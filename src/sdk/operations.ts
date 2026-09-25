@@ -9,6 +9,7 @@ import { operationsCreateBundleUploadUrl } from "../funcs/operationsCreateBundle
 import { operationsDenyAccessRequest } from "../funcs/operationsDenyAccessRequest.js";
 import { operationsGetAccessRequest } from "../funcs/operationsGetAccessRequest.js";
 import { operationsGetAccessRequestCoordinates } from "../funcs/operationsGetAccessRequestCoordinates.js";
+import { operationsGetLiveDebugGrant } from "../funcs/operationsGetLiveDebugGrant.js";
 import { operationsGetPolicy } from "../funcs/operationsGetPolicy.js";
 import { operationsInvoke } from "../funcs/operationsInvoke.js";
 import { operationsListAccessRequests } from "../funcs/operationsListAccessRequests.js";
@@ -40,7 +41,7 @@ export class Operations extends ClientSDK {
   }
 
   /**
-   * Register a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Replaces any existing plugin of the same name in that project. New custom plugins are enabled by default.
+   * Register a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Replaces any existing plugin of the same name in that project. New custom plugins are enabled by default. Returns the cloud permission delta versus the previously enabled set.
    */
   async publishPlugin(
     request: operations.PublishOperationsPluginRequest,
@@ -54,7 +55,7 @@ export class Operations extends ClientSDK {
   }
 
   /**
-   * Replace the complete set of enabled built-in operations plugins for a project.
+   * Replace the complete set of enabled built-in operations plugins for a project. Returns the cloud permission delta versus the previously enabled set.
    */
   async setBuiltinPlugins(
     request: operations.SetBuiltinOperationsPluginsRequest,
@@ -82,7 +83,7 @@ export class Operations extends ClientSDK {
   }
 
   /**
-   * Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are baked into the operator image and can be invoked.
+   * Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are distributed to Operators and can be invoked. Returns the cloud permission delta versus the previously enabled set. With `dryRun`, validates the change and returns the delta without saving it.
    */
   async setPluginEnabled(
     request: operations.SetOperationsPluginEnabledRequest,
@@ -229,6 +230,20 @@ export class Operations extends ClientSDK {
     options?: RequestOptions,
   ): Promise<operations.GetAccessRequestCoordinatesResponse> {
     return unwrapAsync(operationsGetAccessRequestCoordinates(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Find an approved, unexpired access request whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request.
+   */
+  async getLiveDebugGrant(
+    request: operations.GetLiveDebugGrantRequest,
+    options?: RequestOptions,
+  ): Promise<operations.GetLiveDebugGrantResponse> {
+    return unwrapAsync(operationsGetLiveDebugGrant(
       this,
       request,
       options,

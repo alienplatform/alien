@@ -13,6 +13,7 @@ export const DeploymentRole = {
   DeploymentViewer: "deployment.viewer",
   DeploymentManager: "deployment.manager",
   DeploymentTelemetryWriter: "deployment.telemetry-writer",
+  DeploymentChildDeployer: "deployment.child-deployer",
 } as const;
 /**
  * Role for deployment-scoped service accounts

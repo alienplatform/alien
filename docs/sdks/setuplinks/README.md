@@ -26,6 +26,13 @@ async function run() {
     externalId: "ext_example_01",
     name: "prod-us-east-1",
     project: "<value>",
+    deploymentSetupConfig: {
+      validatedReleaseSelection: {
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        releaseChannel: "<value>",
+        platform: "kubernetes",
+      },
+    },
     recoveryDeploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
   });
 
@@ -55,6 +62,13 @@ async function run() {
     externalId: "ext_example_01",
     name: "prod-us-east-1",
     project: "<value>",
+    deploymentSetupConfig: {
+      validatedReleaseSelection: {
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        releaseChannel: "<value>",
+        platform: "kubernetes",
+      },
+    },
     recoveryDeploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
   });
   if (res.ok) {

@@ -12,8 +12,8 @@
 * [addMember](#addmember) - Add a member to a workspace by email. The user must already have an account.
 * [updateMember](#updatemember) - Update a workspace member's role.
 * [removeMember](#removemember) - Remove a member from a workspace.
-* [getSettings](#getsettings) - Read the ai-agent settings for a workspace. Returns defaults (`enabled: true`, `debugPermissionMode: auto`) when the workspace has never customized them.
-* [updateSettings](#updatesettings) - Update the ai-agent settings for a workspace. Supports `debugPermissionMode` (`ask` requires human approval on every ai-agent debug command, `auto` runs them without asking) and `enabled` (`false` turns the ai-agent off so incoming triggers are rejected before any session runs).
+* [getSettings](#getsettings) - Read the ai-agent settings for a workspace. Returns defaults (`enabled: true`) when the workspace has never customized them.
+* [updateSettings](#updatesettings) - Update the ai-agent settings for a workspace. Supports `enabled` (`false` turns the ai-agent off so incoming triggers are rejected before any session runs).
 
 ## list
 
@@ -84,6 +84,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400                      | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -646,7 +647,7 @@ run();
 
 ## getSettings
 
-Read the ai-agent settings for a workspace. Returns defaults (`enabled: true`, `debugPermissionMode: auto`) when the workspace has never customized them.
+Read the ai-agent settings for a workspace. Returns defaults (`enabled: true`) when the workspace has never customized them.
 
 ### Example Usage
 
@@ -722,7 +723,7 @@ run();
 
 ## updateSettings
 
-Update the ai-agent settings for a workspace. Supports `debugPermissionMode` (`ask` requires human approval on every ai-agent debug command, `auto` runs them without asking) and `enabled` (`false` turns the ai-agent off so incoming triggers are rejected before any session runs).
+Update the ai-agent settings for a workspace. Supports `enabled` (`false` turns the ai-agent off so incoming triggers are rejected before any session runs).
 
 ### Example Usage
 

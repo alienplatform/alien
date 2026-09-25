@@ -1,0 +1,23 @@
+# SyncListResponseEgress
+
+The objects that keep an AWS deny sandbox's sessions inside the VPC. Each id is recorded as
+soon as the object exists and cleared once it is deleted.
+
+## Example Usage
+
+```typescript
+import { SyncListResponseEgress } from "@alienplatform/platform-api/models";
+
+let value: SyncListResponseEgress = {
+  operatorRoleName: "<value>",
+};
+```
+
+## Fields
+
+| Field                                                                                                                                                                       | Type                                                                                                                                                                        | Required                                                                                                                                                                    | Description                                                                                                                                                                 |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connectorArn`                                                                                                                                                              | *string*                                                                                                                                                                    | :heavy_minus_sign:                                                                                                                                                          | `AWS::Lambda::NetworkConnector` the sessions start with.                                                                                                                    |
+| `connectorRequest`                                                                                                                                                          | *string*                                                                                                                                                                    | :heavy_minus_sign:                                                                                                                                                          | Cloud Control request creating or deleting the connector that AWS has not finished. Kept<br/>so the request's outcome, and AWS's reason when it fails, is read on a later call. |
+| `operatorRoleName`                                                                                                                                                          | *string*                                                                                                                                                                    | :heavy_check_mark:                                                                                                                                                          | IAM role Lambda assumes to place the connector's network interfaces.                                                                                                        |
+| `securityGroupId`                                                                                                                                                           | *string*                                                                                                                                                                    | :heavy_minus_sign:                                                                                                                                                          | Security group permitting egress to loopback only.                                                                                                                          |

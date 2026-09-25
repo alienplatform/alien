@@ -14,6 +14,10 @@ export type ProjectReleaseInfo = {
    * Unique identifier for the release.
    */
   id: string;
+  /**
+   * Human-readable release title
+   */
+  title?: string | null | undefined;
   gitMetadata: GitMetadata | null;
   createdAt: Date;
 };
@@ -24,6 +28,7 @@ export const ProjectReleaseInfo$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
+  title: z.nullable(z.string()).optional(),
   gitMetadata: z.nullable(GitMetadata$inboundSchema),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });

@@ -10,17 +10,10 @@ let value: DataAzureServiceBusNamespace = {
     name: "<value>",
     privateEndpointConnectionCount: 152029,
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "not-installed",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
+      collectionIssues: [],
       health: "unknown",
-      lifecycle: "running",
-      partial: false,
+      lifecycle: "failed",
+      partial: true,
       stale: true,
     },
   },
@@ -30,7 +23,7 @@ let value: DataAzureServiceBusNamespace = {
 
 ## Fields
 
-| Field                                                | Type                                                 | Required                                             | Description                                          |
-| ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
-| `data`                                               | [operations.Data5](../../models/operations/data5.md) | :heavy_check_mark:                                   | N/A                                                  |
-| `resourceType`                                       | *"azure_service_bus_namespace"*                      | :heavy_check_mark:                                   | N/A                                                  |
+| Field                                                                                                      | Type                                                                                                       | Required                                                                                                   | Description                                                                                                |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `data`                                                                                                     | [operations.GetResourceDeploymentDetailData5](../../models/operations/getresourcedeploymentdetaildata5.md) | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
+| `resourceType`                                                                                             | *"azure_service_bus_namespace"*                                                                            | :heavy_check_mark:                                                                                         | N/A                                                                                                        |

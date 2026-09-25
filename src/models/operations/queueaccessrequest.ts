@@ -56,6 +56,8 @@ export type QueueAccessRequestCommand = {
    * How risky an operation is (declared by the plugin metadata).
    */
   tier?: QueueAccessRequestTier | undefined;
+  pluginVersion?: string | undefined;
+  operationContractHash?: string | undefined;
 };
 
 /**
@@ -92,6 +94,7 @@ export type QueueAccessRequestResponse = {
    * How risky an operation is (declared by the plugin metadata).
    */
   maxRisk: QueueAccessRequestMaxRisk | null;
+  debugGrant: models.AccessRequestDebugGrant | null;
   status: models.AccessRequestStatus;
   approvedUntil: string | null;
   kubectlApprove: string | null;
@@ -157,6 +160,8 @@ export const QueueAccessRequestCommand$inboundSchema: z.ZodType<
   summary: z.string(),
   params: z.nullable(z.any()).optional(),
   tier: QueueAccessRequestTier$inboundSchema.optional(),
+  pluginVersion: z.string().optional(),
+  operationContractHash: z.string().optional(),
 });
 
 export function queueAccessRequestCommandFromJSON(
@@ -192,6 +197,7 @@ export const QueueAccessRequestResponse$inboundSchema: z.ZodType<
   commands: z.array(z.lazy(() => QueueAccessRequestCommand$inboundSchema)),
   operationPattern: z.nullable(z.string()),
   maxRisk: z.nullable(QueueAccessRequestMaxRisk$inboundSchema),
+  debugGrant: z.nullable(models.AccessRequestDebugGrant$inboundSchema),
   status: models.AccessRequestStatus$inboundSchema,
   approvedUntil: z.nullable(z.string()),
   kubectlApprove: z.nullable(z.string()),

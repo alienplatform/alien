@@ -70,6 +70,8 @@ export type ApproveAccessRequestCommand = {
    * How risky an operation is (declared by the plugin metadata).
    */
   tier?: ApproveAccessRequestTier | undefined;
+  pluginVersion?: string | undefined;
+  operationContractHash?: string | undefined;
 };
 
 /**
@@ -106,6 +108,7 @@ export type ApproveAccessRequestResponse = {
    * How risky an operation is (declared by the plugin metadata).
    */
   maxRisk: ApproveAccessRequestMaxRisk | null;
+  debugGrant: models.AccessRequestDebugGrant | null;
   status: models.AccessRequestStatus;
   approvedUntil: string | null;
   approvalMethod: string;
@@ -209,6 +212,8 @@ export const ApproveAccessRequestCommand$inboundSchema: z.ZodType<
   summary: z.string(),
   params: z.nullable(z.any()).optional(),
   tier: ApproveAccessRequestTier$inboundSchema.optional(),
+  pluginVersion: z.string().optional(),
+  operationContractHash: z.string().optional(),
 });
 
 export function approveAccessRequestCommandFromJSON(
@@ -244,6 +249,7 @@ export const ApproveAccessRequestResponse$inboundSchema: z.ZodType<
   commands: z.array(z.lazy(() => ApproveAccessRequestCommand$inboundSchema)),
   operationPattern: z.nullable(z.string()),
   maxRisk: z.nullable(ApproveAccessRequestMaxRisk$inboundSchema),
+  debugGrant: z.nullable(models.AccessRequestDebugGrant$inboundSchema),
   status: models.AccessRequestStatus$inboundSchema,
   approvedUntil: z.nullable(z.string()),
   approvalMethod: z.string(),

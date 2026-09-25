@@ -143,7 +143,7 @@ export const Lifecycle77 = {
 } as const;
 export type Lifecycle77 = ClosedEnum<typeof Lifecycle77>;
 
-export type DataStatus77 = {
+export type GetResourceDeploymentDetailDataStatus77 = {
   collectionIssues: Array<CollectionIssue74>;
   health: Health77;
   lifecycle: Lifecycle77;
@@ -164,7 +164,7 @@ export type DataLocal12 = {
    * the next tick rebinds it.
    */
   routeServing: boolean;
-  status: DataStatus77;
+  status: GetResourceDeploymentDetailDataStatus77;
   backend: "local";
 };
 
@@ -217,7 +217,7 @@ export const Lifecycle76 = {
 } as const;
 export type Lifecycle76 = ClosedEnum<typeof Lifecycle76>;
 
-export type DataStatus76 = {
+export type GetResourceDeploymentDetailDataStatus76 = {
   collectionIssues: Array<CollectionIssue73>;
   health: Health76;
   lifecycle: Lifecycle76;
@@ -236,7 +236,7 @@ export type DataKubernetesPods = {
    */
   idlePods: number;
   namespace: string;
-  status: DataStatus76;
+  status: GetResourceDeploymentDetailDataStatus76;
   backend: "kubernetesPods";
 };
 
@@ -289,7 +289,7 @@ export const Lifecycle75 = {
 } as const;
 export type Lifecycle75 = ClosedEnum<typeof Lifecycle75>;
 
-export type DataStatus75 = {
+export type GetResourceDeploymentDetailDataStatus75 = {
   collectionIssues: Array<CollectionIssue72>;
   health: Health75;
   lifecycle: Lifecycle75;
@@ -312,7 +312,7 @@ export type DataGcpAgentPlatform = {
    * Reasoning engine the template hangs under, without which the template id names nothing.
    */
   engine: string;
-  status: DataStatus75;
+  status: GetResourceDeploymentDetailDataStatus75;
   /**
    * The template sandboxes are currently cut from.
    */
@@ -369,7 +369,7 @@ export const Lifecycle74 = {
 } as const;
 export type Lifecycle74 = ClosedEnum<typeof Lifecycle74>;
 
-export type DataStatus74 = {
+export type GetResourceDeploymentDetailDataStatus74 = {
   collectionIssues: Array<CollectionIssue71>;
   health: Health74;
   lifecycle: Lifecycle74;
@@ -387,7 +387,7 @@ export type DataStatus74 = {
 export type DataAzureSandboxGroup = {
   provisioningState?: string | null | undefined;
   sandboxGroup: string;
-  status: DataStatus74;
+  status: GetResourceDeploymentDetailDataStatus74;
   backend: "azureSandboxGroup";
 };
 
@@ -440,7 +440,7 @@ export const Lifecycle73 = {
 } as const;
 export type Lifecycle73 = ClosedEnum<typeof Lifecycle73>;
 
-export type DataStatus73 = {
+export type GetResourceDeploymentDetailDataStatus73 = {
   collectionIssues: Array<CollectionIssue70>;
   health: Health73;
   lifecycle: Lifecycle73;
@@ -468,7 +468,7 @@ export type DataAwsMicrovm = {
    * implementer ships AccessDenied into a customer's account.
    */
   imageState?: string | null | undefined;
-  status: DataStatus73;
+  status: GetResourceDeploymentDetailDataStatus73;
   backend: "awsMicrovm";
 };
 
@@ -527,23 +527,23 @@ export const Lifecycle72 = {
 } as const;
 export type Lifecycle72 = ClosedEnum<typeof Lifecycle72>;
 
-export type DataStatus72 = {
+export type GetResourceDeploymentDetailDataStatus72 = {
   health: Health72;
   lifecycle: Lifecycle72;
   message?: string | null | undefined;
 };
 
-export type Data8 = {
+export type GetResourceDeploymentDetailData8 = {
   enabled?: boolean | null | undefined;
   keyId: string;
   keyOperations: Array<string>;
   keyType: string;
   recoveryLevel?: string | null | undefined;
-  status: DataStatus72;
+  status: GetResourceDeploymentDetailDataStatus72;
 };
 
 export type DataAzureKeyVault2 = {
-  data: Data8;
+  data: GetResourceDeploymentDetailData8;
   provider: "azure-key-vault";
 };
 
@@ -569,23 +569,23 @@ export const Lifecycle71 = {
 } as const;
 export type Lifecycle71 = ClosedEnum<typeof Lifecycle71>;
 
-export type DataStatus71 = {
+export type GetResourceDeploymentDetailDataStatus71 = {
   health: Health71;
   lifecycle: Lifecycle71;
   message?: string | null | undefined;
 };
 
-export type Data7 = {
+export type GetResourceDeploymentDetailData7 = {
   algorithm?: string | null | undefined;
   cryptoKeyName: string;
   primaryState?: string | null | undefined;
   primaryVersion?: string | null | undefined;
   purpose: string;
-  status: DataStatus71;
+  status: GetResourceDeploymentDetailDataStatus71;
 };
 
 export type DataGcpCloudKms = {
-  data: Data7;
+  data: GetResourceDeploymentDetailData7;
   provider: "gcp-cloud-kms";
 };
 
@@ -611,23 +611,23 @@ export const Lifecycle70 = {
 } as const;
 export type Lifecycle70 = ClosedEnum<typeof Lifecycle70>;
 
-export type DataStatus70 = {
+export type GetResourceDeploymentDetailDataStatus70 = {
   health: Health70;
   lifecycle: Lifecycle70;
   message?: string | null | undefined;
 };
 
-export type Data6 = {
+export type GetResourceDeploymentDetailData6 = {
   enabled: boolean;
   keyArn: string;
   keySpec: string;
   keyState: string;
   keyUsage: string;
-  status: DataStatus70;
+  status: GetResourceDeploymentDetailDataStatus70;
 };
 
 export type DataAwsKms = {
-  data: Data6;
+  data: GetResourceDeploymentDetailData6;
   provider: "aws-kms";
 };
 
@@ -695,7 +695,7 @@ export type GetResourceDeploymentDetailModel4 = {
  * @remarks
  * a model, spending customer quota, or accepting provider terms.
  */
-export const SourceEnum4 = {
+export const AvailabilitySource4 = {
   AwsBedrock: "aws-bedrock",
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
@@ -707,7 +707,7 @@ export const SourceEnum4 = {
  * @remarks
  * a model, spending customer quota, or accepting provider terms.
  */
-export type SourceEnum4 = ClosedEnum<typeof SourceEnum4>;
+export type AvailabilitySource4 = ClosedEnum<typeof AvailabilitySource4>;
 
 export type Availability4 = {
   catalogRevision: string;
@@ -719,7 +719,7 @@ export type Availability4 = {
    * @remarks
    * a model, spending customer quota, or accepting provider terms.
    */
-  source: SourceEnum4;
+  source: AvailabilitySource4;
 };
 
 export type AvailabilityUnion = Availability4 | any;
@@ -773,7 +773,7 @@ export const Lifecycle69 = {
 } as const;
 export type Lifecycle69 = ClosedEnum<typeof Lifecycle69>;
 
-export type DataStatus69 = {
+export type GetResourceDeploymentDetailDataStatus69 = {
   collectionIssues: Array<CollectionIssue69>;
   health: Health69;
   lifecycle: Lifecycle69;
@@ -791,7 +791,7 @@ export type DataExternal = {
    * platform, where the app brings its own provider key instead of an ambient cloud.
    */
   provider: string;
-  status: DataStatus69;
+  status: GetResourceDeploymentDetailDataStatus69;
   backend: "external";
 };
 
@@ -852,7 +852,7 @@ export type GetResourceDeploymentDetailModel3 = {
  * @remarks
  * a model, spending customer quota, or accepting provider terms.
  */
-export const SourceEnum3 = {
+export const AvailabilitySource3 = {
   AwsBedrock: "aws-bedrock",
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
@@ -864,7 +864,7 @@ export const SourceEnum3 = {
  * @remarks
  * a model, spending customer quota, or accepting provider terms.
  */
-export type SourceEnum3 = ClosedEnum<typeof SourceEnum3>;
+export type AvailabilitySource3 = ClosedEnum<typeof AvailabilitySource3>;
 
 export type Availability3 = {
   catalogRevision: string;
@@ -876,7 +876,7 @@ export type Availability3 = {
    * @remarks
    * a model, spending customer quota, or accepting provider terms.
    */
-  source: SourceEnum3;
+  source: AvailabilitySource3;
 };
 
 export const GetResourceDeploymentDetailReason68 = {
@@ -928,7 +928,7 @@ export const Lifecycle68 = {
 } as const;
 export type Lifecycle68 = ClosedEnum<typeof Lifecycle68>;
 
-export type DataStatus68 = {
+export type GetResourceDeploymentDetailDataStatus68 = {
   collectionIssues: Array<CollectionIssue68>;
   health: Health68;
   lifecycle: Lifecycle68;
@@ -943,7 +943,7 @@ export type DataAzureFoundry = {
   endpoint?: string | null | undefined;
   location?: string | null | undefined;
   resourceGroup?: string | null | undefined;
-  status: DataStatus68;
+  status: GetResourceDeploymentDetailDataStatus68;
   backend: "azureFoundry";
 };
 
@@ -1004,7 +1004,7 @@ export type GetResourceDeploymentDetailModel2 = {
  * @remarks
  * a model, spending customer quota, or accepting provider terms.
  */
-export const SourceEnum2 = {
+export const AvailabilitySource2 = {
   AwsBedrock: "aws-bedrock",
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
@@ -1016,7 +1016,7 @@ export const SourceEnum2 = {
  * @remarks
  * a model, spending customer quota, or accepting provider terms.
  */
-export type SourceEnum2 = ClosedEnum<typeof SourceEnum2>;
+export type AvailabilitySource2 = ClosedEnum<typeof AvailabilitySource2>;
 
 export type Availability2 = {
   catalogRevision: string;
@@ -1028,7 +1028,7 @@ export type Availability2 = {
    * @remarks
    * a model, spending customer quota, or accepting provider terms.
    */
-  source: SourceEnum2;
+  source: AvailabilitySource2;
 };
 
 export const GetResourceDeploymentDetailReason67 = {
@@ -1080,7 +1080,7 @@ export const Lifecycle67 = {
 } as const;
 export type Lifecycle67 = ClosedEnum<typeof Lifecycle67>;
 
-export type DataStatus67 = {
+export type GetResourceDeploymentDetailDataStatus67 = {
   collectionIssues: Array<CollectionIssue67>;
   health: Health67;
   lifecycle: Lifecycle67;
@@ -1093,7 +1093,7 @@ export type DataGcpVertex = {
   availability: Availability2;
   location: string;
   project: string;
-  status: DataStatus67;
+  status: GetResourceDeploymentDetailDataStatus67;
   backend: "gcpVertex";
 };
 
@@ -1154,7 +1154,7 @@ export type GetResourceDeploymentDetailModel1 = {
  * @remarks
  * a model, spending customer quota, or accepting provider terms.
  */
-export const SourceEnum1 = {
+export const AvailabilitySource1 = {
   AwsBedrock: "aws-bedrock",
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
@@ -1166,7 +1166,7 @@ export const SourceEnum1 = {
  * @remarks
  * a model, spending customer quota, or accepting provider terms.
  */
-export type SourceEnum1 = ClosedEnum<typeof SourceEnum1>;
+export type AvailabilitySource1 = ClosedEnum<typeof AvailabilitySource1>;
 
 export type Availability1 = {
   catalogRevision: string;
@@ -1178,7 +1178,7 @@ export type Availability1 = {
    * @remarks
    * a model, spending customer quota, or accepting provider terms.
    */
-  source: SourceEnum1;
+  source: AvailabilitySource1;
 };
 
 export const GetResourceDeploymentDetailReason66 = {
@@ -1230,7 +1230,7 @@ export const Lifecycle66 = {
 } as const;
 export type Lifecycle66 = ClosedEnum<typeof Lifecycle66>;
 
-export type DataStatus66 = {
+export type GetResourceDeploymentDetailDataStatus66 = {
   collectionIssues: Array<CollectionIssue66>;
   health: Health66;
   lifecycle: Lifecycle66;
@@ -1242,7 +1242,7 @@ export type DataStatus66 = {
 export type DataAwsBedrock = {
   availability: Availability1;
   region: string;
-  status: DataStatus66;
+  status: GetResourceDeploymentDetailDataStatus66;
   backend: "awsBedrock";
 };
 
@@ -1306,7 +1306,7 @@ export const Lifecycle65 = {
 } as const;
 export type Lifecycle65 = ClosedEnum<typeof Lifecycle65>;
 
-export type DataStatus65 = {
+export type GetResourceDeploymentDetailDataStatus65 = {
   collectionIssues: Array<CollectionIssue65>;
   health: Health65;
   lifecycle: Lifecycle65;
@@ -1315,7 +1315,7 @@ export type DataStatus65 = {
   stale: boolean;
 };
 
-export type Data5 = {
+export type GetResourceDeploymentDetailData5 = {
   createdAt?: string | null | undefined;
   disableLocalAuth?: boolean | null | undefined;
   location?: string | null | undefined;
@@ -1333,13 +1333,13 @@ export type Data5 = {
   skuCapacity?: number | null | undefined;
   skuName?: string | null | undefined;
   skuTier?: string | null | undefined;
-  status: DataStatus65;
+  status: GetResourceDeploymentDetailDataStatus65;
   updatedAt?: string | null | undefined;
   zoneRedundant?: boolean | null | undefined;
 };
 
 export type DataAzureServiceBusNamespace = {
-  data: Data5;
+  data: GetResourceDeploymentDetailData5;
   resourceType: "azure_service_bus_namespace";
 };
 
@@ -1392,7 +1392,7 @@ export const Lifecycle64 = {
 } as const;
 export type Lifecycle64 = ClosedEnum<typeof Lifecycle64>;
 
-export type DataStatus64 = {
+export type GetResourceDeploymentDetailDataStatus64 = {
   collectionIssues: Array<CollectionIssue64>;
   health: Health64;
   lifecycle: Lifecycle64;
@@ -1408,7 +1408,7 @@ export type WorkloadProfile = {
   workloadProfileType: string;
 };
 
-export type Data4 = {
+export type GetResourceDeploymentDetailData4 = {
   customDomainVerificationId?: string | null | undefined;
   defaultDomain?: string | null | undefined;
   eventStreamEndpoint?: string | null | undefined;
@@ -1420,14 +1420,14 @@ export type Data4 = {
   resourceGroup?: string | null | undefined;
   resourceId?: string | null | undefined;
   staticIp?: string | null | undefined;
-  status: DataStatus64;
+  status: GetResourceDeploymentDetailDataStatus64;
   workloadProfileCount: number;
   workloadProfiles: Array<WorkloadProfile>;
   zoneRedundant?: boolean | null | undefined;
 };
 
 export type DataAzureContainerAppsEnvironment = {
-  data: Data4;
+  data: GetResourceDeploymentDetailData4;
   resourceType: "azure_container_apps_environment";
 };
 
@@ -1498,7 +1498,7 @@ export const Lifecycle63 = {
 } as const;
 export type Lifecycle63 = ClosedEnum<typeof Lifecycle63>;
 
-export type DataStatus63 = {
+export type GetResourceDeploymentDetailDataStatus63 = {
   collectionIssues: Array<CollectionIssue63>;
   health: Health63;
   lifecycle: Lifecycle63;
@@ -1507,7 +1507,7 @@ export type DataStatus63 = {
   stale: boolean;
 };
 
-export type Data3 = {
+export type GetResourceDeploymentDetailData3 = {
   allowBlobPublicAccess?: boolean | null | undefined;
   allowSharedKeyAccess?: boolean | null | undefined;
   encryptionKeySource?: string | null | undefined;
@@ -1529,12 +1529,12 @@ export type Data3 = {
   secondaryEndpoints: SecondaryEndpoints;
   skuName?: string | null | undefined;
   skuTier?: string | null | undefined;
-  status: DataStatus63;
+  status: GetResourceDeploymentDetailDataStatus63;
   supportsHttpsTrafficOnly?: boolean | null | undefined;
 };
 
 export type DataAzureStorageAccount = {
-  data: Data3;
+  data: GetResourceDeploymentDetailData3;
   resourceType: "azure_storage_account";
 };
 
@@ -1587,7 +1587,7 @@ export const Lifecycle62 = {
 } as const;
 export type Lifecycle62 = ClosedEnum<typeof Lifecycle62>;
 
-export type DataStatus62 = {
+export type GetResourceDeploymentDetailDataStatus62 = {
   collectionIssues: Array<CollectionIssue62>;
   health: Health62;
   lifecycle: Lifecycle62;
@@ -1596,17 +1596,17 @@ export type DataStatus62 = {
   stale: boolean;
 };
 
-export type Data2 = {
+export type GetResourceDeploymentDetailData2 = {
   location?: string | null | undefined;
   managedTags: { [k: string]: string };
   name: string;
   provisioningState?: string | null | undefined;
   resourceId?: string | null | undefined;
-  status: DataStatus62;
+  status: GetResourceDeploymentDetailDataStatus62;
 };
 
 export type DataAzureResourceGroup = {
-  data: Data2;
+  data: GetResourceDeploymentDetailData2;
   resourceType: "azure_resource_group";
 };
 
@@ -1659,7 +1659,7 @@ export const Lifecycle61 = {
 } as const;
 export type Lifecycle61 = ClosedEnum<typeof Lifecycle61>;
 
-export type DataStatus61 = {
+export type GetResourceDeploymentDetailDataStatus61 = {
   collectionIssues: Array<CollectionIssue61>;
   health: Health61;
   lifecycle: Lifecycle61;
@@ -1675,7 +1675,7 @@ export type DataAzureResourceProvider = {
   registrationPolicy?: string | null | undefined;
   registrationState?: string | null | undefined;
   resourceTypeCount: number;
-  status: DataStatus61;
+  status: GetResourceDeploymentDetailDataStatus61;
   backend: "azureResourceProvider";
 };
 
@@ -1728,7 +1728,7 @@ export const Lifecycle60 = {
 } as const;
 export type Lifecycle60 = ClosedEnum<typeof Lifecycle60>;
 
-export type DataStatus60 = {
+export type GetResourceDeploymentDetailDataStatus60 = {
   collectionIssues: Array<CollectionIssue60>;
   health: Health60;
   lifecycle: Lifecycle60;
@@ -1744,7 +1744,7 @@ export type DataGcpServiceUsage = {
   serviceName: string;
   serviceResourceName?: string | null | undefined;
   state?: string | null | undefined;
-  status: DataStatus60;
+  status: GetResourceDeploymentDetailDataStatus60;
   title?: string | null | undefined;
   backend: "gcpServiceUsage";
 };
@@ -1837,7 +1837,7 @@ export const Lifecycle59 = {
 } as const;
 export type Lifecycle59 = ClosedEnum<typeof Lifecycle59>;
 
-export type DataStatus59 = {
+export type GetResourceDeploymentDetailDataStatus59 = {
   collectionIssues: Array<CollectionIssue59>;
   health: Health59;
   lifecycle: Lifecycle59;
@@ -1856,7 +1856,7 @@ export type DataKubernetesJob = {
   jobName: string;
   namespace: string;
   startTime?: Date | null | undefined;
-  status: DataStatus59;
+  status: GetResourceDeploymentDetailDataStatus59;
   succeeded?: number | null | undefined;
   backend: "kubernetesJob";
 };
@@ -1910,7 +1910,7 @@ export const Lifecycle58 = {
 } as const;
 export type Lifecycle58 = ClosedEnum<typeof Lifecycle58>;
 
-export type DataStatus58 = {
+export type GetResourceDeploymentDetailDataStatus58 = {
   collectionIssues: Array<CollectionIssue58>;
   health: Health58;
   lifecycle: Lifecycle58;
@@ -1925,7 +1925,7 @@ export type DataAzureContainerApps2 = {
   managedIdentityId?: string | null | undefined;
   resourceGroupName: string;
   resourcePrefix?: string | null | undefined;
-  status: DataStatus58;
+  status: GetResourceDeploymentDetailDataStatus58;
   backend: "azureContainerApps";
 };
 
@@ -1978,7 +1978,7 @@ export const Lifecycle57 = {
 } as const;
 export type Lifecycle57 = ClosedEnum<typeof Lifecycle57>;
 
-export type DataStatus57 = {
+export type GetResourceDeploymentDetailDataStatus57 = {
   collectionIssues: Array<CollectionIssue57>;
   health: Health57;
   lifecycle: Lifecycle57;
@@ -1993,7 +1993,7 @@ export type DataGcpCloudBuild = {
   location: string;
   projectId: string;
   serviceAccount?: string | null | undefined;
-  status: DataStatus57;
+  status: GetResourceDeploymentDetailDataStatus57;
   backend: "gcpCloudBuild";
 };
 
@@ -2046,7 +2046,7 @@ export const Lifecycle56 = {
 } as const;
 export type Lifecycle56 = ClosedEnum<typeof Lifecycle56>;
 
-export type DataStatus56 = {
+export type GetResourceDeploymentDetailDataStatus56 = {
   collectionIssues: Array<CollectionIssue56>;
   health: Health56;
   lifecycle: Lifecycle56;
@@ -2075,7 +2075,7 @@ export type DataAwsCodeBuild = {
   s3LogsStatus?: string | null | undefined;
   serviceRolePresent: boolean;
   sourceType?: string | null | undefined;
-  status: DataStatus56;
+  status: GetResourceDeploymentDetailDataStatus56;
   timeoutInMinutes?: number | null | undefined;
   backend: "awsCodeBuild";
 };
@@ -2144,7 +2144,7 @@ export const Lifecycle55 = {
 } as const;
 export type Lifecycle55 = ClosedEnum<typeof Lifecycle55>;
 
-export type DataStatus55 = {
+export type GetResourceDeploymentDetailDataStatus55 = {
   collectionIssues: Array<CollectionIssue55>;
   health: Health55;
   lifecycle: Lifecycle55;
@@ -2156,7 +2156,7 @@ export type DataStatus55 = {
 export type DataLocal11 = {
   reachable: boolean;
   registryUrl: string;
-  status: DataStatus55;
+  status: GetResourceDeploymentDetailDataStatus55;
   backend: "local";
 };
 
@@ -2209,7 +2209,7 @@ export const Lifecycle54 = {
 } as const;
 export type Lifecycle54 = ClosedEnum<typeof Lifecycle54>;
 
-export type DataStatus54 = {
+export type GetResourceDeploymentDetailDataStatus54 = {
   collectionIssues: Array<CollectionIssue54>;
   health: Health54;
   lifecycle: Lifecycle54;
@@ -2243,7 +2243,7 @@ export type DataAzureContainerRegistry = {
   resourceId?: string | null | undefined;
   skuName: string;
   skuTier?: string | null | undefined;
-  status: DataStatus54;
+  status: GetResourceDeploymentDetailDataStatus54;
   type?: string | null | undefined;
   zoneRedundancy: string;
   backend: "azureContainerRegistry";
@@ -2298,7 +2298,7 @@ export const Lifecycle53 = {
 } as const;
 export type Lifecycle53 = ClosedEnum<typeof Lifecycle53>;
 
-export type DataStatus53 = {
+export type GetResourceDeploymentDetailDataStatus53 = {
   collectionIssues: Array<CollectionIssue53>;
   health: Health53;
   lifecycle: Lifecycle53;
@@ -2327,7 +2327,7 @@ export type DataGcpArtifactRegistry = {
   repositoryId: string;
   satisfiesPzs?: boolean | null | undefined;
   sizeBytes?: string | null | undefined;
-  status: DataStatus53;
+  status: GetResourceDeploymentDetailDataStatus53;
   updateTime?: string | null | undefined;
   backend: "gcpArtifactRegistry";
 };
@@ -2393,7 +2393,7 @@ export const Lifecycle52 = {
 } as const;
 export type Lifecycle52 = ClosedEnum<typeof Lifecycle52>;
 
-export type DataStatus52 = {
+export type GetResourceDeploymentDetailDataStatus52 = {
   collectionIssues: Array<CollectionIssue52>;
   health: Health52;
   lifecycle: Lifecycle52;
@@ -2412,7 +2412,7 @@ export type DataAwsEcr = {
   repositoriesTruncated: boolean;
   repositoryCount: number;
   repositoryPrefix: string;
-  status: DataStatus52;
+  status: GetResourceDeploymentDetailDataStatus52;
   backend: "awsEcr";
 };
 
@@ -2480,7 +2480,7 @@ export const Lifecycle51 = {
 } as const;
 export type Lifecycle51 = ClosedEnum<typeof Lifecycle51>;
 
-export type DataStatus51 = {
+export type GetResourceDeploymentDetailDataStatus51 = {
   collectionIssues: Array<CollectionIssue51>;
   health: Health51;
   lifecycle: Lifecycle51;
@@ -2493,7 +2493,7 @@ export type DataAzureManagedIdentity2 = {
   ficName?: string | null | undefined;
   roleAssignmentIds: Array<string>;
   roleDefinitionId?: string | null | undefined;
-  status: DataStatus51;
+  status: GetResourceDeploymentDetailDataStatus51;
   tenantId?: string | null | undefined;
   uamiClientId?: string | null | undefined;
   uamiPrincipalId?: string | null | undefined;
@@ -2550,7 +2550,7 @@ export const Lifecycle50 = {
 } as const;
 export type Lifecycle50 = ClosedEnum<typeof Lifecycle50>;
 
-export type DataStatus50 = {
+export type GetResourceDeploymentDetailDataStatus50 = {
   collectionIssues: Array<CollectionIssue50>;
   health: Health50;
   lifecycle: Lifecycle50;
@@ -2564,7 +2564,7 @@ export type DataGcpServiceAccount2 = {
   roleBound: boolean;
   serviceAccountEmail?: string | null | undefined;
   serviceAccountUniqueId?: string | null | undefined;
-  status: DataStatus50;
+  status: GetResourceDeploymentDetailDataStatus50;
   backend: "gcpServiceAccount";
 };
 
@@ -2617,7 +2617,7 @@ export const Lifecycle49 = {
 } as const;
 export type Lifecycle49 = ClosedEnum<typeof Lifecycle49>;
 
-export type DataStatus49 = {
+export type GetResourceDeploymentDetailDataStatus49 = {
   collectionIssues: Array<CollectionIssue49>;
   health: Health49;
   lifecycle: Lifecycle49;
@@ -2630,7 +2630,7 @@ export type DataAwsIamRole2 = {
   managementPermissionsApplied: boolean;
   roleArn?: string | null | undefined;
   roleName?: string | null | undefined;
-  status: DataStatus49;
+  status: GetResourceDeploymentDetailDataStatus49;
   backend: "awsIamRole";
 };
 
@@ -2693,7 +2693,7 @@ export const Lifecycle48 = {
 } as const;
 export type Lifecycle48 = ClosedEnum<typeof Lifecycle48>;
 
-export type DataStatus48 = {
+export type GetResourceDeploymentDetailDataStatus48 = {
   collectionIssues: Array<CollectionIssue48>;
   health: Health48;
   lifecycle: Lifecycle48;
@@ -2715,7 +2715,7 @@ export type DataAzureVnet = {
   publicIpId?: string | null | undefined;
   publicSubnetName?: string | null | undefined;
   resourceGroup?: string | null | undefined;
-  status: DataStatus48;
+  status: GetResourceDeploymentDetailDataStatus48;
   vnetName?: string | null | undefined;
   vnetResourceId?: string | null | undefined;
   backend: "azureVnet";
@@ -2770,7 +2770,7 @@ export const Lifecycle47 = {
 } as const;
 export type Lifecycle47 = ClosedEnum<typeof Lifecycle47>;
 
-export type DataStatus47 = {
+export type GetResourceDeploymentDetailDataStatus47 = {
   collectionIssues: Array<CollectionIssue47>;
   health: Health47;
   lifecycle: Lifecycle47;
@@ -2788,7 +2788,7 @@ export type DataGcpVpc = {
   networkSelfLink?: string | null | undefined;
   region?: string | null | undefined;
   routerName?: string | null | undefined;
-  status: DataStatus47;
+  status: GetResourceDeploymentDetailDataStatus47;
   subnetworkName?: string | null | undefined;
   subnetworkSelfLink?: string | null | undefined;
   backend: "gcpVpc";
@@ -2843,7 +2843,7 @@ export const Lifecycle46 = {
 } as const;
 export type Lifecycle46 = ClosedEnum<typeof Lifecycle46>;
 
-export type DataStatus46 = {
+export type GetResourceDeploymentDetailDataStatus46 = {
   collectionIssues: Array<CollectionIssue46>;
   health: Health46;
   lifecycle: Lifecycle46;
@@ -2862,7 +2862,7 @@ export type DataAwsVpc = {
   publicSubnetIds: Array<string>;
   routeTableCount: number;
   securityGroupId?: string | null | undefined;
-  status: DataStatus46;
+  status: GetResourceDeploymentDetailDataStatus46;
   vpcId?: string | null | undefined;
   vpcState?: string | null | undefined;
   backend: "awsVpc";
@@ -2924,7 +2924,7 @@ export const Lifecycle45 = {
 } as const;
 export type Lifecycle45 = ClosedEnum<typeof Lifecycle45>;
 
-export type DataStatus45 = {
+export type GetResourceDeploymentDetailDataStatus45 = {
   collectionIssues: Array<CollectionIssue45>;
   health: Health45;
   lifecycle: Lifecycle45;
@@ -2936,7 +2936,7 @@ export type DataStatus45 = {
 export type DataLocal10 = {
   configured: boolean;
   identity: string;
-  status: DataStatus45;
+  status: GetResourceDeploymentDetailDataStatus45;
   backend: "local";
 };
 
@@ -2989,7 +2989,7 @@ export const Lifecycle44 = {
 } as const;
 export type Lifecycle44 = ClosedEnum<typeof Lifecycle44>;
 
-export type DataStatus44 = {
+export type GetResourceDeploymentDetailDataStatus44 = {
   collectionIssues: Array<CollectionIssue44>;
   health: Health44;
   lifecycle: Lifecycle44;
@@ -3012,7 +3012,7 @@ export type DataAzureManagedIdentity1 = {
   roleAssignmentCount: number;
   roleAssignmentIds: Array<string>;
   stackPermissionsApplied: boolean;
-  status: DataStatus44;
+  status: GetResourceDeploymentDetailDataStatus44;
   tenantId?: string | null | undefined;
   type?: string | null | undefined;
   backend: "azureManagedIdentity";
@@ -3067,7 +3067,7 @@ export const Lifecycle43 = {
 } as const;
 export type Lifecycle43 = ClosedEnum<typeof Lifecycle43>;
 
-export type DataStatus43 = {
+export type GetResourceDeploymentDetailDataStatus43 = {
   collectionIssues: Array<CollectionIssue43>;
   health: Health43;
   lifecycle: Lifecycle43;
@@ -3089,7 +3089,7 @@ export type DataGcpServiceAccount1 = {
   projectRoles: Array<string>;
   serviceAccountBindingCount: number;
   serviceAccountRoles: Array<string>;
-  status: DataStatus43;
+  status: GetResourceDeploymentDetailDataStatus43;
   uniqueId?: string | null | undefined;
   backend: "gcpServiceAccount";
 };
@@ -3143,7 +3143,7 @@ export const Lifecycle42 = {
 } as const;
 export type Lifecycle42 = ClosedEnum<typeof Lifecycle42>;
 
-export type DataStatus42 = {
+export type GetResourceDeploymentDetailDataStatus42 = {
   collectionIssues: Array<CollectionIssue42>;
   health: Health42;
   lifecycle: Lifecycle42;
@@ -3171,7 +3171,7 @@ export type DataAwsIamRole1 = {
   roleId: string;
   roleName: string;
   stackPermissionsApplied: boolean;
-  status: DataStatus42;
+  status: GetResourceDeploymentDetailDataStatus42;
   tagCount: number;
   backend: "awsIamRole";
 };
@@ -3240,7 +3240,7 @@ export const Lifecycle41 = {
 } as const;
 export type Lifecycle41 = ClosedEnum<typeof Lifecycle41>;
 
-export type DataStatus41 = {
+export type GetResourceDeploymentDetailDataStatus41 = {
   collectionIssues: Array<CollectionIssue41>;
   health: Health41;
   lifecycle: Lifecycle41;
@@ -3256,7 +3256,7 @@ export type DataLocal9 = {
   pathExists: boolean;
   readonly?: boolean | null | undefined;
   secretMetadataListed: boolean;
-  status: DataStatus41;
+  status: GetResourceDeploymentDetailDataStatus41;
   backend: "local";
 };
 
@@ -3309,7 +3309,7 @@ export const Lifecycle40 = {
 } as const;
 export type Lifecycle40 = ClosedEnum<typeof Lifecycle40>;
 
-export type DataStatus40 = {
+export type GetResourceDeploymentDetailDataStatus40 = {
   collectionIssues: Array<CollectionIssue40>;
   health: Health40;
   lifecycle: Lifecycle40;
@@ -3322,7 +3322,7 @@ export type DataKubernetesSecret = {
   namespace: string;
   prefix: string;
   secretMetadataListed: boolean;
-  status: DataStatus40;
+  status: GetResourceDeploymentDetailDataStatus40;
   backend: "kubernetesSecret";
 };
 
@@ -3375,7 +3375,7 @@ export const Lifecycle39 = {
 } as const;
 export type Lifecycle39 = ClosedEnum<typeof Lifecycle39>;
 
-export type DataStatus39 = {
+export type GetResourceDeploymentDetailDataStatus39 = {
   collectionIssues: Array<CollectionIssue39>;
   health: Health39;
   lifecycle: Lifecycle39;
@@ -3400,7 +3400,7 @@ export type DataAzureKeyVault1 = {
   skuName?: string | null | undefined;
   softDeleteEnabled: boolean;
   softDeleteRetentionDays: number;
-  status: DataStatus39;
+  status: GetResourceDeploymentDetailDataStatus39;
   vaultUri?: string | null | undefined;
   backend: "azureKeyVault";
 };
@@ -3454,7 +3454,7 @@ export const Lifecycle38 = {
 } as const;
 export type Lifecycle38 = ClosedEnum<typeof Lifecycle38>;
 
-export type DataStatus38 = {
+export type GetResourceDeploymentDetailDataStatus38 = {
   collectionIssues: Array<CollectionIssue38>;
   health: Health38;
   lifecycle: Lifecycle38;
@@ -3468,7 +3468,7 @@ export type DataGcpSecretManager = {
   prefix: string;
   projectId: string;
   secretMetadataListed: boolean;
-  status: DataStatus38;
+  status: GetResourceDeploymentDetailDataStatus38;
   backend: "gcpSecretManager";
 };
 
@@ -3521,7 +3521,7 @@ export const Lifecycle37 = {
 } as const;
 export type Lifecycle37 = ClosedEnum<typeof Lifecycle37>;
 
-export type DataStatus37 = {
+export type GetResourceDeploymentDetailDataStatus37 = {
   collectionIssues: Array<CollectionIssue37>;
   health: Health37;
   lifecycle: Lifecycle37;
@@ -3543,7 +3543,7 @@ export type DataAwsParameterStore = {
   sampledSecureStringCount?: number | null | undefined;
   sampledStringCount?: number | null | undefined;
   sampledStringListCount?: number | null | undefined;
-  status: DataStatus37;
+  status: GetResourceDeploymentDetailDataStatus37;
   backend: "awsParameterStore";
 };
 
@@ -3613,7 +3613,7 @@ export const Lifecycle36 = {
 } as const;
 export type Lifecycle36 = ClosedEnum<typeof Lifecycle36>;
 
-export type DataStatus36 = {
+export type GetResourceDeploymentDetailDataStatus36 = {
   collectionIssues: Array<CollectionIssue36>;
   health: Health36;
   lifecycle: Lifecycle36;
@@ -3629,7 +3629,7 @@ export type DataLocal8 = {
   name: string;
   port?: number | null | undefined;
   processRunning: boolean;
-  status: DataStatus36;
+  status: GetResourceDeploymentDetailDataStatus36;
   version: string;
   backend: "local";
 };
@@ -3683,7 +3683,7 @@ export const Lifecycle35 = {
 } as const;
 export type Lifecycle35 = ClosedEnum<typeof Lifecycle35>;
 
-export type DataStatus35 = {
+export type GetResourceDeploymentDetailDataStatus35 = {
   collectionIssues: Array<CollectionIssue35>;
   health: Health35;
   lifecycle: Lifecycle35;
@@ -3698,7 +3698,7 @@ export type DataStatus35 = {
 export type DataFlexibleServer = {
   serverName: string;
   state?: string | null | undefined;
-  status: DataStatus35;
+  status: GetResourceDeploymentDetailDataStatus35;
   version?: string | null | undefined;
   backend: "flexibleServer";
 };
@@ -3752,7 +3752,7 @@ export const Lifecycle34 = {
 } as const;
 export type Lifecycle34 = ClosedEnum<typeof Lifecycle34>;
 
-export type DataStatus34 = {
+export type GetResourceDeploymentDetailDataStatus34 = {
   collectionIssues: Array<CollectionIssue34>;
   health: Health34;
   lifecycle: Lifecycle34;
@@ -3768,7 +3768,7 @@ export type DataCloudSQL = {
   databaseVersion?: string | null | undefined;
   instanceName: string;
   state?: string | null | undefined;
-  status: DataStatus34;
+  status: GetResourceDeploymentDetailDataStatus34;
   backend: "cloudSql";
 };
 
@@ -3821,7 +3821,7 @@ export const Lifecycle33 = {
 } as const;
 export type Lifecycle33 = ClosedEnum<typeof Lifecycle33>;
 
-export type DataStatus33 = {
+export type GetResourceDeploymentDetailDataStatus33 = {
   collectionIssues: Array<CollectionIssue33>;
   health: Health33;
   lifecycle: Lifecycle33;
@@ -3848,7 +3848,7 @@ export type DataAurora = {
    * Latest sampled `ServerlessDatabaseCapacity` (ACU).
    */
   serverlessCapacity?: number | null | undefined;
-  status: DataStatus33;
+  status: GetResourceDeploymentDetailDataStatus33;
   backend: "aurora";
 };
 
@@ -3912,7 +3912,7 @@ export const Lifecycle32 = {
 } as const;
 export type Lifecycle32 = ClosedEnum<typeof Lifecycle32>;
 
-export type DataStatus32 = {
+export type GetResourceDeploymentDetailDataStatus32 = {
   collectionIssues: Array<CollectionIssue32>;
   health: Health32;
   lifecycle: Lifecycle32;
@@ -3927,7 +3927,7 @@ export type DataLocal7 = {
   name: string;
   path: string;
   pathExists: boolean;
-  status: DataStatus32;
+  status: GetResourceDeploymentDetailDataStatus32;
   backend: "local";
 };
 
@@ -3980,7 +3980,7 @@ export const Lifecycle31 = {
 } as const;
 export type Lifecycle31 = ClosedEnum<typeof Lifecycle31>;
 
-export type DataStatus31 = {
+export type GetResourceDeploymentDetailDataStatus31 = {
   collectionIssues: Array<CollectionIssue31>;
   health: Health31;
   lifecycle: Lifecycle31;
@@ -3993,7 +3993,7 @@ export type DataAzureTable = {
   endpoint?: string | null | undefined;
   resourceGroup?: string | null | undefined;
   signedIdentifierCount?: number | null | undefined;
-  status: DataStatus31;
+  status: GetResourceDeploymentDetailDataStatus31;
   storageAccountKind?: string | null | undefined;
   storageAccountLocation?: string | null | undefined;
   storageAccountName: string;
@@ -4054,7 +4054,7 @@ export const Lifecycle30 = {
 } as const;
 export type Lifecycle30 = ClosedEnum<typeof Lifecycle30>;
 
-export type DataStatus30 = {
+export type GetResourceDeploymentDetailDataStatus30 = {
   collectionIssues: Array<CollectionIssue30>;
   health: Health30;
   lifecycle: Lifecycle30;
@@ -4079,7 +4079,7 @@ export type DataGcpFirestore = {
   pointInTimeRecoveryEnablement?: string | null | undefined;
   projectId?: string | null | undefined;
   sourceInfoPresent: boolean;
-  status: DataStatus30;
+  status: GetResourceDeploymentDetailDataStatus30;
   updateTime?: string | null | undefined;
   versionRetentionPeriod?: string | null | undefined;
   backend: "gcpFirestore";
@@ -4139,7 +4139,7 @@ export const Lifecycle29 = {
 } as const;
 export type Lifecycle29 = ClosedEnum<typeof Lifecycle29>;
 
-export type DataStatus29 = {
+export type GetResourceDeploymentDetailDataStatus29 = {
   collectionIssues: Array<CollectionIssue29>;
   health: Health29;
   lifecycle: Lifecycle29;
@@ -4161,7 +4161,7 @@ export type DataAwsDynamoDb = {
   restoreInProgress?: boolean | null | undefined;
   sseStatus?: string | null | undefined;
   sseType?: string | null | undefined;
-  status: DataStatus29;
+  status: GetResourceDeploymentDetailDataStatus29;
   streamEnabled?: boolean | null | undefined;
   streamViewType?: string | null | undefined;
   tableArn?: string | null | undefined;
@@ -4233,7 +4233,7 @@ export const Lifecycle28 = {
 } as const;
 export type Lifecycle28 = ClosedEnum<typeof Lifecycle28>;
 
-export type DataStatus28 = {
+export type GetResourceDeploymentDetailDataStatus28 = {
   collectionIssues: Array<CollectionIssue28>;
   health: Health28;
   lifecycle: Lifecycle28;
@@ -4246,7 +4246,7 @@ export type DataLocal6 = {
   name: string;
   path?: string | null | undefined;
   serviceStatus?: string | null | undefined;
-  status: DataStatus28;
+  status: GetResourceDeploymentDetailDataStatus28;
   backend: "local";
 };
 
@@ -4299,7 +4299,7 @@ export const Lifecycle27 = {
 } as const;
 export type Lifecycle27 = ClosedEnum<typeof Lifecycle27>;
 
-export type DataStatus27 = {
+export type GetResourceDeploymentDetailDataStatus27 = {
   collectionIssues: Array<CollectionIssue27>;
   health: Health27;
   lifecycle: Lifecycle27;
@@ -4337,7 +4337,7 @@ export type DataAzureServiceBus = {
   resourceId?: string | null | undefined;
   scheduledMessageCount?: number | null | undefined;
   sizeInBytes?: number | null | undefined;
-  status: DataStatus27;
+  status: GetResourceDeploymentDetailDataStatus27;
   transferDeadLetterMessageCount?: number | null | undefined;
   transferMessageCount?: number | null | undefined;
   updatedAt?: string | null | undefined;
@@ -4393,7 +4393,7 @@ export const Lifecycle26 = {
 } as const;
 export type Lifecycle26 = ClosedEnum<typeof Lifecycle26>;
 
-export type DataStatus26 = {
+export type GetResourceDeploymentDetailDataStatus26 = {
   collectionIssues: Array<CollectionIssue26>;
   health: Health26;
   lifecycle: Lifecycle26;
@@ -4412,7 +4412,7 @@ export type DataGcpPubSub = {
   schemaFirstRevisionId?: string | null | undefined;
   schemaLastRevisionId?: string | null | undefined;
   schemaName?: string | null | undefined;
-  status: DataStatus26;
+  status: GetResourceDeploymentDetailDataStatus26;
   subscriptionAckDeadlineSeconds?: number | null | undefined;
   subscriptionDeadLetterMaxDeliveryAttempts?: number | null | undefined;
   subscriptionDeadLetterTopic?: string | null | undefined;
@@ -4489,7 +4489,7 @@ export const Lifecycle25 = {
 } as const;
 export type Lifecycle25 = ClosedEnum<typeof Lifecycle25>;
 
-export type DataStatus25 = {
+export type GetResourceDeploymentDetailDataStatus25 = {
   collectionIssues: Array<CollectionIssue25>;
   health: Health25;
   lifecycle: Lifecycle25;
@@ -4521,7 +4521,7 @@ export type DataAwsSqs = {
   region?: string | null | undefined;
   sqsManagedSseEnabled?: boolean | null | undefined;
   sseEnabled?: boolean | null | undefined;
-  status: DataStatus25;
+  status: GetResourceDeploymentDetailDataStatus25;
   visibilityTimeoutSeconds?: number | null | undefined;
   backend: "awsSqs";
 };
@@ -4806,7 +4806,7 @@ export const Lifecycle24 = {
 } as const;
 export type Lifecycle24 = ClosedEnum<typeof Lifecycle24>;
 
-export type DataStatus24 = {
+export type GetResourceDeploymentDetailDataStatus24 = {
   collectionIssues: Array<CollectionIssue24>;
   health: Health24;
   lifecycle: Lifecycle24;
@@ -4815,7 +4815,7 @@ export type DataStatus24 = {
   stale: boolean;
 };
 
-export type Data1 = {
+export type GetResourceDeploymentDetailData1 = {
   cpu?: Cpu11 | any | null | undefined;
   events: Array<Event12>;
   memory?: Memory11 | any | null | undefined;
@@ -4825,12 +4825,12 @@ export type Data1 = {
   nodeStatuses?: Array<NodeStatus> | undefined;
   podCounts: PodCounts;
   region?: string | null | undefined;
-  status: DataStatus24;
+  status: GetResourceDeploymentDetailDataStatus24;
   version?: string | null | undefined;
 };
 
 export type DataKubernetesCluster = {
-  data: Data1;
+  data: GetResourceDeploymentDetailData1;
   resourceType: "kubernetes-cluster";
 };
 
@@ -4889,7 +4889,7 @@ export const Lifecycle23 = {
 } as const;
 export type Lifecycle23 = ClosedEnum<typeof Lifecycle23>;
 
-export type DataStatus23 = {
+export type GetResourceDeploymentDetailDataStatus23 = {
   collectionIssues: Array<CollectionIssue23>;
   health: Health23;
   lifecycle: Lifecycle23;
@@ -4910,7 +4910,7 @@ export type DataLocal5 = {
   networkName?: string | null | undefined;
   nodes: Nodes5;
   runningContainers?: number | null | undefined;
-  status: DataStatus23;
+  status: GetResourceDeploymentDetailDataStatus23;
   trackedContainers?: number | null | undefined;
   backend: "local";
 };
@@ -5116,7 +5116,7 @@ export const Lifecycle22 = {
 } as const;
 export type Lifecycle22 = ClosedEnum<typeof Lifecycle22>;
 
-export type DataStatus22 = {
+export type GetResourceDeploymentDetailDataStatus22 = {
   collectionIssues: Array<CollectionIssue22>;
   health: Health22;
   lifecycle: Lifecycle22;
@@ -5133,7 +5133,7 @@ export type DataMachines2 = {
   memory?: Memory10 | any | null | undefined;
   name: string;
   nodes: Nodes4;
-  status: DataStatus22;
+  status: GetResourceDeploymentDetailDataStatus22;
   backend: "machines";
 };
 
@@ -5319,7 +5319,7 @@ export const Lifecycle21 = {
 } as const;
 export type Lifecycle21 = ClosedEnum<typeof Lifecycle21>;
 
-export type DataStatus21 = {
+export type GetResourceDeploymentDetailDataStatus21 = {
   collectionIssues: Array<CollectionIssue21>;
   health: Health21;
   lifecycle: Lifecycle21;
@@ -5337,7 +5337,7 @@ export type DataAzure2 = {
   nodes: Nodes3;
   providerFleets: Array<ProviderFleet3>;
   region?: string | null | undefined;
-  status: DataStatus21;
+  status: GetResourceDeploymentDetailDataStatus21;
   backend: "azure";
 };
 
@@ -5523,7 +5523,7 @@ export const Lifecycle20 = {
 } as const;
 export type Lifecycle20 = ClosedEnum<typeof Lifecycle20>;
 
-export type DataStatus20 = {
+export type GetResourceDeploymentDetailDataStatus20 = {
   collectionIssues: Array<CollectionIssue20>;
   health: Health20;
   lifecycle: Lifecycle20;
@@ -5541,7 +5541,7 @@ export type DataGcp2 = {
   nodes: Nodes2;
   providerFleets: Array<ProviderFleet2>;
   region?: string | null | undefined;
-  status: DataStatus20;
+  status: GetResourceDeploymentDetailDataStatus20;
   backend: "gcp";
 };
 
@@ -5727,7 +5727,7 @@ export const Lifecycle19 = {
 } as const;
 export type Lifecycle19 = ClosedEnum<typeof Lifecycle19>;
 
-export type DataStatus19 = {
+export type GetResourceDeploymentDetailDataStatus19 = {
   collectionIssues: Array<CollectionIssue19>;
   health: Health19;
   lifecycle: Lifecycle19;
@@ -5745,7 +5745,7 @@ export type DataAws2 = {
   nodes: Nodes1;
   providerFleets: Array<ProviderFleet1>;
   region?: string | null | undefined;
-  status: DataStatus19;
+  status: GetResourceDeploymentDetailDataStatus19;
   backend: "aws";
 };
 
@@ -5891,7 +5891,7 @@ export const Lifecycle18 = {
 } as const;
 export type Lifecycle18 = ClosedEnum<typeof Lifecycle18>;
 
-export type DataStatus18 = {
+export type GetResourceDeploymentDetailDataStatus18 = {
   collectionIssues: Array<CollectionIssue18>;
   health: Health18;
   lifecycle: Lifecycle18;
@@ -5910,7 +5910,7 @@ export type DataLocal4 = {
   pid?: number | null | undefined;
   restartCount?: number | null | undefined;
   runtimeId: string;
-  status: DataStatus18;
+  status: GetResourceDeploymentDetailDataStatus18;
   backend: "local";
 };
 
@@ -5980,6 +5980,27 @@ export type Memory6 = {
 
 export type MemoryUnion6 = Memory6 | any;
 
+/**
+ * Image a running container reports.
+ */
+export type Container3 = {
+  /**
+   * Registry manifest digest in `sha256:<hex>` form, when the runtime
+   *
+   * @remarks
+   * reports one.
+   */
+  digest?: string | null | undefined;
+  /**
+   * Image reference reported by the container runtime.
+   */
+  image: string;
+  /**
+   * Container name.
+   */
+  name: string;
+};
+
 export const CpuPodUnit3 = {
   Count: "count",
   Percent: "percent",
@@ -6022,6 +6043,7 @@ export type OwnerReference3 = {
 };
 
 export type Pod3 = {
+  containers?: Array<Container3> | undefined;
   cpu?: CpuPod3 | any | null | undefined;
   memory?: MemoryPod3 | any | null | undefined;
   name: string;
@@ -6094,7 +6116,7 @@ export const Lifecycle17 = {
 } as const;
 export type Lifecycle17 = ClosedEnum<typeof Lifecycle17>;
 
-export type DataStatus17 = {
+export type GetResourceDeploymentDetailDataStatus17 = {
   collectionIssues: Array<CollectionIssue17>;
   health: Health17;
   lifecycle: Lifecycle17;
@@ -6134,7 +6156,7 @@ export type DataKubernetes3 = {
   pods: Array<Pod3>;
   replicas: Replicas4;
   restarts?: number | null | undefined;
-  status: DataStatus17;
+  status: GetResourceDeploymentDetailDataStatus17;
   workload?: Workload3 | any | null | undefined;
   backend: "kubernetes";
 };
@@ -6278,7 +6300,7 @@ export const Lifecycle16 = {
 } as const;
 export type Lifecycle16 = ClosedEnum<typeof Lifecycle16>;
 
-export type DataStatus16 = {
+export type GetResourceDeploymentDetailDataStatus16 = {
   collectionIssues: Array<CollectionIssue16>;
   health: Health16;
   lifecycle: Lifecycle16;
@@ -6302,7 +6324,7 @@ export type DataMachines1 = {
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
   observedImage?: string | null | undefined;
-  status: DataStatus16;
+  status: GetResourceDeploymentDetailDataStatus16;
   unavailableInstances: number;
   backend: "machines";
 };
@@ -6446,7 +6468,7 @@ export const Lifecycle15 = {
 } as const;
 export type Lifecycle15 = ClosedEnum<typeof Lifecycle15>;
 
-export type DataStatus15 = {
+export type GetResourceDeploymentDetailDataStatus15 = {
   collectionIssues: Array<CollectionIssue15>;
   health: Health15;
   lifecycle: Lifecycle15;
@@ -6470,7 +6492,7 @@ export type DataAzure1 = {
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
   observedImage?: string | null | undefined;
-  status: DataStatus15;
+  status: GetResourceDeploymentDetailDataStatus15;
   unavailableInstances: number;
   backend: "azure";
 };
@@ -6614,7 +6636,7 @@ export const Lifecycle14 = {
 } as const;
 export type Lifecycle14 = ClosedEnum<typeof Lifecycle14>;
 
-export type DataStatus14 = {
+export type GetResourceDeploymentDetailDataStatus14 = {
   collectionIssues: Array<CollectionIssue14>;
   health: Health14;
   lifecycle: Lifecycle14;
@@ -6638,7 +6660,7 @@ export type DataGcp1 = {
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
   observedImage?: string | null | undefined;
-  status: DataStatus14;
+  status: GetResourceDeploymentDetailDataStatus14;
   unavailableInstances: number;
   backend: "gcp";
 };
@@ -6782,7 +6804,7 @@ export const Lifecycle13 = {
 } as const;
 export type Lifecycle13 = ClosedEnum<typeof Lifecycle13>;
 
-export type DataStatus13 = {
+export type GetResourceDeploymentDetailDataStatus13 = {
   collectionIssues: Array<CollectionIssue13>;
   health: Health13;
   lifecycle: Lifecycle13;
@@ -6806,7 +6828,7 @@ export type DataAws1 = {
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
   observedImage?: string | null | undefined;
-  status: DataStatus13;
+  status: GetResourceDeploymentDetailDataStatus13;
   unavailableInstances: number;
   backend: "aws";
 };
@@ -6994,7 +7016,7 @@ export const Lifecycle12 = {
 } as const;
 export type Lifecycle12 = ClosedEnum<typeof Lifecycle12>;
 
-export type DataStatus12 = {
+export type GetResourceDeploymentDetailDataStatus12 = {
   collectionIssues: Array<CollectionIssue12>;
   health: Health12;
   lifecycle: Lifecycle12;
@@ -7017,7 +7039,7 @@ export type DataLocal3 = {
   restartCount?: number | null | undefined;
   runtimeReachable: boolean;
   runtimeStatus?: string | null | undefined;
-  status: DataStatus12;
+  status: GetResourceDeploymentDetailDataStatus12;
   backend: "local";
 };
 
@@ -7087,6 +7109,27 @@ export type Memory4 = {
 
 export type MemoryUnion4 = Memory4 | any;
 
+/**
+ * Image a running container reports.
+ */
+export type Container2 = {
+  /**
+   * Registry manifest digest in `sha256:<hex>` form, when the runtime
+   *
+   * @remarks
+   * reports one.
+   */
+  digest?: string | null | undefined;
+  /**
+   * Image reference reported by the container runtime.
+   */
+  image: string;
+  /**
+   * Container name.
+   */
+  name: string;
+};
+
 export const CpuPodUnit2 = {
   Count: "count",
   Percent: "percent",
@@ -7129,6 +7172,7 @@ export type OwnerReference2 = {
 };
 
 export type Pod2 = {
+  containers?: Array<Container2> | undefined;
   cpu?: CpuPod2 | any | null | undefined;
   memory?: MemoryPod2 | any | null | undefined;
   name: string;
@@ -7201,7 +7245,7 @@ export const Lifecycle11 = {
 } as const;
 export type Lifecycle11 = ClosedEnum<typeof Lifecycle11>;
 
-export type DataStatus11 = {
+export type GetResourceDeploymentDetailDataStatus11 = {
   collectionIssues: Array<CollectionIssue11>;
   health: Health11;
   lifecycle: Lifecycle11;
@@ -7249,7 +7293,7 @@ export type DataKubernetes2 = {
   pods: Array<Pod2>;
   replicas: Replicas3;
   restarts?: number | null | undefined;
-  status: DataStatus11;
+  status: GetResourceDeploymentDetailDataStatus11;
   workload?: Workload2 | any | null | undefined;
   workloadKind: WorkloadKind2;
   backend: "kubernetes";
@@ -7442,7 +7486,7 @@ export const Lifecycle10 = {
 } as const;
 export type Lifecycle10 = ClosedEnum<typeof Lifecycle10>;
 
-export type DataStatus10 = {
+export type GetResourceDeploymentDetailDataStatus10 = {
   collectionIssues: Array<CollectionIssue10>;
   health: Health10;
   lifecycle: Lifecycle10;
@@ -7463,7 +7507,7 @@ export type DataHorizonPlatform = {
   replicaUnits: Array<ReplicaUnit>;
   replicas: Replicas2;
   schedulingMode: SchedulingMode;
-  status: DataStatus10;
+  status: GetResourceDeploymentDetailDataStatus10;
   backend: "horizonPlatform";
 };
 
@@ -7636,7 +7680,7 @@ export const Lifecycle9 = {
 } as const;
 export type Lifecycle9 = ClosedEnum<typeof Lifecycle9>;
 
-export type DataStatus9 = {
+export type GetResourceDeploymentDetailDataStatus9 = {
   collectionIssues: Array<CollectionIssue9>;
   health: Health9;
   lifecycle: Lifecycle9;
@@ -7654,7 +7698,7 @@ export type DataLocal2 = {
   pid?: number | null | undefined;
   process?: Process | any | null | undefined;
   readinessProbeOk?: boolean | null | undefined;
-  status: DataStatus9;
+  status: GetResourceDeploymentDetailDataStatus9;
   triggerCount: number;
   backend: "local";
 };
@@ -7725,6 +7769,27 @@ export type Memory1 = {
 
 export type MemoryUnion1 = Memory1 | any;
 
+/**
+ * Image a running container reports.
+ */
+export type Container1 = {
+  /**
+   * Registry manifest digest in `sha256:<hex>` form, when the runtime
+   *
+   * @remarks
+   * reports one.
+   */
+  digest?: string | null | undefined;
+  /**
+   * Image reference reported by the container runtime.
+   */
+  image: string;
+  /**
+   * Container name.
+   */
+  name: string;
+};
+
 export const CpuPodUnit1 = {
   Count: "count",
   Percent: "percent",
@@ -7767,6 +7832,7 @@ export type OwnerReference1 = {
 };
 
 export type Pod1 = {
+  containers?: Array<Container1> | undefined;
   cpu?: CpuPod1 | any | null | undefined;
   memory?: MemoryPod1 | any | null | undefined;
   name: string;
@@ -7839,7 +7905,7 @@ export const Lifecycle8 = {
 } as const;
 export type Lifecycle8 = ClosedEnum<typeof Lifecycle8>;
 
-export type DataStatus8 = {
+export type GetResourceDeploymentDetailDataStatus8 = {
   collectionIssues: Array<CollectionIssue8>;
   health: Health8;
   lifecycle: Lifecycle8;
@@ -7887,7 +7953,7 @@ export type DataKubernetes1 = {
   pods: Array<Pod1>;
   replicas: Replicas1;
   restarts?: number | null | undefined;
-  status: DataStatus8;
+  status: GetResourceDeploymentDetailDataStatus8;
   triggerCount: number;
   workload?: Workload1 | any | null | undefined;
   workloadKind: WorkloadKind1;
@@ -7943,7 +8009,7 @@ export const Lifecycle7 = {
 } as const;
 export type Lifecycle7 = ClosedEnum<typeof Lifecycle7>;
 
-export type DataStatus7 = {
+export type GetResourceDeploymentDetailDataStatus7 = {
   collectionIssues: Array<CollectionIssue7>;
   health: Health7;
   lifecycle: Lifecycle7;
@@ -7963,7 +8029,7 @@ export type DataAzureContainerApps1 = {
   provisioningState?: string | null | undefined;
   revision?: string | null | undefined;
   runningStatus?: string | null | undefined;
-  status: DataStatus7;
+  status: GetResourceDeploymentDetailDataStatus7;
   backend: "azureContainerApps";
 };
 
@@ -8016,7 +8082,7 @@ export const Lifecycle6 = {
 } as const;
 export type Lifecycle6 = ClosedEnum<typeof Lifecycle6>;
 
-export type DataStatus6 = {
+export type GetResourceDeploymentDetailDataStatus6 = {
   collectionIssues: Array<CollectionIssue6>;
   health: Health6;
   lifecycle: Lifecycle6;
@@ -8037,7 +8103,7 @@ export type DataGcpCloudRun = {
   observedGeneration?: number | null | undefined;
   region?: string | null | undefined;
   service: string;
-  status: DataStatus6;
+  status: GetResourceDeploymentDetailDataStatus6;
   trafficCount: number;
   uri?: string | null | undefined;
   urls: Array<string>;
@@ -8093,7 +8159,7 @@ export const Lifecycle5 = {
 } as const;
 export type Lifecycle5 = ClosedEnum<typeof Lifecycle5>;
 
-export type DataStatus5 = {
+export type GetResourceDeploymentDetailDataStatus5 = {
   collectionIssues: Array<CollectionIssue5>;
   health: Health5;
   lifecycle: Lifecycle5;
@@ -8119,7 +8185,7 @@ export type DataAwsLambda = {
   state?: string | null | undefined;
   stateReason?: string | null | undefined;
   stateReasonCode?: string | null | undefined;
-  status: DataStatus5;
+  status: GetResourceDeploymentDetailDataStatus5;
   timeoutSeconds?: number | null | undefined;
   triggerCount: number;
   version?: string | null | undefined;
@@ -8192,7 +8258,7 @@ export const Lifecycle4 = {
 } as const;
 export type Lifecycle4 = ClosedEnum<typeof Lifecycle4>;
 
-export type DataStatus4 = {
+export type GetResourceDeploymentDetailDataStatus4 = {
   collectionIssues: Array<CollectionIssue4>;
   health: Health4;
   lifecycle: Lifecycle4;
@@ -8207,7 +8273,7 @@ export type DataLocal1 = {
   path: string;
   pathExists: boolean;
   readonly?: boolean | null | undefined;
-  status: DataStatus4;
+  status: GetResourceDeploymentDetailDataStatus4;
   backend: "local";
 };
 
@@ -8260,7 +8326,7 @@ export const Lifecycle3 = {
 } as const;
 export type Lifecycle3 = ClosedEnum<typeof Lifecycle3>;
 
-export type DataStatus3 = {
+export type GetResourceDeploymentDetailDataStatus3 = {
   collectionIssues: Array<CollectionIssue3>;
   health: Health3;
   lifecycle: Lifecycle3;
@@ -8294,7 +8360,7 @@ export type DataAzureBlob = {
   secondaryLocation?: string | null | undefined;
   skuName?: string | null | undefined;
   skuTier?: string | null | undefined;
-  status: DataStatus3;
+  status: GetResourceDeploymentDetailDataStatus3;
   statusOfPrimary?: string | null | undefined;
   statusOfSecondary?: string | null | undefined;
   storageAccountName?: string | null | undefined;
@@ -8351,7 +8417,7 @@ export const Lifecycle2 = {
 } as const;
 export type Lifecycle2 = ClosedEnum<typeof Lifecycle2>;
 
-export type DataStatus2 = {
+export type GetResourceDeploymentDetailDataStatus2 = {
   collectionIssues: Array<CollectionIssue2>;
   health: Health2;
   lifecycle: Lifecycle2;
@@ -8375,7 +8441,7 @@ export type DataGcpCloudStorage = {
   retentionPolicyIsLocked?: boolean | null | undefined;
   softDeleteEffectiveTime?: string | null | undefined;
   softDeleteRetentionDurationSeconds?: string | null | undefined;
-  status: DataStatus2;
+  status: GetResourceDeploymentDetailDataStatus2;
   storageClass?: string | null | undefined;
   uniformBucketLevelAccessEnabled?: boolean | null | undefined;
   uniformBucketLevelAccessLockedTime?: string | null | undefined;
@@ -8432,7 +8498,7 @@ export const Lifecycle1 = {
 } as const;
 export type Lifecycle1 = ClosedEnum<typeof Lifecycle1>;
 
-export type DataStatus1 = {
+export type GetResourceDeploymentDetailDataStatus1 = {
   collectionIssues: Array<CollectionIssue1>;
   health: Health1;
   lifecycle: Lifecycle1;
@@ -8456,7 +8522,7 @@ export type DataAwsS3 = {
   publicAccessBlockPresent: boolean;
   region?: string | null | undefined;
   restrictPublicBuckets?: boolean | null | undefined;
-  status: DataStatus1;
+  status: GetResourceDeploymentDetailDataStatus1;
   versioningEnabled?: boolean | null | undefined;
   versioningStatus?: string | null | undefined;
   backend: "awsS3";
@@ -8727,23 +8793,31 @@ export const Lifecycle77$inboundSchema: z.ZodEnum<typeof Lifecycle77> = z.enum(
 );
 
 /** @internal */
-export const DataStatus77$inboundSchema: z.ZodType<DataStatus77, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue74$inboundSchema)),
-    health: Health77$inboundSchema,
-    lifecycle: Lifecycle77$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus77$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus77,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue74$inboundSchema)),
+  health: Health77$inboundSchema,
+  lifecycle: Lifecycle77$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus77FromJSON(
+export function getResourceDeploymentDetailDataStatus77FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus77, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus77,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus77$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus77' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus77$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus77' from JSON`,
   );
 }
 
@@ -8752,7 +8826,7 @@ export const DataLocal12$inboundSchema: z.ZodType<DataLocal12, unknown> = z
   .object({
     activeSessions: z.int(),
     routeServing: z.boolean(),
-    status: z.lazy(() => DataStatus77$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus77$inboundSchema),
     backend: z.literal("local"),
   });
 
@@ -8808,23 +8882,31 @@ export const Lifecycle76$inboundSchema: z.ZodEnum<typeof Lifecycle76> = z.enum(
 );
 
 /** @internal */
-export const DataStatus76$inboundSchema: z.ZodType<DataStatus76, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue73$inboundSchema)),
-    health: Health76$inboundSchema,
-    lifecycle: Lifecycle76$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus76$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus76,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue73$inboundSchema)),
+  health: Health76$inboundSchema,
+  lifecycle: Lifecycle76$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus76FromJSON(
+export function getResourceDeploymentDetailDataStatus76FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus76, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus76,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus76$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus76' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus76$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus76' from JSON`,
   );
 }
 
@@ -8836,7 +8918,7 @@ export const DataKubernetesPods$inboundSchema: z.ZodType<
   activeSessions: z.int(),
   idlePods: z.int(),
   namespace: z.string(),
-  status: z.lazy(() => DataStatus76$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus76$inboundSchema),
   backend: z.literal("kubernetesPods"),
 });
 
@@ -8892,23 +8974,31 @@ export const Lifecycle75$inboundSchema: z.ZodEnum<typeof Lifecycle75> = z.enum(
 );
 
 /** @internal */
-export const DataStatus75$inboundSchema: z.ZodType<DataStatus75, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue72$inboundSchema)),
-    health: Health75$inboundSchema,
-    lifecycle: Lifecycle75$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus75$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus75,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue72$inboundSchema)),
+  health: Health75$inboundSchema,
+  lifecycle: Lifecycle75$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus75FromJSON(
+export function getResourceDeploymentDetailDataStatus75FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus75, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus75,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus75$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus75' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus75$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus75' from JSON`,
   );
 }
 
@@ -8918,7 +9008,7 @@ export const DataGcpAgentPlatform$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   engine: z.string(),
-  status: z.lazy(() => DataStatus75$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus75$inboundSchema),
   templateId: z.string(),
   backend: z.literal("gcpAgentPlatform"),
 });
@@ -8975,23 +9065,31 @@ export const Lifecycle74$inboundSchema: z.ZodEnum<typeof Lifecycle74> = z.enum(
 );
 
 /** @internal */
-export const DataStatus74$inboundSchema: z.ZodType<DataStatus74, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue71$inboundSchema)),
-    health: Health74$inboundSchema,
-    lifecycle: Lifecycle74$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus74$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus74,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue71$inboundSchema)),
+  health: Health74$inboundSchema,
+  lifecycle: Lifecycle74$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus74FromJSON(
+export function getResourceDeploymentDetailDataStatus74FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus74, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus74,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus74$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus74' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus74$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus74' from JSON`,
   );
 }
 
@@ -9002,7 +9100,7 @@ export const DataAzureSandboxGroup$inboundSchema: z.ZodType<
 > = z.object({
   provisioningState: z.nullable(z.string()).optional(),
   sandboxGroup: z.string(),
-  status: z.lazy(() => DataStatus74$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus74$inboundSchema),
   backend: z.literal("azureSandboxGroup"),
 });
 
@@ -9058,23 +9156,31 @@ export const Lifecycle73$inboundSchema: z.ZodEnum<typeof Lifecycle73> = z.enum(
 );
 
 /** @internal */
-export const DataStatus73$inboundSchema: z.ZodType<DataStatus73, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue70$inboundSchema)),
-    health: Health73$inboundSchema,
-    lifecycle: Lifecycle73$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus73$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus73,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue70$inboundSchema)),
+  health: Health73$inboundSchema,
+  lifecycle: Lifecycle73$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus73FromJSON(
+export function getResourceDeploymentDetailDataStatus73FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus73, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus73,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus73$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus73' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus73$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus73' from JSON`,
   );
 }
 
@@ -9083,7 +9189,7 @@ export const DataAwsMicrovm$inboundSchema: z.ZodType<DataAwsMicrovm, unknown> =
   z.object({
     imageIdentifier: z.string(),
     imageState: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus73$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus73$inboundSchema),
     backend: z.literal("awsMicrovm"),
   });
 
@@ -9151,40 +9257,51 @@ export const Lifecycle72$inboundSchema: z.ZodEnum<typeof Lifecycle72> = z.enum(
 );
 
 /** @internal */
-export const DataStatus72$inboundSchema: z.ZodType<DataStatus72, unknown> = z
-  .object({
-    health: Health72$inboundSchema,
-    lifecycle: Lifecycle72$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-  });
+export const GetResourceDeploymentDetailDataStatus72$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus72,
+  unknown
+> = z.object({
+  health: Health72$inboundSchema,
+  lifecycle: Lifecycle72$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+});
 
-export function dataStatus72FromJSON(
+export function getResourceDeploymentDetailDataStatus72FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus72, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus72,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus72$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus72' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus72$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus72' from JSON`,
   );
 }
 
 /** @internal */
-export const Data8$inboundSchema: z.ZodType<Data8, unknown> = z.object({
+export const GetResourceDeploymentDetailData8$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailData8,
+  unknown
+> = z.object({
   enabled: z.nullable(z.boolean()).optional(),
   keyId: z.string(),
   keyOperations: z.array(z.string()),
   keyType: z.string(),
   recoveryLevel: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus72$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus72$inboundSchema),
 });
 
-export function data8FromJSON(
+export function getResourceDeploymentDetailData8FromJSON(
   jsonString: string,
-): SafeParseResult<Data8, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailData8, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Data8$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Data8' from JSON`,
+    (x) => GetResourceDeploymentDetailData8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailData8' from JSON`,
   );
 }
 
@@ -9193,7 +9310,7 @@ export const DataAzureKeyVault2$inboundSchema: z.ZodType<
   DataAzureKeyVault2,
   unknown
 > = z.object({
-  data: z.lazy(() => Data8$inboundSchema),
+  data: z.lazy(() => GetResourceDeploymentDetailData8$inboundSchema),
   provider: z.literal("azure-key-vault"),
 });
 
@@ -9218,40 +9335,51 @@ export const Lifecycle71$inboundSchema: z.ZodEnum<typeof Lifecycle71> = z.enum(
 );
 
 /** @internal */
-export const DataStatus71$inboundSchema: z.ZodType<DataStatus71, unknown> = z
-  .object({
-    health: Health71$inboundSchema,
-    lifecycle: Lifecycle71$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-  });
+export const GetResourceDeploymentDetailDataStatus71$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus71,
+  unknown
+> = z.object({
+  health: Health71$inboundSchema,
+  lifecycle: Lifecycle71$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+});
 
-export function dataStatus71FromJSON(
+export function getResourceDeploymentDetailDataStatus71FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus71, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus71,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus71$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus71' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus71$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus71' from JSON`,
   );
 }
 
 /** @internal */
-export const Data7$inboundSchema: z.ZodType<Data7, unknown> = z.object({
+export const GetResourceDeploymentDetailData7$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailData7,
+  unknown
+> = z.object({
   algorithm: z.nullable(z.string()).optional(),
   cryptoKeyName: z.string(),
   primaryState: z.nullable(z.string()).optional(),
   primaryVersion: z.nullable(z.string()).optional(),
   purpose: z.string(),
-  status: z.lazy(() => DataStatus71$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus71$inboundSchema),
 });
 
-export function data7FromJSON(
+export function getResourceDeploymentDetailData7FromJSON(
   jsonString: string,
-): SafeParseResult<Data7, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailData7, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Data7$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Data7' from JSON`,
+    (x) => GetResourceDeploymentDetailData7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailData7' from JSON`,
   );
 }
 
@@ -9260,7 +9388,7 @@ export const DataGcpCloudKms$inboundSchema: z.ZodType<
   DataGcpCloudKms,
   unknown
 > = z.object({
-  data: z.lazy(() => Data7$inboundSchema),
+  data: z.lazy(() => GetResourceDeploymentDetailData7$inboundSchema),
   provider: z.literal("gcp-cloud-kms"),
 });
 
@@ -9285,47 +9413,58 @@ export const Lifecycle70$inboundSchema: z.ZodEnum<typeof Lifecycle70> = z.enum(
 );
 
 /** @internal */
-export const DataStatus70$inboundSchema: z.ZodType<DataStatus70, unknown> = z
-  .object({
-    health: Health70$inboundSchema,
-    lifecycle: Lifecycle70$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-  });
+export const GetResourceDeploymentDetailDataStatus70$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus70,
+  unknown
+> = z.object({
+  health: Health70$inboundSchema,
+  lifecycle: Lifecycle70$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+});
 
-export function dataStatus70FromJSON(
+export function getResourceDeploymentDetailDataStatus70FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus70, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus70,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus70$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus70' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus70$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus70' from JSON`,
   );
 }
 
 /** @internal */
-export const Data6$inboundSchema: z.ZodType<Data6, unknown> = z.object({
+export const GetResourceDeploymentDetailData6$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailData6,
+  unknown
+> = z.object({
   enabled: z.boolean(),
   keyArn: z.string(),
   keySpec: z.string(),
   keyState: z.string(),
   keyUsage: z.string(),
-  status: z.lazy(() => DataStatus70$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus70$inboundSchema),
 });
 
-export function data6FromJSON(
+export function getResourceDeploymentDetailData6FromJSON(
   jsonString: string,
-): SafeParseResult<Data6, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailData6, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Data6$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Data6' from JSON`,
+    (x) => GetResourceDeploymentDetailData6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailData6' from JSON`,
   );
 }
 
 /** @internal */
 export const DataAwsKms$inboundSchema: z.ZodType<DataAwsKms, unknown> = z
   .object({
-    data: z.lazy(() => Data6$inboundSchema),
+    data: z.lazy(() => GetResourceDeploymentDetailData6$inboundSchema),
     provider: z.literal("aws-kms"),
   });
 
@@ -9423,9 +9562,9 @@ export function getResourceDeploymentDetailModel4FromJSON(
 }
 
 /** @internal */
-export const SourceEnum4$inboundSchema: z.ZodEnum<typeof SourceEnum4> = z.enum(
-  SourceEnum4,
-);
+export const AvailabilitySource4$inboundSchema: z.ZodEnum<
+  typeof AvailabilitySource4
+> = z.enum(AvailabilitySource4);
 
 /** @internal */
 export const Availability4$inboundSchema: z.ZodType<Availability4, unknown> = z
@@ -9435,7 +9574,7 @@ export const Availability4$inboundSchema: z.ZodType<Availability4, unknown> = z
     models: z.array(
       z.lazy(() => GetResourceDeploymentDetailModel4$inboundSchema),
     ),
-    source: SourceEnum4$inboundSchema,
+    source: AvailabilitySource4$inboundSchema,
   });
 
 export function availability4FromJSON(
@@ -9506,23 +9645,31 @@ export const Lifecycle69$inboundSchema: z.ZodEnum<typeof Lifecycle69> = z.enum(
 );
 
 /** @internal */
-export const DataStatus69$inboundSchema: z.ZodType<DataStatus69, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue69$inboundSchema)),
-    health: Health69$inboundSchema,
-    lifecycle: Lifecycle69$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus69$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus69,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue69$inboundSchema)),
+  health: Health69$inboundSchema,
+  lifecycle: Lifecycle69$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus69FromJSON(
+export function getResourceDeploymentDetailDataStatus69FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus69, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus69,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus69$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus69' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus69$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus69' from JSON`,
   );
 }
 
@@ -9533,7 +9680,7 @@ export const DataExternal$inboundSchema: z.ZodType<DataExternal, unknown> = z
       z.union([z.lazy(() => Availability4$inboundSchema), z.any()]),
     ).optional(),
     provider: z.string(),
-    status: z.lazy(() => DataStatus69$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus69$inboundSchema),
     backend: z.literal("external"),
   });
 
@@ -9593,9 +9740,9 @@ export function getResourceDeploymentDetailModel3FromJSON(
 }
 
 /** @internal */
-export const SourceEnum3$inboundSchema: z.ZodEnum<typeof SourceEnum3> = z.enum(
-  SourceEnum3,
-);
+export const AvailabilitySource3$inboundSchema: z.ZodEnum<
+  typeof AvailabilitySource3
+> = z.enum(AvailabilitySource3);
 
 /** @internal */
 export const Availability3$inboundSchema: z.ZodType<Availability3, unknown> = z
@@ -9605,7 +9752,7 @@ export const Availability3$inboundSchema: z.ZodType<Availability3, unknown> = z
     models: z.array(
       z.lazy(() => GetResourceDeploymentDetailModel3$inboundSchema),
     ),
-    source: SourceEnum3$inboundSchema,
+    source: AvailabilitySource3$inboundSchema,
   });
 
 export function availability3FromJSON(
@@ -9660,23 +9807,31 @@ export const Lifecycle68$inboundSchema: z.ZodEnum<typeof Lifecycle68> = z.enum(
 );
 
 /** @internal */
-export const DataStatus68$inboundSchema: z.ZodType<DataStatus68, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue68$inboundSchema)),
-    health: Health68$inboundSchema,
-    lifecycle: Lifecycle68$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus68$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus68,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue68$inboundSchema)),
+  health: Health68$inboundSchema,
+  lifecycle: Lifecycle68$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus68FromJSON(
+export function getResourceDeploymentDetailDataStatus68FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus68, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus68,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus68$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus68' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus68$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus68' from JSON`,
   );
 }
 
@@ -9690,7 +9845,7 @@ export const DataAzureFoundry$inboundSchema: z.ZodType<
   endpoint: z.nullable(z.string()).optional(),
   location: z.nullable(z.string()).optional(),
   resourceGroup: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus68$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus68$inboundSchema),
   backend: z.literal("azureFoundry"),
 });
 
@@ -9750,9 +9905,9 @@ export function getResourceDeploymentDetailModel2FromJSON(
 }
 
 /** @internal */
-export const SourceEnum2$inboundSchema: z.ZodEnum<typeof SourceEnum2> = z.enum(
-  SourceEnum2,
-);
+export const AvailabilitySource2$inboundSchema: z.ZodEnum<
+  typeof AvailabilitySource2
+> = z.enum(AvailabilitySource2);
 
 /** @internal */
 export const Availability2$inboundSchema: z.ZodType<Availability2, unknown> = z
@@ -9762,7 +9917,7 @@ export const Availability2$inboundSchema: z.ZodType<Availability2, unknown> = z
     models: z.array(
       z.lazy(() => GetResourceDeploymentDetailModel2$inboundSchema),
     ),
-    source: SourceEnum2$inboundSchema,
+    source: AvailabilitySource2$inboundSchema,
   });
 
 export function availability2FromJSON(
@@ -9817,23 +9972,31 @@ export const Lifecycle67$inboundSchema: z.ZodEnum<typeof Lifecycle67> = z.enum(
 );
 
 /** @internal */
-export const DataStatus67$inboundSchema: z.ZodType<DataStatus67, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue67$inboundSchema)),
-    health: Health67$inboundSchema,
-    lifecycle: Lifecycle67$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus67$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus67,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue67$inboundSchema)),
+  health: Health67$inboundSchema,
+  lifecycle: Lifecycle67$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus67FromJSON(
+export function getResourceDeploymentDetailDataStatus67FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus67, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus67,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus67$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus67' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus67$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus67' from JSON`,
   );
 }
 
@@ -9843,7 +10006,7 @@ export const DataGcpVertex$inboundSchema: z.ZodType<DataGcpVertex, unknown> = z
     availability: z.lazy(() => Availability2$inboundSchema),
     location: z.string(),
     project: z.string(),
-    status: z.lazy(() => DataStatus67$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus67$inboundSchema),
     backend: z.literal("gcpVertex"),
   });
 
@@ -9903,9 +10066,9 @@ export function getResourceDeploymentDetailModel1FromJSON(
 }
 
 /** @internal */
-export const SourceEnum1$inboundSchema: z.ZodEnum<typeof SourceEnum1> = z.enum(
-  SourceEnum1,
-);
+export const AvailabilitySource1$inboundSchema: z.ZodEnum<
+  typeof AvailabilitySource1
+> = z.enum(AvailabilitySource1);
 
 /** @internal */
 export const Availability1$inboundSchema: z.ZodType<Availability1, unknown> = z
@@ -9915,7 +10078,7 @@ export const Availability1$inboundSchema: z.ZodType<Availability1, unknown> = z
     models: z.array(
       z.lazy(() => GetResourceDeploymentDetailModel1$inboundSchema),
     ),
-    source: SourceEnum1$inboundSchema,
+    source: AvailabilitySource1$inboundSchema,
   });
 
 export function availability1FromJSON(
@@ -9970,23 +10133,31 @@ export const Lifecycle66$inboundSchema: z.ZodEnum<typeof Lifecycle66> = z.enum(
 );
 
 /** @internal */
-export const DataStatus66$inboundSchema: z.ZodType<DataStatus66, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue66$inboundSchema)),
-    health: Health66$inboundSchema,
-    lifecycle: Lifecycle66$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus66$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus66,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue66$inboundSchema)),
+  health: Health66$inboundSchema,
+  lifecycle: Lifecycle66$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus66FromJSON(
+export function getResourceDeploymentDetailDataStatus66FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus66, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus66,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus66$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus66' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus66$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus66' from JSON`,
   );
 }
 
@@ -9995,7 +10166,7 @@ export const DataAwsBedrock$inboundSchema: z.ZodType<DataAwsBedrock, unknown> =
   z.object({
     availability: z.lazy(() => Availability1$inboundSchema),
     region: z.string(),
-    status: z.lazy(() => DataStatus66$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus66$inboundSchema),
     backend: z.literal("awsBedrock"),
   });
 
@@ -10091,28 +10262,39 @@ export const Lifecycle65$inboundSchema: z.ZodEnum<typeof Lifecycle65> = z.enum(
 );
 
 /** @internal */
-export const DataStatus65$inboundSchema: z.ZodType<DataStatus65, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue65$inboundSchema)),
-    health: Health65$inboundSchema,
-    lifecycle: Lifecycle65$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus65$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus65,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue65$inboundSchema)),
+  health: Health65$inboundSchema,
+  lifecycle: Lifecycle65$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus65FromJSON(
+export function getResourceDeploymentDetailDataStatus65FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus65, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus65,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus65$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus65' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus65$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus65' from JSON`,
   );
 }
 
 /** @internal */
-export const Data5$inboundSchema: z.ZodType<Data5, unknown> = z.object({
+export const GetResourceDeploymentDetailData5$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailData5,
+  unknown
+> = z.object({
   createdAt: z.nullable(z.string()).optional(),
   disableLocalAuth: z.nullable(z.boolean()).optional(),
   location: z.nullable(z.string()).optional(),
@@ -10130,18 +10312,18 @@ export const Data5$inboundSchema: z.ZodType<Data5, unknown> = z.object({
   skuCapacity: z.nullable(z.int()).optional(),
   skuName: z.nullable(z.string()).optional(),
   skuTier: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus65$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus65$inboundSchema),
   updatedAt: z.nullable(z.string()).optional(),
   zoneRedundant: z.nullable(z.boolean()).optional(),
 });
 
-export function data5FromJSON(
+export function getResourceDeploymentDetailData5FromJSON(
   jsonString: string,
-): SafeParseResult<Data5, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailData5, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Data5$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Data5' from JSON`,
+    (x) => GetResourceDeploymentDetailData5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailData5' from JSON`,
   );
 }
 
@@ -10150,7 +10332,7 @@ export const DataAzureServiceBusNamespace$inboundSchema: z.ZodType<
   DataAzureServiceBusNamespace,
   unknown
 > = z.object({
-  data: z.lazy(() => Data5$inboundSchema),
+  data: z.lazy(() => GetResourceDeploymentDetailData5$inboundSchema),
   resourceType: z.literal("azure_service_bus_namespace"),
 });
 
@@ -10206,23 +10388,31 @@ export const Lifecycle64$inboundSchema: z.ZodEnum<typeof Lifecycle64> = z.enum(
 );
 
 /** @internal */
-export const DataStatus64$inboundSchema: z.ZodType<DataStatus64, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue64$inboundSchema)),
-    health: Health64$inboundSchema,
-    lifecycle: Lifecycle64$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus64$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus64,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue64$inboundSchema)),
+  health: Health64$inboundSchema,
+  lifecycle: Lifecycle64$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus64FromJSON(
+export function getResourceDeploymentDetailDataStatus64FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus64, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus64,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus64$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus64' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus64$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus64' from JSON`,
   );
 }
 
@@ -10248,7 +10438,10 @@ export function workloadProfileFromJSON(
 }
 
 /** @internal */
-export const Data4$inboundSchema: z.ZodType<Data4, unknown> = z.object({
+export const GetResourceDeploymentDetailData4$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailData4,
+  unknown
+> = z.object({
   customDomainVerificationId: z.nullable(z.string()).optional(),
   defaultDomain: z.nullable(z.string()).optional(),
   eventStreamEndpoint: z.nullable(z.string()).optional(),
@@ -10260,19 +10453,19 @@ export const Data4$inboundSchema: z.ZodType<Data4, unknown> = z.object({
   resourceGroup: z.nullable(z.string()).optional(),
   resourceId: z.nullable(z.string()).optional(),
   staticIp: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus64$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus64$inboundSchema),
   workloadProfileCount: z.int(),
   workloadProfiles: z.array(z.lazy(() => WorkloadProfile$inboundSchema)),
   zoneRedundant: z.nullable(z.boolean()).optional(),
 });
 
-export function data4FromJSON(
+export function getResourceDeploymentDetailData4FromJSON(
   jsonString: string,
-): SafeParseResult<Data4, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailData4, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Data4$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Data4' from JSON`,
+    (x) => GetResourceDeploymentDetailData4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailData4' from JSON`,
   );
 }
 
@@ -10281,7 +10474,7 @@ export const DataAzureContainerAppsEnvironment$inboundSchema: z.ZodType<
   DataAzureContainerAppsEnvironment,
   unknown
 > = z.object({
-  data: z.lazy(() => Data4$inboundSchema),
+  data: z.lazy(() => GetResourceDeploymentDetailData4$inboundSchema),
   resourceType: z.literal("azure_container_apps_environment"),
 });
 
@@ -10383,28 +10576,39 @@ export const Lifecycle63$inboundSchema: z.ZodEnum<typeof Lifecycle63> = z.enum(
 );
 
 /** @internal */
-export const DataStatus63$inboundSchema: z.ZodType<DataStatus63, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue63$inboundSchema)),
-    health: Health63$inboundSchema,
-    lifecycle: Lifecycle63$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus63$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus63,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue63$inboundSchema)),
+  health: Health63$inboundSchema,
+  lifecycle: Lifecycle63$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus63FromJSON(
+export function getResourceDeploymentDetailDataStatus63FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus63, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus63,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus63$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus63' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus63$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus63' from JSON`,
   );
 }
 
 /** @internal */
-export const Data3$inboundSchema: z.ZodType<Data3, unknown> = z.object({
+export const GetResourceDeploymentDetailData3$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailData3,
+  unknown
+> = z.object({
   allowBlobPublicAccess: z.nullable(z.boolean()).optional(),
   allowSharedKeyAccess: z.nullable(z.boolean()).optional(),
   encryptionKeySource: z.nullable(z.string()).optional(),
@@ -10426,17 +10630,17 @@ export const Data3$inboundSchema: z.ZodType<Data3, unknown> = z.object({
   secondaryEndpoints: z.lazy(() => SecondaryEndpoints$inboundSchema),
   skuName: z.nullable(z.string()).optional(),
   skuTier: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus63$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus63$inboundSchema),
   supportsHttpsTrafficOnly: z.nullable(z.boolean()).optional(),
 });
 
-export function data3FromJSON(
+export function getResourceDeploymentDetailData3FromJSON(
   jsonString: string,
-): SafeParseResult<Data3, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailData3, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Data3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Data3' from JSON`,
+    (x) => GetResourceDeploymentDetailData3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailData3' from JSON`,
   );
 }
 
@@ -10445,7 +10649,7 @@ export const DataAzureStorageAccount$inboundSchema: z.ZodType<
   DataAzureStorageAccount,
   unknown
 > = z.object({
-  data: z.lazy(() => Data3$inboundSchema),
+  data: z.lazy(() => GetResourceDeploymentDetailData3$inboundSchema),
   resourceType: z.literal("azure_storage_account"),
 });
 
@@ -10501,43 +10705,54 @@ export const Lifecycle62$inboundSchema: z.ZodEnum<typeof Lifecycle62> = z.enum(
 );
 
 /** @internal */
-export const DataStatus62$inboundSchema: z.ZodType<DataStatus62, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue62$inboundSchema)),
-    health: Health62$inboundSchema,
-    lifecycle: Lifecycle62$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus62$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus62,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue62$inboundSchema)),
+  health: Health62$inboundSchema,
+  lifecycle: Lifecycle62$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus62FromJSON(
+export function getResourceDeploymentDetailDataStatus62FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus62, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus62,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus62$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus62' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus62$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus62' from JSON`,
   );
 }
 
 /** @internal */
-export const Data2$inboundSchema: z.ZodType<Data2, unknown> = z.object({
+export const GetResourceDeploymentDetailData2$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailData2,
+  unknown
+> = z.object({
   location: z.nullable(z.string()).optional(),
   managedTags: z.record(z.string(), z.string()),
   name: z.string(),
   provisioningState: z.nullable(z.string()).optional(),
   resourceId: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus62$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus62$inboundSchema),
 });
 
-export function data2FromJSON(
+export function getResourceDeploymentDetailData2FromJSON(
   jsonString: string,
-): SafeParseResult<Data2, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailData2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Data2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Data2' from JSON`,
+    (x) => GetResourceDeploymentDetailData2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailData2' from JSON`,
   );
 }
 
@@ -10546,7 +10761,7 @@ export const DataAzureResourceGroup$inboundSchema: z.ZodType<
   DataAzureResourceGroup,
   unknown
 > = z.object({
-  data: z.lazy(() => Data2$inboundSchema),
+  data: z.lazy(() => GetResourceDeploymentDetailData2$inboundSchema),
   resourceType: z.literal("azure_resource_group"),
 });
 
@@ -10602,23 +10817,31 @@ export const Lifecycle61$inboundSchema: z.ZodEnum<typeof Lifecycle61> = z.enum(
 );
 
 /** @internal */
-export const DataStatus61$inboundSchema: z.ZodType<DataStatus61, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue61$inboundSchema)),
-    health: Health61$inboundSchema,
-    lifecycle: Lifecycle61$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus61$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus61,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue61$inboundSchema)),
+  health: Health61$inboundSchema,
+  lifecycle: Lifecycle61$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus61FromJSON(
+export function getResourceDeploymentDetailDataStatus61FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus61, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus61,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus61$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus61' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus61$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus61' from JSON`,
   );
 }
 
@@ -10633,7 +10856,7 @@ export const DataAzureResourceProvider$inboundSchema: z.ZodType<
   registrationPolicy: z.nullable(z.string()).optional(),
   registrationState: z.nullable(z.string()).optional(),
   resourceTypeCount: z.int(),
-  status: z.lazy(() => DataStatus61$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus61$inboundSchema),
   backend: z.literal("azureResourceProvider"),
 });
 
@@ -10689,23 +10912,31 @@ export const Lifecycle60$inboundSchema: z.ZodEnum<typeof Lifecycle60> = z.enum(
 );
 
 /** @internal */
-export const DataStatus60$inboundSchema: z.ZodType<DataStatus60, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue60$inboundSchema)),
-    health: Health60$inboundSchema,
-    lifecycle: Lifecycle60$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus60$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus60,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue60$inboundSchema)),
+  health: Health60$inboundSchema,
+  lifecycle: Lifecycle60$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus60FromJSON(
+export function getResourceDeploymentDetailDataStatus60FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus60, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus60,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus60$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus60' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus60$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus60' from JSON`,
   );
 }
 
@@ -10720,7 +10951,7 @@ export const DataGcpServiceUsage$inboundSchema: z.ZodType<
   serviceName: z.string(),
   serviceResourceName: z.nullable(z.string()).optional(),
   state: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus60$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus60$inboundSchema),
   title: z.nullable(z.string()).optional(),
   backend: z.literal("gcpServiceUsage"),
 });
@@ -10921,23 +11152,31 @@ export const Lifecycle59$inboundSchema: z.ZodEnum<typeof Lifecycle59> = z.enum(
 );
 
 /** @internal */
-export const DataStatus59$inboundSchema: z.ZodType<DataStatus59, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue59$inboundSchema)),
-    health: Health59$inboundSchema,
-    lifecycle: Lifecycle59$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus59$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus59,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue59$inboundSchema)),
+  health: Health59$inboundSchema,
+  lifecycle: Lifecycle59$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus59FromJSON(
+export function getResourceDeploymentDetailDataStatus59FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus59, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus59,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus59$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus59' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus59$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus59' from JSON`,
   );
 }
 
@@ -10959,7 +11198,7 @@ export const DataKubernetesJob$inboundSchema: z.ZodType<
   startTime: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),
-  status: z.lazy(() => DataStatus59$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus59$inboundSchema),
   succeeded: z.nullable(z.int()).optional(),
   backend: z.literal("kubernetesJob"),
 });
@@ -11016,23 +11255,31 @@ export const Lifecycle58$inboundSchema: z.ZodEnum<typeof Lifecycle58> = z.enum(
 );
 
 /** @internal */
-export const DataStatus58$inboundSchema: z.ZodType<DataStatus58, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue58$inboundSchema)),
-    health: Health58$inboundSchema,
-    lifecycle: Lifecycle58$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus58$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus58,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue58$inboundSchema)),
+  health: Health58$inboundSchema,
+  lifecycle: Lifecycle58$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus58FromJSON(
+export function getResourceDeploymentDetailDataStatus58FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus58, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus58,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus58$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus58' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus58$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus58' from JSON`,
   );
 }
 
@@ -11046,7 +11293,7 @@ export const DataAzureContainerApps2$inboundSchema: z.ZodType<
   managedIdentityId: z.nullable(z.string()).optional(),
   resourceGroupName: z.string(),
   resourcePrefix: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus58$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus58$inboundSchema),
   backend: z.literal("azureContainerApps"),
 });
 
@@ -11102,23 +11349,31 @@ export const Lifecycle57$inboundSchema: z.ZodEnum<typeof Lifecycle57> = z.enum(
 );
 
 /** @internal */
-export const DataStatus57$inboundSchema: z.ZodType<DataStatus57, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue57$inboundSchema)),
-    health: Health57$inboundSchema,
-    lifecycle: Lifecycle57$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus57$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus57,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue57$inboundSchema)),
+  health: Health57$inboundSchema,
+  lifecycle: Lifecycle57$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus57FromJSON(
+export function getResourceDeploymentDetailDataStatus57FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus57, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus57,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus57$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus57' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus57$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus57' from JSON`,
   );
 }
 
@@ -11132,7 +11387,7 @@ export const DataGcpCloudBuild$inboundSchema: z.ZodType<
   location: z.string(),
   projectId: z.string(),
   serviceAccount: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus57$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus57$inboundSchema),
   backend: z.literal("gcpCloudBuild"),
 });
 
@@ -11188,23 +11443,31 @@ export const Lifecycle56$inboundSchema: z.ZodEnum<typeof Lifecycle56> = z.enum(
 );
 
 /** @internal */
-export const DataStatus56$inboundSchema: z.ZodType<DataStatus56, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue56$inboundSchema)),
-    health: Health56$inboundSchema,
-    lifecycle: Lifecycle56$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus56$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus56,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue56$inboundSchema)),
+  health: Health56$inboundSchema,
+  lifecycle: Lifecycle56$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus56FromJSON(
+export function getResourceDeploymentDetailDataStatus56FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus56, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus56,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus56$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus56' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus56$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus56' from JSON`,
   );
 }
 
@@ -11232,7 +11495,7 @@ export const DataAwsCodeBuild$inboundSchema: z.ZodType<
   s3LogsStatus: z.nullable(z.string()).optional(),
   serviceRolePresent: z.boolean(),
   sourceType: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus56$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus56$inboundSchema),
   timeoutInMinutes: z.nullable(z.int()).optional(),
   backend: z.literal("awsCodeBuild"),
 });
@@ -11329,23 +11592,31 @@ export const Lifecycle55$inboundSchema: z.ZodEnum<typeof Lifecycle55> = z.enum(
 );
 
 /** @internal */
-export const DataStatus55$inboundSchema: z.ZodType<DataStatus55, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue55$inboundSchema)),
-    health: Health55$inboundSchema,
-    lifecycle: Lifecycle55$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus55$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus55,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue55$inboundSchema)),
+  health: Health55$inboundSchema,
+  lifecycle: Lifecycle55$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus55FromJSON(
+export function getResourceDeploymentDetailDataStatus55FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus55, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus55,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus55$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus55' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus55$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus55' from JSON`,
   );
 }
 
@@ -11354,7 +11625,7 @@ export const DataLocal11$inboundSchema: z.ZodType<DataLocal11, unknown> = z
   .object({
     reachable: z.boolean(),
     registryUrl: z.string(),
-    status: z.lazy(() => DataStatus55$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus55$inboundSchema),
     backend: z.literal("local"),
   });
 
@@ -11410,23 +11681,31 @@ export const Lifecycle54$inboundSchema: z.ZodEnum<typeof Lifecycle54> = z.enum(
 );
 
 /** @internal */
-export const DataStatus54$inboundSchema: z.ZodType<DataStatus54, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue54$inboundSchema)),
-    health: Health54$inboundSchema,
-    lifecycle: Lifecycle54$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus54$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus54,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue54$inboundSchema)),
+  health: Health54$inboundSchema,
+  lifecycle: Lifecycle54$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus54FromJSON(
+export function getResourceDeploymentDetailDataStatus54FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus54, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus54,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus54$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus54' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus54$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus54' from JSON`,
   );
 }
 
@@ -11459,7 +11738,7 @@ export const DataAzureContainerRegistry$inboundSchema: z.ZodType<
   resourceId: z.nullable(z.string()).optional(),
   skuName: z.string(),
   skuTier: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus54$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus54$inboundSchema),
   type: z.nullable(z.string()).optional(),
   zoneRedundancy: z.string(),
   backend: z.literal("azureContainerRegistry"),
@@ -11517,23 +11796,31 @@ export const Lifecycle53$inboundSchema: z.ZodEnum<typeof Lifecycle53> = z.enum(
 );
 
 /** @internal */
-export const DataStatus53$inboundSchema: z.ZodType<DataStatus53, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue53$inboundSchema)),
-    health: Health53$inboundSchema,
-    lifecycle: Lifecycle53$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus53$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus53,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue53$inboundSchema)),
+  health: Health53$inboundSchema,
+  lifecycle: Lifecycle53$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus53FromJSON(
+export function getResourceDeploymentDetailDataStatus53FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus53, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus53,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus53$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus53' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus53$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus53' from JSON`,
   );
 }
 
@@ -11561,7 +11848,7 @@ export const DataGcpArtifactRegistry$inboundSchema: z.ZodType<
   repositoryId: z.string(),
   satisfiesPzs: z.nullable(z.boolean()).optional(),
   sizeBytes: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus53$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus53$inboundSchema),
   updateTime: z.nullable(z.string()).optional(),
   backend: z.literal("gcpArtifactRegistry"),
 });
@@ -11645,23 +11932,31 @@ export const Lifecycle52$inboundSchema: z.ZodEnum<typeof Lifecycle52> = z.enum(
 );
 
 /** @internal */
-export const DataStatus52$inboundSchema: z.ZodType<DataStatus52, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue52$inboundSchema)),
-    health: Health52$inboundSchema,
-    lifecycle: Lifecycle52$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus52$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus52,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue52$inboundSchema)),
+  health: Health52$inboundSchema,
+  lifecycle: Lifecycle52$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus52FromJSON(
+export function getResourceDeploymentDetailDataStatus52FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus52, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus52,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus52$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus52' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus52$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus52' from JSON`,
   );
 }
 
@@ -11679,7 +11974,7 @@ export const DataAwsEcr$inboundSchema: z.ZodType<DataAwsEcr, unknown> = z
     repositoriesTruncated: z.boolean(),
     repositoryCount: z.int(),
     repositoryPrefix: z.string(),
-    status: z.lazy(() => DataStatus52$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus52$inboundSchema),
     backend: z.literal("awsEcr"),
   });
 
@@ -11778,23 +12073,31 @@ export const Lifecycle51$inboundSchema: z.ZodEnum<typeof Lifecycle51> = z.enum(
 );
 
 /** @internal */
-export const DataStatus51$inboundSchema: z.ZodType<DataStatus51, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue51$inboundSchema)),
-    health: Health51$inboundSchema,
-    lifecycle: Lifecycle51$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus51$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus51,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue51$inboundSchema)),
+  health: Health51$inboundSchema,
+  lifecycle: Lifecycle51$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus51FromJSON(
+export function getResourceDeploymentDetailDataStatus51FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus51, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus51,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus51$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus51' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus51$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus51' from JSON`,
   );
 }
 
@@ -11806,7 +12109,7 @@ export const DataAzureManagedIdentity2$inboundSchema: z.ZodType<
   ficName: z.nullable(z.string()).optional(),
   roleAssignmentIds: z.array(z.string()),
   roleDefinitionId: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus51$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus51$inboundSchema),
   tenantId: z.nullable(z.string()).optional(),
   uamiClientId: z.nullable(z.string()).optional(),
   uamiPrincipalId: z.nullable(z.string()).optional(),
@@ -11866,23 +12169,31 @@ export const Lifecycle50$inboundSchema: z.ZodEnum<typeof Lifecycle50> = z.enum(
 );
 
 /** @internal */
-export const DataStatus50$inboundSchema: z.ZodType<DataStatus50, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue50$inboundSchema)),
-    health: Health50$inboundSchema,
-    lifecycle: Lifecycle50$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus50$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus50,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue50$inboundSchema)),
+  health: Health50$inboundSchema,
+  lifecycle: Lifecycle50$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus50FromJSON(
+export function getResourceDeploymentDetailDataStatus50FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus50, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus50,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus50$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus50' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus50$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus50' from JSON`,
   );
 }
 
@@ -11895,7 +12206,7 @@ export const DataGcpServiceAccount2$inboundSchema: z.ZodType<
   roleBound: z.boolean(),
   serviceAccountEmail: z.nullable(z.string()).optional(),
   serviceAccountUniqueId: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus50$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus50$inboundSchema),
   backend: z.literal("gcpServiceAccount"),
 });
 
@@ -11951,23 +12262,31 @@ export const Lifecycle49$inboundSchema: z.ZodEnum<typeof Lifecycle49> = z.enum(
 );
 
 /** @internal */
-export const DataStatus49$inboundSchema: z.ZodType<DataStatus49, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue49$inboundSchema)),
-    health: Health49$inboundSchema,
-    lifecycle: Lifecycle49$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus49$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus49,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue49$inboundSchema)),
+  health: Health49$inboundSchema,
+  lifecycle: Lifecycle49$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus49FromJSON(
+export function getResourceDeploymentDetailDataStatus49FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus49, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus49,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus49$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus49' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus49$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus49' from JSON`,
   );
 }
 
@@ -11979,7 +12298,7 @@ export const DataAwsIamRole2$inboundSchema: z.ZodType<
   managementPermissionsApplied: z.boolean(),
   roleArn: z.nullable(z.string()).optional(),
   roleName: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus49$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus49$inboundSchema),
   backend: z.literal("awsIamRole"),
 });
 
@@ -12076,23 +12395,31 @@ export const Lifecycle48$inboundSchema: z.ZodEnum<typeof Lifecycle48> = z.enum(
 );
 
 /** @internal */
-export const DataStatus48$inboundSchema: z.ZodType<DataStatus48, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue48$inboundSchema)),
-    health: Health48$inboundSchema,
-    lifecycle: Lifecycle48$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus48$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus48,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue48$inboundSchema)),
+  health: Health48$inboundSchema,
+  lifecycle: Lifecycle48$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus48FromJSON(
+export function getResourceDeploymentDetailDataStatus48FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus48, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus48,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus48$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus48' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus48$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus48' from JSON`,
   );
 }
 
@@ -12111,7 +12438,7 @@ export const DataAzureVnet$inboundSchema: z.ZodType<DataAzureVnet, unknown> = z
     publicIpId: z.nullable(z.string()).optional(),
     publicSubnetName: z.nullable(z.string()).optional(),
     resourceGroup: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus48$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus48$inboundSchema),
     vnetName: z.nullable(z.string()).optional(),
     vnetResourceId: z.nullable(z.string()).optional(),
     backend: z.literal("azureVnet"),
@@ -12169,23 +12496,31 @@ export const Lifecycle47$inboundSchema: z.ZodEnum<typeof Lifecycle47> = z.enum(
 );
 
 /** @internal */
-export const DataStatus47$inboundSchema: z.ZodType<DataStatus47, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue47$inboundSchema)),
-    health: Health47$inboundSchema,
-    lifecycle: Lifecycle47$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus47$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus47,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue47$inboundSchema)),
+  health: Health47$inboundSchema,
+  lifecycle: Lifecycle47$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus47FromJSON(
+export function getResourceDeploymentDetailDataStatus47FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus47, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus47,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus47$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus47' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus47$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus47' from JSON`,
   );
 }
 
@@ -12200,7 +12535,7 @@ export const DataGcpVpc$inboundSchema: z.ZodType<DataGcpVpc, unknown> = z
     networkSelfLink: z.nullable(z.string()).optional(),
     region: z.nullable(z.string()).optional(),
     routerName: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus47$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus47$inboundSchema),
     subnetworkName: z.nullable(z.string()).optional(),
     subnetworkSelfLink: z.nullable(z.string()).optional(),
     backend: z.literal("gcpVpc"),
@@ -12258,23 +12593,31 @@ export const Lifecycle46$inboundSchema: z.ZodEnum<typeof Lifecycle46> = z.enum(
 );
 
 /** @internal */
-export const DataStatus46$inboundSchema: z.ZodType<DataStatus46, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue46$inboundSchema)),
-    health: Health46$inboundSchema,
-    lifecycle: Lifecycle46$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus46$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus46,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue46$inboundSchema)),
+  health: Health46$inboundSchema,
+  lifecycle: Lifecycle46$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus46FromJSON(
+export function getResourceDeploymentDetailDataStatus46FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus46, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus46,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus46$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus46' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus46$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus46' from JSON`,
   );
 }
 
@@ -12290,7 +12633,7 @@ export const DataAwsVpc$inboundSchema: z.ZodType<DataAwsVpc, unknown> = z
     publicSubnetIds: z.array(z.string()),
     routeTableCount: z.int(),
     securityGroupId: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus46$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus46$inboundSchema),
     vpcId: z.nullable(z.string()).optional(),
     vpcState: z.nullable(z.string()).optional(),
     backend: z.literal("awsVpc"),
@@ -12387,23 +12730,31 @@ export const Lifecycle45$inboundSchema: z.ZodEnum<typeof Lifecycle45> = z.enum(
 );
 
 /** @internal */
-export const DataStatus45$inboundSchema: z.ZodType<DataStatus45, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue45$inboundSchema)),
-    health: Health45$inboundSchema,
-    lifecycle: Lifecycle45$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus45$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus45,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue45$inboundSchema)),
+  health: Health45$inboundSchema,
+  lifecycle: Lifecycle45$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus45FromJSON(
+export function getResourceDeploymentDetailDataStatus45FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus45, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus45,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus45$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus45' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus45$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus45' from JSON`,
   );
 }
 
@@ -12412,7 +12763,7 @@ export const DataLocal10$inboundSchema: z.ZodType<DataLocal10, unknown> = z
   .object({
     configured: z.boolean(),
     identity: z.string(),
-    status: z.lazy(() => DataStatus45$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus45$inboundSchema),
     backend: z.literal("local"),
   });
 
@@ -12468,23 +12819,31 @@ export const Lifecycle44$inboundSchema: z.ZodEnum<typeof Lifecycle44> = z.enum(
 );
 
 /** @internal */
-export const DataStatus44$inboundSchema: z.ZodType<DataStatus44, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue44$inboundSchema)),
-    health: Health44$inboundSchema,
-    lifecycle: Lifecycle44$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus44$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus44,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue44$inboundSchema)),
+  health: Health44$inboundSchema,
+  lifecycle: Lifecycle44$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus44FromJSON(
+export function getResourceDeploymentDetailDataStatus44FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus44, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus44,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus44$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus44' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus44$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus44' from JSON`,
   );
 }
 
@@ -12506,7 +12865,7 @@ export const DataAzureManagedIdentity1$inboundSchema: z.ZodType<
   roleAssignmentCount: z.int(),
   roleAssignmentIds: z.array(z.string()),
   stackPermissionsApplied: z.boolean(),
-  status: z.lazy(() => DataStatus44$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus44$inboundSchema),
   tenantId: z.nullable(z.string()).optional(),
   type: z.nullable(z.string()).optional(),
   backend: z.literal("azureManagedIdentity"),
@@ -12564,23 +12923,31 @@ export const Lifecycle43$inboundSchema: z.ZodEnum<typeof Lifecycle43> = z.enum(
 );
 
 /** @internal */
-export const DataStatus43$inboundSchema: z.ZodType<DataStatus43, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue43$inboundSchema)),
-    health: Health43$inboundSchema,
-    lifecycle: Lifecycle43$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus43$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus43,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue43$inboundSchema)),
+  health: Health43$inboundSchema,
+  lifecycle: Lifecycle43$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus43FromJSON(
+export function getResourceDeploymentDetailDataStatus43FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus43, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus43,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus43$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus43' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus43$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus43' from JSON`,
   );
 }
 
@@ -12601,7 +12968,7 @@ export const DataGcpServiceAccount1$inboundSchema: z.ZodType<
   projectRoles: z.array(z.string()),
   serviceAccountBindingCount: z.int(),
   serviceAccountRoles: z.array(z.string()),
-  status: z.lazy(() => DataStatus43$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus43$inboundSchema),
   uniqueId: z.nullable(z.string()).optional(),
   backend: z.literal("gcpServiceAccount"),
 });
@@ -12658,23 +13025,31 @@ export const Lifecycle42$inboundSchema: z.ZodEnum<typeof Lifecycle42> = z.enum(
 );
 
 /** @internal */
-export const DataStatus42$inboundSchema: z.ZodType<DataStatus42, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue42$inboundSchema)),
-    health: Health42$inboundSchema,
-    lifecycle: Lifecycle42$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus42$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus42,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue42$inboundSchema)),
+  health: Health42$inboundSchema,
+  lifecycle: Lifecycle42$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus42FromJSON(
+export function getResourceDeploymentDetailDataStatus42FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus42, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus42,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus42$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus42' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus42$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus42' from JSON`,
   );
 }
 
@@ -12701,7 +13076,7 @@ export const DataAwsIamRole1$inboundSchema: z.ZodType<
   roleId: z.string(),
   roleName: z.string(),
   stackPermissionsApplied: z.boolean(),
-  status: z.lazy(() => DataStatus42$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus42$inboundSchema),
   tagCount: z.int(),
   backend: z.literal("awsIamRole"),
 });
@@ -12801,23 +13176,31 @@ export const Lifecycle41$inboundSchema: z.ZodEnum<typeof Lifecycle41> = z.enum(
 );
 
 /** @internal */
-export const DataStatus41$inboundSchema: z.ZodType<DataStatus41, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue41$inboundSchema)),
-    health: Health41$inboundSchema,
-    lifecycle: Lifecycle41$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus41$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus41,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue41$inboundSchema)),
+  health: Health41$inboundSchema,
+  lifecycle: Lifecycle41$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus41FromJSON(
+export function getResourceDeploymentDetailDataStatus41FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus41, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus41,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus41$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus41' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus41$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus41' from JSON`,
   );
 }
 
@@ -12832,7 +13215,7 @@ export const DataLocal9$inboundSchema: z.ZodType<DataLocal9, unknown> = z
     pathExists: z.boolean(),
     readonly: z.nullable(z.boolean()).optional(),
     secretMetadataListed: z.boolean(),
-    status: z.lazy(() => DataStatus41$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus41$inboundSchema),
     backend: z.literal("local"),
   });
 
@@ -12888,23 +13271,31 @@ export const Lifecycle40$inboundSchema: z.ZodEnum<typeof Lifecycle40> = z.enum(
 );
 
 /** @internal */
-export const DataStatus40$inboundSchema: z.ZodType<DataStatus40, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue40$inboundSchema)),
-    health: Health40$inboundSchema,
-    lifecycle: Lifecycle40$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus40$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus40,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue40$inboundSchema)),
+  health: Health40$inboundSchema,
+  lifecycle: Lifecycle40$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus40FromJSON(
+export function getResourceDeploymentDetailDataStatus40FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus40, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus40,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus40$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus40' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus40$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus40' from JSON`,
   );
 }
 
@@ -12916,7 +13307,7 @@ export const DataKubernetesSecret$inboundSchema: z.ZodType<
   namespace: z.string(),
   prefix: z.string(),
   secretMetadataListed: z.boolean(),
-  status: z.lazy(() => DataStatus40$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus40$inboundSchema),
   backend: z.literal("kubernetesSecret"),
 });
 
@@ -12972,23 +13363,31 @@ export const Lifecycle39$inboundSchema: z.ZodEnum<typeof Lifecycle39> = z.enum(
 );
 
 /** @internal */
-export const DataStatus39$inboundSchema: z.ZodType<DataStatus39, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue39$inboundSchema)),
-    health: Health39$inboundSchema,
-    lifecycle: Lifecycle39$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus39$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus39,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue39$inboundSchema)),
+  health: Health39$inboundSchema,
+  lifecycle: Lifecycle39$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus39FromJSON(
+export function getResourceDeploymentDetailDataStatus39FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus39, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus39,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus39$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus39' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus39$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus39' from JSON`,
   );
 }
 
@@ -13012,7 +13411,7 @@ export const DataAzureKeyVault1$inboundSchema: z.ZodType<
   skuName: z.nullable(z.string()).optional(),
   softDeleteEnabled: z.boolean(),
   softDeleteRetentionDays: z.int(),
-  status: z.lazy(() => DataStatus39$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus39$inboundSchema),
   vaultUri: z.nullable(z.string()).optional(),
   backend: z.literal("azureKeyVault"),
 });
@@ -13069,23 +13468,31 @@ export const Lifecycle38$inboundSchema: z.ZodEnum<typeof Lifecycle38> = z.enum(
 );
 
 /** @internal */
-export const DataStatus38$inboundSchema: z.ZodType<DataStatus38, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue38$inboundSchema)),
-    health: Health38$inboundSchema,
-    lifecycle: Lifecycle38$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus38$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus38,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue38$inboundSchema)),
+  health: Health38$inboundSchema,
+  lifecycle: Lifecycle38$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus38FromJSON(
+export function getResourceDeploymentDetailDataStatus38FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus38, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus38,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus38$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus38' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus38$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus38' from JSON`,
   );
 }
 
@@ -13098,7 +13505,7 @@ export const DataGcpSecretManager$inboundSchema: z.ZodType<
   prefix: z.string(),
   projectId: z.string(),
   secretMetadataListed: z.boolean(),
-  status: z.lazy(() => DataStatus38$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus38$inboundSchema),
   backend: z.literal("gcpSecretManager"),
 });
 
@@ -13154,23 +13561,31 @@ export const Lifecycle37$inboundSchema: z.ZodEnum<typeof Lifecycle37> = z.enum(
 );
 
 /** @internal */
-export const DataStatus37$inboundSchema: z.ZodType<DataStatus37, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue37$inboundSchema)),
-    health: Health37$inboundSchema,
-    lifecycle: Lifecycle37$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus37$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus37,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue37$inboundSchema)),
+  health: Health37$inboundSchema,
+  lifecycle: Lifecycle37$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus37FromJSON(
+export function getResourceDeploymentDetailDataStatus37FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus37, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus37,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus37$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus37' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus37$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus37' from JSON`,
   );
 }
 
@@ -13193,7 +13608,7 @@ export const DataAwsParameterStore$inboundSchema: z.ZodType<
   sampledSecureStringCount: z.nullable(z.int()).optional(),
   sampledStringCount: z.nullable(z.int()).optional(),
   sampledStringListCount: z.nullable(z.int()).optional(),
-  status: z.lazy(() => DataStatus37$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus37$inboundSchema),
   backend: z.literal("awsParameterStore"),
 });
 
@@ -13292,23 +13707,31 @@ export const Lifecycle36$inboundSchema: z.ZodEnum<typeof Lifecycle36> = z.enum(
 );
 
 /** @internal */
-export const DataStatus36$inboundSchema: z.ZodType<DataStatus36, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue36$inboundSchema)),
-    health: Health36$inboundSchema,
-    lifecycle: Lifecycle36$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus36$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus36,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue36$inboundSchema)),
+  health: Health36$inboundSchema,
+  lifecycle: Lifecycle36$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus36FromJSON(
+export function getResourceDeploymentDetailDataStatus36FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus36, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus36,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus36$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus36' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus36$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus36' from JSON`,
   );
 }
 
@@ -13318,7 +13741,7 @@ export const DataLocal8$inboundSchema: z.ZodType<DataLocal8, unknown> = z
     name: z.string(),
     port: z.nullable(z.int()).optional(),
     processRunning: z.boolean(),
-    status: z.lazy(() => DataStatus36$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus36$inboundSchema),
     version: z.string(),
     backend: z.literal("local"),
   });
@@ -13375,23 +13798,31 @@ export const Lifecycle35$inboundSchema: z.ZodEnum<typeof Lifecycle35> = z.enum(
 );
 
 /** @internal */
-export const DataStatus35$inboundSchema: z.ZodType<DataStatus35, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue35$inboundSchema)),
-    health: Health35$inboundSchema,
-    lifecycle: Lifecycle35$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus35$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus35,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue35$inboundSchema)),
+  health: Health35$inboundSchema,
+  lifecycle: Lifecycle35$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus35FromJSON(
+export function getResourceDeploymentDetailDataStatus35FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus35, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus35,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus35$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus35' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus35$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus35' from JSON`,
   );
 }
 
@@ -13402,7 +13833,7 @@ export const DataFlexibleServer$inboundSchema: z.ZodType<
 > = z.object({
   serverName: z.string(),
   state: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus35$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus35$inboundSchema),
   version: z.nullable(z.string()).optional(),
   backend: z.literal("flexibleServer"),
 });
@@ -13459,23 +13890,31 @@ export const Lifecycle34$inboundSchema: z.ZodEnum<typeof Lifecycle34> = z.enum(
 );
 
 /** @internal */
-export const DataStatus34$inboundSchema: z.ZodType<DataStatus34, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue34$inboundSchema)),
-    health: Health34$inboundSchema,
-    lifecycle: Lifecycle34$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus34$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus34,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue34$inboundSchema)),
+  health: Health34$inboundSchema,
+  lifecycle: Lifecycle34$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus34FromJSON(
+export function getResourceDeploymentDetailDataStatus34FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus34, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus34,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus34$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus34' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus34$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus34' from JSON`,
   );
 }
 
@@ -13485,7 +13924,7 @@ export const DataCloudSQL$inboundSchema: z.ZodType<DataCloudSQL, unknown> = z
     databaseVersion: z.nullable(z.string()).optional(),
     instanceName: z.string(),
     state: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus34$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus34$inboundSchema),
     backend: z.literal("cloudSql"),
   });
 
@@ -13541,23 +13980,31 @@ export const Lifecycle33$inboundSchema: z.ZodEnum<typeof Lifecycle33> = z.enum(
 );
 
 /** @internal */
-export const DataStatus33$inboundSchema: z.ZodType<DataStatus33, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue33$inboundSchema)),
-    health: Health33$inboundSchema,
-    lifecycle: Lifecycle33$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus33$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus33,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue33$inboundSchema)),
+  health: Health33$inboundSchema,
+  lifecycle: Lifecycle33$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus33FromJSON(
+export function getResourceDeploymentDetailDataStatus33FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus33, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus33,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus33$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus33' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus33$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus33' from JSON`,
   );
 }
 
@@ -13569,7 +14016,7 @@ export const DataAurora$inboundSchema: z.ZodType<DataAurora, unknown> = z
     engineVersion: z.nullable(z.string()).optional(),
     neverPauses: z.boolean(),
     serverlessCapacity: z.nullable(z.number()).optional(),
-    status: z.lazy(() => DataStatus33$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus33$inboundSchema),
     backend: z.literal("aurora"),
   });
 
@@ -13667,23 +14114,31 @@ export const Lifecycle32$inboundSchema: z.ZodEnum<typeof Lifecycle32> = z.enum(
 );
 
 /** @internal */
-export const DataStatus32$inboundSchema: z.ZodType<DataStatus32, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue32$inboundSchema)),
-    health: Health32$inboundSchema,
-    lifecycle: Lifecycle32$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus32$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus32,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue32$inboundSchema)),
+  health: Health32$inboundSchema,
+  lifecycle: Lifecycle32$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus32FromJSON(
+export function getResourceDeploymentDetailDataStatus32FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus32, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus32,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus32$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus32' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus32$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus32' from JSON`,
   );
 }
 
@@ -13695,7 +14150,7 @@ export const DataLocal7$inboundSchema: z.ZodType<DataLocal7, unknown> = z
     name: z.string(),
     path: z.string(),
     pathExists: z.boolean(),
-    status: z.lazy(() => DataStatus32$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus32$inboundSchema),
     backend: z.literal("local"),
   });
 
@@ -13751,23 +14206,31 @@ export const Lifecycle31$inboundSchema: z.ZodEnum<typeof Lifecycle31> = z.enum(
 );
 
 /** @internal */
-export const DataStatus31$inboundSchema: z.ZodType<DataStatus31, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue31$inboundSchema)),
-    health: Health31$inboundSchema,
-    lifecycle: Lifecycle31$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus31$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus31,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue31$inboundSchema)),
+  health: Health31$inboundSchema,
+  lifecycle: Lifecycle31$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus31FromJSON(
+export function getResourceDeploymentDetailDataStatus31FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus31, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus31,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus31$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus31' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus31$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus31' from JSON`,
   );
 }
 
@@ -13777,7 +14240,7 @@ export const DataAzureTable$inboundSchema: z.ZodType<DataAzureTable, unknown> =
     endpoint: z.nullable(z.string()).optional(),
     resourceGroup: z.nullable(z.string()).optional(),
     signedIdentifierCount: z.nullable(z.int()).optional(),
-    status: z.lazy(() => DataStatus31$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus31$inboundSchema),
     storageAccountKind: z.nullable(z.string()).optional(),
     storageAccountLocation: z.nullable(z.string()).optional(),
     storageAccountName: z.string(),
@@ -13841,23 +14304,31 @@ export const Lifecycle30$inboundSchema: z.ZodEnum<typeof Lifecycle30> = z.enum(
 );
 
 /** @internal */
-export const DataStatus30$inboundSchema: z.ZodType<DataStatus30, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue30$inboundSchema)),
-    health: Health30$inboundSchema,
-    lifecycle: Lifecycle30$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus30$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus30,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue30$inboundSchema)),
+  health: Health30$inboundSchema,
+  lifecycle: Lifecycle30$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus30FromJSON(
+export function getResourceDeploymentDetailDataStatus30FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus30, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus30,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus30$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus30' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus30$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus30' from JSON`,
   );
 }
 
@@ -13881,7 +14352,7 @@ export const DataGcpFirestore$inboundSchema: z.ZodType<
   pointInTimeRecoveryEnablement: z.nullable(z.string()).optional(),
   projectId: z.nullable(z.string()).optional(),
   sourceInfoPresent: z.boolean(),
-  status: z.lazy(() => DataStatus30$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus30$inboundSchema),
   updateTime: z.nullable(z.string()).optional(),
   versionRetentionPeriod: z.nullable(z.string()).optional(),
   backend: z.literal("gcpFirestore"),
@@ -13955,23 +14426,31 @@ export const Lifecycle29$inboundSchema: z.ZodEnum<typeof Lifecycle29> = z.enum(
 );
 
 /** @internal */
-export const DataStatus29$inboundSchema: z.ZodType<DataStatus29, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue29$inboundSchema)),
-    health: Health29$inboundSchema,
-    lifecycle: Lifecycle29$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus29$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus29,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue29$inboundSchema)),
+  health: Health29$inboundSchema,
+  lifecycle: Lifecycle29$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus29FromJSON(
+export function getResourceDeploymentDetailDataStatus29FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus29, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus29,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus29$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus29' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus29$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus29' from JSON`,
   );
 }
 
@@ -13992,7 +14471,7 @@ export const DataAwsDynamoDb$inboundSchema: z.ZodType<
   restoreInProgress: z.nullable(z.boolean()).optional(),
   sseStatus: z.nullable(z.string()).optional(),
   sseType: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus29$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus29$inboundSchema),
   streamEnabled: z.nullable(z.boolean()).optional(),
   streamViewType: z.nullable(z.string()).optional(),
   tableArn: z.nullable(z.string()).optional(),
@@ -14097,23 +14576,31 @@ export const Lifecycle28$inboundSchema: z.ZodEnum<typeof Lifecycle28> = z.enum(
 );
 
 /** @internal */
-export const DataStatus28$inboundSchema: z.ZodType<DataStatus28, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue28$inboundSchema)),
-    health: Health28$inboundSchema,
-    lifecycle: Lifecycle28$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus28$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus28,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue28$inboundSchema)),
+  health: Health28$inboundSchema,
+  lifecycle: Lifecycle28$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus28FromJSON(
+export function getResourceDeploymentDetailDataStatus28FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus28, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus28,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus28$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus28' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus28$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus28' from JSON`,
   );
 }
 
@@ -14123,7 +14610,7 @@ export const DataLocal6$inboundSchema: z.ZodType<DataLocal6, unknown> = z
     name: z.string(),
     path: z.nullable(z.string()).optional(),
     serviceStatus: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus28$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus28$inboundSchema),
     backend: z.literal("local"),
   });
 
@@ -14179,23 +14666,31 @@ export const Lifecycle27$inboundSchema: z.ZodEnum<typeof Lifecycle27> = z.enum(
 );
 
 /** @internal */
-export const DataStatus27$inboundSchema: z.ZodType<DataStatus27, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue27$inboundSchema)),
-    health: Health27$inboundSchema,
-    lifecycle: Lifecycle27$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus27$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus27,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue27$inboundSchema)),
+  health: Health27$inboundSchema,
+  lifecycle: Lifecycle27$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus27FromJSON(
+export function getResourceDeploymentDetailDataStatus27FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus27, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus27,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus27$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus27' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus27$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus27' from JSON`,
   );
 }
 
@@ -14232,7 +14727,7 @@ export const DataAzureServiceBus$inboundSchema: z.ZodType<
   resourceId: z.nullable(z.string()).optional(),
   scheduledMessageCount: z.nullable(z.int()).optional(),
   sizeInBytes: z.nullable(z.int()).optional(),
-  status: z.lazy(() => DataStatus27$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus27$inboundSchema),
   transferDeadLetterMessageCount: z.nullable(z.int()).optional(),
   transferMessageCount: z.nullable(z.int()).optional(),
   updatedAt: z.nullable(z.string()).optional(),
@@ -14291,23 +14786,31 @@ export const Lifecycle26$inboundSchema: z.ZodEnum<typeof Lifecycle26> = z.enum(
 );
 
 /** @internal */
-export const DataStatus26$inboundSchema: z.ZodType<DataStatus26, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue26$inboundSchema)),
-    health: Health26$inboundSchema,
-    lifecycle: Lifecycle26$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus26$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus26,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue26$inboundSchema)),
+  health: Health26$inboundSchema,
+  lifecycle: Lifecycle26$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus26FromJSON(
+export function getResourceDeploymentDetailDataStatus26FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus26, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus26,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus26$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus26' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus26$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus26' from JSON`,
   );
 }
 
@@ -14323,7 +14826,7 @@ export const DataGcpPubSub$inboundSchema: z.ZodType<DataGcpPubSub, unknown> = z
     schemaFirstRevisionId: z.nullable(z.string()).optional(),
     schemaLastRevisionId: z.nullable(z.string()).optional(),
     schemaName: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus26$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus26$inboundSchema),
     subscriptionAckDeadlineSeconds: z.nullable(z.int()).optional(),
     subscriptionDeadLetterMaxDeliveryAttempts: z.nullable(z.int()).optional(),
     subscriptionDeadLetterTopic: z.nullable(z.string()).optional(),
@@ -14404,23 +14907,31 @@ export const Lifecycle25$inboundSchema: z.ZodEnum<typeof Lifecycle25> = z.enum(
 );
 
 /** @internal */
-export const DataStatus25$inboundSchema: z.ZodType<DataStatus25, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue25$inboundSchema)),
-    health: Health25$inboundSchema,
-    lifecycle: Lifecycle25$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus25$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus25,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue25$inboundSchema)),
+  health: Health25$inboundSchema,
+  lifecycle: Lifecycle25$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus25FromJSON(
+export function getResourceDeploymentDetailDataStatus25FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus25, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus25,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus25$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus25' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus25$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus25' from JSON`,
   );
 }
 
@@ -14449,7 +14960,7 @@ export const DataAwsSqs$inboundSchema: z.ZodType<DataAwsSqs, unknown> = z
     region: z.nullable(z.string()).optional(),
     sqsManagedSseEnabled: z.nullable(z.boolean()).optional(),
     sseEnabled: z.nullable(z.boolean()).optional(),
-    status: z.lazy(() => DataStatus25$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus25$inboundSchema),
     visibilityTimeoutSeconds: z.nullable(z.int()).optional(),
     backend: z.literal("awsSqs"),
   });
@@ -15106,28 +15617,39 @@ export const Lifecycle24$inboundSchema: z.ZodEnum<typeof Lifecycle24> = z.enum(
 );
 
 /** @internal */
-export const DataStatus24$inboundSchema: z.ZodType<DataStatus24, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue24$inboundSchema)),
-    health: Health24$inboundSchema,
-    lifecycle: Lifecycle24$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus24$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus24,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue24$inboundSchema)),
+  health: Health24$inboundSchema,
+  lifecycle: Lifecycle24$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus24FromJSON(
+export function getResourceDeploymentDetailDataStatus24FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus24, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus24,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus24$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus24' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus24$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus24' from JSON`,
   );
 }
 
 /** @internal */
-export const Data1$inboundSchema: z.ZodType<Data1, unknown> = z.object({
+export const GetResourceDeploymentDetailData1$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailData1,
+  unknown
+> = z.object({
   cpu: z.nullable(z.union([z.lazy(() => Cpu11$inboundSchema), z.any()]))
     .optional(),
   events: z.array(z.lazy(() => Event12$inboundSchema)),
@@ -15139,17 +15661,17 @@ export const Data1$inboundSchema: z.ZodType<Data1, unknown> = z.object({
   nodeStatuses: z.array(z.lazy(() => NodeStatus$inboundSchema)).optional(),
   podCounts: z.lazy(() => PodCounts$inboundSchema),
   region: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus24$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus24$inboundSchema),
   version: z.nullable(z.string()).optional(),
 });
 
-export function data1FromJSON(
+export function getResourceDeploymentDetailData1FromJSON(
   jsonString: string,
-): SafeParseResult<Data1, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailData1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Data1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Data1' from JSON`,
+    (x) => GetResourceDeploymentDetailData1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailData1' from JSON`,
   );
 }
 
@@ -15158,7 +15680,7 @@ export const DataKubernetesCluster$inboundSchema: z.ZodType<
   DataKubernetesCluster,
   unknown
 > = z.object({
-  data: z.lazy(() => Data1$inboundSchema),
+  data: z.lazy(() => GetResourceDeploymentDetailData1$inboundSchema),
   resourceType: z.literal("kubernetes-cluster"),
 });
 
@@ -15231,23 +15753,31 @@ export const Lifecycle23$inboundSchema: z.ZodEnum<typeof Lifecycle23> = z.enum(
 );
 
 /** @internal */
-export const DataStatus23$inboundSchema: z.ZodType<DataStatus23, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue23$inboundSchema)),
-    health: Health23$inboundSchema,
-    lifecycle: Lifecycle23$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus23$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus23,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue23$inboundSchema)),
+  health: Health23$inboundSchema,
+  lifecycle: Lifecycle23$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus23FromJSON(
+export function getResourceDeploymentDetailDataStatus23FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus23, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus23,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus23$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus23' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus23$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus23' from JSON`,
   );
 }
 
@@ -15265,7 +15795,7 @@ export const DataLocal5$inboundSchema: z.ZodType<DataLocal5, unknown> = z
     networkName: z.nullable(z.string()).optional(),
     nodes: z.lazy(() => Nodes5$inboundSchema),
     runningContainers: z.nullable(z.int()).optional(),
-    status: z.lazy(() => DataStatus23$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus23$inboundSchema),
     trackedContainers: z.nullable(z.int()).optional(),
     backend: z.literal("local"),
   });
@@ -15677,23 +16207,31 @@ export const Lifecycle22$inboundSchema: z.ZodEnum<typeof Lifecycle22> = z.enum(
 );
 
 /** @internal */
-export const DataStatus22$inboundSchema: z.ZodType<DataStatus22, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue22$inboundSchema)),
-    health: Health22$inboundSchema,
-    lifecycle: Lifecycle22$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus22$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus22,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue22$inboundSchema)),
+  health: Health22$inboundSchema,
+  lifecycle: Lifecycle22$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus22FromJSON(
+export function getResourceDeploymentDetailDataStatus22FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus22, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus22,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus22$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus22' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus22$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus22' from JSON`,
   );
 }
 
@@ -15709,7 +16247,7 @@ export const DataMachines2$inboundSchema: z.ZodType<DataMachines2, unknown> = z
       .optional(),
     name: z.string(),
     nodes: z.lazy(() => Nodes4$inboundSchema),
-    status: z.lazy(() => DataStatus22$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus22$inboundSchema),
     backend: z.literal("machines"),
   });
 
@@ -16092,23 +16630,31 @@ export const Lifecycle21$inboundSchema: z.ZodEnum<typeof Lifecycle21> = z.enum(
 );
 
 /** @internal */
-export const DataStatus21$inboundSchema: z.ZodType<DataStatus21, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue21$inboundSchema)),
-    health: Health21$inboundSchema,
-    lifecycle: Lifecycle21$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus21$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus21,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue21$inboundSchema)),
+  health: Health21$inboundSchema,
+  lifecycle: Lifecycle21$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus21FromJSON(
+export function getResourceDeploymentDetailDataStatus21FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus21, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus21,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus21$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus21' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus21$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus21' from JSON`,
   );
 }
 
@@ -16125,7 +16671,7 @@ export const DataAzure2$inboundSchema: z.ZodType<DataAzure2, unknown> = z
     nodes: z.lazy(() => Nodes3$inboundSchema),
     providerFleets: z.array(z.lazy(() => ProviderFleet3$inboundSchema)),
     region: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus21$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus21$inboundSchema),
     backend: z.literal("azure"),
   });
 
@@ -16508,23 +17054,31 @@ export const Lifecycle20$inboundSchema: z.ZodEnum<typeof Lifecycle20> = z.enum(
 );
 
 /** @internal */
-export const DataStatus20$inboundSchema: z.ZodType<DataStatus20, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue20$inboundSchema)),
-    health: Health20$inboundSchema,
-    lifecycle: Lifecycle20$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus20$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus20,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue20$inboundSchema)),
+  health: Health20$inboundSchema,
+  lifecycle: Lifecycle20$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus20FromJSON(
+export function getResourceDeploymentDetailDataStatus20FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus20, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus20,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus20$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus20' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus20$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus20' from JSON`,
   );
 }
 
@@ -16540,7 +17094,7 @@ export const DataGcp2$inboundSchema: z.ZodType<DataGcp2, unknown> = z.object({
   nodes: z.lazy(() => Nodes2$inboundSchema),
   providerFleets: z.array(z.lazy(() => ProviderFleet2$inboundSchema)),
   region: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus20$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus20$inboundSchema),
   backend: z.literal("gcp"),
 });
 
@@ -16923,23 +17477,31 @@ export const Lifecycle19$inboundSchema: z.ZodEnum<typeof Lifecycle19> = z.enum(
 );
 
 /** @internal */
-export const DataStatus19$inboundSchema: z.ZodType<DataStatus19, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue19$inboundSchema)),
-    health: Health19$inboundSchema,
-    lifecycle: Lifecycle19$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus19$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus19,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue19$inboundSchema)),
+  health: Health19$inboundSchema,
+  lifecycle: Lifecycle19$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus19FromJSON(
+export function getResourceDeploymentDetailDataStatus19FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus19, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus19,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus19$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus19' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus19$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus19' from JSON`,
   );
 }
 
@@ -16955,7 +17517,7 @@ export const DataAws2$inboundSchema: z.ZodType<DataAws2, unknown> = z.object({
   nodes: z.lazy(() => Nodes1$inboundSchema),
   providerFleets: z.array(z.lazy(() => ProviderFleet1$inboundSchema)),
   region: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus19$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus19$inboundSchema),
   backend: z.literal("aws"),
 });
 
@@ -17244,23 +17806,31 @@ export const Lifecycle18$inboundSchema: z.ZodEnum<typeof Lifecycle18> = z.enum(
 );
 
 /** @internal */
-export const DataStatus18$inboundSchema: z.ZodType<DataStatus18, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue18$inboundSchema)),
-    health: Health18$inboundSchema,
-    lifecycle: Lifecycle18$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus18$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus18,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue18$inboundSchema)),
+  health: Health18$inboundSchema,
+  lifecycle: Lifecycle18$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus18FromJSON(
+export function getResourceDeploymentDetailDataStatus18FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus18, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus18,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus18$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus18' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus18$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus18' from JSON`,
   );
 }
 
@@ -17278,7 +17848,7 @@ export const DataLocal4$inboundSchema: z.ZodType<DataLocal4, unknown> = z
     pid: z.nullable(z.int()).optional(),
     restartCount: z.nullable(z.int()).optional(),
     runtimeId: z.string(),
-    status: z.lazy(() => DataStatus18$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus18$inboundSchema),
     backend: z.literal("local"),
   });
 
@@ -17470,6 +18040,24 @@ export function memoryUnion6FromJSON(
 }
 
 /** @internal */
+export const Container3$inboundSchema: z.ZodType<Container3, unknown> = z
+  .object({
+    digest: z.nullable(z.string()).optional(),
+    image: z.string(),
+    name: z.string(),
+  });
+
+export function container3FromJSON(
+  jsonString: string,
+): SafeParseResult<Container3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Container3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Container3' from JSON`,
+  );
+}
+
+/** @internal */
 export const CpuPodUnit3$inboundSchema: z.ZodEnum<typeof CpuPodUnit3> = z.enum(
   CpuPodUnit3,
 );
@@ -17564,6 +18152,7 @@ export function ownerReference3FromJSON(
 
 /** @internal */
 export const Pod3$inboundSchema: z.ZodType<Pod3, unknown> = z.object({
+  containers: z.array(z.lazy(() => Container3$inboundSchema)).optional(),
   cpu: z.nullable(z.union([z.lazy(() => CpuPod3$inboundSchema), z.any()]))
     .optional(),
   memory: z.nullable(z.union([z.lazy(() => MemoryPod3$inboundSchema), z.any()]))
@@ -17652,23 +18241,31 @@ export const Lifecycle17$inboundSchema: z.ZodEnum<typeof Lifecycle17> = z.enum(
 );
 
 /** @internal */
-export const DataStatus17$inboundSchema: z.ZodType<DataStatus17, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue17$inboundSchema)),
-    health: Health17$inboundSchema,
-    lifecycle: Lifecycle17$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus17$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus17,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue17$inboundSchema)),
+  health: Health17$inboundSchema,
+  lifecycle: Lifecycle17$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus17FromJSON(
+export function getResourceDeploymentDetailDataStatus17FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus17, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus17,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus17$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus17' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus17$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus17' from JSON`,
   );
 }
 
@@ -17748,7 +18345,7 @@ export const DataKubernetes3$inboundSchema: z.ZodType<
   pods: z.array(z.lazy(() => Pod3$inboundSchema)),
   replicas: z.lazy(() => Replicas4$inboundSchema),
   restarts: z.nullable(z.int()).optional(),
-  status: z.lazy(() => DataStatus17$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus17$inboundSchema),
   workload: z.nullable(
     z.union([z.lazy(() => Workload3$inboundSchema), z.any()]),
   ).optional(),
@@ -18032,23 +18629,31 @@ export const Lifecycle16$inboundSchema: z.ZodEnum<typeof Lifecycle16> = z.enum(
 );
 
 /** @internal */
-export const DataStatus16$inboundSchema: z.ZodType<DataStatus16, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue16$inboundSchema)),
-    health: Health16$inboundSchema,
-    lifecycle: Lifecycle16$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus16$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus16,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue16$inboundSchema)),
+  health: Health16$inboundSchema,
+  lifecycle: Lifecycle16$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus16FromJSON(
+export function getResourceDeploymentDetailDataStatus16FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus16, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus16,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus16$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus16' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus16$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus16' from JSON`,
   );
 }
 
@@ -18069,7 +18674,7 @@ export const DataMachines1$inboundSchema: z.ZodType<DataMachines1, unknown> = z
     horizonStatusReason: z.nullable(z.string()).optional(),
     latestUpdateTimestamp: z.string(),
     observedImage: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus16$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus16$inboundSchema),
     unavailableInstances: z.int(),
     backend: z.literal("machines"),
   });
@@ -18351,23 +18956,31 @@ export const Lifecycle15$inboundSchema: z.ZodEnum<typeof Lifecycle15> = z.enum(
 );
 
 /** @internal */
-export const DataStatus15$inboundSchema: z.ZodType<DataStatus15, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue15$inboundSchema)),
-    health: Health15$inboundSchema,
-    lifecycle: Lifecycle15$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus15$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus15,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue15$inboundSchema)),
+  health: Health15$inboundSchema,
+  lifecycle: Lifecycle15$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus15FromJSON(
+export function getResourceDeploymentDetailDataStatus15FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus15, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus15,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus15$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus15' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus15$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus15' from JSON`,
   );
 }
 
@@ -18388,7 +19001,7 @@ export const DataAzure1$inboundSchema: z.ZodType<DataAzure1, unknown> = z
     horizonStatusReason: z.nullable(z.string()).optional(),
     latestUpdateTimestamp: z.string(),
     observedImage: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus15$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus15$inboundSchema),
     unavailableInstances: z.int(),
     backend: z.literal("azure"),
   });
@@ -18670,23 +19283,31 @@ export const Lifecycle14$inboundSchema: z.ZodEnum<typeof Lifecycle14> = z.enum(
 );
 
 /** @internal */
-export const DataStatus14$inboundSchema: z.ZodType<DataStatus14, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue14$inboundSchema)),
-    health: Health14$inboundSchema,
-    lifecycle: Lifecycle14$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus14$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus14,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue14$inboundSchema)),
+  health: Health14$inboundSchema,
+  lifecycle: Lifecycle14$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus14FromJSON(
+export function getResourceDeploymentDetailDataStatus14FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus14, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus14,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus14$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus14' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus14$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus14' from JSON`,
   );
 }
 
@@ -18706,7 +19327,7 @@ export const DataGcp1$inboundSchema: z.ZodType<DataGcp1, unknown> = z.object({
   horizonStatusReason: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.string(),
   observedImage: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus14$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus14$inboundSchema),
   unavailableInstances: z.int(),
   backend: z.literal("gcp"),
 });
@@ -18988,23 +19609,31 @@ export const Lifecycle13$inboundSchema: z.ZodEnum<typeof Lifecycle13> = z.enum(
 );
 
 /** @internal */
-export const DataStatus13$inboundSchema: z.ZodType<DataStatus13, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue13$inboundSchema)),
-    health: Health13$inboundSchema,
-    lifecycle: Lifecycle13$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus13$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus13,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue13$inboundSchema)),
+  health: Health13$inboundSchema,
+  lifecycle: Lifecycle13$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus13FromJSON(
+export function getResourceDeploymentDetailDataStatus13FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus13, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus13,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus13$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus13' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus13$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus13' from JSON`,
   );
 }
 
@@ -19024,7 +19653,7 @@ export const DataAws1$inboundSchema: z.ZodType<DataAws1, unknown> = z.object({
   horizonStatusReason: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.string(),
   observedImage: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus13$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus13$inboundSchema),
   unavailableInstances: z.int(),
   backend: z.literal("aws"),
 });
@@ -19384,23 +20013,31 @@ export const Lifecycle12$inboundSchema: z.ZodEnum<typeof Lifecycle12> = z.enum(
 );
 
 /** @internal */
-export const DataStatus12$inboundSchema: z.ZodType<DataStatus12, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue12$inboundSchema)),
-    health: Health12$inboundSchema,
-    lifecycle: Lifecycle12$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus12$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus12,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue12$inboundSchema)),
+  health: Health12$inboundSchema,
+  lifecycle: Lifecycle12$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus12FromJSON(
+export function getResourceDeploymentDetailDataStatus12FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus12, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus12,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus12$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus12' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus12$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus12' from JSON`,
   );
 }
 
@@ -19424,7 +20061,7 @@ export const DataLocal3$inboundSchema: z.ZodType<DataLocal3, unknown> = z
     restartCount: z.nullable(z.int()).optional(),
     runtimeReachable: z.boolean(),
     runtimeStatus: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus12$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus12$inboundSchema),
     backend: z.literal("local"),
   });
 
@@ -19616,6 +20253,24 @@ export function memoryUnion4FromJSON(
 }
 
 /** @internal */
+export const Container2$inboundSchema: z.ZodType<Container2, unknown> = z
+  .object({
+    digest: z.nullable(z.string()).optional(),
+    image: z.string(),
+    name: z.string(),
+  });
+
+export function container2FromJSON(
+  jsonString: string,
+): SafeParseResult<Container2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Container2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Container2' from JSON`,
+  );
+}
+
+/** @internal */
 export const CpuPodUnit2$inboundSchema: z.ZodEnum<typeof CpuPodUnit2> = z.enum(
   CpuPodUnit2,
 );
@@ -19710,6 +20365,7 @@ export function ownerReference2FromJSON(
 
 /** @internal */
 export const Pod2$inboundSchema: z.ZodType<Pod2, unknown> = z.object({
+  containers: z.array(z.lazy(() => Container2$inboundSchema)).optional(),
   cpu: z.nullable(z.union([z.lazy(() => CpuPod2$inboundSchema), z.any()]))
     .optional(),
   memory: z.nullable(z.union([z.lazy(() => MemoryPod2$inboundSchema), z.any()]))
@@ -19798,23 +20454,31 @@ export const Lifecycle11$inboundSchema: z.ZodEnum<typeof Lifecycle11> = z.enum(
 );
 
 /** @internal */
-export const DataStatus11$inboundSchema: z.ZodType<DataStatus11, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue11$inboundSchema)),
-    health: Health11$inboundSchema,
-    lifecycle: Lifecycle11$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus11$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus11,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue11$inboundSchema)),
+  health: Health11$inboundSchema,
+  lifecycle: Lifecycle11$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus11FromJSON(
+export function getResourceDeploymentDetailDataStatus11FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus11, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus11,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus11$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus11' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus11$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus11' from JSON`,
   );
 }
 
@@ -19897,7 +20561,7 @@ export const DataKubernetes2$inboundSchema: z.ZodType<
   pods: z.array(z.lazy(() => Pod2$inboundSchema)),
   replicas: z.lazy(() => Replicas3$inboundSchema),
   restarts: z.nullable(z.int()).optional(),
-  status: z.lazy(() => DataStatus11$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus11$inboundSchema),
   workload: z.nullable(
     z.union([z.lazy(() => Workload2$inboundSchema), z.any()]),
   ).optional(),
@@ -20274,23 +20938,31 @@ export const Lifecycle10$inboundSchema: z.ZodEnum<typeof Lifecycle10> = z.enum(
 );
 
 /** @internal */
-export const DataStatus10$inboundSchema: z.ZodType<DataStatus10, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue10$inboundSchema)),
-    health: Health10$inboundSchema,
-    lifecycle: Lifecycle10$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus10$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus10,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue10$inboundSchema)),
+  health: Health10$inboundSchema,
+  lifecycle: Lifecycle10$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus10FromJSON(
+export function getResourceDeploymentDetailDataStatus10FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus10, SDKValidationError> {
+): SafeParseResult<
+  GetResourceDeploymentDetailDataStatus10,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DataStatus10$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus10' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus10$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus10' from JSON`,
   );
 }
 
@@ -20312,7 +20984,7 @@ export const DataHorizonPlatform$inboundSchema: z.ZodType<
   replicaUnits: z.array(z.lazy(() => ReplicaUnit$inboundSchema)),
   replicas: z.lazy(() => Replicas2$inboundSchema),
   schedulingMode: SchedulingMode$inboundSchema,
-  status: z.lazy(() => DataStatus10$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus10$inboundSchema),
   backend: z.literal("horizonPlatform"),
 });
 
@@ -20654,23 +21326,26 @@ export const Lifecycle9$inboundSchema: z.ZodEnum<typeof Lifecycle9> = z.enum(
 );
 
 /** @internal */
-export const DataStatus9$inboundSchema: z.ZodType<DataStatus9, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue9$inboundSchema)),
-    health: Health9$inboundSchema,
-    lifecycle: Lifecycle9$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus9$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus9,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue9$inboundSchema)),
+  health: Health9$inboundSchema,
+  lifecycle: Lifecycle9$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus9FromJSON(
+export function getResourceDeploymentDetailDataStatus9FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus9, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailDataStatus9, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus9$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus9' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus9' from JSON`,
   );
 }
 
@@ -20688,7 +21363,7 @@ export const DataLocal2$inboundSchema: z.ZodType<DataLocal2, unknown> = z
     process: z.nullable(z.union([z.lazy(() => Process$inboundSchema), z.any()]))
       .optional(),
     readinessProbeOk: z.nullable(z.boolean()).optional(),
-    status: z.lazy(() => DataStatus9$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus9$inboundSchema),
     triggerCount: z.int(),
     backend: z.literal("local"),
   });
@@ -20881,6 +21556,24 @@ export function memoryUnion1FromJSON(
 }
 
 /** @internal */
+export const Container1$inboundSchema: z.ZodType<Container1, unknown> = z
+  .object({
+    digest: z.nullable(z.string()).optional(),
+    image: z.string(),
+    name: z.string(),
+  });
+
+export function container1FromJSON(
+  jsonString: string,
+): SafeParseResult<Container1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Container1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Container1' from JSON`,
+  );
+}
+
+/** @internal */
 export const CpuPodUnit1$inboundSchema: z.ZodEnum<typeof CpuPodUnit1> = z.enum(
   CpuPodUnit1,
 );
@@ -20975,6 +21668,7 @@ export function ownerReference1FromJSON(
 
 /** @internal */
 export const Pod1$inboundSchema: z.ZodType<Pod1, unknown> = z.object({
+  containers: z.array(z.lazy(() => Container1$inboundSchema)).optional(),
   cpu: z.nullable(z.union([z.lazy(() => CpuPod1$inboundSchema), z.any()]))
     .optional(),
   memory: z.nullable(z.union([z.lazy(() => MemoryPod1$inboundSchema), z.any()]))
@@ -21061,23 +21755,26 @@ export const Lifecycle8$inboundSchema: z.ZodEnum<typeof Lifecycle8> = z.enum(
 );
 
 /** @internal */
-export const DataStatus8$inboundSchema: z.ZodType<DataStatus8, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue8$inboundSchema)),
-    health: Health8$inboundSchema,
-    lifecycle: Lifecycle8$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus8$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus8,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue8$inboundSchema)),
+  health: Health8$inboundSchema,
+  lifecycle: Lifecycle8$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus8FromJSON(
+export function getResourceDeploymentDetailDataStatus8FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus8, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailDataStatus8, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus8$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus8' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus8' from JSON`,
   );
 }
 
@@ -21160,7 +21857,7 @@ export const DataKubernetes1$inboundSchema: z.ZodType<
   pods: z.array(z.lazy(() => Pod1$inboundSchema)),
   replicas: z.lazy(() => Replicas1$inboundSchema),
   restarts: z.nullable(z.int()).optional(),
-  status: z.lazy(() => DataStatus8$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus8$inboundSchema),
   triggerCount: z.int(),
   workload: z.nullable(
     z.union([z.lazy(() => Workload1$inboundSchema), z.any()]),
@@ -21219,23 +21916,26 @@ export const Lifecycle7$inboundSchema: z.ZodEnum<typeof Lifecycle7> = z.enum(
 );
 
 /** @internal */
-export const DataStatus7$inboundSchema: z.ZodType<DataStatus7, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue7$inboundSchema)),
-    health: Health7$inboundSchema,
-    lifecycle: Lifecycle7$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus7$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus7,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue7$inboundSchema)),
+  health: Health7$inboundSchema,
+  lifecycle: Lifecycle7$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus7FromJSON(
+export function getResourceDeploymentDetailDataStatus7FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus7, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailDataStatus7, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus7$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus7' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus7' from JSON`,
   );
 }
 
@@ -21254,7 +21954,7 @@ export const DataAzureContainerApps1$inboundSchema: z.ZodType<
   provisioningState: z.nullable(z.string()).optional(),
   revision: z.nullable(z.string()).optional(),
   runningStatus: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus7$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus7$inboundSchema),
   backend: z.literal("azureContainerApps"),
 });
 
@@ -21308,23 +22008,26 @@ export const Lifecycle6$inboundSchema: z.ZodEnum<typeof Lifecycle6> = z.enum(
 );
 
 /** @internal */
-export const DataStatus6$inboundSchema: z.ZodType<DataStatus6, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue6$inboundSchema)),
-    health: Health6$inboundSchema,
-    lifecycle: Lifecycle6$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus6$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus6,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue6$inboundSchema)),
+  health: Health6$inboundSchema,
+  lifecycle: Lifecycle6$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus6FromJSON(
+export function getResourceDeploymentDetailDataStatus6FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus6, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailDataStatus6, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus6$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus6' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus6' from JSON`,
   );
 }
 
@@ -21344,7 +22047,7 @@ export const DataGcpCloudRun$inboundSchema: z.ZodType<
   observedGeneration: z.nullable(z.int()).optional(),
   region: z.nullable(z.string()).optional(),
   service: z.string(),
-  status: z.lazy(() => DataStatus6$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus6$inboundSchema),
   trafficCount: z.int(),
   uri: z.nullable(z.string()).optional(),
   urls: z.array(z.string()),
@@ -21401,23 +22104,26 @@ export const Lifecycle5$inboundSchema: z.ZodEnum<typeof Lifecycle5> = z.enum(
 );
 
 /** @internal */
-export const DataStatus5$inboundSchema: z.ZodType<DataStatus5, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue5$inboundSchema)),
-    health: Health5$inboundSchema,
-    lifecycle: Lifecycle5$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus5$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus5,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue5$inboundSchema)),
+  health: Health5$inboundSchema,
+  lifecycle: Lifecycle5$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus5FromJSON(
+export function getResourceDeploymentDetailDataStatus5FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus5, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailDataStatus5, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus5$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus5' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus5' from JSON`,
   );
 }
 
@@ -21440,7 +22146,7 @@ export const DataAwsLambda$inboundSchema: z.ZodType<DataAwsLambda, unknown> = z
     state: z.nullable(z.string()).optional(),
     stateReason: z.nullable(z.string()).optional(),
     stateReasonCode: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus5$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus5$inboundSchema),
     timeoutSeconds: z.nullable(z.int()).optional(),
     triggerCount: z.int(),
     version: z.nullable(z.string()).optional(),
@@ -21541,23 +22247,26 @@ export const Lifecycle4$inboundSchema: z.ZodEnum<typeof Lifecycle4> = z.enum(
 );
 
 /** @internal */
-export const DataStatus4$inboundSchema: z.ZodType<DataStatus4, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue4$inboundSchema)),
-    health: Health4$inboundSchema,
-    lifecycle: Lifecycle4$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus4$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus4,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue4$inboundSchema)),
+  health: Health4$inboundSchema,
+  lifecycle: Lifecycle4$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus4FromJSON(
+export function getResourceDeploymentDetailDataStatus4FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus4, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailDataStatus4, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus4$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus4' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus4' from JSON`,
   );
 }
 
@@ -21571,7 +22280,7 @@ export const DataLocal1$inboundSchema: z.ZodType<DataLocal1, unknown> = z
     path: z.string(),
     pathExists: z.boolean(),
     readonly: z.nullable(z.boolean()).optional(),
-    status: z.lazy(() => DataStatus4$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus4$inboundSchema),
     backend: z.literal("local"),
   });
 
@@ -21625,23 +22334,26 @@ export const Lifecycle3$inboundSchema: z.ZodEnum<typeof Lifecycle3> = z.enum(
 );
 
 /** @internal */
-export const DataStatus3$inboundSchema: z.ZodType<DataStatus3, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue3$inboundSchema)),
-    health: Health3$inboundSchema,
-    lifecycle: Lifecycle3$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus3$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus3,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue3$inboundSchema)),
+  health: Health3$inboundSchema,
+  lifecycle: Lifecycle3$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus3FromJSON(
+export function getResourceDeploymentDetailDataStatus3FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus3, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailDataStatus3, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus3' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus3' from JSON`,
   );
 }
 
@@ -21672,7 +22384,7 @@ export const DataAzureBlob$inboundSchema: z.ZodType<DataAzureBlob, unknown> = z
     secondaryLocation: z.nullable(z.string()).optional(),
     skuName: z.nullable(z.string()).optional(),
     skuTier: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus3$inboundSchema),
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus3$inboundSchema),
     statusOfPrimary: z.nullable(z.string()).optional(),
     statusOfSecondary: z.nullable(z.string()).optional(),
     storageAccountName: z.nullable(z.string()).optional(),
@@ -21730,23 +22442,26 @@ export const Lifecycle2$inboundSchema: z.ZodEnum<typeof Lifecycle2> = z.enum(
 );
 
 /** @internal */
-export const DataStatus2$inboundSchema: z.ZodType<DataStatus2, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue2$inboundSchema)),
-    health: Health2$inboundSchema,
-    lifecycle: Lifecycle2$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus2$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus2,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue2$inboundSchema)),
+  health: Health2$inboundSchema,
+  lifecycle: Lifecycle2$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus2FromJSON(
+export function getResourceDeploymentDetailDataStatus2FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus2, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailDataStatus2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus2' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus2' from JSON`,
   );
 }
 
@@ -21769,7 +22484,7 @@ export const DataGcpCloudStorage$inboundSchema: z.ZodType<
   retentionPolicyIsLocked: z.nullable(z.boolean()).optional(),
   softDeleteEffectiveTime: z.nullable(z.string()).optional(),
   softDeleteRetentionDurationSeconds: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus2$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus2$inboundSchema),
   storageClass: z.nullable(z.string()).optional(),
   uniformBucketLevelAccessEnabled: z.nullable(z.boolean()).optional(),
   uniformBucketLevelAccessLockedTime: z.nullable(z.string()).optional(),
@@ -21827,23 +22542,26 @@ export const Lifecycle1$inboundSchema: z.ZodEnum<typeof Lifecycle1> = z.enum(
 );
 
 /** @internal */
-export const DataStatus1$inboundSchema: z.ZodType<DataStatus1, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue1$inboundSchema)),
-    health: Health1$inboundSchema,
-    lifecycle: Lifecycle1$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
+export const GetResourceDeploymentDetailDataStatus1$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus1,
+  unknown
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => CollectionIssue1$inboundSchema)),
+  health: Health1$inboundSchema,
+  lifecycle: Lifecycle1$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
 
-export function dataStatus1FromJSON(
+export function getResourceDeploymentDetailDataStatus1FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus1, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailDataStatus1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus1' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus1' from JSON`,
   );
 }
 
@@ -21863,7 +22581,7 @@ export const DataAwsS3$inboundSchema: z.ZodType<DataAwsS3, unknown> = z.object({
   publicAccessBlockPresent: z.boolean(),
   region: z.nullable(z.string()).optional(),
   restrictPublicBuckets: z.nullable(z.boolean()).optional(),
-  status: z.lazy(() => DataStatus1$inboundSchema),
+  status: z.lazy(() => GetResourceDeploymentDetailDataStatus1$inboundSchema),
   versioningEnabled: z.nullable(z.boolean()).optional(),
   versioningStatus: z.nullable(z.string()).optional(),
   backend: z.literal("awsS3"),

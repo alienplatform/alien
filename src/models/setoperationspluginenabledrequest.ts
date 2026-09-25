@@ -4,17 +4,29 @@
  */
 
 import * as z from "zod/v4";
+import {
+  OperationsPermissionDiff,
+  OperationsPermissionDiff$Outbound,
+  OperationsPermissionDiff$outboundSchema,
+} from "./operationspermissiondiff.js";
 
 export type SetOperationsPluginEnabledRequest = {
   /**
-   * Whether the plugin should be baked into the operator image.
+   * Whether the plugin is distributed to this project's Operators.
    */
   enabled: boolean;
+  /**
+   * Validate the change and return its permission delta without saving it. Defaults to false.
+   */
+  dryRun?: boolean | undefined;
+  expectedPermissionDiff?: OperationsPermissionDiff | undefined;
 };
 
 /** @internal */
 export type SetOperationsPluginEnabledRequest$Outbound = {
   enabled: boolean;
+  dryRun?: boolean | undefined;
+  expectedPermissionDiff?: OperationsPermissionDiff$Outbound | undefined;
 };
 
 /** @internal */
@@ -23,6 +35,8 @@ export const SetOperationsPluginEnabledRequest$outboundSchema: z.ZodType<
   SetOperationsPluginEnabledRequest
 > = z.object({
   enabled: z.boolean(),
+  dryRun: z.boolean().optional(),
+  expectedPermissionDiff: OperationsPermissionDiff$outboundSchema.optional(),
 });
 
 export function setOperationsPluginEnabledRequestToJSON(

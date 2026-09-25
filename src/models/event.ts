@@ -28,6 +28,187 @@ export type EventDataDeploymentDeletionRequested = {
 /**
  * Type of authenticated principal that requested an event.
  */
+export const EventKind7 = {
+  User: "user",
+  ServiceAccount: "serviceAccount",
+} as const;
+/**
+ * Type of authenticated principal that requested an event.
+ */
+export type EventKind7 = ClosedEnum<typeof EventKind7>;
+
+/**
+ * Client channel that carried a principal's request.
+ */
+export const EventViaEnum7 = {
+  Mcp: "mcp",
+} as const;
+/**
+ * Client channel that carried a principal's request.
+ */
+export type EventViaEnum7 = ClosedEnum<typeof EventViaEnum7>;
+
+export type EventViaUnion7 = EventViaEnum7 | any;
+
+/**
+ * Authenticated principal that requested a deployment intent event.
+ */
+export type EventActor7 = {
+  /**
+   * User email when the principal is a user.
+   */
+  email?: string | null | undefined;
+  /**
+   * Stable user or service-account identifier.
+   */
+  id: string;
+  /**
+   * Type of authenticated principal that requested an event.
+   */
+  kind: EventKind7;
+  via?: EventViaEnum7 | any | null | undefined;
+};
+
+export type EventActorUnion7 = EventActor7 | any;
+
+export type EventDataDeploymentEnvironmentUpdated = {
+  actor?: EventActor7 | any | null | undefined;
+  /**
+   * Names of the environment variables that changed (added, removed, or modified)
+   */
+  changedKeys: Array<string>;
+  /**
+   * ID of the deployment
+   */
+  deploymentId: string;
+  type: "DeploymentEnvironmentUpdated";
+};
+
+/**
+ * Type of authenticated principal that requested an event.
+ */
+export const EventKind6 = {
+  User: "user",
+  ServiceAccount: "serviceAccount",
+} as const;
+/**
+ * Type of authenticated principal that requested an event.
+ */
+export type EventKind6 = ClosedEnum<typeof EventKind6>;
+
+/**
+ * Client channel that carried a principal's request.
+ */
+export const EventViaEnum6 = {
+  Mcp: "mcp",
+} as const;
+/**
+ * Client channel that carried a principal's request.
+ */
+export type EventViaEnum6 = ClosedEnum<typeof EventViaEnum6>;
+
+export type EventViaUnion6 = EventViaEnum6 | any;
+
+/**
+ * Authenticated principal that requested a deployment intent event.
+ */
+export type EventActor6 = {
+  /**
+   * User email when the principal is a user.
+   */
+  email?: string | null | undefined;
+  /**
+   * Stable user or service-account identifier.
+   */
+  id: string;
+  /**
+   * Type of authenticated principal that requested an event.
+   */
+  kind: EventKind6;
+  via?: EventViaEnum6 | any | null | undefined;
+};
+
+export type EventActorUnion6 = EventActor6 | any;
+
+export type EventDataDeploymentReleaseUnpinned = {
+  actor?: EventActor6 | any | null | undefined;
+  /**
+   * ID of the deployment
+   */
+  deploymentId: string;
+  /**
+   * ID of the release that was previously pinned
+   */
+  previousPinnedReleaseId: string;
+  type: "DeploymentReleaseUnpinned";
+};
+
+/**
+ * Type of authenticated principal that requested an event.
+ */
+export const EventKind5 = {
+  User: "user",
+  ServiceAccount: "serviceAccount",
+} as const;
+/**
+ * Type of authenticated principal that requested an event.
+ */
+export type EventKind5 = ClosedEnum<typeof EventKind5>;
+
+/**
+ * Client channel that carried a principal's request.
+ */
+export const EventViaEnum5 = {
+  Mcp: "mcp",
+} as const;
+/**
+ * Client channel that carried a principal's request.
+ */
+export type EventViaEnum5 = ClosedEnum<typeof EventViaEnum5>;
+
+export type EventViaUnion5 = EventViaEnum5 | any;
+
+/**
+ * Authenticated principal that requested a deployment intent event.
+ */
+export type EventActor5 = {
+  /**
+   * User email when the principal is a user.
+   */
+  email?: string | null | undefined;
+  /**
+   * Stable user or service-account identifier.
+   */
+  id: string;
+  /**
+   * Type of authenticated principal that requested an event.
+   */
+  kind: EventKind5;
+  via?: EventViaEnum5 | any | null | undefined;
+};
+
+export type EventActorUnion5 = EventActor5 | any;
+
+export type EventDataDeploymentReleasePinned = {
+  actor?: EventActor5 | any | null | undefined;
+  /**
+   * ID of the deployment
+   */
+  deploymentId: string;
+  /**
+   * ID of the release that is now pinned
+   */
+  pinnedReleaseId: string;
+  /**
+   * ID of the previously pinned release, if any
+   */
+  previousPinnedReleaseId?: string | null | undefined;
+  type: "DeploymentReleasePinned";
+};
+
+/**
+ * Type of authenticated principal that requested an event.
+ */
 export const EventKind4 = {
   User: "user",
   ServiceAccount: "serviceAccount",
@@ -36,6 +217,19 @@ export const EventKind4 = {
  * Type of authenticated principal that requested an event.
  */
 export type EventKind4 = ClosedEnum<typeof EventKind4>;
+
+/**
+ * Client channel that carried a principal's request.
+ */
+export const EventViaEnum4 = {
+  Mcp: "mcp",
+} as const;
+/**
+ * Client channel that carried a principal's request.
+ */
+export type EventViaEnum4 = ClosedEnum<typeof EventViaEnum4>;
+
+export type EventViaUnion4 = EventViaEnum4 | any;
 
 /**
  * Authenticated principal that requested a deployment intent event.
@@ -53,52 +247,13 @@ export type EventActor4 = {
    * Type of authenticated principal that requested an event.
    */
   kind: EventKind4;
+  via?: EventViaEnum4 | any | null | undefined;
 };
 
 export type EventActorUnion4 = EventActor4 | any;
 
-export type EventDataDeploymentEnvironmentUpdated = {
-  actor?: EventActor4 | any | null | undefined;
-  /**
-   * Names of the environment variables that changed (added, removed, or modified)
-   */
-  changedKeys: Array<string>;
-  /**
-   * ID of the deployment
-   */
-  deploymentId: string;
-  type: "DeploymentEnvironmentUpdated";
-};
-
-export type EventDataDeploymentReleaseUnpinned = {
-  /**
-   * ID of the deployment
-   */
-  deploymentId: string;
-  /**
-   * ID of the release that was previously pinned
-   */
-  previousPinnedReleaseId: string;
-  type: "DeploymentReleaseUnpinned";
-};
-
-export type EventDataDeploymentReleasePinned = {
-  /**
-   * ID of the deployment
-   */
-  deploymentId: string;
-  /**
-   * ID of the release that is now pinned
-   */
-  pinnedReleaseId: string;
-  /**
-   * ID of the previously pinned release, if any
-   */
-  previousPinnedReleaseId?: string | null | undefined;
-  type: "DeploymentReleasePinned";
-};
-
 export type EventDataDeploymentRedeployRequested = {
+  actor?: EventActor4 | any | null | undefined;
   /**
    * ID of the deployment
    */
@@ -123,6 +278,19 @@ export const EventKind3 = {
 export type EventKind3 = ClosedEnum<typeof EventKind3>;
 
 /**
+ * Client channel that carried a principal's request.
+ */
+export const EventViaEnum3 = {
+  Mcp: "mcp",
+} as const;
+/**
+ * Client channel that carried a principal's request.
+ */
+export type EventViaEnum3 = ClosedEnum<typeof EventViaEnum3>;
+
+export type EventViaUnion3 = EventViaEnum3 | any;
+
+/**
  * Authenticated principal that requested a deployment intent event.
  */
 export type EventActor3 = {
@@ -138,6 +306,7 @@ export type EventActor3 = {
    * Type of authenticated principal that requested an event.
    */
   kind: EventKind3;
+  via?: EventViaEnum3 | any | null | undefined;
 };
 
 export type EventActorUnion3 = EventActor3 | any;
@@ -257,6 +426,19 @@ export const EventKind2 = {
 export type EventKind2 = ClosedEnum<typeof EventKind2>;
 
 /**
+ * Client channel that carried a principal's request.
+ */
+export const EventViaEnum2 = {
+  Mcp: "mcp",
+} as const;
+/**
+ * Client channel that carried a principal's request.
+ */
+export type EventViaEnum2 = ClosedEnum<typeof EventViaEnum2>;
+
+export type EventViaUnion2 = EventViaEnum2 | any;
+
+/**
  * Authenticated principal that requested a deployment intent event.
  */
 export type EventActor2 = {
@@ -272,6 +454,7 @@ export type EventActor2 = {
    * Type of authenticated principal that requested an event.
    */
   kind: EventKind2;
+  via?: EventViaEnum2 | any | null | undefined;
 };
 
 export type EventActorUnion2 = EventActor2 | any;
@@ -306,6 +489,19 @@ export const EventKind1 = {
 export type EventKind1 = ClosedEnum<typeof EventKind1>;
 
 /**
+ * Client channel that carried a principal's request.
+ */
+export const EventViaEnum1 = {
+  Mcp: "mcp",
+} as const;
+/**
+ * Client channel that carried a principal's request.
+ */
+export type EventViaEnum1 = ClosedEnum<typeof EventViaEnum1>;
+
+export type EventViaUnion1 = EventViaEnum1 | any;
+
+/**
  * Authenticated principal that requested a deployment intent event.
  */
 export type EventActor1 = {
@@ -321,6 +517,7 @@ export type EventActor1 = {
    * Type of authenticated principal that requested an event.
    */
   kind: EventKind1;
+  via?: EventViaEnum1 | any | null | undefined;
 };
 
 export type EventActorUnion1 = EventActor1 | any;
@@ -1550,9 +1747,270 @@ export function eventDataDeploymentDeletionRequestedFromJSON(
 }
 
 /** @internal */
+export const EventKind7$inboundSchema: z.ZodEnum<typeof EventKind7> = z.enum(
+  EventKind7,
+);
+
+/** @internal */
+export const EventViaEnum7$inboundSchema: z.ZodEnum<typeof EventViaEnum7> = z
+  .enum(EventViaEnum7);
+
+/** @internal */
+export const EventViaUnion7$inboundSchema: z.ZodType<EventViaUnion7, unknown> =
+  z.union([EventViaEnum7$inboundSchema, z.any()]);
+
+export function eventViaUnion7FromJSON(
+  jsonString: string,
+): SafeParseResult<EventViaUnion7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventViaUnion7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventViaUnion7' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventActor7$inboundSchema: z.ZodType<EventActor7, unknown> = z
+  .object({
+    email: z.nullable(z.string()).optional(),
+    id: z.string(),
+    kind: EventKind7$inboundSchema,
+    via: z.nullable(z.union([EventViaEnum7$inboundSchema, z.any()])).optional(),
+  });
+
+export function eventActor7FromJSON(
+  jsonString: string,
+): SafeParseResult<EventActor7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventActor7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventActor7' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventActorUnion7$inboundSchema: z.ZodType<
+  EventActorUnion7,
+  unknown
+> = z.union([z.lazy(() => EventActor7$inboundSchema), z.any()]);
+
+export function eventActorUnion7FromJSON(
+  jsonString: string,
+): SafeParseResult<EventActorUnion7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventActorUnion7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventActorUnion7' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventDataDeploymentEnvironmentUpdated$inboundSchema: z.ZodType<
+  EventDataDeploymentEnvironmentUpdated,
+  unknown
+> = z.object({
+  actor: z.nullable(z.union([z.lazy(() => EventActor7$inboundSchema), z.any()]))
+    .optional(),
+  changedKeys: z.array(z.string()),
+  deploymentId: z.string(),
+  type: z.literal("DeploymentEnvironmentUpdated"),
+});
+
+export function eventDataDeploymentEnvironmentUpdatedFromJSON(
+  jsonString: string,
+): SafeParseResult<EventDataDeploymentEnvironmentUpdated, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      EventDataDeploymentEnvironmentUpdated$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventDataDeploymentEnvironmentUpdated' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventKind6$inboundSchema: z.ZodEnum<typeof EventKind6> = z.enum(
+  EventKind6,
+);
+
+/** @internal */
+export const EventViaEnum6$inboundSchema: z.ZodEnum<typeof EventViaEnum6> = z
+  .enum(EventViaEnum6);
+
+/** @internal */
+export const EventViaUnion6$inboundSchema: z.ZodType<EventViaUnion6, unknown> =
+  z.union([EventViaEnum6$inboundSchema, z.any()]);
+
+export function eventViaUnion6FromJSON(
+  jsonString: string,
+): SafeParseResult<EventViaUnion6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventViaUnion6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventViaUnion6' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventActor6$inboundSchema: z.ZodType<EventActor6, unknown> = z
+  .object({
+    email: z.nullable(z.string()).optional(),
+    id: z.string(),
+    kind: EventKind6$inboundSchema,
+    via: z.nullable(z.union([EventViaEnum6$inboundSchema, z.any()])).optional(),
+  });
+
+export function eventActor6FromJSON(
+  jsonString: string,
+): SafeParseResult<EventActor6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventActor6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventActor6' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventActorUnion6$inboundSchema: z.ZodType<
+  EventActorUnion6,
+  unknown
+> = z.union([z.lazy(() => EventActor6$inboundSchema), z.any()]);
+
+export function eventActorUnion6FromJSON(
+  jsonString: string,
+): SafeParseResult<EventActorUnion6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventActorUnion6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventActorUnion6' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventDataDeploymentReleaseUnpinned$inboundSchema: z.ZodType<
+  EventDataDeploymentReleaseUnpinned,
+  unknown
+> = z.object({
+  actor: z.nullable(z.union([z.lazy(() => EventActor6$inboundSchema), z.any()]))
+    .optional(),
+  deploymentId: z.string(),
+  previousPinnedReleaseId: z.string(),
+  type: z.literal("DeploymentReleaseUnpinned"),
+});
+
+export function eventDataDeploymentReleaseUnpinnedFromJSON(
+  jsonString: string,
+): SafeParseResult<EventDataDeploymentReleaseUnpinned, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      EventDataDeploymentReleaseUnpinned$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventDataDeploymentReleaseUnpinned' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventKind5$inboundSchema: z.ZodEnum<typeof EventKind5> = z.enum(
+  EventKind5,
+);
+
+/** @internal */
+export const EventViaEnum5$inboundSchema: z.ZodEnum<typeof EventViaEnum5> = z
+  .enum(EventViaEnum5);
+
+/** @internal */
+export const EventViaUnion5$inboundSchema: z.ZodType<EventViaUnion5, unknown> =
+  z.union([EventViaEnum5$inboundSchema, z.any()]);
+
+export function eventViaUnion5FromJSON(
+  jsonString: string,
+): SafeParseResult<EventViaUnion5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventViaUnion5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventViaUnion5' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventActor5$inboundSchema: z.ZodType<EventActor5, unknown> = z
+  .object({
+    email: z.nullable(z.string()).optional(),
+    id: z.string(),
+    kind: EventKind5$inboundSchema,
+    via: z.nullable(z.union([EventViaEnum5$inboundSchema, z.any()])).optional(),
+  });
+
+export function eventActor5FromJSON(
+  jsonString: string,
+): SafeParseResult<EventActor5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventActor5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventActor5' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventActorUnion5$inboundSchema: z.ZodType<
+  EventActorUnion5,
+  unknown
+> = z.union([z.lazy(() => EventActor5$inboundSchema), z.any()]);
+
+export function eventActorUnion5FromJSON(
+  jsonString: string,
+): SafeParseResult<EventActorUnion5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventActorUnion5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventActorUnion5' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventDataDeploymentReleasePinned$inboundSchema: z.ZodType<
+  EventDataDeploymentReleasePinned,
+  unknown
+> = z.object({
+  actor: z.nullable(z.union([z.lazy(() => EventActor5$inboundSchema), z.any()]))
+    .optional(),
+  deploymentId: z.string(),
+  pinnedReleaseId: z.string(),
+  previousPinnedReleaseId: z.nullable(z.string()).optional(),
+  type: z.literal("DeploymentReleasePinned"),
+});
+
+export function eventDataDeploymentReleasePinnedFromJSON(
+  jsonString: string,
+): SafeParseResult<EventDataDeploymentReleasePinned, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventDataDeploymentReleasePinned$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventDataDeploymentReleasePinned' from JSON`,
+  );
+}
+
+/** @internal */
 export const EventKind4$inboundSchema: z.ZodEnum<typeof EventKind4> = z.enum(
   EventKind4,
 );
+
+/** @internal */
+export const EventViaEnum4$inboundSchema: z.ZodEnum<typeof EventViaEnum4> = z
+  .enum(EventViaEnum4);
+
+/** @internal */
+export const EventViaUnion4$inboundSchema: z.ZodType<EventViaUnion4, unknown> =
+  z.union([EventViaEnum4$inboundSchema, z.any()]);
+
+export function eventViaUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<EventViaUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventViaUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventViaUnion4' from JSON`,
+  );
+}
 
 /** @internal */
 export const EventActor4$inboundSchema: z.ZodType<EventActor4, unknown> = z
@@ -1560,6 +2018,7 @@ export const EventActor4$inboundSchema: z.ZodType<EventActor4, unknown> = z
     email: z.nullable(z.string()).optional(),
     id: z.string(),
     kind: EventKind4$inboundSchema,
+    via: z.nullable(z.union([EventViaEnum4$inboundSchema, z.any()])).optional(),
   });
 
 export function eventActor4FromJSON(
@@ -1589,75 +2048,12 @@ export function eventActorUnion4FromJSON(
 }
 
 /** @internal */
-export const EventDataDeploymentEnvironmentUpdated$inboundSchema: z.ZodType<
-  EventDataDeploymentEnvironmentUpdated,
-  unknown
-> = z.object({
-  actor: z.nullable(z.union([z.lazy(() => EventActor4$inboundSchema), z.any()]))
-    .optional(),
-  changedKeys: z.array(z.string()),
-  deploymentId: z.string(),
-  type: z.literal("DeploymentEnvironmentUpdated"),
-});
-
-export function eventDataDeploymentEnvironmentUpdatedFromJSON(
-  jsonString: string,
-): SafeParseResult<EventDataDeploymentEnvironmentUpdated, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      EventDataDeploymentEnvironmentUpdated$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeploymentEnvironmentUpdated' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventDataDeploymentReleaseUnpinned$inboundSchema: z.ZodType<
-  EventDataDeploymentReleaseUnpinned,
-  unknown
-> = z.object({
-  deploymentId: z.string(),
-  previousPinnedReleaseId: z.string(),
-  type: z.literal("DeploymentReleaseUnpinned"),
-});
-
-export function eventDataDeploymentReleaseUnpinnedFromJSON(
-  jsonString: string,
-): SafeParseResult<EventDataDeploymentReleaseUnpinned, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      EventDataDeploymentReleaseUnpinned$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeploymentReleaseUnpinned' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventDataDeploymentReleasePinned$inboundSchema: z.ZodType<
-  EventDataDeploymentReleasePinned,
-  unknown
-> = z.object({
-  deploymentId: z.string(),
-  pinnedReleaseId: z.string(),
-  previousPinnedReleaseId: z.nullable(z.string()).optional(),
-  type: z.literal("DeploymentReleasePinned"),
-});
-
-export function eventDataDeploymentReleasePinnedFromJSON(
-  jsonString: string,
-): SafeParseResult<EventDataDeploymentReleasePinned, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => EventDataDeploymentReleasePinned$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeploymentReleasePinned' from JSON`,
-  );
-}
-
-/** @internal */
 export const EventDataDeploymentRedeployRequested$inboundSchema: z.ZodType<
   EventDataDeploymentRedeployRequested,
   unknown
 > = z.object({
+  actor: z.nullable(z.union([z.lazy(() => EventActor4$inboundSchema), z.any()]))
+    .optional(),
   deploymentId: z.string(),
   releaseId: z.string(),
   type: z.literal("DeploymentRedeployRequested"),
@@ -1680,11 +2076,30 @@ export const EventKind3$inboundSchema: z.ZodEnum<typeof EventKind3> = z.enum(
 );
 
 /** @internal */
+export const EventViaEnum3$inboundSchema: z.ZodEnum<typeof EventViaEnum3> = z
+  .enum(EventViaEnum3);
+
+/** @internal */
+export const EventViaUnion3$inboundSchema: z.ZodType<EventViaUnion3, unknown> =
+  z.union([EventViaEnum3$inboundSchema, z.any()]);
+
+export function eventViaUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<EventViaUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventViaUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventViaUnion3' from JSON`,
+  );
+}
+
+/** @internal */
 export const EventActor3$inboundSchema: z.ZodType<EventActor3, unknown> = z
   .object({
     email: z.nullable(z.string()).optional(),
     id: z.string(),
     kind: EventKind3$inboundSchema,
+    via: z.nullable(z.union([EventViaEnum3$inboundSchema, z.any()])).optional(),
   });
 
 export function eventActor3FromJSON(
@@ -1785,11 +2200,30 @@ export const EventKind2$inboundSchema: z.ZodEnum<typeof EventKind2> = z.enum(
 );
 
 /** @internal */
+export const EventViaEnum2$inboundSchema: z.ZodEnum<typeof EventViaEnum2> = z
+  .enum(EventViaEnum2);
+
+/** @internal */
+export const EventViaUnion2$inboundSchema: z.ZodType<EventViaUnion2, unknown> =
+  z.union([EventViaEnum2$inboundSchema, z.any()]);
+
+export function eventViaUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<EventViaUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventViaUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventViaUnion2' from JSON`,
+  );
+}
+
+/** @internal */
 export const EventActor2$inboundSchema: z.ZodType<EventActor2, unknown> = z
   .object({
     email: z.nullable(z.string()).optional(),
     id: z.string(),
     kind: EventKind2$inboundSchema,
+    via: z.nullable(z.union([EventViaEnum2$inboundSchema, z.any()])).optional(),
   });
 
 export function eventActor2FromJSON(
@@ -1853,11 +2287,30 @@ export const EventKind1$inboundSchema: z.ZodEnum<typeof EventKind1> = z.enum(
 );
 
 /** @internal */
+export const EventViaEnum1$inboundSchema: z.ZodEnum<typeof EventViaEnum1> = z
+  .enum(EventViaEnum1);
+
+/** @internal */
+export const EventViaUnion1$inboundSchema: z.ZodType<EventViaUnion1, unknown> =
+  z.union([EventViaEnum1$inboundSchema, z.any()]);
+
+export function eventViaUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<EventViaUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventViaUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventViaUnion1' from JSON`,
+  );
+}
+
+/** @internal */
 export const EventActor1$inboundSchema: z.ZodType<EventActor1, unknown> = z
   .object({
     email: z.nullable(z.string()).optional(),
     id: z.string(),
     kind: EventKind1$inboundSchema,
+    via: z.nullable(z.union([EventViaEnum1$inboundSchema, z.any()])).optional(),
   });
 
 export function eventActor1FromJSON(

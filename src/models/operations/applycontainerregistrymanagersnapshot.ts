@@ -26,7 +26,7 @@ export type ApplyContainerRegistryManagerSnapshotRepository = {
   error: string | null;
 };
 
-export type Verification = {
+export type ApplyContainerRegistryManagerSnapshotVerification = {
   succeeded: boolean;
   observedAt: Date;
   error: string | null;
@@ -39,7 +39,7 @@ export type ApplyContainerRegistryManagerSnapshotRequestBody = {
   routeId: string;
   desiredRevision: number;
   repositories: Array<ApplyContainerRegistryManagerSnapshotRepository>;
-  verification: Verification | null;
+  verification: ApplyContainerRegistryManagerSnapshotVerification | null;
 };
 
 export type ApplyContainerRegistryManagerSnapshotRequest = {
@@ -85,24 +85,32 @@ export function applyContainerRegistryManagerSnapshotRepositoryToJSON(
 }
 
 /** @internal */
-export type Verification$Outbound = {
+export type ApplyContainerRegistryManagerSnapshotVerification$Outbound = {
   succeeded: boolean;
   observedAt: string;
   error: string | null;
 };
 
 /** @internal */
-export const Verification$outboundSchema: z.ZodType<
-  Verification$Outbound,
-  Verification
-> = z.object({
-  succeeded: z.boolean(),
-  observedAt: z.date().transform(v => v.toISOString()),
-  error: z.nullable(z.string()),
-});
+export const ApplyContainerRegistryManagerSnapshotVerification$outboundSchema:
+  z.ZodType<
+    ApplyContainerRegistryManagerSnapshotVerification$Outbound,
+    ApplyContainerRegistryManagerSnapshotVerification
+  > = z.object({
+    succeeded: z.boolean(),
+    observedAt: z.date().transform(v => v.toISOString()),
+    error: z.nullable(z.string()),
+  });
 
-export function verificationToJSON(verification: Verification): string {
-  return JSON.stringify(Verification$outboundSchema.parse(verification));
+export function applyContainerRegistryManagerSnapshotVerificationToJSON(
+  applyContainerRegistryManagerSnapshotVerification:
+    ApplyContainerRegistryManagerSnapshotVerification,
+): string {
+  return JSON.stringify(
+    ApplyContainerRegistryManagerSnapshotVerification$outboundSchema.parse(
+      applyContainerRegistryManagerSnapshotVerification,
+    ),
+  );
 }
 
 /** @internal */
@@ -110,7 +118,9 @@ export type ApplyContainerRegistryManagerSnapshotRequestBody$Outbound = {
   routeId: string;
   desiredRevision: number;
   repositories: Array<ApplyContainerRegistryManagerSnapshotRepository$Outbound>;
-  verification: Verification$Outbound | null;
+  verification:
+    | ApplyContainerRegistryManagerSnapshotVerification$Outbound
+    | null;
 };
 
 /** @internal */
@@ -126,7 +136,11 @@ export const ApplyContainerRegistryManagerSnapshotRequestBody$outboundSchema:
         ApplyContainerRegistryManagerSnapshotRepository$outboundSchema
       ),
     ),
-    verification: z.nullable(z.lazy(() => Verification$outboundSchema)),
+    verification: z.nullable(
+      z.lazy(() =>
+        ApplyContainerRegistryManagerSnapshotVerification$outboundSchema
+      ),
+    ),
   });
 
 export function applyContainerRegistryManagerSnapshotRequestBodyToJSON(

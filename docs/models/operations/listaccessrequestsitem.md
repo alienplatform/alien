@@ -26,8 +26,13 @@ let value: ListAccessRequestsItem = {
   commands: [],
   operationPattern: "<value>",
   maxRisk: "mutating",
-  status: "expired",
-  approvedUntil: null,
+  debugGrant: {
+    tool: "gcloud",
+    namespace: "braintrust",
+    cloudScope: "123456789012/prod-readonly",
+  },
+  status: "pending-approval",
+  approvedUntil: "<value>",
 };
 ```
 
@@ -47,5 +52,6 @@ let value: ListAccessRequestsItem = {
 | `commands`                                                                                               | [operations.ListAccessRequestsCommand](../../models/operations/listaccessrequestscommand.md)[]           | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `operationPattern`                                                                                       | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `maxRisk`                                                                                                | [operations.ListAccessRequestsMaxRisk](../../models/operations/listaccessrequestsmaxrisk.md)             | :heavy_check_mark:                                                                                       | How risky an operation is (declared by the plugin metadata).                                             |
+| `debugGrant`                                                                                             | [models.AccessRequestDebugGrant](../../models/accessrequestdebuggrant.md)                                | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `status`                                                                                                 | [models.AccessRequestStatus](../../models/accessrequeststatus.md)                                        | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `approvedUntil`                                                                                          | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |

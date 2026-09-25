@@ -22,15 +22,21 @@ const value: models.ManagerRetryResponseSetup = {
       allowedPlatforms: [],
       allowedSetupMethods: [],
     },
+    validatedReleaseSelection: {
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      releaseChannel: "<value>",
+      platform: "aws",
+    },
     items: [
       {
-        item: "deployment",
+        item: "models",
         source: {
-          type: "project-release",
-          releaseChannel: "<value>",
-          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+          type: "built-in",
+          definitionId: "customer-ai",
+          version: "<value>",
+          sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         },
-        required: false,
+        required: true,
       },
     ],
     environmentVariables: [

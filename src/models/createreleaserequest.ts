@@ -21,6 +21,10 @@ export type CreateReleaseRequest = {
    */
   project: string;
   version?: string | undefined;
+  /**
+   * Human-readable release title
+   */
+  title?: string | null | undefined;
   gitMetadata?: GitMetadata | null | undefined;
   stack?: StackByPlatform | undefined;
   rootDirectory?: string | null | undefined;
@@ -31,6 +35,7 @@ export type CreateReleaseRequest = {
 export type CreateReleaseRequest$Outbound = {
   project: string;
   version?: string | undefined;
+  title?: string | null | undefined;
   gitMetadata?: GitMetadata$Outbound | null | undefined;
   stack?: StackByPlatform$Outbound | undefined;
   rootDirectory?: string | null | undefined;
@@ -44,6 +49,7 @@ export const CreateReleaseRequest$outboundSchema: z.ZodType<
 > = z.object({
   project: z.string(),
   version: z.string().optional(),
+  title: z.nullable(z.string()).optional(),
   gitMetadata: z.nullable(GitMetadata$outboundSchema).optional(),
   stack: StackByPlatform$outboundSchema.optional(),
   rootDirectory: z.nullable(z.string()).optional(),

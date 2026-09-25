@@ -2073,6 +2073,14 @@ export type DeploymentDetailResponsePendingPreparedStackOverrideAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -2086,6 +2094,14 @@ export type DeploymentDetailResponsePendingPreparedStackOverrideAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -2461,6 +2477,14 @@ export type DeploymentDetailResponsePendingPreparedStackExtendAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -2474,6 +2498,14 @@ export type DeploymentDetailResponsePendingPreparedStackExtendAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -2851,6 +2883,14 @@ export type DeploymentDetailResponsePendingPreparedStackProfileAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -2864,6 +2904,14 @@ export type DeploymentDetailResponsePendingPreparedStackProfileAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -3652,6 +3700,14 @@ export type DeploymentDetailResponsePreparedStackOverrideAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -3665,6 +3721,14 @@ export type DeploymentDetailResponsePreparedStackOverrideAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -4028,6 +4092,14 @@ export type DeploymentDetailResponsePreparedStackExtendAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -4041,6 +4113,14 @@ export type DeploymentDetailResponsePreparedStackExtendAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -4405,6 +4485,14 @@ export type DeploymentDetailResponsePreparedStackProfileAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -4418,6 +4506,14 @@ export type DeploymentDetailResponsePreparedStackProfileAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -4913,6 +5009,85 @@ export type DeploymentDetailResponsePreparedStackUnion =
   | any;
 
 /**
+ * The cross-account read a manager opened on Alien's registry for one deployment.
+ */
+export type DeploymentDetailResponseRegistryAccess = {
+  /**
+   * Repository identifiers the grant names, sorted.
+   */
+  repositories?: Array<string> | undefined;
+  /**
+   * Compute services the grant admits, sorted. Each pulls as its own principal, so a service
+   *
+   * @remarks
+   * added later needs the policy rewritten.
+   */
+  serviceTypes?: Array<string> | undefined;
+};
+
+export type DeploymentDetailResponseRegistryAccessUnion =
+  | DeploymentDetailResponseRegistryAccess
+  | any;
+
+/**
+ * The objects that keep an AWS deny sandbox's sessions inside the VPC. Each id is recorded as
+ *
+ * @remarks
+ * soon as the object exists and cleared once it is deleted.
+ */
+export type DeploymentDetailResponseEgress = {
+  /**
+   * `AWS::Lambda::NetworkConnector` the sessions start with.
+   */
+  connectorArn?: string | null | undefined;
+  /**
+   * Cloud Control request creating or deleting the connector that AWS has not finished. Kept
+   *
+   * @remarks
+   * so the request's outcome, and AWS's reason when it fails, is read on a later call.
+   */
+  connectorRequest?: string | null | undefined;
+  /**
+   * IAM role Lambda assumes to place the connector's network interfaces.
+   */
+  operatorRoleName: string;
+  /**
+   * Security group permitting egress to loopback only.
+   */
+  securityGroupId?: string | null | undefined;
+};
+
+export type DeploymentDetailResponseEgressUnion =
+  | DeploymentDetailResponseEgress
+  | any;
+
+export const DeploymentDetailResponseTypeAwsSandbox = {
+  AwsSandbox: "awsSandbox",
+} as const;
+export type DeploymentDetailResponseTypeAwsSandbox = ClosedEnum<
+  typeof DeploymentDetailResponseTypeAwsSandbox
+>;
+
+/**
+ * Cloud objects a direct setup created so a runtime-owned resource can run.
+ */
+export type DeploymentDetailResponseSetupScaffolding = {
+  /**
+   * IAM role the image build runs as.
+   */
+  buildRoleName: string;
+  egress?: DeploymentDetailResponseEgress | any | null | undefined;
+  /**
+   * A Frozen sandbox's MicroVM image, built during setup. A Live one's image belongs to its
+   *
+   * @remarks
+   * runtime controller.
+   */
+  imageArn?: string | null | undefined;
+  type: DeploymentDetailResponseTypeAwsSandbox;
+};
+
+/**
  * One-shot authority for a setup re-import to replace setup-owned resources.
  */
 export type DeploymentDetailResponseSetupUpdateAuthorization = {
@@ -5005,6 +5180,11 @@ export type DeploymentDetailResponseRuntimeMetadata = {
     | any
     | null
     | undefined;
+  registryAccess?:
+    | DeploymentDetailResponseRegistryAccess
+    | any
+    | null
+    | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
    *
@@ -5014,6 +5194,15 @@ export type DeploymentDetailResponseRuntimeMetadata = {
    * every reconcile tick.
    */
   registryAccessGranted?: boolean | undefined;
+  /**
+   * What a direct setup created for resources it does not own, keyed by resource id. Setup
+   *
+   * @remarks
+   * teardown removes exactly what is recorded here.
+   */
+  setupScaffolding?:
+    | { [k: string]: DeploymentDetailResponseSetupScaffolding }
+    | undefined;
   setupUpdateAuthorization?:
     | DeploymentDetailResponseSetupUpdateAuthorization
     | any
@@ -8427,6 +8616,7 @@ export const DeploymentDetailResponsePendingPreparedStackOverrideAwResource$inbo
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -8454,6 +8644,7 @@ export const DeploymentDetailResponsePendingPreparedStackOverrideAwStack$inbound
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -9087,6 +9278,7 @@ export const DeploymentDetailResponsePendingPreparedStackExtendAwResource$inboun
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -9114,6 +9306,7 @@ export const DeploymentDetailResponsePendingPreparedStackExtendAwStack$inboundSc
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -9775,6 +9968,7 @@ export const DeploymentDetailResponsePendingPreparedStackProfileAwResource$inbou
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -9802,6 +9996,7 @@ export const DeploymentDetailResponsePendingPreparedStackProfileAwStack$inboundS
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -10958,6 +11153,7 @@ export const DeploymentDetailResponsePreparedStackOverrideAwResource$inboundSche
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -10983,6 +11179,7 @@ export const DeploymentDetailResponsePreparedStackOverrideAwStack$inboundSchema:
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -11597,6 +11794,7 @@ export const DeploymentDetailResponsePreparedStackExtendAwResource$inboundSchema
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -11623,6 +11821,7 @@ export const DeploymentDetailResponsePreparedStackExtendAwStack$inboundSchema:
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -12268,6 +12467,7 @@ export const DeploymentDetailResponsePreparedStackProfileAwResource$inboundSchem
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -12293,6 +12493,7 @@ export const DeploymentDetailResponsePreparedStackProfileAwStack$inboundSchema:
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -13069,6 +13270,127 @@ export function deploymentDetailResponsePreparedStackUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentDetailResponseRegistryAccess$inboundSchema: z.ZodType<
+  DeploymentDetailResponseRegistryAccess,
+  unknown
+> = z.object({
+  repositories: z.array(z.string()).optional(),
+  serviceTypes: z.array(z.string()).optional(),
+});
+
+export function deploymentDetailResponseRegistryAccessFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponseRegistryAccess, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseRegistryAccess$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponseRegistryAccess' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseRegistryAccessUnion$inboundSchema:
+  z.ZodType<DeploymentDetailResponseRegistryAccessUnion, unknown> = z.union([
+    z.lazy(() => DeploymentDetailResponseRegistryAccess$inboundSchema),
+    z.any(),
+  ]);
+
+export function deploymentDetailResponseRegistryAccessUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponseRegistryAccessUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseRegistryAccessUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponseRegistryAccessUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseEgress$inboundSchema: z.ZodType<
+  DeploymentDetailResponseEgress,
+  unknown
+> = z.object({
+  connectorArn: z.nullable(z.string()).optional(),
+  connectorRequest: z.nullable(z.string()).optional(),
+  operatorRoleName: z.string(),
+  securityGroupId: z.nullable(z.string()).optional(),
+});
+
+export function deploymentDetailResponseEgressFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponseEgress, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDetailResponseEgress$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponseEgress' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseEgressUnion$inboundSchema: z.ZodType<
+  DeploymentDetailResponseEgressUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentDetailResponseEgress$inboundSchema),
+  z.any(),
+]);
+
+export function deploymentDetailResponseEgressUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDetailResponseEgressUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseEgressUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponseEgressUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseTypeAwsSandbox$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseTypeAwsSandbox
+> = z.enum(DeploymentDetailResponseTypeAwsSandbox);
+
+/** @internal */
+export const DeploymentDetailResponseSetupScaffolding$inboundSchema: z.ZodType<
+  DeploymentDetailResponseSetupScaffolding,
+  unknown
+> = z.object({
+  buildRoleName: z.string(),
+  egress: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentDetailResponseEgress$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  imageArn: z.nullable(z.string()).optional(),
+  type: DeploymentDetailResponseTypeAwsSandbox$inboundSchema,
+});
+
+export function deploymentDetailResponseSetupScaffoldingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponseSetupScaffolding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseSetupScaffolding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponseSetupScaffolding' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentDetailResponseSetupUpdateAuthorization$inboundSchema:
   z.ZodType<DeploymentDetailResponseSetupUpdateAuthorization, unknown> = z
     .object({
@@ -13146,7 +13468,17 @@ export const DeploymentDetailResponseRuntimeMetadata$inboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
+  registryAccess: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentDetailResponseRegistryAccess$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   registryAccessGranted: z.boolean().optional(),
+  setupScaffolding: z.record(
+    z.string(),
+    z.lazy(() => DeploymentDetailResponseSetupScaffolding$inboundSchema),
+  ).optional(),
   setupUpdateAuthorization: z.nullable(
     z.union([
       z.lazy(() =>

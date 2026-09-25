@@ -62,6 +62,10 @@ export type ListPackagesRequest = {
    */
   status?: ListPackagesStatus | undefined;
   /**
+   * Filter by source release
+   */
+  sourceReleaseId?: string | undefined;
+  /**
    * Search packages by type or version
    */
   search?: string | undefined;
@@ -104,6 +108,7 @@ export type ListPackagesRequest$Outbound = {
   project?: string | undefined;
   type?: string | undefined;
   status?: string | undefined;
+  sourceReleaseId?: string | undefined;
   search?: string | undefined;
   limit: number;
   cursor?: string | undefined;
@@ -117,6 +122,7 @@ export const ListPackagesRequest$outboundSchema: z.ZodType<
   project: z.string().optional(),
   type: ListPackagesType$outboundSchema.optional(),
   status: ListPackagesStatus$outboundSchema.optional(),
+  sourceReleaseId: z.string().optional(),
   search: z.string().optional(),
   limit: z.int().default(20),
   cursor: z.string().optional(),

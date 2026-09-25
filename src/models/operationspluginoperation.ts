@@ -100,7 +100,7 @@ export type OperationsPluginOperationGcp = {
  */
 export type OperationsPluginOperationPermissions = {
   /**
-   * No Azure resource permissions are supported. Kubernetes API permissions are separate.
+   * Always empty: Azure resource operations are not supported yet because no Azure resource permission has been reviewed for operations. Kubernetes API permissions are separate.
    */
   azure: Array<string>;
   aws: Array<OperationsPluginOperationAw>;

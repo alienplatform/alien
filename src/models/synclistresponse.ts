@@ -2002,6 +2002,14 @@ export type SyncListResponsePendingPreparedStackOverrideAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -2015,6 +2023,14 @@ export type SyncListResponsePendingPreparedStackOverrideAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -2376,6 +2392,14 @@ export type SyncListResponsePendingPreparedStackExtendAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -2389,6 +2413,14 @@ export type SyncListResponsePendingPreparedStackExtendAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -2750,6 +2782,14 @@ export type SyncListResponsePendingPreparedStackProfileAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -2763,6 +2803,14 @@ export type SyncListResponsePendingPreparedStackProfileAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -3517,6 +3565,14 @@ export type SyncListResponsePreparedStackOverrideAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -3530,6 +3586,14 @@ export type SyncListResponsePreparedStackOverrideAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -3878,6 +3942,14 @@ export type SyncListResponsePreparedStackExtendAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -3891,6 +3963,14 @@ export type SyncListResponsePreparedStackExtendAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -4245,6 +4325,14 @@ export type SyncListResponsePreparedStackProfileAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -4258,6 +4346,14 @@ export type SyncListResponsePreparedStackProfileAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -4740,6 +4836,83 @@ export type SyncListResponsePreparedStackUnion =
   | any;
 
 /**
+ * The cross-account read a manager opened on Alien's registry for one deployment.
+ */
+export type SyncListResponseRegistryAccess = {
+  /**
+   * Repository identifiers the grant names, sorted.
+   */
+  repositories?: Array<string> | undefined;
+  /**
+   * Compute services the grant admits, sorted. Each pulls as its own principal, so a service
+   *
+   * @remarks
+   * added later needs the policy rewritten.
+   */
+  serviceTypes?: Array<string> | undefined;
+};
+
+export type SyncListResponseRegistryAccessUnion =
+  | SyncListResponseRegistryAccess
+  | any;
+
+/**
+ * The objects that keep an AWS deny sandbox's sessions inside the VPC. Each id is recorded as
+ *
+ * @remarks
+ * soon as the object exists and cleared once it is deleted.
+ */
+export type SyncListResponseEgress = {
+  /**
+   * `AWS::Lambda::NetworkConnector` the sessions start with.
+   */
+  connectorArn?: string | null | undefined;
+  /**
+   * Cloud Control request creating or deleting the connector that AWS has not finished. Kept
+   *
+   * @remarks
+   * so the request's outcome, and AWS's reason when it fails, is read on a later call.
+   */
+  connectorRequest?: string | null | undefined;
+  /**
+   * IAM role Lambda assumes to place the connector's network interfaces.
+   */
+  operatorRoleName: string;
+  /**
+   * Security group permitting egress to loopback only.
+   */
+  securityGroupId?: string | null | undefined;
+};
+
+export type SyncListResponseEgressUnion = SyncListResponseEgress | any;
+
+export const SyncListResponseTypeAwsSandbox = {
+  AwsSandbox: "awsSandbox",
+} as const;
+export type SyncListResponseTypeAwsSandbox = ClosedEnum<
+  typeof SyncListResponseTypeAwsSandbox
+>;
+
+/**
+ * Cloud objects a direct setup created so a runtime-owned resource can run.
+ */
+export type SyncListResponseSetupScaffolding = {
+  /**
+   * IAM role the image build runs as.
+   */
+  buildRoleName: string;
+  egress?: SyncListResponseEgress | any | null | undefined;
+  /**
+   * A Frozen sandbox's MicroVM image, built during setup. A Live one's image belongs to its
+   *
+   * @remarks
+   * runtime controller.
+   */
+  imageArn?: string | null | undefined;
+  type: SyncListResponseTypeAwsSandbox;
+};
+
+/**
  * One-shot authority for a setup re-import to replace setup-owned resources.
  */
 export type SyncListResponseSetupUpdateAuthorization = {
@@ -4826,6 +4999,7 @@ export type SyncListResponseRuntimeMetadata = {
    */
   persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?: SyncListResponsePreparedStack | any | null | undefined;
+  registryAccess?: SyncListResponseRegistryAccess | any | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
    *
@@ -4835,6 +5009,15 @@ export type SyncListResponseRuntimeMetadata = {
    * every reconcile tick.
    */
   registryAccessGranted?: boolean | undefined;
+  /**
+   * What a direct setup created for resources it does not own, keyed by resource id. Setup
+   *
+   * @remarks
+   * teardown removes exactly what is recorded here.
+   */
+  setupScaffolding?:
+    | { [k: string]: SyncListResponseSetupScaffolding }
+    | undefined;
   setupUpdateAuthorization?:
     | SyncListResponseSetupUpdateAuthorization
     | any
@@ -8012,6 +8195,7 @@ export const SyncListResponsePendingPreparedStackOverrideAwResource$inboundSchem
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -8037,6 +8221,7 @@ export const SyncListResponsePendingPreparedStackOverrideAwStack$inboundSchema:
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -8653,6 +8838,7 @@ export const SyncListResponsePendingPreparedStackExtendAwResource$inboundSchema:
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -8679,6 +8865,7 @@ export const SyncListResponsePendingPreparedStackExtendAwStack$inboundSchema:
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -9322,6 +9509,7 @@ export const SyncListResponsePendingPreparedStackProfileAwResource$inboundSchema
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -9348,6 +9536,7 @@ export const SyncListResponsePendingPreparedStackProfileAwStack$inboundSchema:
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -10443,6 +10632,7 @@ export const SyncListResponsePreparedStackOverrideAwResource$inboundSchema:
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -10468,6 +10658,7 @@ export const SyncListResponsePreparedStackOverrideAwStack$inboundSchema:
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -11069,6 +11260,7 @@ export const SyncListResponsePreparedStackExtendAwResource$inboundSchema:
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -11094,6 +11286,7 @@ export const SyncListResponsePreparedStackExtendAwStack$inboundSchema:
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -11710,6 +11903,7 @@ export const SyncListResponsePreparedStackProfileAwResource$inboundSchema:
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     },
   );
@@ -11736,6 +11930,7 @@ export const SyncListResponsePreparedStackProfileAwStack$inboundSchema:
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -12483,6 +12678,110 @@ export function syncListResponsePreparedStackUnionFromJSON(
 }
 
 /** @internal */
+export const SyncListResponseRegistryAccess$inboundSchema: z.ZodType<
+  SyncListResponseRegistryAccess,
+  unknown
+> = z.object({
+  repositories: z.array(z.string()).optional(),
+  serviceTypes: z.array(z.string()).optional(),
+});
+
+export function syncListResponseRegistryAccessFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseRegistryAccess, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseRegistryAccess$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseRegistryAccess' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseRegistryAccessUnion$inboundSchema: z.ZodType<
+  SyncListResponseRegistryAccessUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponseRegistryAccess$inboundSchema),
+  z.any(),
+]);
+
+export function syncListResponseRegistryAccessUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseRegistryAccessUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseRegistryAccessUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseRegistryAccessUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseEgress$inboundSchema: z.ZodType<
+  SyncListResponseEgress,
+  unknown
+> = z.object({
+  connectorArn: z.nullable(z.string()).optional(),
+  connectorRequest: z.nullable(z.string()).optional(),
+  operatorRoleName: z.string(),
+  securityGroupId: z.nullable(z.string()).optional(),
+});
+
+export function syncListResponseEgressFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseEgress, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseEgress$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseEgress' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseEgressUnion$inboundSchema: z.ZodType<
+  SyncListResponseEgressUnion,
+  unknown
+> = z.union([z.lazy(() => SyncListResponseEgress$inboundSchema), z.any()]);
+
+export function syncListResponseEgressUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseEgressUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseEgressUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseEgressUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseTypeAwsSandbox$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseTypeAwsSandbox
+> = z.enum(SyncListResponseTypeAwsSandbox);
+
+/** @internal */
+export const SyncListResponseSetupScaffolding$inboundSchema: z.ZodType<
+  SyncListResponseSetupScaffolding,
+  unknown
+> = z.object({
+  buildRoleName: z.string(),
+  egress: z.nullable(
+    z.union([z.lazy(() => SyncListResponseEgress$inboundSchema), z.any()]),
+  ).optional(),
+  imageArn: z.nullable(z.string()).optional(),
+  type: SyncListResponseTypeAwsSandbox$inboundSchema,
+});
+
+export function syncListResponseSetupScaffoldingFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseSetupScaffolding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseSetupScaffolding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseSetupScaffolding' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncListResponseSetupUpdateAuthorization$inboundSchema: z.ZodType<
   SyncListResponseSetupUpdateAuthorization,
   unknown
@@ -12558,7 +12857,17 @@ export const SyncListResponseRuntimeMetadata$inboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
+  registryAccess: z.nullable(
+    z.union([
+      z.lazy(() => SyncListResponseRegistryAccess$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   registryAccessGranted: z.boolean().optional(),
+  setupScaffolding: z.record(
+    z.string(),
+    z.lazy(() => SyncListResponseSetupScaffolding$inboundSchema),
+  ).optional(),
   setupUpdateAuthorization: z.nullable(
     z.union([
       z.lazy(() => SyncListResponseSetupUpdateAuthorization$inboundSchema),

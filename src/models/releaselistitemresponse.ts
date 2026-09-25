@@ -84,6 +84,10 @@ export type ReleaseListItemResponse = {
   id: string;
   projectId: string;
   version: string;
+  /**
+   * Human-readable release title
+   */
+  title?: string | null | undefined;
   gitMetadata?: GitMetadata | null | undefined;
   createdAt: Date;
   stack?: ReleaseListItemResponseStack | null | undefined;
@@ -202,6 +206,7 @@ export const ReleaseListItemResponse$inboundSchema: z.ZodType<
   id: z.string(),
   projectId: z.string(),
   version: z.string(),
+  title: z.nullable(z.string()).optional(),
   gitMetadata: z.nullable(GitMetadata$inboundSchema).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   stack: z.nullable(z.lazy(() => ReleaseListItemResponseStack$inboundSchema))
