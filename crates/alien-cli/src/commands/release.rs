@@ -1770,12 +1770,22 @@ fn save_push_cache(
             operation: "serialize".to_string(),
             reason: "Failed to serialize push cache".to_string(),
         })?;
-    fs::write(&cache_path, content)
+    // Written through a temp file: a truncated cache reads back as empty, which re-pushes
+    // every artifact under a new tag.
+    let tmp_path = cache_path.with_extension("json.tmp");
+    fs::write(&tmp_path, content)
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
             operation: "write".to_string(),
-            file_path: cache_path.display().to_string(),
+            file_path: tmp_path.display().to_string(),
             reason: "Failed to write push cache".to_string(),
+        })?;
+    fs::rename(&tmp_path, &cache_path)
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "rename".to_string(),
+            file_path: cache_path.display().to_string(),
+            reason: "Failed to replace push cache".to_string(),
         })?;
     Ok(())
 }

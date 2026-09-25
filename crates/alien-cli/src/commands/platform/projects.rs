@@ -582,10 +582,9 @@ fn sandbox_source_stack(src: &Path, dockerfile: Option<String>) -> Result<Stack>
     let src =
         std::fs::canonicalize(src)
             .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "resolve".to_string(),
-                file_path: src.display().to_string(),
-                reason: "Could not resolve the --src directory".to_string(),
+            .context(ErrorData::ValidationError {
+                field: "src".to_string(),
+                message: format!("Could not resolve the --src directory '{}'", src.display()),
             })?;
     let sandbox = Sandbox::new("remote-sandbox".to_string())
         .code(SandboxCode::Source {
