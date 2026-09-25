@@ -246,6 +246,15 @@ impl PreflightRunner {
                 })?;
         }
 
+        // Later mutations can add resources to a borrowed workload (for example,
+        // a vault for an external secrets binding). Check the final stack too.
+        if let Some(horizon) = crate::mutations::compute_cluster::borrowed_horizon_config(config) {
+            current_stack = crate::mutations::compute_cluster::validate_borrowed_cluster_stack(
+                current_stack,
+                horizon,
+            )?;
+        }
+
         let mut dependency_result =
             crate::compile_time::validate_stack_dependencies(&current_stack);
         dependency_result = dependency_result.with_check_metadata(

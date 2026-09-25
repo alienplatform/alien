@@ -28,6 +28,9 @@ impl StackMutation for RemoteStackManagementMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> bool {
+        if super::uses_borrowed_compute(config) {
+            return false;
+        }
         let platform = stack_state.platform;
 
         // Only add RemoteStackManagement for cross-account platforms (and test

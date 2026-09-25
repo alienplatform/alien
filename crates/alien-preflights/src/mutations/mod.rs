@@ -21,7 +21,14 @@ pub mod secrets_vault;
 pub mod service_account;
 pub mod service_account_dependencies;
 
-use alien_core::{DeploymentConfig, Platform, StackState};
+use alien_core::{ComputeBackend, DeploymentConfig, Platform, StackState};
+
+pub(crate) fn uses_borrowed_compute(config: &DeploymentConfig) -> bool {
+    matches!(
+        config.compute_backend.as_ref(),
+        Some(ComputeBackend::Horizon(horizon)) if horizon.workload_namespace.is_some()
+    )
+}
 
 pub(crate) fn runs_on_platform_or_base(
     stack_state: &StackState,

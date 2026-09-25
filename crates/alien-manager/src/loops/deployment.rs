@@ -747,6 +747,8 @@ impl DeploymentLoop {
                     config.compute_backend = Some(alien_core::ComputeBackend::Horizon(
                         alien_core::HorizonConfig {
                             url,
+                            workload_namespace: None,
+                            borrowed_capacity_groups: Vec::new(),
                             horizon_machine_image: synthesize_byo_horizon_machine_image(),
                             clusters,
                         },

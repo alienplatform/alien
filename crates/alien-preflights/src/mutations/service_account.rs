@@ -27,9 +27,9 @@ impl StackMutation for ServiceAccountMutation {
         &self,
         stack: &Stack,
         stack_state: &StackState,
-        _config: &DeploymentConfig,
+        config: &DeploymentConfig,
     ) -> bool {
-        if stack_state.platform == Platform::Machines {
+        if stack_state.platform == Platform::Machines || super::uses_borrowed_compute(config) {
             return false;
         }
 

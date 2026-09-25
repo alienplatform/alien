@@ -768,6 +768,8 @@ mod tests {
     fn horizon_backend() -> ComputeBackend {
         ComputeBackend::Horizon(alien_core::HorizonConfig {
             url: "https://containers.example.com".to_string(),
+            workload_namespace: None,
+            borrowed_capacity_groups: Vec::new(),
             horizon_machine_image: None,
             clusters: HashMap::new(),
         })

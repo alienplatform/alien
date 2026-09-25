@@ -630,6 +630,7 @@ pub struct SingleControllerExecutorBuilder {
     environment_variables: EnvironmentVariablesSnapshot,
     external_bindings: ExternalBindings,
     monitoring: Option<alien_core::OtlpConfig>,
+    permission_profiles: Option<IndexMap<String, alien_core::permissions::PermissionProfile>>,
     domain_metadata: Option<DomainMetadata>,
     public_endpoints: Option<alien_core::PublicEndpointUrls>,
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
@@ -656,6 +657,7 @@ impl SingleControllerExecutorBuilder {
             },
             external_bindings: ExternalBindings::default(),
             monitoring: None,
+            permission_profiles: None,
             domain_metadata: None,
             public_endpoints: None,
             dependencies: Vec::new(),
@@ -714,6 +716,15 @@ impl SingleControllerExecutorBuilder {
     /// Sets the deployment monitoring configuration.
     pub fn monitoring(mut self, monitoring: alien_core::OtlpConfig) -> Self {
         self.monitoring = Some(monitoring);
+        self
+    }
+
+    /// Override the default test permission profile when exercising preflight rules.
+    pub fn permission_profiles<I>(mut self, profiles: I) -> Self
+    where
+        I: IntoIterator<Item = (String, alien_core::permissions::PermissionProfile)>,
+    {
+        self.permission_profiles = Some(profiles.into_iter().collect());
         self
     }
 
@@ -1078,6 +1089,7 @@ impl SingleControllerExecutorBuilder {
 
         let mut permissions = IndexMap::new();
         permissions.insert("default-profile".to_string(), default_profile);
+        let permissions = self.permission_profiles.unwrap_or(permissions);
 
         let mut stack = Stack {
             id: "test-stack".to_string(),

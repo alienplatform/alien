@@ -2,7 +2,8 @@ use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
 use alien_core::{
-    ComputeClusterOutputs, Platform, ResourceLifecycle, Stack, StackState, StackStatus,
+    ComputeClusterOutputs, Platform, ResourceLifecycle, ResourceStatus, Stack, StackState,
+    StackStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_infra::{RunningResourcePolicy, StackExecutor};
@@ -17,6 +18,26 @@ fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &Stack
                 .and_then(|outputs| outputs.downcast_ref::<ComputeClusterOutputs>())
                 .is_some_and(|outputs| outputs.total_machines == 0)
         })
+}
+
+fn compute_provisioning_status(
+    stack_state: &StackState,
+    target_stack: &Stack,
+) -> alien_core::Result<StackStatus> {
+    // A prior failed attempt can leave a deleted resource in durable state after
+    // the prepared stack no longer declares it. It must not keep provisioning
+    // open once all resources in the current attempt are running.
+    let statuses = stack_state
+        .resources
+        .iter()
+        .filter_map(|(resource_id, resource)| {
+            (target_stack.resources.contains_key(resource_id)
+                || resource.status != ResourceStatus::Deleted)
+                .then_some(resource.status)
+        })
+        .collect::<Vec<_>>();
+
+    StackState::compute_stack_status_from_resources(&statuses)
 }
 
 /// Handle Provisioning status (deploy live resources)
@@ -126,13 +147,10 @@ pub async fn handle_provisioning(
             })?;
 
     // Compute the stack status from the resulting state
-    let stack_status =
-        step_result
-            .next_state
-            .compute_stack_status()
-            .context(ErrorData::StackExecutionFailed {
-                message: "Failed to compute stack status".to_string(),
-            })?;
+    let stack_status = compute_provisioning_status(&step_result.next_state, &target_stack)
+        .context(ErrorData::StackExecutionFailed {
+            message: "Failed to compute stack status".to_string(),
+        })?;
 
     // Check if all live resources are deployed
     let waiting_for_machines =
@@ -293,4 +311,52 @@ pub async fn handle_provisioning_failed(
         heartbeats: vec![],
         observed_inventory_batches: vec![],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{Resource, StackResourceState, Worker, WorkerCode};
+
+    #[test]
+    fn obsolete_deleted_resource_does_not_hold_provisioning_open() {
+        let worker = Worker::new("app".to_string())
+            .permissions("execution".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/app:latest".to_string(),
+            })
+            .build();
+        let obsolete = Worker::new("obsolete".to_string())
+            .permissions("execution".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/obsolete:latest".to_string(),
+            })
+            .build();
+        let target_stack = Stack::new("s".to_string())
+            .add(worker.clone(), ResourceLifecycle::Live)
+            .build();
+        let mut state = StackState::new(Platform::Aws);
+        for (id, resource, status) in [
+            ("app", Resource::new(worker), ResourceStatus::Running),
+            ("obsolete", Resource::new(obsolete), ResourceStatus::Deleted),
+        ] {
+            let mut entry = StackResourceState::new_pending(
+                resource.resource_type().as_ref().to_string(),
+                resource,
+                Some(ResourceLifecycle::Live),
+                Vec::new(),
+            );
+            entry.status = status;
+            state.resources.insert(id.to_string(), entry);
+        }
+
+        assert_eq!(
+            state.compute_stack_status().expect("unfiltered status"),
+            StackStatus::InProgress
+        );
+        assert_eq!(
+            compute_provisioning_status(&state, &target_stack).expect("provisioning status"),
+            StackStatus::Running
+        );
+    }
 }

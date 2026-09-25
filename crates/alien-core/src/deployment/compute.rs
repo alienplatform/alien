@@ -144,6 +144,16 @@ pub struct HorizonConfig {
     /// Horizon control-plane API base URL.
     pub url: String,
 
+    /// Namespace for workloads sharing a cluster with another deployment.
+    /// Absent for dedicated clusters to preserve their existing service names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workload_namespace: Option<String>,
+
+    /// Capacity groups approved for workloads in a borrowed cluster.
+    /// Empty for dedicated clusters, whose groups are owned by the stack.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub borrowed_capacity_groups: Vec<String>,
+
     /// Horizon machine image catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub horizon_machine_image: Option<HorizonMachineImage>,

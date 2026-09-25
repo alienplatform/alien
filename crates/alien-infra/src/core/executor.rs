@@ -31,9 +31,9 @@ use crate::{
     error::{ErrorData, Result},
 };
 use alien_core::{
-    alien_event, ownership_policy_for_resource_type, AlienEvent, Platform, Resource,
-    ResourceHeartbeat, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, StackResourceState,
-    StackState,
+    alien_event, ownership_policy_for_resource_type, AlienEvent, ComputeBackend, Container,
+    Platform, Resource, ResourceHeartbeat, ResourceLifecycle, ResourceRef, ResourceStatus, Stack,
+    StackResourceState, StackState,
 };
 use alien_core::{ClientConfig, InitialSetupAuthority};
 
@@ -410,7 +410,22 @@ impl StackExecutor {
             id_to_node.insert(id.clone(), node_index);
             node_to_id.insert(node_index, id.clone());
             // Combine intrinsic dependencies from the resource with additional dependencies from the stack entry
-            let all_dependencies = resource_entry.combined_dependencies();
+            let all_dependencies = if matches!(
+                deployment_config.compute_backend.as_ref(),
+                Some(ComputeBackend::Horizon(horizon)) if horizon.workload_namespace.is_some()
+            ) {
+                if let Some(container) = resource_entry.config.downcast_ref::<Container>() {
+                    // The cluster is supplied by the backend, outside this stack. Keep
+                    // stack-authored dependencies so unsupported references still fail.
+                    let mut dependencies = container.links.clone();
+                    dependencies.extend(resource_entry.dependencies.clone());
+                    dependencies
+                } else {
+                    resource_entry.combined_dependencies()
+                }
+            } else {
+                resource_entry.combined_dependencies()
+            };
 
             resource_map.insert(
                 id.clone(),

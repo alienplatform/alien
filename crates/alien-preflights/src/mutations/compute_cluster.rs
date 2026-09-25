@@ -10,9 +10,9 @@ use crate::StackMutation;
 use alien_core::{
     compute_planner::{capacity_group_requirements, validate_compute_pool_selection},
     instance_catalog::{self, WorkloadRequirements},
-    CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, Container, Daemon, DeploymentConfig,
-    MachineProfile, Network, Platform, ResourceEntry, ResourceLifecycle, ResourceRef, Stack,
-    StackState,
+    CapacityGroup, CapacityGroupScalePolicy, ComputeBackend, ComputeCluster, Container, Daemon,
+    DeploymentConfig, HorizonConfig, MachineProfile, Network, Platform, ResourceEntry,
+    ResourceLifecycle, ResourceRef, Stack, StackState,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -26,6 +26,118 @@ use tracing::{debug, info};
 /// computed from the containers' resource requirements.
 pub struct ComputeClusterMutation;
 
+pub(crate) fn borrowed_horizon_config(config: &DeploymentConfig) -> Option<&HorizonConfig> {
+    match config.compute_backend.as_ref() {
+        Some(ComputeBackend::Horizon(horizon)) if horizon.workload_namespace.is_some() => {
+            Some(horizon)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn validate_borrowed_cluster_stack(
+    stack: Stack,
+    horizon: &HorizonConfig,
+) -> Result<Stack> {
+    let reject = |resource_id: Option<String>, message: String| {
+        AlienError::new(crate::error::ErrorData::StackMutationFailed {
+            mutation_name: "ComputeClusterMutation".to_string(),
+            message,
+            resource_id,
+        })
+    };
+    if horizon
+        .workload_namespace
+        .as_deref()
+        .is_none_or(str::is_empty)
+        || horizon.clusters.len() != 1
+        || horizon.borrowed_capacity_groups.is_empty()
+    {
+        return Err(reject(
+            None,
+            "Borrowed compute requires a workload namespace, exactly one cluster, and at least one approved capacity group"
+                .to_string(),
+        ));
+    }
+    if stack
+        .permissions
+        .profiles
+        .values()
+        .any(|profile| !profile.0.is_empty())
+    {
+        return Err(reject(
+            None,
+            "Borrowed compute does not support cloud permission profiles".to_string(),
+        ));
+    }
+    let cluster_key = horizon.clusters.keys().next().expect("length checked");
+    for (resource_id, entry) in &stack.resources {
+        if entry.lifecycle != ResourceLifecycle::Live
+            || !entry.dependencies.is_empty()
+            || entry.remote_access
+            || entry.enabled_when.is_some()
+        {
+            return Err(reject(
+                Some(resource_id.clone()),
+                "Borrowed compute requires live resources without stack dependencies, remote access, or gates"
+                    .to_string(),
+            ));
+        }
+        let Some(container) = entry.config.downcast_ref::<Container>() else {
+            return Err(reject(
+                Some(resource_id.clone()),
+                "Borrowed compute initially supports only Container resources".to_string(),
+            ));
+        };
+        if !stack
+            .permissions
+            .profiles
+            .contains_key(&container.permissions)
+        {
+            return Err(reject(
+                Some(resource_id.clone()),
+                format!(
+                    "Container permission profile '{}' is missing",
+                    container.permissions
+                ),
+            ));
+        }
+        if container.cluster.as_deref() != Some(cluster_key) {
+            return Err(reject(
+                Some(resource_id.clone()),
+                format!("Container must reference borrowed cluster '{cluster_key}'"),
+            ));
+        }
+        let Some(pool) = container.pool.as_deref() else {
+            return Err(reject(
+                Some(resource_id.clone()),
+                "Container must select an approved borrowed capacity group".to_string(),
+            ));
+        };
+        if !horizon
+            .borrowed_capacity_groups
+            .iter()
+            .any(|allowed| allowed == pool)
+        {
+            return Err(reject(
+                Some(resource_id.clone()),
+                format!("Capacity group '{pool}' is not approved for borrowed compute"),
+            ));
+        }
+        if !container.public_endpoints.is_empty()
+            || container.persistent_storage.is_some()
+            || !container.links.is_empty()
+        {
+            return Err(reject(
+                Some(resource_id.clone()),
+                "Borrowed compute initially supports only private stateless containers without links"
+                    .to_string(),
+            ));
+        }
+    }
+    Ok(stack)
+}
+
 #[async_trait]
 impl StackMutation for ComputeClusterMutation {
     fn description(&self) -> &'static str {
@@ -38,6 +150,9 @@ impl StackMutation for ComputeClusterMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> bool {
+        if borrowed_horizon_config(config).is_some() {
+            return true;
+        }
         if stack_state.platform == Platform::Kubernetes {
             return false;
         }
@@ -147,6 +262,9 @@ impl StackMutation for ComputeClusterMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<Stack> {
+        if let Some(horizon) = borrowed_horizon_config(config) {
+            return validate_borrowed_cluster_stack(stack, horizon);
+        }
         let has_cluster = stack
             .resources
             .values()
@@ -998,8 +1116,8 @@ mod tests {
     use alien_core::{
         compute_planner::plan_compute, ComputeChoiceRange, ComputePoolSelection, ComputeSettings,
         ContainerAutoscaling, ContainerCode, DaemonCode, EnvironmentVariablesSnapshot,
-        ExternalBindings, FailureDomainSelection, NetworkSettings, PersistentStorage, ResourceSpec,
-        StackSettings,
+        ExternalBinding, ExternalBindings, FailureDomainSelection, NetworkSettings,
+        PersistentStorage, ResourceSpec, StackSettings,
     };
     use indexmap::IndexMap;
 
@@ -1026,6 +1144,121 @@ mod tests {
             })
             .permissions("test".to_string())
             .build()
+    }
+
+    #[tokio::test]
+    async fn borrowed_cluster_accepts_only_approved_pool_without_creating_cluster() {
+        let container = Container::new("api".to_string())
+            .code(ContainerCode::Image {
+                image: "example@sha256:abc".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .cluster("parent-cluster".to_string())
+            .pool("approved".to_string())
+            .permissions("test".to_string())
+            .build();
+        let mut stack = Stack::new("child".to_string()).build();
+        stack.resources.insert(
+            "api".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(container),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        stack.permissions.profiles.insert(
+            "test".to_string(),
+            alien_core::permissions::PermissionProfile::new(),
+        );
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .compute_backend(ComputeBackend::Horizon(HorizonConfig {
+                url: "https://example.invalid".to_string(),
+                workload_namespace: Some("child-deployment".to_string()),
+                borrowed_capacity_groups: vec!["approved".to_string()],
+                horizon_machine_image: None,
+                clusters: std::collections::HashMap::from([(
+                    "parent-cluster".to_string(),
+                    alien_core::HorizonClusterConfig {
+                        cluster_id: "actual-cluster".to_string(),
+                        management_token: "token".to_string(),
+                    },
+                )]),
+            }))
+            .environment_variables(empty_env_snapshot())
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        let state = StackState::new(Platform::Machines);
+        let mutation = ComputeClusterMutation;
+        assert!(mutation.should_run(&stack, &state, &config));
+        let accepted = mutation
+            .mutate(stack.clone(), &state, &config)
+            .await
+            .unwrap();
+        assert_eq!(accepted, stack);
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Machines,
+        ] {
+            let prepared = crate::runner::PreflightRunner::new()
+                .apply_mutations(stack.clone(), &StackState::new(platform), &config)
+                .await
+                .expect("borrowed stack preflights should succeed");
+            assert_eq!(
+                prepared.resources.len(),
+                1,
+                "{platform:?} added a cloud resource"
+            );
+            assert!(prepared.resources.contains_key("api"));
+            assert!(prepared.resources["api"].dependencies.is_empty());
+        }
+
+        let mut bound_config = config.clone();
+        bound_config.external_bindings.insert(
+            "secrets",
+            ExternalBinding::Storage(alien_core::bindings::StorageBinding::s3("test-bucket")),
+        );
+        let error = crate::runner::PreflightRunner::new()
+            .apply_mutations(stack.clone(), &state, &bound_config)
+            .await
+            .expect_err("a later mutation must not add a vault to borrowed compute");
+        assert!(
+            error
+                .to_string()
+                .contains("Borrowed compute requires live resources"),
+            "{error}"
+        );
+
+        let mut permissioned = stack.clone();
+        permissioned.permissions.profiles.insert(
+            "test".to_string(),
+            alien_core::permissions::PermissionProfile::new().global(["cloud-read"]),
+        );
+        let error = mutation
+            .mutate(permissioned, &state, &config)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("cloud permission profiles"));
+
+        stack.resources["api"]
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .pool = Some("unknown".to_string());
+        let error = mutation.mutate(stack, &state, &config).await.unwrap_err();
+        assert!(error.to_string().contains("not approved"));
     }
 
     #[tokio::test]

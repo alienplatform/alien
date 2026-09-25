@@ -47,6 +47,9 @@ impl StackMutation for NetworkMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> bool {
+        if super::uses_borrowed_compute(config) {
+            return false;
+        }
         let target_platform = match stack_state.platform {
             Platform::Aws | Platform::Gcp | Platform::Azure => stack_state.platform,
             _ => return false,
@@ -127,8 +130,8 @@ impl StackMutation for NetworkMutation {
 mod tests {
     use super::*;
     use alien_core::{
-        Container, ContainerCode, EnvironmentVariablesSnapshot, ExternalBindings, ResourceEntry,
-        ResourceLifecycle, ResourceSpec, StackSettings,
+        ComputeBackend, Container, ContainerCode, EnvironmentVariablesSnapshot, ExternalBindings,
+        ResourceEntry, ResourceLifecycle, ResourceSpec, StackSettings,
     };
     use indexmap::IndexMap;
     use std::collections::HashMap;
@@ -230,6 +233,24 @@ mod tests {
 
         let mutation = NetworkMutation;
         assert!(mutation.should_run(&stack, &stack_state, &config));
+    }
+
+    #[test]
+    fn borrowed_compute_does_not_create_child_network() {
+        let stack = create_stack_with_container();
+        let stack_state = create_stack_state(Platform::Aws);
+        let mut config = create_deployment_config(Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        }));
+        config.compute_backend = Some(ComputeBackend::Horizon(alien_core::HorizonConfig {
+            url: "https://example.invalid".to_string(),
+            workload_namespace: Some("child".to_string()),
+            borrowed_capacity_groups: vec!["approved".to_string()],
+            horizon_machine_image: None,
+            clusters: HashMap::new(),
+        }));
+        assert!(!NetworkMutation.should_run(&stack, &stack_state, &config));
     }
 
     #[test]
