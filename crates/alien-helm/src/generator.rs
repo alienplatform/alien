@@ -1904,6 +1904,28 @@ fn generate_operator_manifest_inner(
         operator_image_report.as_ref(),
     ));
     if let Some(log_collector) = options.log_collector.as_ref() {
+        // Product charts manage workloads under the chart's runtime scope, not
+        // under the separately named Remote Operator Deployment.
+        let default_collector_scope = if resource_name.is_some()
+            && options.format == OperatorOutputFormat::HelmTemplate
+        {
+            (
+                "{{ .Values.logCollector.scope.deploymentLabelKey }}".to_string(),
+                "{{ default (include \"deployment.fullname\" .) .Values.logCollector.scope.deploymentLabelValue | regexQuoteMeta }}".to_string(),
+            )
+        } else {
+            (
+                branded_tag_key(
+                    alien_core::access_request_crd::current_kubernetes_label_domain(
+                        options
+                            .label_domain
+                            .unwrap_or(alien_core::DEFAULT_ALIEN_LABEL_DOMAIN),
+                    ),
+                    ALIEN_STACK_TAG_KEY,
+                ),
+                operator_name.clone(),
+            )
+        };
         let mut collector_labels = labels.clone();
         collector_labels.insert(
             "app.kubernetes.io/component".to_string(),
@@ -1936,6 +1958,7 @@ fn generate_operator_manifest_inner(
             namespace,
             &collector_labels,
             log_collector,
+            (&default_collector_scope.0, &default_collector_scope.1),
             options.format == OperatorOutputFormat::HelmTemplate,
         ));
         docs.push(operator_log_collector_daemonset_doc(
@@ -3025,6 +3048,7 @@ fn operator_log_collector_configmap_doc(
     observed_namespace: &str,
     labels: &BTreeMap<String, String>,
     collector: &OperatorLogCollectorOptions<'_>,
+    default_scope: (&str, &str),
     helm_template: bool,
 ) -> String {
     let mut yaml = operator_metadata_doc("v1", "ConfigMap", namespace, collector_name, labels);
@@ -3072,8 +3096,8 @@ fn operator_log_collector_configmap_doc(
     yaml.push_str(
         "        Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$\n\n",
     );
-    let label_key = collector.pod_label_key.unwrap_or("alien.dev/deployment");
-    let label_value = collector.pod_label_value.unwrap_or(operator_name);
+    let label_key = collector.pod_label_key.unwrap_or(default_scope.0);
+    let label_value = collector.pod_label_value.unwrap_or(default_scope.1);
     let label_pattern = if helm_template && collector.pod_label_value.is_none() {
         label_value.to_string()
     } else {
@@ -8185,6 +8209,54 @@ remoteOperator:
                 && yaml_path(document, &["metadata", "name"]).and_then(YamlValue::as_str)
                     == Some("test-release-remote-operator-ab7b1d5677627240")
         }));
+    }
+
+    #[test]
+    fn product_collector_follows_branded_runtime_scope() {
+        let mut files =
+            sample_product_chart_with_collector_and_label_domain(true, Some("acme.dev")).files;
+        // Client-only rendering has no live Secret or Helm history for this guard to inspect.
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let values = r#"
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#;
+        let rendered =
+            crate::test_utils::helm_template_for_release(&files, Some(values), "customer-one");
+        rendered.assert_ok("branded product collector scope");
+        let docs = parse_manifest_docs(&rendered.stdout);
+        let runtime = docs_by_kind(&docs, "Deployment")
+            .into_iter()
+            .find(|deployment| {
+                yaml_path(deployment, &["metadata", "name"]).and_then(YamlValue::as_str)
+                    == Some("customer-one")
+            })
+            .expect("runtime Deployment");
+        let label_key = operator_env_value(&runtime, "ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY")
+            .expect("runtime deployment label key");
+        let label_value = operator_env_value(&runtime, "ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE")
+            .expect("runtime deployment label value");
+        assert_eq!(
+            (label_key, label_value),
+            ("acme/deployment", "customer-one")
+        );
+
+        let collector = docs_by_kind(&docs, "ConfigMap")
+            .into_iter()
+            .find(|config| yaml_path(config, &["data", "collector.conf"]).is_some())
+            .expect("Remote Operator collector ConfigMap");
+        let config = yaml_path(&collector, &["data", "collector.conf"])
+            .and_then(YamlValue::as_str)
+            .expect("Fluent Bit configuration");
+        assert!(config.contains(&format!(
+            "Regex               $kubernetes['labels']['{label_key}'] ^{label_value}$"
+        )));
+        assert!(!config.contains("$kubernetes['labels']['alien.dev/deployment']"));
     }
 
     #[test]
