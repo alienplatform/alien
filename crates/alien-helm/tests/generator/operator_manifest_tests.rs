@@ -15,6 +15,81 @@ use super::test_utils;
 const TEST_ENCRYPTION_KEY: &str =
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
+#[test]
+fn standalone_log_collector_filters_to_the_selected_pods() {
+    let render = |key, value| {
+        generate_operator_manifest(OperatorManifestOptions {
+            custom_operation_permissions: &[],
+            manager_url: "https://manager.example.com",
+            group_token: "ax_dg_test",
+            encryption_key: TEST_ENCRYPTION_KEY,
+            image: "registry.example.com/operator:test",
+            log_collector: Some(OperatorLogCollectorOptions {
+                image: "fluent/fluent-bit:3.2",
+                token: "collector-secret",
+                pod_label_key: key,
+                pod_label_value: value,
+            }),
+            stack_settings: None,
+            project_name: "my-saas",
+            environment_name: Some("acme-prod-eu"),
+            install_namespace: Some("demo"),
+            label_domain: None,
+            scope: OperatorScope::Namespace,
+            label_selector: None,
+            kubernetes_operations_enabled: true,
+            permission: OperatorPermission::Diagnostics,
+            format: OperatorOutputFormat::RawManifest,
+        })
+    };
+    let config = |manifest: &str| {
+        let docs = parse_manifest(manifest);
+        let collector = docs
+            .iter()
+            .find(|doc| {
+                doc["kind"] == "ConfigMap"
+                    && doc["metadata"]["name"]
+                        .as_str()
+                        .is_some_and(|name| name.contains("log-collector"))
+            })
+            .expect("collector ConfigMap");
+        collector["data"]["collector.conf"]
+            .as_str()
+            .expect("collector config")
+            .to_string()
+    };
+
+    let default_manifest = render(None, None).expect("safe default collector");
+    let default_config = config(&default_manifest);
+    assert!(default_config.contains(
+        "Regex               $kubernetes['labels']['alien.dev/deployment'] ^my-saas-operator$"
+    ));
+    assert!(!default_config.contains("Exclude_Path"));
+    assert!(default_config.contains(
+        "Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$"
+    ));
+
+    let selected_manifest =
+        render(Some("app"), Some("external.agent")).expect("selected collector");
+    let selected_config = config(&selected_manifest);
+    assert!(selected_config
+        .contains("Regex               $kubernetes['labels']['app'] ^external\\.agent$"));
+    let docs = parse_manifest(&selected_manifest);
+    for kind in ["Deployment", "DaemonSet"] {
+        let pod = docs
+            .iter()
+            .find(|doc| doc["kind"] == kind)
+            .expect("pod workload");
+        assert_eq!(
+            pod["spec"]["template"]["metadata"]["labels"]["alien.dev/log-collector-exclude"],
+            "true"
+        );
+    }
+
+    assert!(render(Some("app"), None).is_err());
+    assert!(render(Some("bad/key/extra"), Some("agent")).is_err());
+}
+
 fn rendered_manifest(
     scope: OperatorScope,
     permission: OperatorPermission,
@@ -567,6 +642,8 @@ fn operator_template_can_reference_setup_owned_credentials() {
             log_collector: Some(OperatorLogCollectorOptions {
                 image: "registry.example.com/collector:test",
                 token: "",
+                pod_label_key: None,
+                pod_label_value: None,
             }),
             stack_settings: None,
             project_name: "my-saas",
