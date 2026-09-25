@@ -1353,7 +1353,8 @@ data:
 
     [INPUT]
         Name              tail
-        Path              /var/log/pods/{{ .Release.Namespace }}_*/*/*.log
+        # The Kubernetes filter parses the /var/log/containers symlink filename.
+        Path              /var/log/containers/*_{{ .Release.Namespace }}_*.log
         Path_Key          filename
         multiline.parser  docker, cri
         Tag               kube.*

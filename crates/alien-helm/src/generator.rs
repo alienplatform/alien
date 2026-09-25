@@ -2985,8 +2985,10 @@ fn operator_log_collector_configmap_doc(
     yaml.push_str("        storage.backlog.mem_limit 64M\n\n");
     yaml.push_str("    [INPUT]\n");
     yaml.push_str("        Name              tail\n");
+    // The Kubernetes filter's default tag parser reads the symlink filename in
+    // /var/log/containers. Files under /var/log/pods cannot supply its metadata.
     yaml.push_str(&format!(
-        "        Path              /var/log/pods/{}_*/*/*.log\n",
+        "        Path              /var/log/containers/*_{}_*.log\n",
         observed_namespace
     ));
     yaml.push_str("        Path_Key          filename\n");
@@ -5889,7 +5891,8 @@ data:
 
     [INPUT]
         Name              tail
-        Path              /var/log/pods/{{ .Release.Namespace }}_*/*/*.log
+        # The Kubernetes filter parses the /var/log/containers symlink filename.
+        Path              /var/log/containers/*_{{ .Release.Namespace }}_*.log
         Path_Key          filename
         multiline.parser  docker, cri
         Tag               kube.*
@@ -7097,7 +7100,7 @@ mod tests {
         assert!(kinds.contains(&"RoleBinding"));
         assert!(kinds.contains(&"DaemonSet"));
         assert!(manifest.contains("whitelabeled-log-collector"));
-        assert!(manifest.contains("/var/log/pods/demo_"));
+        assert!(manifest.contains("/var/log/containers/*_demo_*.log"));
         assert!(manifest.contains("/internal/logs"));
         assert!(manifest.contains("COLLECTOR_TOKEN_FILE"));
         assert!(manifest.contains("collector-token"));
@@ -8679,7 +8682,9 @@ logCollector:
         assert!(rendered.stdout.contains("kind: DaemonSet"));
         assert!(rendered.stdout.contains("whitelabeled-log-collector"));
         assert!(rendered.stdout.contains("COLLECTOR_TOKEN_FILE"));
-        assert!(rendered.stdout.contains("/var/log/pods/default_"));
+        assert!(rendered
+            .stdout
+            .contains("/var/log/containers/*_default_*.log"));
         assert!(rendered.stdout.contains("fluent/fluent-bit:3.2"));
         assert!(rendered
             .stdout
