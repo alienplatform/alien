@@ -267,7 +267,7 @@ importers:
         version: 24.13.6
       ts-proto:
         specifier: ^2.7.0
-        version: 2.12.1
+        version: 2.12.4
       tsdown:
         specifier: ^0.13.0
         version: 0.13.5(typescript@5.9.3)
@@ -373,7 +373,7 @@ importers:
     devDependencies:
       '@types/node':
         specifier: ^22.10.5
-        version: 22.20.1
+        version: 22.20.4
       tsdown:
         specifier: ^0.13.0
         version: 0.13.5(typescript@5.8.3)
@@ -407,7 +407,7 @@ importers:
     devDependencies:
       '@types/node':
         specifier: ^22.10.5
-        version: 22.20.1
+        version: 22.20.4
       tsdown:
         specifier: ^0.13.0
         version: 0.13.5(typescript@5.8.3)
@@ -679,6 +679,9 @@ packages:
 
   '@bufbuild/protobuf@2.14.0':
     resolution: {integrity: sha512-C3UGsiCwSprE2NKIIFA3hCDlpXTMCAXRZuEVp88L1GY36Y41+rYL5fryE+nOFhp4p4JPQvdV8PQ4DWgHgeTE+w==}
+
+  '@bufbuild/protobuf@2.15.0':
+    resolution: {integrity: sha512-DAheWUkVr/SJTWCc+lg9dhY0eN4SaWlf4+bG1KzHeXbnqt0AfB/NX0Z+VunGlM1ki1B4zVvye27MpKh/svySUA==}
 
   '@changesets/apply-release-plan@7.1.1':
     resolution: {integrity: sha512-9qPCm/rLx/xoOFXIHGB229+4GOL76S4MC+7tyOuTsR6+1jYlfFDQORdvwR5hDA6y4FL2BPt3qpbcQIS+dW85LA==}
@@ -2130,8 +2133,8 @@ packages:
   '@types/node@12.20.55':
     resolution: {integrity: sha512-J8xLz7q2OFulZ2cyGTLE1TbbZcjpno7FaN6zdJNrgAdrJ+DZzh/uFR6YrTb4C+nXakvud8Q4+rbhoIWlYQbUFQ==}
 
-  '@types/node@22.20.1':
-    resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
+  '@types/node@22.20.4':
+    resolution: {integrity: sha512-zJRE40jpHtKqE/C4fgHrAKQLJuSpzEnP9ff9Y7YtoR3Wd2pwqzlekDeEuUQXjRd+QCYnVnNwuJYmhdk9XV8gvA==}
 
   '@types/node@24.13.6':
     resolution: {integrity: sha512-SGrw/h3KPFshy3OE6ZL53LMBG5vGQQ8/gIpiqz/kRZhPJ7HgwCEs8LBuNtWLa8dvGZVpSF7+Bf+c11HUrCb/yg==}
@@ -3826,8 +3829,8 @@ packages:
   ts-proto-descriptors@2.1.0:
     resolution: {integrity: sha512-S5EZYEQ6L9KLFfjSRpZWDIXDV/W7tAj8uW7pLsihIxyr62EAVSiKuVPwE8iWnr849Bqa53enex1jhDUcpgquzA==}
 
-  ts-proto@2.12.1:
-    resolution: {integrity: sha512-IEFvmib22yVlXbagL/UXcfliCPilgqXs3J0/ajDhUslfezMRhhhZvwgc63W0ZrKxCj+8jMHxvrN6G13A5UGFVg==}
+  ts-proto@2.12.4:
+    resolution: {integrity: sha512-nZ2UyT+xEanL90lCnL0BrTfKtljZE4wnOvUqR0XUpuWCu3w4k8LUnR4AKJoy1UtxPDa1HpJ1z//pu2tvIPDrUA==}
     hasBin: true
 
   tsdown@0.13.5:
@@ -4526,6 +4529,8 @@ snapshots:
     optional: true
 
   '@bufbuild/protobuf@2.14.0': {}
+
+  '@bufbuild/protobuf@2.15.0': {}
 
   '@changesets/apply-release-plan@7.1.1':
     dependencies:
@@ -5884,7 +5889,7 @@ snapshots:
 
   '@types/node@12.20.55': {}
 
-  '@types/node@22.20.1':
+  '@types/node@22.20.4':
     dependencies:
       undici-types: 6.21.0
 
@@ -7756,9 +7761,9 @@ snapshots:
     dependencies:
       '@bufbuild/protobuf': 2.14.0
 
-  ts-proto@2.12.1:
+  ts-proto@2.12.4:
     dependencies:
-      '@bufbuild/protobuf': 2.14.0
+      '@bufbuild/protobuf': 2.15.0
       case-anything: 2.1.13
       ts-poet: 6.12.0
       ts-proto-descriptors: 2.1.0

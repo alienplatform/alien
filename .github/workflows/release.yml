@@ -674,7 +674,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         if: ${{ inputs.stable_action == 'qualification' }}
         with:
-          bun-version: "1.4.0"
+          bun-version: "1.4.2"
 
       - name: Validate npm auth
         if: ${{ inputs.stable_action == 'publish' }}
@@ -1151,7 +1151,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         if: matrix.execute
         with:
-          bun-version: "1.4.0"
+          bun-version: "1.4.2"
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
