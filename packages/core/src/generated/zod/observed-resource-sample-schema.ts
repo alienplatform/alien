@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { ContainerImageIdentitySchema } from "./container-image-identity-schema.js";
 import { HeartbeatCollectionIssueSchema } from "./heartbeat-collection-issue-schema.js";
 import { ObservedCountsSchema } from "./observed-counts-schema.js";
 import { ObservedHealthSchema } from "./observed-health-schema.js";
@@ -27,6 +28,9 @@ get "counts"(){
 "displayName": z.string(),
 get "health"(){
                 return ObservedHealthSchema
+              },
+get "images"(){
+                return z.array(ContainerImageIdentitySchema.describe("Image a running container reports.")).describe("Distinct container images the resource's running instances report, when\nthe provider exposes them.").optional()
               },
 "labels": z.optional(z.object({
     

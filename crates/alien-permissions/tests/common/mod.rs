@@ -56,6 +56,7 @@ pub fn create_aws_storage_data_read_permission_set() -> PermissionSet {
                             "arn:aws:s3:::${stackPrefix}-*/*".to_string(),
                         ],
                         condition: None,
+                        not_resources: Vec::new(),
                     }),
                     resource: Some(AwsBindingSpec {
                         resources: vec![
@@ -63,6 +64,7 @@ pub fn create_aws_storage_data_read_permission_set() -> PermissionSet {
                             "arn:aws:s3:::${resourceName}/*".to_string(),
                         ],
                         condition: None,
+                        not_resources: Vec::new(),
                     }),
                 },
             }]),
@@ -106,6 +108,7 @@ pub fn create_aws_storage_data_read_permission_set_with_condition() -> Permissio
                             "arn:aws:s3:::${stackPrefix}-*/*".to_string(),
                         ],
                         condition: Some(condition),
+                        not_resources: Vec::new(),
                     }),
                     resource: Some(AwsBindingSpec {
                         resources: vec![
@@ -113,6 +116,7 @@ pub fn create_aws_storage_data_read_permission_set_with_condition() -> Permissio
                             "arn:aws:s3:::${resourceName}/*".to_string(),
                         ],
                         condition: None,
+                        not_resources: Vec::new(),
                     }),
                 },
             }]),
@@ -289,6 +293,7 @@ pub fn create_permission_set_missing_actions() -> PermissionSet {
                     stack: Some(AwsBindingSpec {
                         resources: vec!["arn:aws:s3:::test-bucket".to_string()],
                         condition: None,
+                        not_resources: Vec::new(),
                     }),
                     resource: None,
                 },
@@ -378,6 +383,7 @@ pub fn create_aws_cloudformation_permission_set() -> PermissionSet {
                             "arn:aws:s3:::${AWS::StackName}-*/*".to_string(),
                         ],
                         condition: None,
+                        not_resources: Vec::new(),
                     }),
                     resource: Some(AwsBindingSpec {
                         resources: vec![
@@ -385,6 +391,7 @@ pub fn create_aws_cloudformation_permission_set() -> PermissionSet {
                             "arn:aws:s3:::${resourceName}/*".to_string(),
                         ],
                         condition: None,
+                        not_resources: Vec::new(),
                     }),
                 },
             }]),
@@ -426,12 +433,14 @@ pub fn create_aws_lambda_permission_set() -> PermissionSet {
                                 "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*".to_string(),
                             ],
                             condition: None,
+                            not_resources: Vec::new(),
                         }),
                         resource: Some(AwsBindingSpec {
                             resources: vec![
                                 "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-${resourceName}".to_string(),
                             ],
                             condition: None,
+                            not_resources: Vec::new(),
                         }),
                     },
                 },
@@ -456,6 +465,7 @@ pub fn create_aws_lambda_permission_set() -> PermissionSet {
                                 "arn:aws:ecr:*:${ManagingAccountId}:repository/*".to_string(),
                             ],
                             condition: Some(condition.clone()),
+                            not_resources: Vec::new(),
                         }),
                         resource: None,
                     },

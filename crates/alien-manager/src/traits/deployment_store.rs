@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use alien_core::{
     import::ImportSourceKind,
-    sync::{OperatorCapabilityReport, OperatorImageReport},
+    sync::{ObservedApplicationReport, OperatorCapabilityReport, OperatorImageReport},
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentInfo,
     EnvironmentVariable, ManagementConfig, ObservedInventoryBatch, Platform, ResourceHeartbeat,
     RuntimeMetadata, StackSettings, StackState,
@@ -302,6 +302,7 @@ pub struct ReconcileData {
 pub struct ReconcileInput {
     data: ReconcileData,
     operator_image: Option<OperatorImageReport>,
+    application: Option<ObservedApplicationReport>,
 }
 
 impl ReconcileInput {
@@ -309,7 +310,14 @@ impl ReconcileInput {
         ReconcileInputBuilder {
             data,
             operator_image: None,
+            application: None,
         }
+    }
+
+    /// Application release the Operator observed in its environment, opaque
+    /// to OSS beyond forwarding it. Read it before [`Self::into_parts`].
+    pub fn application(&self) -> Option<&ObservedApplicationReport> {
+        self.application.as_ref()
     }
 
     pub fn into_parts(self) -> (ReconcileData, Option<OperatorImageReport>) {
@@ -322,6 +330,7 @@ impl ReconcileInput {
 pub struct ReconcileInputBuilder {
     data: ReconcileData,
     operator_image: Option<OperatorImageReport>,
+    application: Option<ObservedApplicationReport>,
 }
 
 impl ReconcileInputBuilder {
@@ -330,10 +339,16 @@ impl ReconcileInputBuilder {
         self
     }
 
+    pub fn application(mut self, application: ObservedApplicationReport) -> Self {
+        self.application = Some(application);
+        self
+    }
+
     pub fn build(self) -> ReconcileInput {
         ReconcileInput {
             data: self.data,
             operator_image: self.operator_image,
+            application: self.application,
         }
     }
 }

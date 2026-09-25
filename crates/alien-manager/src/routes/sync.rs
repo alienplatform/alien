@@ -16,8 +16,8 @@ fn deserialize_bool_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Resul
 
 use alien_core::{
     sync::{
-        OperationsReport, OperatorCapabilityReport, OperatorImageReport, TargetDeployment,
-        TargetOperationsBundleSet,
+        ObservedApplicationReport, OperationsReport, OperatorCapabilityReport, OperatorImageReport,
+        TargetDeployment, TargetOperationsBundleSet,
     },
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform, ReleaseInfo, ResourceHeartbeat,
@@ -161,17 +161,25 @@ pub struct AgentSyncRequest {
     pub operations_report: Option<OperationsReport>,
 }
 
-/// Inbound sync payload that adds optional receipts without expanding the
-/// public [`AgentSyncRequest`] struct literal.
+// Adds optional receipts without expanding the public [`AgentSyncRequest`]
+// struct literal. The API documents it as `AgentSyncRequest`, the body
+// clients send.
+/// Body of `POST /v1/sync`.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", schema(as = AgentSyncRequest))]
 #[serde(rename_all = "camelCase")]
 struct AgentSyncWireRequest {
     #[serde(flatten)]
+    #[cfg_attr(feature = "openapi", schema(inline))]
     request: AgentSyncRequest,
     /// Exact immutable Operator image identity reported by the running process.
     #[serde(default)]
     operator_image: Option<OperatorImageReport>,
+    /// Application release the Operator observed in its environment.
+    /// Opaque to OSS beyond forwarding it to `reconcile_request()`.
+    #[serde(default)]
+    application: Option<ObservedApplicationReport>,
 }
 
 #[derive(Debug, Serialize)]
@@ -631,6 +639,10 @@ async fn release(
 #[cfg(test)]
 mod tests {
     use alien_core::{
+        sync::{
+            ObservedApplicationImage, ObservedApplicationReport, ObservedApplicationSource,
+            SyncInput, SyncRequest,
+        },
         DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariablesSnapshot,
         ExternalBindings, Platform, ReleaseInfo, ResourceHeartbeatData, RuntimeMetadata, Stack,
         StackSettings, StackState, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
@@ -779,6 +791,37 @@ mod tests {
             .validate()
             .expect("operator image receipt should be valid");
         assert_eq!(req.request.deployment_id, "dep_test");
+    }
+
+    #[test]
+    fn agent_sync_wire_request_receives_the_operator_application_report() {
+        let application = ObservedApplicationReport {
+            source: ObservedApplicationSource::Kubernetes,
+            chart_name: Some("shop".to_string()),
+            chart_version: Some("1.4.0".to_string()),
+            images: vec![ObservedApplicationImage {
+                workload: "apps/v1:Deployment:shop:api".to_string(),
+                container: "api".to_string(),
+                image: "registry.example.com/shop/api:1.4.0".to_string(),
+                digest: Some(format!("sha256:{}", "a".repeat(64))),
+            }],
+            complete: true,
+            observed_at: "2026-09-24T10:00:00Z".parse().unwrap(),
+        };
+        let operator_request: SyncRequest =
+            serde_json::from_value(json!({ "deploymentId": "dep_test" })).unwrap();
+        let wire = serde_json::to_value(
+            SyncInput::builder(operator_request)
+                .application(application.clone())
+                .build(),
+        )
+        .unwrap();
+
+        let req: AgentSyncWireRequest = serde_json::from_value(wire).unwrap();
+
+        assert_eq!(req.request.deployment_id, "dep_test");
+        assert_eq!(req.application, Some(application));
+        assert_eq!(req.operator_image, None);
     }
 
     #[test]
@@ -1303,20 +1346,19 @@ async fn reconcile_agent_report(
     subject: &crate::auth::Subject,
     data: ReconcileData,
     operator_image: Option<OperatorImageReport>,
+    application: Option<ObservedApplicationReport>,
 ) -> Result<crate::traits::ReconcileOutcome, AlienError> {
-    match operator_image {
-        Some(operator_image) => {
-            store
-                .reconcile_request(
-                    subject,
-                    ReconcileInput::builder(data)
-                        .operator_image(operator_image)
-                        .build(),
-                )
-                .await
-        }
-        None => store.reconcile(subject, data).await,
+    if operator_image.is_none() && application.is_none() {
+        return store.reconcile(subject, data).await;
     }
+    let mut request = ReconcileInput::builder(data);
+    if let Some(operator_image) = operator_image {
+        request = request.operator_image(operator_image);
+    }
+    if let Some(application) = application {
+        request = request.application(application);
+    }
+    store.reconcile_request(subject, request.build()).await
 }
 
 /// `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
@@ -1340,6 +1382,7 @@ async fn agent_sync(
     Json(AgentSyncWireRequest {
         request: req,
         operator_image,
+        application,
     }): Json<AgentSyncWireRequest>,
 ) -> Response {
     let subject = match auth::require_auth(&state, &headers).await {
@@ -1443,6 +1486,7 @@ async fn agent_sync(
                         &subject,
                         reconcile_data,
                         operator_image.clone(),
+                        application.clone(),
                     )
                     .await;
 
@@ -1718,6 +1762,7 @@ async fn agent_sync(
                         || !req.capabilities.is_empty()
                         || req.operator_version.is_some()
                         || operator_image.is_some()
+                        || application.is_some()
                         || req.operations_report.is_some())
                 {
                     let reconcile_data = ReconcileData {
@@ -1738,6 +1783,7 @@ async fn agent_sync(
                         &subject,
                         reconcile_data,
                         operator_image.clone(),
+                        application.clone(),
                     )
                     .await;
 

@@ -812,6 +812,7 @@ version = "3.3.24"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
+ "alien-bindings",
  "alien-client-config",
  "alien-client-core",
  "alien-core",
@@ -860,6 +861,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "urlencoding",
  "utoipa",
  "uuid",
  "wasm-bindgen",

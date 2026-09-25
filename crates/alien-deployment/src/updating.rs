@@ -2,12 +2,12 @@ use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
 use alien_core::{
-    ComputeClusterOutputs, Platform, ResourceLifecycle, ResourceStatus, Stack, StackState,
-    StackStatus,
+    ComputeClusterOutputs, InitialSetupAuthority, Platform, ResourceLifecycle, ResourceStatus,
+    SetupScaffolding, Stack, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_infra::{RunningResourcePolicy, StackExecutor};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use tracing::{debug, info};
 
 fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &StackState) -> bool {
@@ -201,6 +201,24 @@ pub async fn handle_update_pending(
         &frozen_gating,
     )?;
 
+    if current.runtime_metadata.as_ref().is_some_and(|metadata| {
+        metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup
+    }) {
+        // With nothing installed to compare against, every scaffolded resource counts as new.
+        let nothing_installed = Stack::new(mutated_stack.id.clone()).build();
+        let nothing_recorded = BTreeMap::new();
+        refuse_changes_requiring_setup(
+            &client_config,
+            old_stack_for_comparison.unwrap_or(&nothing_installed),
+            current
+                .runtime_metadata
+                .as_ref()
+                .map_or(&nothing_recorded, |metadata| &metadata.setup_scaffolding),
+            &mutated_stack,
+            current.platform,
+        )?;
+    }
+
     // Store the mutated stack in runtime_metadata for future compatibility checks
     let mut runtime_metadata = current.runtime_metadata.unwrap_or_default();
     runtime_metadata.pending_prepared_stack = Some(mutated_stack);
@@ -219,6 +237,42 @@ pub async fn handle_update_pending(
         heartbeats: vec![],
         observed_inventory_batches: vec![],
     })
+}
+
+/// A direct setup's scaffolding is created with the deployer's credentials, which an update
+/// does not hold; applying the update anyway would serve a sandbox without it, such as a newly
+/// denied one with open egress.
+fn refuse_changes_requiring_setup(
+    client_config: &alien_core::ClientConfig,
+    installed_stack: &Stack,
+    records: &BTreeMap<String, SetupScaffolding>,
+    target_stack: &Stack,
+    platform: Platform,
+) -> Result<()> {
+    let changes = alien_infra::setup_scaffolding::changes_requiring_setup(
+        client_config,
+        installed_stack,
+        records,
+        target_stack,
+        platform,
+    )
+    .context(ErrorData::StackExecutionFailed {
+        message: "Failed to compare the release with the deployment's setup scaffolding"
+            .to_string(),
+    })?;
+    if changes.is_empty() {
+        return Ok(());
+    }
+    Err(AlienError::new(
+        alien_preflights::error::ErrorData::SetupRequired {
+            message: format!(
+                "{}. Run the deployment's setup again with the updated stack, using the \
+             credentials that set it up",
+                changes.join("; ")
+            ),
+        },
+    ))
+    .context(ErrorData::PreflightChecksFailed)
 }
 
 /// Handle Updating status (update live resources)
@@ -549,6 +603,264 @@ fn prune_deprovisioned_resources(
 mod tests {
     use super::*;
     use alien_core::{Kv, Resource, ResourceLifecycle, StackResourceState, Worker, WorkerCode};
+
+    mod setup_scaffolding_drift {
+        use super::super::*;
+        use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
+        use alien_core::{
+            ClientConfig, DeploymentState, EnvironmentVariablesSnapshot, ExternalBindings,
+            ReleaseInfo, RuntimeMetadata, Sandbox, SandboxCode, SandboxEgress,
+            SandboxLifecyclePolicy, StackSettings,
+        };
+
+        const BUNDLE: &str = "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip";
+
+        fn sandbox(egress: SandboxEgress, bundle: &str, idle_pause_seconds: Option<u32>) -> Stack {
+            Stack::new("acme".to_string())
+                .add(
+                    Sandbox::new("agents".to_string())
+                        .code(SandboxCode::Image {
+                            image: bundle.to_string(),
+                        })
+                        .egress(egress)
+                        .lifecycle(SandboxLifecyclePolicy {
+                            max_lifetime_seconds: None,
+                            idle_pause_seconds,
+                        })
+                        .build(),
+                    ResourceLifecycle::Live,
+                )
+                .build()
+        }
+
+        fn empty() -> Stack {
+            Stack::new("acme".to_string()).build()
+        }
+
+        fn config() -> DeploymentConfig {
+            DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(ExternalBindings::default())
+                .allow_frozen_changes(false)
+                .build()
+        }
+
+        fn client_config() -> ClientConfig {
+            ClientConfig::Aws(Box::new(AwsClientConfig::mock()))
+        }
+
+        fn stack_state() -> StackState {
+            StackState::with_resource_prefix(Platform::Aws, "test".to_string())
+        }
+
+        /// The stack an earlier setup prepared, as Pending would have stored it.
+        async fn prepared(stack: Stack) -> Stack {
+            alien_preflights::runner::PreflightRunner::new()
+                .run_deployment_time_preflights(
+                    stack,
+                    &stack_state(),
+                    &config(),
+                    &client_config(),
+                    None,
+                    None,
+                    Some(InitialSetupAuthority::DirectSetup),
+                )
+                .await
+                .expect("the installed stack passes preflights")
+                .0
+        }
+
+        /// What setup recorded for `stack`'s sandboxes; the update check reads only that a
+        /// record exists.
+        fn recorded_for(stack: &Stack) -> BTreeMap<String, SetupScaffolding> {
+            stack
+                .resources()
+                .filter(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some())
+                .map(|(id, _)| {
+                    let record = SetupScaffolding::AwsSandbox {
+                        build_role_name: format!("test-{id}-build"),
+                        egress: None,
+                        image_arn: None,
+                    };
+                    (id.clone(), record)
+                })
+                .collect()
+        }
+
+        fn release(stack: Stack, id: &str) -> ReleaseInfo {
+            ReleaseInfo {
+                release_id: Some(id.to_string()),
+                version: None,
+                description: None,
+                stack,
+            }
+        }
+
+        async fn update(
+            authority: InitialSetupAuthority,
+            installed: Stack,
+            target: Stack,
+        ) -> Result<DeploymentStepResult> {
+            let state = DeploymentState {
+                status: DeploymentStatus::UpdatePending,
+                platform: Platform::Aws,
+                current_release: Some(release(installed.clone(), "rel_installed")),
+                target_release: Some(release(target.clone(), "rel_target")),
+                stack_state: Some(stack_state()),
+                error: None,
+                environment_info: None,
+                runtime_metadata: Some(RuntimeMetadata {
+                    initial_setup_authority: authority,
+                    setup_scaffolding: recorded_for(&installed),
+                    prepared_stack: Some(prepared(installed).await),
+                    ..Default::default()
+                }),
+                retry_requested: false,
+                protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            };
+            handle_update_pending(
+                state,
+                target,
+                config(),
+                client_config(),
+                std::sync::Arc::new(alien_infra::DefaultPlatformServiceProvider::default()),
+            )
+            .await
+        }
+
+        /// `reason`, when given, is what the refusal must name.
+        async fn assert_setup_required(installed: Stack, target: Stack, reason: Option<&str>) {
+            let error = update(InitialSetupAuthority::DirectSetup, installed, target)
+                .await
+                .expect_err("the update needs setup to run first");
+            let cause = error
+                .source
+                .as_deref()
+                .expect("the preflight refusal is the cause");
+            assert_eq!(cause.code, "DEPLOYMENT_SETUP_REQUIRED");
+            assert!(!cause.retryable);
+            if let Some(reason) = reason {
+                assert!(cause.message.contains(reason), "{}", cause.message);
+            }
+        }
+
+        async fn assert_updates(authority: InitialSetupAuthority, installed: Stack, target: Stack) {
+            let updated = update(authority, installed, target)
+                .await
+                .expect("the update needs nothing from setup");
+            assert_eq!(updated.state.status, DeploymentStatus::Updating);
+        }
+
+        #[tokio::test]
+        async fn a_sandbox_switched_to_deny_waits_for_setup_to_build_its_connector() {
+            assert_setup_required(
+                sandbox(SandboxEgress::Allow, BUNDLE, None),
+                sandbox(SandboxEgress::Deny, BUNDLE, None),
+                None,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn a_sandbox_switched_to_allow_waits_for_setup_to_reseed_it() {
+            assert_setup_required(
+                sandbox(SandboxEgress::Deny, BUNDLE, None),
+                sandbox(SandboxEgress::Allow, BUNDLE, None),
+                None,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn a_bundle_in_another_bucket_waits_for_setup_to_regrant_the_build_role() {
+            assert_setup_required(
+                sandbox(SandboxEgress::Allow, BUNDLE, None),
+                sandbox(
+                    SandboxEgress::Allow,
+                    "s3://other-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
+                    None,
+                ),
+                Some("sandbox 'agents' changes its build role policy. Run the deployment's setup again"),
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn a_sandbox_added_by_an_update_waits_for_setup_to_create_its_build_role() {
+            assert_setup_required(empty(), sandbox(SandboxEgress::Allow, BUNDLE, None), None).await;
+        }
+
+        /// Every release publishes its bundle under a new version segment of the same prefix,
+        /// which the build role already reads; refusing it would block every sandbox release.
+        #[tokio::test]
+        async fn a_new_bundle_version_or_session_policy_needs_no_setup() {
+            assert_updates(
+                InitialSetupAuthority::DirectSetup,
+                sandbox(SandboxEgress::Deny, BUNDLE, None),
+                sandbox(
+                    SandboxEgress::Deny,
+                    "s3://acme-artifacts/sandbox-bundle/0ddba11/bundle.zip",
+                    Some(300),
+                ),
+            )
+            .await;
+        }
+
+        /// With nothing installed to compare against, the sandbox is treated as new, not skipped.
+        #[tokio::test]
+        async fn an_update_with_no_installed_stack_waits_for_setup() {
+            let target = sandbox(SandboxEgress::Allow, BUNDLE, None);
+            let state = DeploymentState {
+                status: DeploymentStatus::UpdatePending,
+                platform: Platform::Aws,
+                current_release: None,
+                target_release: Some(release(target.clone(), "rel_target")),
+                stack_state: Some(stack_state()),
+                error: None,
+                environment_info: None,
+                runtime_metadata: Some(RuntimeMetadata {
+                    initial_setup_authority: InitialSetupAuthority::DirectSetup,
+                    prepared_stack: None,
+                    ..Default::default()
+                }),
+                retry_requested: false,
+                protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            };
+
+            let error = handle_update_pending(
+                state,
+                target,
+                config(),
+                client_config(),
+                std::sync::Arc::new(alien_infra::DefaultPlatformServiceProvider::default()),
+            )
+            .await
+            .expect_err("the update needs setup to run first");
+
+            let cause = error.source.as_deref().expect("the refusal is the cause");
+            assert_eq!(cause.code, "DEPLOYMENT_SETUP_REQUIRED");
+            assert!(cause.message.contains("is new"), "{}", cause.message);
+        }
+
+        #[tokio::test]
+        async fn a_template_setup_is_not_held_to_direct_setup_scaffolding() {
+            assert_updates(
+                InitialSetupAuthority::ImportedHandoff,
+                sandbox(SandboxEgress::Allow, BUNDLE, None),
+                sandbox(
+                    SandboxEgress::Allow,
+                    "s3://other-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
+                    None,
+                ),
+            )
+            .await;
+        }
+    }
 
     fn state_entry(resource: Resource, status: ResourceStatus) -> StackResourceState {
         let mut entry = StackResourceState::new_pending(

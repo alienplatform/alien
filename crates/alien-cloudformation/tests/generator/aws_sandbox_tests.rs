@@ -5,10 +5,16 @@ use super::helpers::{
 };
 use alien_cloudformation::CloudFormationTarget;
 use alien_core::{
-    import::data::AwsSandboxImportData, Network, NetworkSettings, RemoteBindings,
-    ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack,
-    StackSettings, Worker, WorkerCode,
+    import::data::AwsSandboxImportData,
+    sandbox_build_role::{SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME},
+    sandbox_egress::{
+        sandbox_egress_operator_policy, sandbox_egress_operator_trust_policy,
+        SandboxEgressConnector, LOOPBACK_ONLY_CIDR, SANDBOX_EGRESS_POLICY_NAME,
+    },
+    Network, NetworkSettings, RemoteBindings, ResourceLifecycle, Sandbox, SandboxCode,
+    SandboxEgress, SandboxLifecyclePolicy, Stack, StackSettings, Worker, WorkerCode,
 };
+use serde_json::Value;
 
 /// A bundle key a runtime rebuild can be granted: the version segment moves, the prefix does not.
 /// A Frozen sandbox is built once and needs no such shape, so it keeps the flat key its snapshots
@@ -144,12 +150,20 @@ fn registration_import_data(
         }
     }
 
+    resolve(&emitted_import_data(template, resource_id))
+}
+
+/// The `importData` a rendered registration carries for one resource id, intrinsics and all.
+fn emitted_import_data(
+    template: &alien_cloudformation::CfTemplate,
+    resource_id: &str,
+) -> serde_json::Value {
     fn find(value: &serde_json::Value, resource_id: &str) -> Option<serde_json::Value> {
         match value {
             serde_json::Value::Object(map) => {
                 if map.get("id").and_then(serde_json::Value::as_str) == Some(resource_id) {
                     if let Some(import_data) = map.get("importData") {
-                        return Some(resolve(import_data));
+                        return Some(import_data.clone());
                     }
                 }
                 map.values().find_map(|nested| find(nested, resource_id))
@@ -242,54 +256,71 @@ fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
         "the controller is handed the bundle it builds from: {import_data:#}"
     );
 
-    // The runtime build's base image comes from a private registry, and the identity itself
-    // needs all three actions — a repository policy on the registry side is not enough.
+    // No `privateBaseImage`, so the base is public and pulled anonymously.
     let statements = build_role_statements(&template);
-    let ecr = statements
-        .iter()
-        .find(|statement| grants_ecr(statement) && statement["Effect"] == "Allow")
-        .unwrap_or_else(|| panic!("a Live build role must authenticate to ECR: {statements:#?}"));
-    assert_eq!(
-        ecr["Sid"], "PullSandboxBaseImage",
-        "the statement a security reviewer reads must say what it is for"
+    assert!(
+        !statements.iter().any(grants_ecr),
+        "a build with no private base must hold no ECR grant: {statements:#?}"
     );
-    assert_eq!(
-        ecr["Action"],
-        serde_json::json!([
-            "ecr:GetAuthorizationToken",
-            "ecr:BatchGetImage",
-            "ecr:GetDownloadUrlForLayer"
-        ]),
-        "exactly the token call and the two pull actions, nothing wider"
+}
+
+/// The declared base is the one repository the build may pull, in whichever region the host
+/// names or the deployment's own when it names `{region}`.
+#[test]
+fn a_declared_private_base_is_the_only_repository_a_live_build_pulls() {
+    let (stack, settings) = sandbox_stack_with_lifecycle(
+        "acme-sandbox-live-base",
+        SandboxEgress::Allow,
+        ResourceLifecycle::Live,
     );
-    assert_eq!(
-        ecr["Resource"],
-        serde_json::json!("*"),
-        "GetAuthorizationToken is only accepted against `*`"
+    let mut stack = stack;
+    let sandbox = stack
+        .resources
+        .get_mut("agents")
+        .and_then(|entry| entry.config.downcast_mut::<Sandbox>())
+        .expect("the sandbox is in the stack");
+    sandbox.private_base_image =
+        Some("123456789012.dkr.ecr.{region}.amazonaws.com/acme/agents-base:1.4".to_string());
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "live sandbox with a private base",
     );
 
-    // Same-account pulls are authorized by identity policy alone, so without this Deny the
-    // Allow above makes a customer-authored Dockerfile a reader of every private repository
-    // in the customer's own account.
-    let deny = statements
-        .iter()
-        .find(|statement| statement["Effect"] == "Deny")
-        .unwrap_or_else(|| {
-            panic!("same-account pulls must be denied on a Live build role: {statements:#?}")
-        });
-    assert_eq!(deny["Sid"], "DenySameAccountImagePull");
+    let statements = build_role_statements(&template);
+    let ecr: Vec<_> = statements.iter().filter(|s| grants_ecr(s)).collect();
     assert_eq!(
-        deny["Action"],
-        serde_json::json!(["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]),
-        "the deny covers exactly the two pull actions — never the token call, which the \
-         cross-account login needs"
-    );
-    assert_eq!(
-        deny["Resource"],
-        serde_json::json!({
-            "Fn::Sub": "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/*"
-        }),
-        "the deny must name this account's repositories through pseudo parameters, not literals"
+        ecr,
+        [
+            &serde_json::json!({
+                "Sid": "AuthorizeSandboxBaseImagePull",
+                "Effect": "Allow",
+                "Action": ["ecr:GetAuthorizationToken"],
+                "Resource": "*"
+            }),
+            &serde_json::json!({
+                "Sid": "PullSandboxBaseImage",
+                "Effect": "Allow",
+                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                "Resource": {
+                    "Fn::Sub":
+                        "arn:${AWS::Partition}:ecr:${AWS::Region}:123456789012:repository/acme/agents-base"
+                }
+            }),
+            &serde_json::json!({
+                "Sid": "DenySameAccountImagePull",
+                "Effect": "Deny",
+                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/*"
+                }
+            }),
+        ],
+        "the token call on `*`, the pull on exactly the declared repository, and no pull from \
+         this account"
     );
 }
 
@@ -483,51 +514,13 @@ fn aws_sandbox_deny_builds_a_connector_that_permits_nothing_outbound() {
         "sandbox deny",
     );
 
-    let security_group = template
-        .resources
-        .get("AgentsEgressSecurityGroup")
-        .expect("the sandbox egress security group must render");
-    let egress = serde_json::to_string(
-        security_group
-            .properties
-            .get("SecurityGroupEgress")
-            .expect("an egress rule, or EC2's allow-all default survives"),
-    )
-    .expect("serializes");
-    assert!(
-        egress.contains("127.0.0.1/32"),
-        "the only permitted destination must be the one that reaches nothing: {egress}"
-    );
-    assert!(
-        !egress.contains("0.0.0.0/0"),
-        "a wide egress rule turns deny back into outbound access: {egress}"
-    );
-
+    // The group's rules and the connector's configuration are compared whole by the parity
+    // tests below.
     let connector = template
         .resources
         .get("AgentsEgressConnector")
         .expect("the egress connector must render");
     assert_eq!(connector.resource_type, "AWS::Lambda::NetworkConnector");
-    let configuration = serde_json::to_string(
-        connector
-            .properties
-            .get("Configuration")
-            .expect("connector configuration"),
-    )
-    .expect("serializes");
-    assert!(
-        configuration.contains("AgentsEgressSecurityGroup"),
-        "the connector must carry the group that denies: {configuration}"
-    );
-    assert!(
-        configuration.contains("DefaultNetworkPrivateSubnet1"),
-        "the connector must place its interfaces in the network's private subnets: \
-         {configuration}"
-    );
-    assert!(
-        configuration.contains("MicroVm"),
-        "the connector must be usable by MicroVMs: {configuration}"
-    );
 
     let image = template
         .resources
@@ -572,6 +565,77 @@ fn aws_sandbox_deny_builds_a_connector_that_permits_nothing_outbound() {
         registration.contains("AgentsEgressConnector"),
         "the deny connector must still be carried to the session"
     );
+}
+
+/// The connector attaches where `sandbox_egress_network` says, which is the stack's first network.
+/// A created network is the one whose subnets the template names by logical id, so the connector
+/// names them exactly when the created network is the first one.
+#[test]
+fn a_deny_sandbox_attaches_to_the_first_of_two_networks() {
+    let created = || NetworkSettings::Create {
+        cidr: None,
+        availability_zones: 2,
+    };
+    let brought = || NetworkSettings::ByoVpcAws {
+        vpc_id: "vpc-0brought".to_string(),
+        public_subnet_ids: vec!["subnet-public-a".to_string()],
+        private_subnet_ids: existing_subnets(),
+        security_group_ids: vec!["sg-0network".to_string()],
+    };
+    for (first, second) in [(created(), brought()), (brought(), created())] {
+        let stack = Stack::new("acme-sandbox-two-networks".to_string())
+            .add(
+                Network::new("first-net".to_string())
+                    .settings(first.clone())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Network::new("second-net".to_string())
+                    .settings(second.clone())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                sandbox_fixture_with(SandboxEgress::Deny, LIVE_BUNDLE),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let chosen =
+            alien_core::sandbox_egress::sandbox_egress_network(&stack, &SandboxEgress::Deny)
+                .expect("both networks are attachable")
+                .expect("deny attaches to a network");
+        assert_eq!(chosen.id, "first-net");
+
+        let (template, _yaml) = render_built_ins_template(
+            &stack,
+            StackSettings {
+                network: Some(first.clone()),
+                ..StackSettings::default()
+            },
+            custom_resource_registration(),
+            CloudFormationTarget::Aws,
+            "aws",
+            &format!("deny sandbox on {first:?} then {second:?}"),
+        );
+        let subnets = serde_json::to_string(
+            &emitted_properties(&template, "AgentsEgressConnector")["Configuration"]
+                ["VpcEgressConfiguration"]["SubnetIds"],
+        )
+        .expect("serializes");
+        let names_created_subnets =
+            |network: &str| subnets.contains(&format!("{network}PrivateSubnet"));
+        match first {
+            NetworkSettings::Create { .. } => assert!(
+                names_created_subnets("FirstNet") && !names_created_subnets("SecondNet"),
+                "the first network is the created one: {subnets}"
+            ),
+            _ => assert!(
+                !names_created_subnets("FirstNet") && !names_created_subnets("SecondNet"),
+                "the first network is brought, so no created subnet is named: {subnets}"
+            ),
+        }
+    }
 }
 
 /// Without a VPC there are no subnets, and a connector needs between one and sixteen.
@@ -984,8 +1048,9 @@ fn aws_remote_sandbox_with_restricted_egress_carries_no_grant() {
 /// reach into its sessions — the caller drives those.
 #[test]
 fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
-    // The profile the preflight mutation derives for this stack: heartbeat so the identity can
-    // report on the sandbox, management because a frozen sandbox is setup-owned.
+    // The grants this test is about, out of what the preflight mutation derives for this stack:
+    // heartbeat so the identity can report on the sandbox, management because a frozen sandbox is
+    // setup-owned.
     let stack = Stack::new("byo-sandbox".to_string())
         .management(alien_core::permissions::ManagementPermissions::extend(
             alien_core::PermissionProfile::new()
@@ -1041,6 +1106,123 @@ fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
             !management.contains(reaches_a_session),
             "{reaches_a_session} reaches a session and belongs to the remote caller alone: {yaml}"
         );
+    }
+}
+
+/// Other sets grant role writes on `role/<prefix>-*`. One guard refuses them on the management role
+/// by the name this template gives it; the other on every role carrying setup's sandbox tags, which
+/// both sandbox roles carry, including the egress operator role CloudFormation names itself.
+#[test]
+fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
+    let (mut stack, settings) = sandbox_stack("acme-guarded", SandboxEgress::Deny);
+    stack.permissions.management = alien_core::permissions::ManagementPermissions::extend(
+        alien_core::PermissionProfile::new().global([
+            "sandbox/management",
+            "artifact-registry/management",
+            alien_permissions::SANDBOX_SETUP_ROLES_GUARD,
+            alien_permissions::MANAGEMENT_ROLE_GUARD,
+        ]),
+    );
+    stack.resources.insert(
+        "management".to_string(),
+        alien_core::ResourceEntry {
+            config: alien_core::Resource::new(
+                alien_core::RemoteStackManagement::new("management".to_string()).build(),
+            ),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: vec![],
+            remote_access: false,
+            enabled_when: None,
+        },
+    );
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "sandbox setup roles guard",
+    );
+
+    let statements: Vec<Value> = template
+        .resources
+        .iter()
+        .filter(|(name, resource)| {
+            name.starts_with("ManagementRole") && resource.resource_type.contains("Policy")
+        })
+        .flat_map(|(_, resource)| {
+            let properties = serde_json::to_value(&resource.properties).expect("serializes");
+            properties["PolicyDocument"]["Statement"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect();
+    let role_name = serde_json::to_value(&template.resources["ManagementRole"].properties)
+        .expect("serializes")["RoleName"]
+        .clone();
+    assert_eq!(
+        role_name,
+        serde_json::json!({ "Fn::Sub": "${AWS::StackName}-management" })
+    );
+    let own_role = serde_json::json!([{
+        "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management"
+    }]);
+    let (own_role_denies, denies): (Vec<&Value>, Vec<&Value>) = statements
+        .iter()
+        .filter(|statement| statement["Effect"] == "Deny")
+        .partition(|statement| statement["Resource"] == own_role);
+    assert_eq!(
+        own_role_denies.len(),
+        1,
+        "the management role may not rewrite itself: {statements:#?}"
+    );
+    assert_eq!(denies.len(), 1, "{statements:#?}");
+    insta::assert_snapshot!(
+        "aws_management_role_guards",
+        serde_json::to_string_pretty(&[own_role_denies[0], denies[0]]).expect("serializes")
+    );
+    assert_eq!(denies[0]["Resource"], serde_json::json!(["*"]));
+    assert_eq!(
+        denies[0]["Condition"],
+        serde_json::json!({
+            "StringEquals": {
+                "aws:ResourceTag/managed-by": "setup",
+                "aws:ResourceTag/resource-type": "sandbox"
+            }
+        })
+    );
+    assert!(
+        !denies[0].to_string().contains("iam:PassRole"),
+        "the build role must stay passable"
+    );
+
+    let sandbox_roles: Vec<(&String, Value)> = template
+        .resources
+        .iter()
+        .filter(|(name, resource)| {
+            name.starts_with("Agents") && resource.resource_type == "AWS::IAM::Role"
+        })
+        .map(|(name, resource)| {
+            (
+                name,
+                serde_json::to_value(&resource.properties).expect("serializes"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        sandbox_roles.len(),
+        2,
+        "the build and egress operator roles"
+    );
+    for (name, properties) in sandbox_roles {
+        let tags = properties["Tags"].as_array().expect("tags");
+        for (key, value) in [("managed-by", "setup"), ("resource-type", "sandbox")] {
+            assert!(
+                tags.contains(&serde_json::json!({ "Key": key, "Value": value })),
+                "{name} must carry {key}={value} for the guard to reach it: {tags:?}"
+            );
+        }
     }
 }
 
@@ -1157,4 +1339,598 @@ fn aws_remote_sandbox_grants_a_live_sandbox_the_same_execute_set() {
         document.contains("microvm-image:${AWS::StackName}-agents"),
         "the grant must name this sandbox's own image: {document}"
     );
+}
+
+/// Values no emitter could get right by hardcoding a default.
+const PARITY_PARTITION: &str = "aws-us-gov";
+const PARITY_ACCOUNT: &str = "987654321098";
+const PARITY_REGION: &str = "us-gov-east-1";
+
+/// Every combination the build role's grant branches on: lifecycle, whether the bundle URI
+/// carries the region token, and whether a private base image is declared and where its region
+/// comes from.
+const PARITY_CASES: [(ResourceLifecycle, &str, Option<&str>); 6] = [
+    (
+        ResourceLifecycle::Frozen,
+        "s3://acme-artifacts/agents/bundle.zip",
+        None,
+    ),
+    (
+        ResourceLifecycle::Frozen,
+        "s3://acme-artifacts-{region}/agents/bundle.zip",
+        None,
+    ),
+    (ResourceLifecycle::Live, LIVE_BUNDLE, None),
+    (
+        ResourceLifecycle::Live,
+        "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
+        None,
+    ),
+    (
+        ResourceLifecycle::Live,
+        LIVE_BUNDLE,
+        Some("123456789012.dkr.ecr.eu-west-1.amazonaws.com/acme/agents-base:1.4"),
+    ),
+    (
+        ResourceLifecycle::Live,
+        LIVE_BUNDLE,
+        Some("123456789012.dkr.ecr.{region}.amazonaws.com/acme/agents-base@sha256:f00d"),
+    ),
+];
+
+/// Resolves the intrinsics the build role uses to the fixed parity values, and panics on any
+/// other: a placeholder would let both sides compare equal without either being checked.
+fn resolve_intrinsics(value: &serde_json::Value) -> serde_json::Value {
+    let pseudo = |name: &str| match name {
+        "AWS::Partition" => PARITY_PARTITION,
+        "AWS::AccountId" => PARITY_ACCOUNT,
+        "AWS::Region" => PARITY_REGION,
+        other => panic!("the build role references {other}, which the parity test cannot resolve"),
+    };
+    match value {
+        serde_json::Value::Object(map) if map.len() == 1 && map.contains_key("Fn::Sub") => {
+            let text = map["Fn::Sub"].as_str().unwrap_or_else(|| {
+                panic!("only the string form of Fn::Sub is resolvable: {value}")
+            });
+            let resolved = ["AWS::Partition", "AWS::AccountId", "AWS::Region"]
+                .into_iter()
+                .fold(text.to_string(), |acc, name| {
+                    acc.replace(&format!("${{{name}}}"), pseudo(name))
+                });
+            assert!(
+                !resolved.contains("${"),
+                "unresolved substitution left in {resolved}"
+            );
+            serde_json::Value::String(resolved)
+        }
+        serde_json::Value::Object(map) if map.len() == 1 && map.contains_key("Ref") => {
+            let name = map["Ref"].as_str().expect("Ref names a string");
+            serde_json::Value::String(pseudo(name).to_string())
+        }
+        serde_json::Value::Object(map) => {
+            if let Some(key) = map
+                .keys()
+                .find(|key| key.starts_with("Fn::") || *key == "Ref")
+            {
+                panic!("the parity test cannot resolve {key}: {value}");
+            }
+            serde_json::Value::Object(
+                map.iter()
+                    .map(|(k, v)| (k.clone(), resolve_intrinsics(v)))
+                    .collect(),
+            )
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(resolve_intrinsics).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+/// A direct deploy creates the build role through the IAM API from `SandboxBuildRole`, so a
+/// grant changed in the emitter alone would give the two install paths different roles.
+#[test]
+fn the_emitted_build_role_matches_the_shared_policy_builder() {
+    for (lifecycle, bundle_uri, private_base_image) in PARITY_CASES {
+        let stack = Stack::new("acme-sandbox-parity".to_string())
+            .add(
+                Sandbox {
+                    private_base_image: private_base_image.map(str::to_string),
+                    ..sandbox_fixture_with(SandboxEgress::Allow, bundle_uri)
+                },
+                lifecycle,
+            )
+            .build();
+        let case =
+            format!("{lifecycle:?} sandbox built from {bundle_uri} on base {private_base_image:?}");
+        let (template, _yaml) = render_built_ins_template(
+            &stack,
+            StackSettings::default(),
+            custom_resource_registration(),
+            CloudFormationTarget::Aws,
+            "aws",
+            &case,
+        );
+        let role = serde_json::to_value(
+            template
+                .resources
+                .get("AgentsBuildRole")
+                .expect("the build role must render"),
+        )
+        .expect("serializes");
+        let properties = &role["Properties"];
+        let policies = properties["Policies"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{case}: Policies must be a list: {role:#}"));
+
+        let expected = SandboxBuildRole::builder()
+            .sandbox_id("agents")
+            .partition(PARITY_PARTITION)
+            .account_id(PARITY_ACCOUNT)
+            .region(PARITY_REGION)
+            .bundle_uri(bundle_uri)
+            .runtime_built(lifecycle == ResourceLifecycle::Live)
+            .maybe_private_base_image(private_base_image)
+            .build();
+
+        assert_eq!(policies.len(), 1, "{case}: one inline policy: {role:#}");
+        assert_eq!(
+            policies[0]["PolicyName"],
+            serde_json::json!(SANDBOX_BUILD_POLICY_NAME),
+            "{case}"
+        );
+        assert_eq!(
+            resolve_intrinsics(&policies[0]["PolicyDocument"]),
+            serde_json::to_value(expected.policy().expect("the builder accepts the fixture"))
+                .expect("serializes"),
+            "{case}: permission policy"
+        );
+        assert_eq!(
+            resolve_intrinsics(&properties["AssumeRolePolicyDocument"]),
+            serde_json::to_value(expected.trust_policy()).expect("serializes"),
+            "{case}: trust policy"
+        );
+    }
+}
+
+const PARITY_PREFIX: &str = "acme-parity";
+const PARITY_OPERATOR_ARN: &str = "arn:aws-us-gov:iam::987654321098:role/acme-parity-agents-egress";
+const PARITY_SECURITY_GROUP: &str = "sg-0parity";
+
+/// The `PrivateSubnetIds` parameter as an installer fills it in.
+fn existing_subnets() -> Vec<String> {
+    vec![
+        "subnet-existing-a".to_string(),
+        "subnet-existing-b".to_string(),
+    ]
+}
+
+/// A network mode `egress: deny` accepts, the value of the template's `NetworkModeCreate`
+/// condition, and the private subnets its connector must name once both are resolved.
+struct EgressParityCase {
+    network: NetworkSettings,
+    network_mode_create: bool,
+    subnets: Vec<String>,
+}
+
+fn egress_parity_cases() -> [EgressParityCase; 3] {
+    let create = NetworkSettings::Create {
+        cidr: None,
+        availability_zones: 2,
+    };
+    [
+        EgressParityCase {
+            network: create.clone(),
+            network_mode_create: true,
+            subnets: vec![
+                "subnet-created-1".to_string(),
+                "subnet-created-2".to_string(),
+            ],
+        },
+        EgressParityCase {
+            network: create,
+            network_mode_create: false,
+            subnets: existing_subnets(),
+        },
+        EgressParityCase {
+            network: NetworkSettings::ByoVpcAws {
+                vpc_id: "vpc-0parity".to_string(),
+                public_subnet_ids: vec!["subnet-public-a".to_string()],
+                private_subnet_ids: existing_subnets(),
+                security_group_ids: vec!["sg-0network".to_string()],
+            },
+            network_mode_create: false,
+            subnets: existing_subnets(),
+        },
+    ]
+}
+
+fn deny_template(network: &NetworkSettings) -> alien_cloudformation::CfTemplate {
+    let settings = StackSettings {
+        network: Some(network.clone()),
+        ..StackSettings::default()
+    };
+    let stack = Stack::new("acme-sandbox-egress-parity".to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(network.clone())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            sandbox_fixture_with(SandboxEgress::Deny, LIVE_BUNDLE),
+            ResourceLifecycle::Live,
+        )
+        .build();
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        &format!("deny sandbox on {network:?}"),
+    );
+    template
+}
+
+fn emitted_properties(
+    template: &alien_cloudformation::CfTemplate,
+    logical_id: &str,
+) -> serde_json::Value {
+    serde_json::to_value(
+        template
+            .resources
+            .get(logical_id)
+            .unwrap_or_else(|| panic!("{logical_id} must render")),
+    )
+    .expect("serializes")["Properties"]
+        .clone()
+}
+
+/// Resolves every intrinsic the connector uses to the value it takes in a deployed stack. An
+/// intrinsic outside these tables panics, so a new reference cannot compare equal unchecked.
+fn resolve_connector(
+    value: &serde_json::Value,
+    network_mode_create: bool,
+) -> Option<serde_json::Value> {
+    let reference = |name: &str| -> Option<Value> {
+        match name {
+            "AWS::NoValue" => None,
+            "AWS::StackName" => Some(Value::from(PARITY_PREFIX)),
+            "DefaultNetworkPrivateSubnet1" => Some(Value::from("subnet-created-1")),
+            "DefaultNetworkPrivateSubnet2" => Some(Value::from("subnet-created-2")),
+            "PrivateSubnetIds" => Some(serde_json::json!(existing_subnets())),
+            other => panic!("the parity test cannot resolve Ref {other}"),
+        }
+    };
+    let condition = |name: &str| match name {
+        "NetworkModeCreate" => network_mode_create,
+        "NetworkCreateUseAz2" => true,
+        "NetworkCreateUseAz3" => false,
+        other => panic!("the parity test cannot evaluate condition {other}"),
+    };
+    match value {
+        Value::Object(map) if map.len() == 1 && map.contains_key("Ref") => {
+            reference(map["Ref"].as_str().expect("Ref names a string"))
+        }
+        Value::Object(map) if map.len() == 1 && map.contains_key("Fn::GetAtt") => {
+            let target = map["Fn::GetAtt"]
+                .as_array()
+                .expect("GetAtt takes a pair")
+                .iter()
+                .map(|part| part.as_str().expect("GetAtt parts are strings"))
+                .collect::<Vec<_>>();
+            Some(Value::from(match target.as_slice() {
+                ["AgentsEgressOperatorRole", "Arn"] => PARITY_OPERATOR_ARN,
+                ["AgentsEgressSecurityGroup", "GroupId"] => PARITY_SECURITY_GROUP,
+                other => panic!("the parity test cannot resolve GetAtt {other:?}"),
+            }))
+        }
+        Value::Object(map) if map.len() == 1 && map.contains_key("Fn::If") => {
+            let branches = map["Fn::If"].as_array().expect("If takes three items");
+            let name = branches[0].as_str().expect("If names a condition");
+            resolve_connector(
+                &branches[if condition(name) { 1 } else { 2 }],
+                network_mode_create,
+            )
+        }
+        Value::Object(map) if map.len() == 1 && map.contains_key("Fn::Sub") => {
+            let text = map["Fn::Sub"].as_str().expect("the string form of Sub");
+            let resolved = text.replace("${AWS::StackName}", PARITY_PREFIX);
+            assert!(!resolved.contains("${"), "unresolved Sub in {text}");
+            Some(Value::from(resolved))
+        }
+        Value::Object(map) => {
+            if let Some(key) = map.keys().find(|key| key.starts_with("Fn::")) {
+                panic!("the parity test cannot resolve {key}: {value}");
+            }
+            Some(Value::Object(
+                map.iter()
+                    .filter_map(|(k, v)| {
+                        resolve_connector(v, network_mode_create).map(|v| (k.clone(), v))
+                    })
+                    .collect(),
+            ))
+        }
+        Value::Array(items) => Some(Value::Array(
+            items
+                .iter()
+                .filter_map(|item| resolve_connector(item, network_mode_create))
+                .flat_map(|item| match item {
+                    // A list parameter referenced inside a list stands for its members.
+                    Value::Array(members) => members,
+                    one => vec![one],
+                })
+                .collect(),
+        )),
+        other => Some(other.clone()),
+    }
+}
+
+/// Tags carry `insertionOrder: false` in the connector's schema, so their order is not state.
+fn tags_sorted(mut properties: serde_json::Value) -> serde_json::Value {
+    if let Some(tags) = properties["Tags"].as_array_mut() {
+        tags.sort_by(|a, b| a["Key"].as_str().cmp(&b["Key"].as_str()));
+    }
+    properties
+}
+
+/// A direct deploy creates the operator role through the IAM API from the shared builder, so a
+/// grant changed in the emitter alone would give the two install paths different roles.
+#[test]
+fn the_emitted_operator_role_matches_the_shared_builder() {
+    for EgressParityCase { network, .. } in egress_parity_cases() {
+        let template = deny_template(&network);
+        let properties = emitted_properties(&template, "AgentsEgressOperatorRole");
+        let policies = properties["Policies"]
+            .as_array()
+            .unwrap_or_else(|| panic!("Policies must be a list: {properties:#}"));
+
+        assert_eq!(policies.len(), 1, "one inline policy: {properties:#}");
+        assert_eq!(
+            policies[0]["PolicyName"],
+            serde_json::json!(SANDBOX_EGRESS_POLICY_NAME)
+        );
+        assert_eq!(
+            resolve_intrinsics(&policies[0]["PolicyDocument"]),
+            sandbox_egress_operator_policy(PARITY_PARTITION, PARITY_ACCOUNT, PARITY_REGION),
+            "permission policy"
+        );
+        assert_eq!(
+            resolve_intrinsics(&properties["AssumeRolePolicyDocument"]),
+            sandbox_egress_operator_trust_policy(),
+            "trust policy"
+        );
+    }
+}
+
+/// A direct deploy sends this builder's output to Cloud Control as the connector's desired state;
+/// it must be the resource CloudFormation creates for the same sandbox.
+#[test]
+fn the_emitted_connector_matches_the_direct_desired_state() {
+    for EgressParityCase {
+        network,
+        network_mode_create,
+        subnets,
+    } in egress_parity_cases()
+    {
+        let case = format!("connector on {network:?} with NetworkModeCreate={network_mode_create}");
+        let template = deny_template(&network);
+        let emitted = resolve_connector(
+            &emitted_properties(&template, "AgentsEgressConnector"),
+            network_mode_create,
+        )
+        .expect("the connector's properties resolve to a value");
+
+        let direct = SandboxEgressConnector::builder()
+            .resource_prefix(PARITY_PREFIX)
+            .sandbox_id("agents")
+            .operator_role_arn(PARITY_OPERATOR_ARN)
+            .private_subnet_ids(&subnets)
+            .security_group_id(PARITY_SECURITY_GROUP)
+            .build()
+            .desired_state();
+
+        assert_eq!(tags_sorted(emitted), tags_sorted(direct), "{case}");
+    }
+}
+
+/// The group is what enforces `egress: deny`, and a direct deploy creates it with exactly one
+/// all-protocol rule to [`LOOPBACK_ONLY_CIDR`] and no ingress. The name is not compared: the
+/// direct path finds its group again by `sandbox_egress_name`, CloudFormation by logical id, and
+/// adding `GroupName` here would replace the group under every installed stack.
+#[test]
+fn the_emitted_deny_group_matches_the_direct_rule_set() {
+    for EgressParityCase { network, .. } in egress_parity_cases() {
+        let case = format!("deny group on {network:?}");
+        let template = deny_template(&network);
+        let properties = emitted_properties(&template, "AgentsEgressSecurityGroup");
+
+        assert_eq!(properties.get("GroupName"), None, "{case}");
+        assert_eq!(
+            properties["GroupDescription"],
+            serde_json::json!("Sandbox agents session egress"),
+            "{case}"
+        );
+        assert_eq!(
+            properties["SecurityGroupEgress"],
+            serde_json::json!([{
+                "IpProtocol": "-1",
+                "CidrIp": LOOPBACK_ONLY_CIDR,
+                "Description": "Sandbox sessions reach nothing outbound"
+            }]),
+            "{case}: one rule, all protocols, to the destination that reaches nothing"
+        );
+        assert_eq!(
+            properties.get("SecurityGroupIngress"),
+            None,
+            "{case}: {properties:#}"
+        );
+
+        // A standalone rule resource widens the group as surely as an inline one.
+        for (logical_id, resource) in &template.resources {
+            if resource
+                .resource_type
+                .starts_with("AWS::EC2::SecurityGroup")
+                && logical_id != "AgentsEgressSecurityGroup"
+            {
+                let rendered = serde_json::to_string(resource).expect("serializes");
+                assert!(
+                    !rendered.contains("AgentsEgressSecurityGroup"),
+                    "{case}: {logical_id} adds a rule to the deny group: {rendered}"
+                );
+            }
+        }
+    }
+}
+
+const PARITY_CONNECTOR_ARN: &str =
+    "arn:aws-us-gov:lambda:us-gov-east-1:987654321098:network-connector:nc-0parity";
+
+/// Resolves the registration's intrinsics to a deployed stack's values. The build role resolves
+/// from its own emitted `RoleName`, so a renamed role cannot compare equal to the direct side's
+/// derivation by both sides reading one placeholder.
+fn resolve_registration(
+    template: &alien_cloudformation::CfTemplate,
+    value: &serde_json::Value,
+) -> serde_json::Value {
+    let sub = |text: &str| {
+        let resolved = text
+            .replace("${AWS::StackName}", PARITY_PREFIX)
+            .replace("${AWS::Partition}", PARITY_PARTITION)
+            .replace("${AWS::AccountId}", PARITY_ACCOUNT)
+            .replace("${AWS::Region}", PARITY_REGION);
+        assert!(!resolved.contains("${"), "unresolved Sub in {text}");
+        resolved
+    };
+    match value {
+        Value::Object(map) if map.len() == 1 && map.contains_key("Fn::Sub") => {
+            Value::from(sub(map["Fn::Sub"]
+                .as_str()
+                .expect("the string form of Sub")))
+        }
+        Value::Object(map) if map.len() == 1 && map.contains_key("Fn::GetAtt") => {
+            let target: Vec<&str> = map["Fn::GetAtt"]
+                .as_array()
+                .expect("GetAtt takes a pair")
+                .iter()
+                .map(|part| part.as_str().expect("GetAtt parts are strings"))
+                .collect();
+            let resource = serde_json::to_value(
+                template
+                    .resources
+                    .get(target[0])
+                    .unwrap_or_else(|| panic!("GetAtt names {} which must render", target[0])),
+            )
+            .expect("serializes");
+            match target.as_slice() {
+                [_, "Arn"] if resource["Type"] == "AWS::IAM::Role" => {
+                    assert_eq!(
+                        resource["Properties"].get("Path"),
+                        None,
+                        "the pass grant is scoped to the root path"
+                    );
+                    let role_name = resource["Properties"]["RoleName"]["Fn::Sub"]
+                        .as_str()
+                        .expect("the build role is named through Sub");
+                    Value::from(format!(
+                        "arn:{PARITY_PARTITION}:iam::{PARITY_ACCOUNT}:role/{}",
+                        sub(role_name)
+                    ))
+                }
+                [_, "Arn"] if resource["Type"] == "AWS::Lambda::NetworkConnector" => {
+                    Value::from(PARITY_CONNECTOR_ARN)
+                }
+                other => panic!("the parity test cannot resolve GetAtt {other:?}"),
+            }
+        }
+        Value::Object(map) => {
+            if let Some(key) = map
+                .keys()
+                .find(|key| key.starts_with("Fn::") || *key == "Ref")
+            {
+                panic!("the parity test cannot resolve {key}: {value}");
+            }
+            Value::Object(
+                map.iter()
+                    .map(|(k, v)| (k.clone(), resolve_registration(template, v)))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| resolve_registration(template, item))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// A direct deploy registers a runtime-built sandbox from `AwsSandboxImportData::runtime_built`
+/// instead of this template, so a field changed in the emitter alone would hand the controller a
+/// different build role, bundle, egress, or preview set depending on how it was installed.
+#[test]
+fn the_emitted_registration_matches_the_direct_seed() {
+    let network = NetworkSettings::Create {
+        cidr: None,
+        availability_zones: 2,
+    };
+    for (egress, bundle_uri) in [
+        (
+            SandboxEgress::Allow,
+            "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
+        ),
+        (SandboxEgress::Deny, LIVE_BUNDLE),
+        (
+            SandboxEgress::Deny,
+            "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
+        ),
+    ] {
+        let sandbox = Sandbox {
+            preview_ports: vec![8080, 3000],
+            ..sandbox_fixture_with(egress.clone(), bundle_uri)
+        };
+        let stack = Stack::new("acme-sandbox-registration-parity".to_string())
+            .add(
+                Network::new("default-network".to_string())
+                    .settings(network.clone())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(sandbox.clone(), ResourceLifecycle::Live)
+            .build();
+        let case = format!("{egress:?} sandbox built from {bundle_uri}");
+        let (template, _yaml) = render_built_ins_template(
+            &stack,
+            StackSettings {
+                network: Some(network.clone()),
+                ..StackSettings::default()
+            },
+            custom_resource_registration(),
+            CloudFormationTarget::Aws,
+            "aws",
+            &case,
+        );
+
+        let emitted: AwsSandboxImportData = serde_json::from_value(resolve_registration(
+            &template,
+            &emitted_import_data(&template, "agents"),
+        ))
+        .unwrap_or_else(|error| panic!("{case}: the importer must accept it: {error}"));
+        let direct = AwsSandboxImportData::runtime_built(
+            &sandbox,
+            alien_core::sandbox_build_role::sandbox_build_role_arn(
+                PARITY_PARTITION,
+                PARITY_ACCOUNT,
+                PARITY_PREFIX,
+                "agents",
+            ),
+            PARITY_REGION,
+            Some(PARITY_CONNECTOR_ARN),
+        )
+        .unwrap_or_else(|error| panic!("{case}: the direct seed resolves: {error}"));
+
+        assert_eq!(emitted, direct, "{case}");
+    }
 }

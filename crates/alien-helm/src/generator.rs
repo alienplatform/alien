@@ -10,7 +10,9 @@ use crate::{
     registry::HelmRegistry,
 };
 use alien_core::{
-    access_request_crd::AccessRequestCrdNames, branded_tag_key, import::EmitContext,
+    access_request_crd::AccessRequestCrdNames,
+    branded_tag_key,
+    import::EmitContext,
     sync::{OperatorImageReport, OperatorImageSource},
     AzureResourceGroupOutputs, Container, ContainerCode, Daemon, DaemonCode, ErrorData,
     KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
@@ -524,6 +526,10 @@ fn add_remote_operator_files(
         "templates/remote-operator-rollback-guard.yaml".to_string(),
         remote_operator_rollback_guard_tpl(),
     );
+    files.insert(
+        "templates/NOTES.txt".to_string(),
+        remote_operator_removal_notes_tpl(),
+    );
 
     let values = files.get_mut("values.yaml").ok_or_else(|| {
         AlienError::new(ErrorData::GenericError {
@@ -658,6 +664,11 @@ fn remote_operator_identity_record_tpl(
 {{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 30 | trimAll "-" -}}}}
 {{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
 {{{{ printf "%s-identity-gate-%s" $releasePrefix $releaseIdentity }}}}
+{{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorRemovalConfirmed" -}}}}
+{{{{- if and (not .Values.remoteOperator.enabled) (eq (default "" .Values.remoteOperator.confirmRemoval | toString) .Release.Name) -}}}}
+true
+{{{{- end -}}}}
 {{{{- end -}}}}
 {{{{- define "deployment.remoteOperatorRollbackGuardName" -}}}}
 {{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 30 | trimAll "-" -}}}}
@@ -1247,7 +1258,9 @@ spec:
 }
 
 fn remote_operator_rollback_guard_tpl() -> String {
-    r#"{{- if not .Values.remoteOperator.enabled }}
+    r#"{{- /* Only a confirmed removal of a completed identity is a guard-free rollback target. */ -}}
+{{- $identityCompletion := lookup "v1" "ConfigMap" .Release.Namespace (include "deployment.remoteOperatorIdentityCompletionName" .) }}
+{{- if not (or .Values.remoteOperator.enabled (and (include "deployment.remoteOperatorRemovalConfirmed" .) $identityCompletion)) }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -1278,9 +1291,38 @@ spec:
               identity_completion={{ include "deployment.remoteOperatorIdentityCompletionName" . | quote }}
               identity_completion_resource="$(kubectl -n {{ .Release.Namespace | quote }} get configmap "$identity_completion" --ignore-not-found=true --output=name)"
               if [ -n "$identity_completion_resource" ]; then
-                echo "Refusing rollback: the Remote Operator identity is complete, and this revision would disable it. Use the explicit uninstall lifecycle instead." >&2
+                echo "Refusing rollback: the Remote Operator identity is complete, and this revision would disable it. To remove only the Remote Operator, upgrade with --set remoteOperator.enabled=false --set-string remoteOperator.confirmRemoval={{ .Release.Name }}" >&2
                 exit 1
               fi
+{{- end }}
+"#
+    .to_string()
+}
+
+fn remote_operator_removal_notes_tpl() -> String {
+    r#"{{- if include "deployment.remoteOperatorRemovalConfirmed" . }}
+{{- $identityRecordName := include "deployment.remoteOperatorIdentityRecordName" . }}
+{{- $identityInitializedName := include "deployment.remoteOperatorIdentityInitializedName" . }}
+{{- $identityCompletionName := include "deployment.remoteOperatorIdentityCompletionName" . }}
+Remote Operator was removed from release {{ .Release.Name }}. The other workloads in this release are unchanged.
+
+Kept in namespace {{ .Release.Namespace }} so the Remote Operator can be restored or its registration retired:
+  - PersistentVolumeClaim {{ $identityRecordName }}-identity (the Remote Operator identity)
+  - ConfigMaps {{ $identityRecordName }}, {{ $identityInitializedName }}, {{ $identityCompletionName }} (identity records)
+{{- with .Values.remoteOperator.existingSecret.name }}
+  - Secret {{ . }} (credentials created by setup; this chart does not manage it)
+{{- end }}
+
+Keep remoteOperator.confirmRemoval={{ .Release.Name }} on later upgrades while the Remote Operator stays removed.
+
+To restore the Remote Operator with the same identity, upgrade with:
+  --set remoteOperator.enabled=true --set-string remoteOperator.confirmRemoval=
+and the same remoteOperator.existingSecret values.
+
+To delete the kept identity permanently (restoring then requires the first-time setup again):
+  kubectl --namespace {{ .Release.Namespace }} delete persistentvolumeclaim {{ $identityRecordName }}-identity
+  kubectl --namespace {{ .Release.Namespace }} delete configmap {{ $identityRecordName }} {{ $identityInitializedName }} {{ $identityCompletionName }}
+Uninstalling the release also deletes them.
 {{- end }}
 "#
     .to_string()
@@ -1303,6 +1345,10 @@ remoteOperator:
   # Set true only for the first upgrade that enables Remote Operator after the
   # required disabled install/upgrade, then immediately persist false.
   bootstrapIdentity: false
+  # Set to this release's name together with enabled: false to remove the
+  # Remote Operator from an existing release. Its identity volume and records
+  # are kept. Keep it set while the Operator stays removed; clear it to enable.
+  confirmRemoval: ""
   syncTokenRevision: 0
   # Rollout marker for the independently rotatable collector token. Setup
   # tooling should set this to a digest or revision that changes with the token.
@@ -1333,6 +1379,7 @@ fn remote_operator_values_schema() -> serde_json::Value {
                 "enum": ["secret", "configmap"]
             },
             "bootstrapIdentity": { "type": "boolean" },
+            "confirmRemoval": { "type": "string" },
             "existingSecret": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1408,6 +1455,13 @@ fn remote_operator_checks_tpl(requires_collector_token: bool) -> String {
     };
     r#"{{- $secretName := include "deployment.remoteOperatorCredentialsSecretName" . | trim -}}
 {{- $expectedEncryptionKeySha256 := include "deployment.remoteOperatorEncryptionKeySha256" . | trim -}}
+{{- $confirmRemoval := default "" .Values.remoteOperator.confirmRemoval | toString -}}
+{{- if and .Values.remoteOperator.enabled $confirmRemoval -}}
+  {{- fail "remoteOperator.confirmRemoval must be empty when Remote Operator is enabled. Set remoteOperator.confirmRemoval to an empty string to restore the Remote Operator." -}}
+{{- end -}}
+{{- if and $confirmRemoval (ne $confirmRemoval .Release.Name) -}}
+  {{- fail (printf "remoteOperator.confirmRemoval is %q, but this release is %q. Set it to the exact release name to remove the Remote Operator." $confirmRemoval .Release.Name) -}}
+{{- end -}}
 {{- if and .Release.IsInstall .Values.remoteOperator.enabled -}}
   {{- fail "Remote Operator cannot be enabled on the initial Helm install. Install once with remoteOperator.enabled=false so Helm records a rollback-guarded Kubernetes history revision, then enable it in an upgrade with remoteOperator.bootstrapIdentity=true." -}}
 {{- end -}}
@@ -1626,8 +1680,8 @@ __COLLECTOR_CHECK__{{- end -}}
   {{- fail "A prepared Remote Operator retry may reuse only its exact-release owned retained identity PVC. Refusing adoption of another managed resource." -}}
 {{- end -}}
 {{- $safePreparedRollback := and (not .Values.remoteOperator.enabled) $preparedIdentity -}}
-{{- if and .Release.IsUpgrade (not .Values.remoteOperator.enabled) (or $identityRecord $identityInitialized $identityCompletion (get $identityState "managedResourceExists")) (not $safePreparedRollback) -}}
-  {{- fail "Disabling Remote Operator on an existing release would delete its identity and managed resources. Uninstall the Remote Operator through the explicit lifecycle flow instead." -}}
+{{- if and .Release.IsUpgrade (not .Values.remoteOperator.enabled) (or $identityRecord $identityInitialized $identityCompletion (get $identityState "managedResourceExists")) (not $safePreparedRollback) (not (include "deployment.remoteOperatorRemovalConfirmed" .)) -}}
+  {{- fail (printf "Disabling Remote Operator on an existing release deletes its workload and permissions. To remove only the Remote Operator and keep its identity volume, upgrade with --set remoteOperator.enabled=false --set-string remoteOperator.confirmRemoval=%s" .Release.Name) -}}
 {{- end -}}
 {{- if and .Release.IsUpgrade .Values.remoteOperator.enabled (get $identityState "managedResourceExists") (not $identityRecord) -}}
   {{- fail "Remote Operator managed resources exist without the retained identity record. Refusing adoption; restore the original identity record before retrying." -}}
@@ -1670,7 +1724,12 @@ pub fn generate_product_operator_manifest_with_image_identity(
     options: ProductOperatorManifestOptions<'_>,
     image_identity: OperatorImageIdentityOptions<'_>,
 ) -> Result<String> {
-    generate_product_operator_manifest_with_identity_marker(options, None, None, Some(image_identity))
+    generate_product_operator_manifest_with_identity_marker(
+        options,
+        None,
+        None,
+        Some(image_identity),
+    )
 }
 
 fn generate_product_operator_manifest_with_identity_marker(
@@ -7666,13 +7725,10 @@ mod tests {
         assert!(initialized_delete < capability_delete);
         assert!(capability_delete < record_delete);
         let rollback_guard = &chart.files["templates/remote-operator-rollback-guard.yaml"];
-        assert!(rollback_guard.contains("if not .Values.remoteOperator.enabled"));
         assert!(rollback_guard.contains("helm.sh/hook\": pre-rollback"));
         assert!(rollback_guard.contains("--ignore-not-found=true --output=name"));
         assert!(rollback_guard.contains("if [ -n \"$identity_completion_resource\" ]"));
-        assert!(rollback_guard.contains("Use the explicit uninstall lifecycle instead"));
         assert!(checks.contains("missing from a partial installation"));
-        assert!(checks.contains("Disabling Remote Operator"));
         assert!(checks.contains("remoteOperator.bootstrapIdentity has already been consumed"));
         assert!(checks.contains("(not .Values.remoteOperator.bootstrapIdentity)"));
         assert!(checks.contains("$encryptionKey | sha256sum"));
@@ -8315,6 +8371,84 @@ remoteOperator:
         let first = render_collector_name(&format!("{shared_prefix}aa"));
         let second = render_collector_name(&format!("{shared_prefix}ab"));
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn product_chart_remote_operator_removal_requires_the_exact_release_name() {
+        let chart = sample_product_chart();
+        let render = |values: &str| {
+            crate::test_utils::helm_template_for_release(&chart.files, Some(values), "shop")
+        };
+        let has_rollback_guard = |manifest: &str| {
+            docs_by_kind(&parse_manifest_docs(manifest), "Job")
+                .iter()
+                .any(|job| {
+                    yaml_path(job, &["metadata", "annotations", "helm.sh/hook"])
+                        .and_then(YamlValue::as_str)
+                        == Some("pre-rollback")
+                })
+        };
+
+        let wrong_release = render("remoteOperator:\n  confirmRemoval: other-release\n");
+        assert!(!wrong_release.is_ok(), "{wrong_release:?}");
+        assert!(
+            wrong_release.stderr.contains(
+                r#"remoteOperator.confirmRemoval is "other-release", but this release is "shop""#
+            ),
+            "{}",
+            wrong_release.stderr
+        );
+
+        let enabled_with_confirmation = render(
+            r#"
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  confirmRemoval: shop
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#,
+        );
+        assert!(!enabled_with_confirmation.is_ok());
+        assert!(
+            enabled_with_confirmation.stderr.contains(
+                "remoteOperator.confirmRemoval must be empty when Remote Operator is enabled"
+            ),
+            "{}",
+            enabled_with_confirmation.stderr
+        );
+
+        // A plain disabled revision refuses rollback over a completed identity.
+        let disabled = render("remoteOperator:\n  enabled: false\n");
+        disabled.assert_ok("disabled product chart");
+        assert!(has_rollback_guard(&disabled.stdout));
+
+        // A confirmation with no completed identity to remove (here, no
+        // cluster at all) keeps the rollback guard, so an install or bridge
+        // upgrade confirmed early never becomes a guard-free rollback target.
+        // The Kind lifecycle test covers removal of a completed identity.
+        let removed = render("remoteOperator:\n  enabled: false\n  confirmRemoval: shop\n");
+        removed.assert_ok("product chart with the Remote Operator removed");
+        let documents = parse_manifest_docs(&removed.stdout);
+        assert!(has_rollback_guard(&removed.stdout));
+        assert!(docs_by_kind(&documents, "Deployment")
+            .iter()
+            .all(|document| {
+                yaml_path(document, &["metadata", "name"])
+                    .and_then(YamlValue::as_str)
+                    .is_some_and(|name| !name.contains("-remote-operator-"))
+            }));
+        assert!(docs_by_kind(&documents, "Job").iter().any(|job| {
+            yaml_path(job, &["metadata", "annotations", "helm.sh/hook"]).and_then(YamlValue::as_str)
+                == Some("pre-delete")
+        }));
+        assert_eq!(
+            documents,
+            parse_manifest_docs(&disabled.stdout),
+            "removal must leave the product resources exactly as a disabled render"
+        );
     }
 
     #[test]

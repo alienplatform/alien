@@ -558,12 +558,6 @@ Resources:
             - s3:GetObject
             Resource:
               Fn::Sub: arn:${AWS::Partition}:s3:::acme-artifacts/agents/bundle.zip
-          - Effect: Allow
-            Action:
-            - logs:CreateLogGroup
-            - logs:CreateLogStream
-            - logs:PutLogEvents
-            Resource: '*'
       Tags:
       - Key: managed-by
         Value: setup
@@ -603,6 +597,7 @@ Resources:
               Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:network-interface/*
             Condition:
               StringEquals:
+                ec2:CreateAction: CreateNetworkInterface
                 ec2:ManagedResourceOperator: network-connectors.lambda.amazonaws.com
       Tags:
       - Key: managed-by

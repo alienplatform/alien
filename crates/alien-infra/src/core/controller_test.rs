@@ -336,6 +336,7 @@ pub struct SingleControllerExecutor {
     resource_prefix: String,
     // Heartbeats emitted by the most recent step.
     last_heartbeats: Vec<ResourceHeartbeat>,
+    initial_setup_authority: alien_core::InitialSetupAuthority,
 }
 
 impl SingleControllerExecutor {
@@ -390,7 +391,7 @@ impl SingleControllerExecutor {
                 .manager_url("https://test-manager.alien.dev".to_string())
                 .deployment_token("test-deployment-token".to_string())
                 .build(),
-            initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
+            initial_setup_authority: self.initial_setup_authority,
             heartbeat_collector: HeartbeatCollector::default(),
         };
 
@@ -632,9 +633,11 @@ pub struct SingleControllerExecutorBuilder {
     domain_metadata: Option<DomainMetadata>,
     public_endpoints: Option<alien_core::PublicEndpointUrls>,
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
+    stack_resources: Vec<(Resource, ResourceLifecycle)>,
     service_provider: Option<Arc<dyn PlatformServiceProvider>>,
     client_config: Option<ClientConfig>,
     resource_lifecycle: ResourceLifecycle,
+    initial_setup_authority: alien_core::InitialSetupAuthority,
 }
 
 impl SingleControllerExecutorBuilder {
@@ -656,10 +659,19 @@ impl SingleControllerExecutorBuilder {
             domain_metadata: None,
             public_endpoints: None,
             dependencies: Vec::new(),
+            stack_resources: Vec::new(),
             service_provider: None,
             client_config: None,
             resource_lifecycle: ResourceLifecycle::Live,
+            initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
         }
+    }
+
+    /// Sets the authority the controller runs under. Direct setup's by default; an update or
+    /// the runtime loop runs as `ImportedHandoff`.
+    pub fn initial_setup_authority(mut self, authority: alien_core::InitialSetupAuthority) -> Self {
+        self.initial_setup_authority = authority;
+        self
     }
 
     /// Sets the main resource's lifecycle in stack and state. Live by default; a controller
@@ -747,6 +759,18 @@ impl SingleControllerExecutorBuilder {
         let resource_ref = ResourceRef::new(resource.resource_type(), resource.id());
         self.dependencies
             .push((resource_ref, resource, Box::new(controller)));
+        self
+    }
+
+    /// Adds a resource the stack declares that the main resource does not depend on, not yet
+    /// created. For a controller whose behaviour depends on what else is in the stack.
+    pub fn with_stack_resource<R: ResourceDefinition>(
+        mut self,
+        resource: R,
+        lifecycle: ResourceLifecycle,
+    ) -> Self {
+        self.stack_resources
+            .push((Resource::new(resource), lifecycle));
         self
     }
 
@@ -974,6 +998,28 @@ impl SingleControllerExecutorBuilder {
             stack_state.resources.insert(dep_id, stack_resource_state);
         }
 
+        for (other, lifecycle) in &self.stack_resources {
+            stack_resources.insert(
+                other.id().to_string(),
+                ResourceEntry {
+                    config: other.clone(),
+                    lifecycle: *lifecycle,
+                    dependencies: vec![],
+                    remote_access: false,
+                    enabled_when: None,
+                },
+            );
+            stack_state.resources.insert(
+                other.id().to_string(),
+                StackResourceState::new_pending(
+                    other.resource_type().to_string(),
+                    other.clone(),
+                    Some(*lifecycle),
+                    vec![],
+                ),
+            );
+        }
+
         // Add the main resource
         let status = controller.get_status();
         let outputs = controller.get_outputs();
@@ -1178,6 +1224,7 @@ impl SingleControllerExecutorBuilder {
                 .unwrap_or_else(|| Arc::new(DefaultPlatformServiceProvider::default())),
             resource_prefix: "test".to_string(),
             last_heartbeats: Vec::new(),
+            initial_setup_authority: self.initial_setup_authority,
         })
     }
 }

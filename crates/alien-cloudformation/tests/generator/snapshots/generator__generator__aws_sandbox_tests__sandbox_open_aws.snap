@@ -563,12 +563,6 @@ Resources:
             - s3:GetObject
             Resource:
               Fn::Sub: arn:${AWS::Partition}:s3:::acme-artifacts/agents/bundle.zip
-          - Effect: Allow
-            Action:
-            - logs:CreateLogGroup
-            - logs:CreateLogStream
-            - logs:PutLogEvents
-            Resource: '*'
       Tags:
       - Key: managed-by
         Value: setup

@@ -24,7 +24,11 @@ pub fn test_task(directory: Option<&str>, json: bool) -> Result<()> {
     // ahead of `{"passed":true}` and break JSON parsing, so redirect the
     // child's stdout to our stderr instead of inheriting it — the output
     // stays visible for debugging, just off the JSON channel.
-    let stdout = if json { Stdio::from(std::io::stderr()) } else { Stdio::inherit() };
+    let stdout = if json {
+        Stdio::from(std::io::stderr())
+    } else {
+        Stdio::inherit()
+    };
     let status = Command::new("cargo")
         .arg("test")
         .current_dir(directory)

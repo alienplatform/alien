@@ -1,6 +1,6 @@
 //! Common resource boundary tags used by cloud controllers and permission sets.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub const ALIEN_STACK_TAG_KEY: &str = "deployment";
 pub const ALIEN_RESOURCE_TAG_KEY: &str = "resource";
@@ -19,6 +19,21 @@ pub fn standard_resource_tags(
             ALIEN_MANAGED_BY_TAG_KEY.to_string(),
             ALIEN_MANAGED_BY_TAG_VALUE.to_string(),
         ),
+    ])
+}
+
+/// The tags the template setups put on what they create for a resource, with the stack name
+/// replaced by the resource prefix. A direct setup creating the same objects uses these.
+pub fn setup_resource_tags(
+    stack_prefix: &str,
+    resource_id: &str,
+    resource_type: &str,
+) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (ALIEN_STACK_TAG_KEY.to_string(), stack_prefix.to_string()),
+        (ALIEN_RESOURCE_TAG_KEY.to_string(), resource_id.to_string()),
+        (ALIEN_MANAGED_BY_TAG_KEY.to_string(), "setup".to_string()),
+        ("resource-type".to_string(), resource_type.to_string()),
     ])
 }
 

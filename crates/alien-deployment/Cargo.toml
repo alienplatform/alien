@@ -53,6 +53,7 @@ tempfile = "3"
 indexmap = "2"
 chrono = "0.4"
 httpmock.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [dev-dependencies.alien-infra]
 workspace = true

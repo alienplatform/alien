@@ -130,7 +130,10 @@ async fn source_reaches_no_platform_but_aws_through_the_runner() {
         .await
         .expect("compile-time checks run");
 
-    assert!(!summary.success, "source has no builder off AWS: {summary:?}");
+    assert!(
+        !summary.success,
+        "source has no builder off AWS: {summary:?}"
+    );
     let rendered = format!("{summary:?}");
     assert!(
         rendered.contains("agent"),

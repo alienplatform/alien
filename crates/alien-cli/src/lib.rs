@@ -614,7 +614,10 @@ mod tests {
 
     #[test]
     fn non_blank_trims_non_blank_values() {
-        assert_eq!(non_blank("  my-project  ".to_string()), Some("my-project".to_string()));
+        assert_eq!(
+            non_blank("  my-project  ".to_string()),
+            Some("my-project".to_string())
+        );
     }
 
     #[test]

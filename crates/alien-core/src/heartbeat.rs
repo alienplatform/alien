@@ -85,6 +85,25 @@ pub struct ObservedResourceSample {
     pub attributes: BTreeMap<String, JsonValue>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub raw: Vec<RawHeartbeatSnippet>,
+    /// Distinct container images the resource's running instances report, when
+    /// the provider exposes them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ContainerImageIdentity>,
+}
+
+/// Image a running container reports.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerImageIdentity {
+    /// Container name.
+    pub name: String,
+    /// Image reference reported by the container runtime.
+    pub image: String,
+    /// Registry manifest digest in `sha256:<hex>` form, when the runtime
+    /// reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -978,6 +997,8 @@ pub struct KubernetesPodRuntimeUnitStatus {
     pub owner_references: Vec<KubernetesOwnerReference>,
     pub cpu: Option<MetricSample>,
     pub memory: Option<MetricSample>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub containers: Vec<ContainerImageIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

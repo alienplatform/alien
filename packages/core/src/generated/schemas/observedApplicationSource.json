@@ -1,0 +1,1 @@
+{"type":"string","description":"Where the Operator read the application identity from.","enum":["kubernetes"],"x-readme-ref-name":"ObservedApplicationSource"}

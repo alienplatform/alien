@@ -1,7 +1,7 @@
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
-use crate::commands::event_display::{EventDisplayRow, print_event_table};
+use crate::commands::event_display::{print_event_table, EventDisplayRow};
 use crate::deployment_tracking::DeploymentTracker;
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -12,12 +12,11 @@ use crate::ui::{
     heading, make_table, print_table, render_human_error, status_cell, success_line,
 };
 use alien_cli_common::network::{self, NetworkArgs};
-use alien_core::{ComputeClusterOutputs, RESOURCE_PREFIX_ERROR_MESSAGE, is_valid_resource_prefix};
+use alien_core::{is_valid_resource_prefix, ComputeClusterOutputs, RESOURCE_PREFIX_ERROR_MESSAGE};
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_manager_api::types::DeploymentResponse;
 use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use alien_manager_api::SdkResultExtReadingBody as _;
-use alien_manager_api::types::DeploymentResponse;
-use alien_platform_api::SdkResultExt as _;
 use alien_platform_api::types::{
     CreateDeploymentTokenId, CreateDeploymentTokenRequest, CreateDeploymentTokenWorkspace,
     CreateDeploymentWorkspace, DeploymentDetailResponse, DeploymentDetailResponseUpdateState,
@@ -26,6 +25,7 @@ use alien_platform_api::types::{
     PinDeploymentReleaseId, PinDeploymentReleaseWorkspace, PinReleaseRequest,
     PinReleaseRequestReleaseId,
 };
+use alien_platform_api::SdkResultExt as _;
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
