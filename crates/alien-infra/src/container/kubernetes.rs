@@ -73,6 +73,41 @@ fn first_declared_container_port(config: &Container) -> Option<u16> {
     config.ports.first().map(|port| port.port)
 }
 
+fn deployment_rollout_complete(deployment: &Deployment, desired_replicas: i32) -> bool {
+    let (Some(generation), Some(status)) = (deployment.metadata.generation, &deployment.status)
+    else {
+        return false;
+    };
+
+    // Ready replicas can still belong to the old ReplicaSet after an update.
+    status
+        .observed_generation
+        .is_some_and(|observed| observed >= generation)
+        && status.updated_replicas == Some(desired_replicas)
+        && status.replicas == Some(desired_replicas)
+        && status
+            .available_replicas
+            .is_some_and(|available| available >= desired_replicas)
+}
+
+fn statefulset_rollout_complete(statefulset: &StatefulSet, desired_replicas: i32) -> bool {
+    let (Some(generation), Some(status)) = (statefulset.metadata.generation, &statefulset.status)
+    else {
+        return false;
+    };
+
+    status
+        .observed_generation
+        .is_some_and(|observed| observed >= generation)
+        && status.updated_replicas == Some(desired_replicas)
+        && status.replicas == desired_replicas
+        && status
+            .ready_replicas
+            .is_some_and(|ready| ready >= desired_replicas)
+        && status.current_revision.is_some()
+        && status.current_revision == status.update_revision
+}
+
 fn kubernetes_port_name(port: &alien_core::ContainerPort) -> String {
     if false {
         "http".to_string()
@@ -1047,17 +1082,23 @@ impl KubernetesContainerController {
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
 
-        let (ready_replicas, replicas) = if self.is_stateful {
+        let desired_replicas = config.replicas.unwrap_or(1) as i32;
+        let (ready_replicas, replicas, rollout_complete) = if self.is_stateful {
             match deployment_client
                 .get_statefulset(namespace, workload_name)
                 .await
             {
                 Ok(statefulset) => {
-                    if let Some(status) = &statefulset.status {
-                        (status.ready_replicas, Some(status.replicas))
-                    } else {
-                        (None, None)
-                    }
+                    let ready = statefulset
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.ready_replicas);
+                    let replicas = statefulset.status.as_ref().map(|status| status.replicas);
+                    (
+                        ready,
+                        replicas,
+                        statefulset_rollout_complete(&statefulset, desired_replicas),
+                    )
                 }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
@@ -1075,11 +1116,19 @@ impl KubernetesContainerController {
                 .await
             {
                 Ok(deployment) => {
-                    if let Some(status) = &deployment.status {
-                        (status.ready_replicas, status.replicas)
-                    } else {
-                        (None, None)
-                    }
+                    let ready = deployment
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.ready_replicas);
+                    let replicas = deployment
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.replicas);
+                    (
+                        ready,
+                        replicas,
+                        deployment_rollout_complete(&deployment, desired_replicas),
+                    )
                 }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
@@ -1093,23 +1142,20 @@ impl KubernetesContainerController {
             }
         };
 
-        if let (Some(ready_replicas), Some(replicas)) = (ready_replicas, replicas) {
-            let desired_replicas = config.replicas.unwrap_or(1) as i32;
-            if ready_replicas >= desired_replicas.min(replicas) && replicas > 0 {
-                let workload_type = if self.is_stateful {
-                    "StatefulSet"
-                } else {
-                    "Deployment"
-                };
-                info!(workload_name=%workload_name, workload_type=%workload_type, "Container workload rollout complete");
-                return Ok(HandlerAction::Continue {
-                    state: ReconcilePublicEndpointAfterUpdate,
-                    suggested_delay: None,
-                });
+        if rollout_complete {
+            let workload_type = if self.is_stateful {
+                "StatefulSet"
             } else {
-                debug!(workload_name=%workload_name, ready=%ready_replicas, total=%replicas, "Container workload rollout in progress");
-            }
+                "Deployment"
+            };
+            info!(workload_name=%workload_name, workload_type=%workload_type, "Container workload rollout complete");
+            return Ok(HandlerAction::Continue {
+                state: ReconcilePublicEndpointAfterUpdate,
+                suggested_delay: None,
+            });
         }
+
+        debug!(workload_name=%workload_name, ready=?ready_replicas, total=?replicas, desired=desired_replicas, "Container workload rollout in progress");
 
         Ok(HandlerAction::Stay {
             max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
@@ -2300,6 +2346,73 @@ impl KubernetesContainerController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use k8s_openapi::api::apps::v1::{DeploymentStatus, StatefulSetStatus};
+
+    #[test]
+    fn deployment_update_waits_for_the_new_revision_to_be_available() {
+        let mut deployment = Deployment {
+            metadata: ObjectMeta {
+                generation: Some(2),
+                ..Default::default()
+            },
+            status: Some(DeploymentStatus {
+                observed_generation: Some(1),
+                replicas: Some(1),
+                ready_replicas: Some(1),
+                available_replicas: Some(1),
+                updated_replicas: Some(0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert!(!deployment_rollout_complete(&deployment, 1));
+
+        let status = deployment.status.as_mut().unwrap();
+        status.observed_generation = Some(2);
+        assert!(!deployment_rollout_complete(&deployment, 1));
+
+        let status = deployment.status.as_mut().unwrap();
+        status.replicas = Some(2);
+        status.updated_replicas = Some(1);
+        assert!(!deployment_rollout_complete(&deployment, 1));
+
+        let status = deployment.status.as_mut().unwrap();
+        status.replicas = Some(1);
+        status.available_replicas = Some(0);
+        assert!(!deployment_rollout_complete(&deployment, 1));
+
+        deployment.status.as_mut().unwrap().available_replicas = Some(1);
+        assert!(deployment_rollout_complete(&deployment, 1));
+    }
+
+    #[test]
+    fn statefulset_update_waits_for_the_current_revision_to_advance() {
+        let mut statefulset = StatefulSet {
+            metadata: ObjectMeta {
+                generation: Some(2),
+                ..Default::default()
+            },
+            status: Some(StatefulSetStatus {
+                observed_generation: Some(2),
+                replicas: 1,
+                ready_replicas: Some(1),
+                updated_replicas: Some(0),
+                current_revision: Some("old".to_string()),
+                update_revision: Some("new".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert!(!statefulset_rollout_complete(&statefulset, 1));
+
+        statefulset.status.as_mut().unwrap().updated_replicas = Some(1);
+        assert!(!statefulset_rollout_complete(&statefulset, 1));
+
+        statefulset.status.as_mut().unwrap().current_revision = Some("new".to_string());
+        assert!(statefulset_rollout_complete(&statefulset, 1));
+    }
 
     #[test]
     fn test_kubernetes_container_name() {
