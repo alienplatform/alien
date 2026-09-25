@@ -73,16 +73,21 @@ fn first_declared_container_port(config: &Container) -> Option<u16> {
     config.ports.first().map(|port| port.port)
 }
 
-fn deployment_rollout_complete(deployment: &Deployment, desired_replicas: i32) -> bool {
+fn deployment_rollout_complete(
+    deployment: &Deployment,
+    desired_replicas: i32,
+    expected_generation: Option<i64>,
+) -> bool {
     let (Some(generation), Some(status)) = (deployment.metadata.generation, &deployment.status)
     else {
         return false;
     };
 
     // Ready replicas can still belong to the old ReplicaSet after an update.
-    status
-        .observed_generation
-        .is_some_and(|observed| observed >= generation)
+    Some(generation) == expected_generation
+        && status
+            .observed_generation
+            .is_some_and(|observed| observed >= generation)
         && status.updated_replicas == Some(desired_replicas)
         && status.replicas == Some(desired_replicas)
         && status
@@ -90,15 +95,20 @@ fn deployment_rollout_complete(deployment: &Deployment, desired_replicas: i32) -
             .is_some_and(|available| available >= desired_replicas)
 }
 
-fn statefulset_rollout_complete(statefulset: &StatefulSet, desired_replicas: i32) -> bool {
+fn statefulset_rollout_complete(
+    statefulset: &StatefulSet,
+    desired_replicas: i32,
+    expected_generation: Option<i64>,
+) -> bool {
     let (Some(generation), Some(status)) = (statefulset.metadata.generation, &statefulset.status)
     else {
         return false;
     };
 
-    status
-        .observed_generation
-        .is_some_and(|observed| observed >= generation)
+    Some(generation) == expected_generation
+        && status
+            .observed_generation
+            .is_some_and(|observed| observed >= generation)
         && status.updated_replicas == Some(desired_replicas)
         && status.replicas == desired_replicas
         && status
@@ -137,6 +147,10 @@ pub struct KubernetesContainerController {
     /// secretKeyRef, never into the resource config).
     #[serde(default)]
     pub(crate) env_secret: EnvSecretRotationTracker,
+    /// Generation returned by the Kubernetes update call. A subsequent read of
+    /// the previous generation must not complete this rollout.
+    #[serde(default)]
+    pub(crate) update_generation: Option<i64>,
 }
 
 #[controller]
@@ -1013,13 +1027,19 @@ impl KubernetesContainerController {
                 .await?;
             new_statefulset.metadata.resource_version = resource_version;
 
-            deployment_client
+            let updated = deployment_client
                 .update_statefulset(namespace, workload_name, &new_statefulset)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to update statefulset '{}'.", workload_name),
                     resource_id: Some(config.id.clone()),
                 })?;
+            self.update_generation = Some(updated.metadata.generation.ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!("Updated statefulset '{}' has no generation", workload_name),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?);
         } else {
             let mut new_deployment = self
                 .build_deployment(
@@ -1034,13 +1054,19 @@ impl KubernetesContainerController {
                 .await?;
             new_deployment.metadata.resource_version = resource_version;
 
-            deployment_client
+            let updated = deployment_client
                 .update_deployment(namespace, workload_name, &new_deployment)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to update deployment '{}'.", workload_name),
                     resource_id: Some(config.id.clone()),
                 })?;
+            self.update_generation = Some(updated.metadata.generation.ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!("Updated deployment '{}' has no generation", workload_name),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?);
         }
 
         info!(workload_name=%workload_name, workload_type=%workload_type, "Workload update submitted, waiting for rollout");
@@ -1097,7 +1123,11 @@ impl KubernetesContainerController {
                     (
                         ready,
                         replicas,
-                        statefulset_rollout_complete(&statefulset, desired_replicas),
+                        statefulset_rollout_complete(
+                            &statefulset,
+                            desired_replicas,
+                            self.update_generation,
+                        ),
                     )
                 }
                 Err(e) => {
@@ -1127,7 +1157,11 @@ impl KubernetesContainerController {
                     (
                         ready,
                         replicas,
-                        deployment_rollout_complete(&deployment, desired_replicas),
+                        deployment_rollout_complete(
+                            &deployment,
+                            desired_replicas,
+                            self.update_generation,
+                        ),
                     )
                 }
                 Err(e) => {
@@ -1155,7 +1189,7 @@ impl KubernetesContainerController {
             });
         }
 
-        debug!(workload_name=%workload_name, ready=?ready_replicas, total=?replicas, desired=desired_replicas, "Container workload rollout in progress");
+        debug!(workload_name=%workload_name, ready=?ready_replicas, total=?replicas, desired=desired_replicas, expected_generation=?self.update_generation, "Container workload rollout in progress");
 
         Ok(HandlerAction::Stay {
             max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
@@ -1698,6 +1732,7 @@ mod output_tests {
             container_id: Some("container".to_string()),
             public_endpoint,
             env_secret: EnvSecretRotationTracker::default(),
+            update_generation: None,
             _internal_stay_count: None,
         };
 
@@ -1734,6 +1769,7 @@ mod output_tests {
             container_id: Some("container".to_string()),
             public_endpoint,
             env_secret: EnvSecretRotationTracker::default(),
+            update_generation: None,
             _internal_stay_count: None,
         };
 
@@ -2366,24 +2402,28 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(!deployment_rollout_complete(&deployment, 1));
+        assert!(!deployment_rollout_complete(&deployment, 1, Some(2)));
 
         let status = deployment.status.as_mut().unwrap();
         status.observed_generation = Some(2);
-        assert!(!deployment_rollout_complete(&deployment, 1));
+        assert!(!deployment_rollout_complete(&deployment, 1, Some(2)));
 
         let status = deployment.status.as_mut().unwrap();
         status.replicas = Some(2);
         status.updated_replicas = Some(1);
-        assert!(!deployment_rollout_complete(&deployment, 1));
+        assert!(!deployment_rollout_complete(&deployment, 1, Some(2)));
 
         let status = deployment.status.as_mut().unwrap();
         status.replicas = Some(1);
         status.available_replicas = Some(0);
-        assert!(!deployment_rollout_complete(&deployment, 1));
+        assert!(!deployment_rollout_complete(&deployment, 1, Some(2)));
 
         deployment.status.as_mut().unwrap().available_replicas = Some(1);
-        assert!(deployment_rollout_complete(&deployment, 1));
+        assert!(deployment_rollout_complete(&deployment, 1, Some(2)));
+
+        deployment.metadata.generation = Some(1);
+        deployment.status.as_mut().unwrap().observed_generation = Some(1);
+        assert!(!deployment_rollout_complete(&deployment, 1, Some(2)));
     }
 
     #[test]
@@ -2405,13 +2445,17 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(!statefulset_rollout_complete(&statefulset, 1));
+        assert!(!statefulset_rollout_complete(&statefulset, 1, Some(2)));
 
         statefulset.status.as_mut().unwrap().updated_replicas = Some(1);
-        assert!(!statefulset_rollout_complete(&statefulset, 1));
+        assert!(!statefulset_rollout_complete(&statefulset, 1, Some(2)));
 
         statefulset.status.as_mut().unwrap().current_revision = Some("new".to_string());
-        assert!(statefulset_rollout_complete(&statefulset, 1));
+        assert!(statefulset_rollout_complete(&statefulset, 1, Some(2)));
+
+        statefulset.metadata.generation = Some(1);
+        statefulset.status.as_mut().unwrap().observed_generation = Some(1);
+        assert!(!statefulset_rollout_complete(&statefulset, 1, Some(2)));
     }
 
     #[test]
@@ -2566,6 +2610,7 @@ mod tests {
             container_id: Some("api".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
             env_secret: EnvSecretRotationTracker::default(),
+            update_generation: None,
             _internal_stay_count: None,
         };
         let harness =
