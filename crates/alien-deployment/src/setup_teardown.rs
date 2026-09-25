@@ -1503,42 +1503,110 @@ mod tests {
         seed(&vault, &["API_KEY", "DB_URL", TOKEN, "UNRELATED"]).await;
         let transport = RecordingTransport::default();
 
-        run(&mut state, MockPlatformServiceProvider::new(), &transport)
-            .await
-            .unwrap();
+        let result = run(&mut state, MockPlatformServiceProvider::new(), &transport).await;
 
+        {
+            let checkpoints = transport.checkpoints.lock().unwrap();
+            let vault_gone = checkpoints
+                .iter()
+                .find(|checkpoint| {
+                    checkpoint.stack_state.as_ref().unwrap().resources["secrets"].status
+                        == alien_core::ResourceStatus::Deleted
+                })
+                .expect("a checkpoint records the deleted vault");
+            let inventory = vault_gone.runtime_metadata.as_ref().unwrap();
+            assert!(
+                inventory.last_synced_env_vars_hash.is_none()
+                    && inventory.last_synced_secret_names.is_empty(),
+                "the secrets go before the vault"
+            );
+        }
+        result.unwrap();
         assert_eq!(state.status, DeploymentStatus::Deleted);
         assert_eq!(
             held(&vault, &["API_KEY", "DB_URL", TOKEN, "UNRELATED"]).await,
             vec!["UNRELATED"]
         );
-        let checkpoints = transport.checkpoints.lock().unwrap();
-        let cleared = checkpoints
-            .iter()
-            .find(|checkpoint| {
-                checkpoint
-                    .runtime_metadata
-                    .as_ref()
-                    .unwrap()
-                    .last_synced_env_vars_hash
-                    .is_none()
-            })
-            .expect("a checkpoint records the deleted inventory");
-        assert!(cleared
-            .runtime_metadata
-            .as_ref()
-            .unwrap()
-            .last_synced_secret_names
-            .is_empty());
-        assert_ne!(
-            cleared.stack_state.as_ref().unwrap().resources["secrets"].status,
-            alien_core::ResourceStatus::Deleted,
-            "the secrets go before the vault"
+    }
+
+    /// Fails the write of one name, after the names before it were written.
+    #[derive(Debug)]
+    struct FailingVault {
+        inner: alien_bindings::providers::vault::local::LocalVault,
+        fail_on: &'static str,
+    }
+
+    impl alien_bindings::traits::Binding for FailingVault {}
+
+    #[async_trait::async_trait]
+    impl alien_bindings::traits::Vault for FailingVault {
+        async fn get_secret(&self, name: &str) -> alien_bindings::Result<String> {
+            self.inner.get_secret(name).await
+        }
+        async fn set_secret(&self, name: &str, value: &str) -> alien_bindings::Result<()> {
+            if name == self.fail_on {
+                return Err(AlienError::new(
+                    alien_bindings::ErrorData::CloudPlatformError {
+                        message: format!("refused '{name}'"),
+                        resource_id: None,
+                    },
+                ));
+            }
+            self.inner.set_secret(name, value).await
+        }
+        async fn delete_secret(&self, name: &str) -> alien_bindings::Result<()> {
+            self.inner.delete_secret(name).await
+        }
+        async fn list_secrets(&self) -> alien_bindings::Result<Vec<String>> {
+            self.inner.list_secrets().await
+        }
+    }
+
+    #[tokio::test]
+    async fn setup_teardown_deletes_what_a_failed_first_sync_wrote() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut state, vault) = synced_vault_teardown(dir.path(), &[]);
+        let metadata = state.runtime_metadata.as_mut().unwrap();
+        metadata.last_synced_env_vars_hash = None;
+        let failing = FailingVault {
+            inner: alien_bindings::providers::vault::local::LocalVault::new(
+                "secrets".to_string(),
+                dir.path().to_path_buf(),
+            ),
+            fail_on: "DB_URL",
+        };
+        let desired = BTreeMap::from(
+            ["API_KEY", "DB_URL", "ZONE"].map(|name| (name.to_string(), "value".to_string())),
         );
+
+        assert!(crate::helpers::write_owned_vault_secrets(
+            &failing,
+            &desired,
+            &[],
+            "synced".to_string(),
+            metadata,
+        )
+        .await
+        .is_err());
         assert_eq!(
-            state.stack_state.as_ref().unwrap().resources["secrets"].status,
-            alien_core::ResourceStatus::Deleted
+            metadata.last_synced_secret_names,
+            vec!["API_KEY", "DB_URL", "ZONE"]
         );
+        assert!(metadata.last_synced_env_vars_hash.is_none());
+        assert_eq!(held(&vault, &["API_KEY"]).await, vec!["API_KEY"]);
+
+        run(
+            &mut state,
+            MockPlatformServiceProvider::new(),
+            &RecordingTransport::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state.status, DeploymentStatus::Deleted);
+        assert!(held(&vault, &["API_KEY", "DB_URL", "ZONE"])
+            .await
+            .is_empty());
     }
 
     /// A teardown interrupted after some deletes kept the full inventory; the next one finishes.

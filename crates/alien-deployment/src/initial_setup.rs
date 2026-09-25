@@ -84,17 +84,25 @@ pub async fn handle_initial_setup(
         .unwrap_or(false);
 
     if vault_is_running {
-        let synced = crate::helpers::sync_secrets_to_vault(
+        match crate::helpers::sync_secrets_to_vault(
             &target_stack,
             &stack_state,
             &client_config,
             &config,
             &mut runtime_metadata,
         )
-        .await?;
-
-        if synced {
-            info!("Secrets synced to vault during InitialSetup");
+        .await
+        {
+            Ok(true) => info!("Secrets synced to vault during InitialSetup"),
+            Ok(false) => {}
+            Err(error) => {
+                return Ok(failed_keeping_record(
+                    current_cloned,
+                    stack_state,
+                    runtime_metadata,
+                    error,
+                ))
+            }
         }
     }
 
@@ -308,9 +316,9 @@ pub async fn handle_initial_setup(
 
 const SCAFFOLDING_POLL_DELAY_MS: u64 = 5_000;
 
-/// Setup scaffolding records each object in `runtime_metadata` as it is created, and the runner's
-/// failure path would persist the state from before the step, dropping those records. So once
-/// scaffolding has run, a step fails itself with the record it holds.
+/// Setup scaffolding and secret sync record what they create in `runtime_metadata` as they go, and
+/// the runner's failure path would persist the state from before the step, dropping those records.
+/// So once either has run, a step fails itself with the record it holds.
 fn failed_keeping_record(
     current: DeploymentState,
     stack_state: StackState,
@@ -1928,5 +1936,76 @@ mod tests {
             serde_json::to_value(&retried.stack_state.as_ref().unwrap().resources["live"]).unwrap(),
             before_retry
         );
+    }
+
+    #[tokio::test]
+    async fn a_secret_sync_that_fails_keeps_the_names_it_attempted() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let not_a_dir = dir.path().join("not-a-dir");
+        std::fs::write(&not_a_dir, b"").unwrap();
+        let mut vault = alien_core::StackResourceState::builder()
+            .resource_type(alien_core::Vault::RESOURCE_TYPE.to_string())
+            .status(ResourceStatus::Running)
+            .config(alien_core::Resource::new(
+                alien_core::Vault::new("secrets".to_string()).build(),
+            ))
+            .lifecycle(ResourceLifecycle::Frozen)
+            .build();
+        vault.remote_binding_params = Some(
+            serde_json::to_value(alien_core::bindings::VaultBinding::local(
+                "secrets",
+                not_a_dir.to_string_lossy(),
+            ))
+            .unwrap(),
+        );
+        let mut stack_state = StackState::new(Platform::Test);
+        stack_state.resources.insert("secrets".to_string(), vault);
+        let worker = alien_core::Worker::new("worker".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        let prepared = Stack::new("test".to_string())
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+        let mut config = config();
+        config.environment_variables.variables = vec![alien_core::EnvironmentVariable {
+            name: "API_TOKEN".to_string(),
+            value: "secret".to_string(),
+            var_type: alien_core::EnvironmentVariableType::Secret,
+            target_resources: None,
+        }];
+        let state = DeploymentState {
+            status: DeploymentStatus::InitialSetup,
+            platform: Platform::Test,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(stack_state),
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            runtime_metadata: Some(RuntimeMetadata {
+                prepared_stack: Some(prepared),
+                initial_setup_authority: InitialSetupAuthority::DirectSetup,
+                ..Default::default()
+            }),
+        };
+
+        let failed = handle_initial_setup(
+            state,
+            config,
+            ClientConfig::Test,
+            Arc::new(MockPlatformServiceProvider::new()),
+        )
+        .await
+        .expect("the step fails itself with the record it holds")
+        .state;
+
+        assert_eq!(failed.status, DeploymentStatus::InitialSetupFailed);
+        let metadata = failed.runtime_metadata.unwrap();
+        assert_eq!(metadata.last_synced_secret_names, vec!["API_TOKEN"]);
+        assert!(metadata.last_synced_env_vars_hash.is_none());
     }
 }
