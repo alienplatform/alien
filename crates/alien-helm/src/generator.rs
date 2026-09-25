@@ -196,6 +196,10 @@ pub struct ProductOperatorManifestOptions<'a> {
 pub struct OperatorLogCollectorOptions<'a> {
     pub image: &'a str,
     pub token: &'a str,
+    /// Existing Pod label key to collect. Set together with `pod_label_value`.
+    pub pod_label_key: Option<&'a str>,
+    /// Existing Pod label value to collect. Set together with `pod_label_key`.
+    pub pod_label_value: Option<&'a str>,
 }
 
 /// Generate a Helm chart for `stack`.
@@ -1853,6 +1857,10 @@ fn generate_operator_manifest_inner(
             "app.kubernetes.io/component".to_string(),
             "whitelabeled-log-collector".to_string(),
         );
+        collector_labels.insert(
+            "alien.dev/log-collector-exclude".to_string(),
+            "true".to_string(),
+        );
         docs.push(operator_service_doc(namespace, &operator_name, &labels));
         docs.push(operator_log_collector_service_account_doc(
             namespace,
@@ -1875,6 +1883,8 @@ fn generate_operator_manifest_inner(
             &log_collector_name,
             namespace,
             &collector_labels,
+            log_collector,
+            options.format == OperatorOutputFormat::HelmTemplate,
         ));
         docs.push(operator_log_collector_daemonset_doc(
             namespace,
@@ -2075,6 +2085,19 @@ fn validate_operator_options(options: &OperatorManifestOptions<'_>) -> Result<()
         }
     }
 
+    if let Some(collector) = &options.log_collector {
+        match (collector.pod_label_key, collector.pod_label_value) {
+            (None, None) => {}
+            (Some(key), Some(value))
+                if valid_kubernetes_pod_label_key(key) && valid_kubernetes_label_name(value) => {}
+            _ => {
+                return invalid(
+                    "log collector Pod label key and value must be set together and be valid Kubernetes labels",
+                );
+            }
+        }
+    }
+
     // Raw manifests are applied to one concrete cluster, so the install namespace
     // and per-environment identity must be concrete. Helm defers both to install.
     if options.format == OperatorOutputFormat::RawManifest {
@@ -2095,6 +2118,32 @@ fn validate_operator_options(options: &OperatorManifestOptions<'_>) -> Result<()
     }
 
     Ok(())
+}
+
+fn valid_kubernetes_label_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+}
+
+fn valid_kubernetes_pod_label_key(value: &str) -> bool {
+    match value.split_once('/') {
+        Some((domain, name)) => {
+            alien_core::access_request_crd::is_valid_kubernetes_label_domain(domain)
+                && valid_kubernetes_label_name(name)
+        }
+        None => valid_kubernetes_label_name(value),
+    }
 }
 
 fn validate_product_operator_options(
@@ -2669,6 +2718,9 @@ fn operator_deployment_doc(
     yaml.push_str("    metadata:\n");
     yaml.push_str("      labels:\n");
     append_operator_labels(&mut yaml, labels, 8);
+    if options.log_collector.is_some() {
+        yaml.push_str("        alien.dev/log-collector-exclude: 'true'\n");
+    }
     if options.format == OperatorOutputFormat::HelmTemplate {
         yaml.push_str("        {{- with .Values.remoteOperator.podLabels }}\n");
         yaml.push_str("        {{- toYaml . | nindent 8 }}\n");
@@ -2918,6 +2970,8 @@ fn operator_log_collector_configmap_doc(
     collector_name: &str,
     observed_namespace: &str,
     labels: &BTreeMap<String, String>,
+    collector: &OperatorLogCollectorOptions<'_>,
+    helm_template: bool,
 ) -> String {
     let mut yaml = operator_metadata_doc("v1", "ConfigMap", namespace, collector_name, labels);
     yaml.push_str("data:\n");
@@ -2934,10 +2988,6 @@ fn operator_log_collector_configmap_doc(
     yaml.push_str(&format!(
         "        Path              /var/log/pods/{}_*/*/*.log\n",
         observed_namespace
-    ));
-    yaml.push_str(&format!(
-        "        Exclude_Path      /var/log/pods/{}_{}-*/*/*.log\n",
-        observed_namespace, collector_name
     ));
     yaml.push_str("        Path_Key          filename\n");
     // Built-in multiline parsers auto-detect the runtime log format: `cri` for
@@ -2960,6 +3010,25 @@ fn operator_log_collector_configmap_doc(
     yaml.push_str("        Keep_Log            On\n");
     yaml.push_str("        Labels              On\n");
     yaml.push_str("        Annotations         Off\n\n");
+    yaml.push_str("    [FILTER]\n");
+    yaml.push_str("        Name                grep\n");
+    yaml.push_str("        Match               kube.*\n");
+    yaml.push_str(
+        "        Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$\n\n",
+    );
+    let label_key = collector.pod_label_key.unwrap_or("alien.dev/deployment");
+    let label_value = collector.pod_label_value.unwrap_or(operator_name);
+    let label_pattern = if helm_template && collector.pod_label_value.is_none() {
+        label_value.to_string()
+    } else {
+        label_value.replace('.', "\\.")
+    };
+    yaml.push_str("    [FILTER]\n");
+    yaml.push_str("        Name                grep\n");
+    yaml.push_str("        Match               kube.*\n");
+    yaml.push_str(&format!(
+        "        Regex               $kubernetes['labels']['{label_key}'] ^{label_pattern}$\n\n"
+    ));
     yaml.push_str("    [OUTPUT]\n");
     yaml.push_str("        Name          http\n");
     // Without a Match the router never routes the tailed kube.* records to this
@@ -3470,6 +3539,9 @@ logCollector:
     deploymentLabelKey: "alien.dev/deployment"
     legacyDeploymentLabelKey: ""
     deploymentLabelValue: ""
+    # For an observed workload that lacks the deployment label, set both fields.
+    podLabelKey: ""
+    podLabelValue: ""
 
 heartbeat:
   collection:
@@ -4231,7 +4303,17 @@ fn values_schema_json() -> String {
               "maxLength": 264,
               "pattern": "^$|^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*/deployment$"
             },
-            "deploymentLabelValue": { "type": "string" }
+            "deploymentLabelValue": { "type": "string" },
+            "podLabelKey": {
+              "type": "string",
+              "maxLength": 317,
+              "pattern": "^$|^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+            },
+            "podLabelValue": {
+              "type": "string",
+              "maxLength": 63,
+              "pattern": "^$|^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+            }
           }
         }
       }
@@ -5449,6 +5531,7 @@ spec:
     metadata:
       labels:
         {{- include "deployment.labels" . | nindent 8 }}
+        alien.dev/log-collector-exclude: "true"
         {{- with .Values.runtime.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -5773,7 +5856,6 @@ data:
     [INPUT]
         Name              tail
         Path              /var/log/pods/{{ .Release.Namespace }}_*/*/*.log
-        Exclude_Path      /var/log/pods/{{ .Release.Namespace }}_{{ include "deployment.fullname" . }}-*/*/*.log
         Path_Key          filename
         multiline.parser  docker, cri
         Tag               kube.*
@@ -5792,12 +5874,22 @@ data:
         Labels              On
         Annotations         Off
 
-    {{- if and .Values.logCollector.scope.deploymentLabelKey .Values.logCollector.scope.deploymentLabelValue }}
     [FILTER]
         Name                grep
         Match               kube.*
-        Regex               $kubernetes['labels']['{{ .Values.logCollector.scope.deploymentLabelKey }}'] ^{{ .Values.logCollector.scope.deploymentLabelValue }}$
-    {{- end }}
+        Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$
+
+    {{- $podLabelKey := .Values.logCollector.scope.podLabelKey -}}
+    {{- $podLabelValue := .Values.logCollector.scope.podLabelValue -}}
+    {{- if ne (empty $podLabelKey) (empty $podLabelValue) -}}
+      {{- fail "logCollector.scope.podLabelKey and podLabelValue must be set together" -}}
+    {{- end -}}
+    {{- $logLabelKey := default .Values.logCollector.scope.deploymentLabelKey $podLabelKey -}}
+    {{- $logLabelValue := default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
+    [FILTER]
+        Name                grep
+        Match               kube.*
+        Regex               $kubernetes['labels']['{{ $logLabelKey }}'] ^{{ $logLabelValue | regexQuoteMeta }}$
 
     [OUTPUT]
         Name          http
@@ -5841,6 +5933,7 @@ spec:
       labels:
         {{- include "deployment.labels" . | nindent 8 }}
         app.kubernetes.io/component: whitelabeled-log-collector
+        alien.dev/log-collector-exclude: "true"
     spec:
       serviceAccountName: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
       tolerations:
@@ -6515,6 +6608,8 @@ mod tests {
             log_collector: Some(OperatorLogCollectorOptions {
                 image: "fluent/fluent-bit:3.2",
                 token: "collector-secret",
+                pod_label_key: None,
+                pod_label_value: None,
             }),
             stack_settings: None,
             project_name: "my-saas",
@@ -7367,6 +7462,8 @@ mod tests {
                     log_collector: include_collector.then_some(OperatorLogCollectorOptions {
                         image: "fluent/fluent-bit:3.2",
                         token: "",
+                        pod_label_key: None,
+                        pod_label_value: None,
                     }),
                     stack_settings: None,
                     project_name: "remote-sample-stack",
