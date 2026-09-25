@@ -42,6 +42,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "deleteManager",
     "deleteReleaseChannel",
     "ensureDeploymentGroupByExternalId",
+    "ensureProjectSandboxBaseImageRepository",
     "generateManagerBindingToken",
     "generateManagerToken",
     "getAPIKey",
