@@ -2514,6 +2514,8 @@ fn product_chart_with_scope(image: &str, scope: OperatorScope) -> HelmChart {
                 log_collector: Some(OperatorLogCollectorOptions {
                     image: LOG_COLLECTOR_IMAGE,
                     token: "",
+                    pod_label_key: None,
+                    pod_label_value: None,
                 }),
                 stack_settings: None,
                 project_name: "product-lifecycle",
