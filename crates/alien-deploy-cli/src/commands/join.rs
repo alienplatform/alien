@@ -704,6 +704,7 @@ async fn print_join_plan(request: &JoinRequest) -> Result<()> {
     let paths = install_paths(&request.install_root);
     let manifest = download_manifest(&request.plan.bundle_url).await?;
     reject_different_cluster(&paths, request)?;
+    validate_public_ip_bundle_support(request, &manifest)?;
     let action = classify_join_action(&paths, request, &manifest).await?;
     let json = serde_json::to_string_pretty(&JoinPreview {
         action,
@@ -748,20 +749,7 @@ async fn classify_join_action(
     if !install_state_matches_bundle_context(&state, request, manifest) {
         return Ok(JoinAction::Reinstall);
     }
-    if state.network_interface != request.plan.network_interface
-        || state.wireguard_endpoint != request.plan.wireguard_endpoint
-        || state.public_ip != request.plan.public_ip
-    {
-        return Ok(JoinAction::Reconfigure);
-    }
-    let join_token_path = rooted_manifest_path(
-        &request.install_root,
-        "bundle.config.joinTokenFile",
-        &manifest.config.join_token_file,
-    )?;
-    let expected_config = render_machine_config(request, manifest, &join_token_path)?;
-    if std::fs::read_to_string(&state.config_path).ok().as_deref() != Some(expected_config.as_str())
-    {
+    if join_configuration_changed(&state, request, manifest)? {
         return Ok(JoinAction::Reconfigure);
     }
     if !machine_id_valid || machine_service_status(&state.service_label)? != ServiceStatus::Running
@@ -769,6 +757,27 @@ async fn classify_join_action(
         return Ok(JoinAction::Repair);
     }
     Ok(JoinAction::NoOp)
+}
+
+fn join_configuration_changed(
+    state: &MachineInstallState,
+    request: &JoinRequest,
+    manifest: &MachineBundleManifest,
+) -> Result<bool> {
+    if state.network_interface != request.plan.network_interface
+        || state.wireguard_endpoint != request.plan.wireguard_endpoint
+        || state.public_ip != request.plan.public_ip
+    {
+        return Ok(true);
+    }
+    let join_token_path = rooted_manifest_path(
+        &request.install_root,
+        "bundle.config.joinTokenFile",
+        &manifest.config.join_token_file,
+    )?;
+    let expected_config = render_machine_config(request, manifest, &join_token_path)?;
+    Ok(std::fs::read_to_string(&state.config_path).ok().as_deref()
+        != Some(expected_config.as_str()))
 }
 
 fn rejected_credentials_action(
@@ -799,6 +808,7 @@ async fn install_join(request: JoinRequest) -> Result<()> {
     output::step(1, 6, "Resolving machine bundle");
     let manifest = download_manifest(&request.plan.bundle_url).await?;
     reject_different_cluster(&paths, &request)?;
+    validate_public_ip_bundle_support(&request, &manifest)?;
     let action = classify_join_action(&paths, &request, &manifest).await?;
     if action == JoinAction::NoOp {
         let state = read_install_state(&install_state_path(&paths))?;
@@ -818,6 +828,15 @@ async fn install_join(request: JoinRequest) -> Result<()> {
         let state = read_install_state(&install_state_path(&paths))?;
         reregister_existing_join(&request, &state).await?;
         if action == JoinAction::Reregister {
+            if join_configuration_changed(&state, &request, &manifest)? {
+                return reconcile_existing_join(
+                    &paths,
+                    &request,
+                    &manifest,
+                    JoinAction::Reconfigure,
+                )
+                .await;
+            }
             output::success("Machine credentials refreshed");
             return Ok(());
         }
@@ -1483,6 +1502,7 @@ fn write_machine_config(
         "bundle.config.joinTokenFile",
         &manifest.config.join_token_file,
     )?;
+    let config_text = render_machine_config(request, manifest, &token_path)?;
     let token_parent = token_path.parent().ok_or_else(|| {
         AlienError::new(ErrorData::FileOperationFailed {
             operation: "resolve".to_string(),
@@ -1499,7 +1519,6 @@ fn write_machine_config(
         })?;
     write_secret_file(&token_path, &request.token)?;
 
-    let config_text = render_machine_config(request, manifest, &token_path)?;
     write_validated_machine_config(&config_path, &config_text, bundle_root, &manifest.config)?;
     Ok(config_path)
 }
@@ -1598,19 +1617,7 @@ fn render_machine_config(
     manifest: &MachineBundleManifest,
     token_path: &Path,
 ) -> Result<String> {
-    if request.plan.public_ip.is_some()
-        && !manifest
-            .config
-            .entries
-            .iter()
-            .any(|entry| matches!(&entry.source, MachineBundleConfigSource::PublicIp))
-    {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "bundle.config.entries".to_string(),
-            message: "this machine bundle does not support --public-ip; use a newer bundle"
-                .to_string(),
-        }));
-    }
+    validate_public_ip_bundle_support(request, manifest)?;
     let mut config = toml::Table::new();
     for entry in &manifest.config.entries {
         match resolve_config_entry_value(entry, request, manifest, &token_path)? {
@@ -1639,6 +1646,26 @@ fn render_machine_config(
             message: "serialized machine configuration is not valid TOML".to_string(),
         })?;
     Ok(rendered)
+}
+
+fn validate_public_ip_bundle_support(
+    request: &JoinRequest,
+    manifest: &MachineBundleManifest,
+) -> Result<()> {
+    if request.plan.public_ip.is_some()
+        && !manifest
+            .config
+            .entries
+            .iter()
+            .any(|entry| matches!(&entry.source, MachineBundleConfigSource::PublicIp))
+    {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "bundle.config.entries".to_string(),
+            message: "this machine bundle does not support --public-ip; use a newer bundle"
+                .to_string(),
+        }));
+    }
+    Ok(())
 }
 
 fn resolve_config_entry_value(
@@ -3453,11 +3480,20 @@ mod tests {
             .config
             .entries
             .retain(|entry| !matches!(&entry.source, MachineBundleConfigSource::PublicIp));
+        let paths = install_paths(root.path());
+        let token_path = root.path().join("var/lib/machine-service/join-token");
+        std::fs::create_dir_all(token_path.parent().expect("token directory"))
+            .expect("create token directory");
+        std::fs::write(&token_path, "old-token").expect("existing token");
 
-        let error = render_machine_config(&request, &manifest, &root.path().join("join-token"))
+        let error = write_machine_config(&paths, &request, &manifest, root.path())
             .expect_err("old bundle must reject the override");
         assert_eq!(error.code, "VALIDATION_ERROR");
         assert!(error.message.contains("newer bundle"));
+        assert_eq!(
+            std::fs::read_to_string(token_path).expect("existing token"),
+            "old-token"
+        );
     }
 
     #[test]
