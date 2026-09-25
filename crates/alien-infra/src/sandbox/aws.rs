@@ -4,8 +4,9 @@
 //! the deployment registers: setup installs the build role and egress connector and registers
 //! the bundle, and only at runtime does a customer account exist as a principal Alien's
 //! registry can open to. A release that changes the bundle re-enters that flow against an image
-//! that already exists and rolls a new version onto it. A Frozen sandbox arrives through the
-//! importer with its image already built by stack creation, and this controller only watches it.
+//! that already exists and rolls a new version onto it. A Frozen sandbox a template set up
+//! arrives through the importer with its image already built by stack creation, and this
+//! controller only watches it; one a direct setup registered is built here while setup runs.
 //!
 //! Sessions are MicroVMs started from the image at runtime. `RunMicrovm` has no `tags`, so
 //! image plus version *is* the session identity; `lambda:ListMicrovms` is account-wide and
@@ -25,6 +26,7 @@ use alien_aws_clients::lambda_microvms::{
     MicrovmLifecycleHooks, UpdateMicrovmImageRequest,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
+use alien_core::sandbox_build_role::{sandbox_build_role_arn, sandbox_build_role_name};
 use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::{
     parse_bundle_uri, standard_resource_tags, BundleUri, ResourceOutputs as CoreResourceOutputs,
@@ -91,6 +93,10 @@ pub struct AwsSandboxController {
     /// Bundle the image is built from, handed over by the registration.
     #[serde(default)]
     pub(crate) bundle_uri: Option<String>,
+    /// Bundle setup last granted the build role, for a Frozen sandbox a direct setup registered:
+    /// its policy names one bundle object, so a roll waits until setup has granted the new one.
+    #[serde(default)]
+    pub(crate) granted_bundle_uri: Option<String>,
     /// Connectors every session is started with; empty is `allow`, readable only because
     /// `allow_egress` travels with it.
     #[serde(default)]
@@ -125,12 +131,23 @@ impl AwsSandboxController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
 
+        // Direct setup steps a Frozen sandbox before its build role exists; the registration lands
+        // only once the role is ready, so until then the build waits rather than fails.
+        if self.build_role_arn.is_none()
+            && resource_lifecycle(ctx, &config.id) == Some(alien_core::ResourceLifecycle::Frozen)
+        {
+            return Err(AlienError::new(ErrorData::DependencyNotReady {
+                resource_id: config.id.clone(),
+                dependency_id: sandbox_build_role_name(ctx.resource_prefix, &config.id),
+            }));
+        }
+
         let aws_config = ctx.get_aws_config()?;
         // Derived, not read back from what setup registered. Both are functions of the desired
         // config and the deployment's own names, so a create that restarts after a failure still
         // has them — and the adopt below, which is what makes that restart safe, is reachable.
         let build_role_arn = sandbox_build_role_arn(
-            &aws_config.region,
+            aws_partition(&aws_config.region),
             &aws_config.account_id,
             ctx.resource_prefix,
             &config.id,
@@ -199,12 +216,7 @@ impl AwsSandboxController {
             None => {
                 let created = client
                     .create_microvm_image(
-                        inputs.create_request(
-                            image_name.clone(),
-                            standard_resource_tags(ctx.resource_prefix, &config.id)
-                                .into_iter()
-                                .collect(),
-                        ),
+                        inputs.create_request(image_name.clone(), image_tags(ctx, &config.id)),
                     )
                     .await
                     .context(ErrorData::CloudPlatformError {
@@ -402,7 +414,12 @@ impl AwsSandboxController {
             }
             self.region = Some(aws_config.region.clone());
 
-            self.reap_retired_versions(&client, &config.id).await?;
+            // A Frozen image is setup's: its retired versions are reaped when setup rolls it again,
+            // or removed with the image at teardown. The lifecycle check, not IAM, keeps them from
+            // the runtime identity, which a Live sibling's provision grant can reach.
+            if self.owns_image_deletion(ctx, &config.id) {
+                self.reap_retired_versions(&client, &config.id).await?;
+            }
 
             // Session counts require `lambda:ListMicrovms`, which AWS authorizes against no
             // resource type — no sandbox permission set grants it, so the count travels as
@@ -467,7 +484,7 @@ impl AwsSandboxController {
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
         self.max_lifetime_seconds = config.lifecycle.max_lifetime_seconds;
 
-        // Ownership decides before the bundle is even read. A Frozen sandbox's image belongs to
+        // Ownership decides before the bundle is even read. A template's Frozen image belongs to
         // the setup stack, which owns its bundle too and hands none over — so there is nothing
         // here to compare against, and rebuilding would use credentials never granted it.
         if !self.owns_image_builds(ctx, &config.id) {
@@ -490,6 +507,16 @@ impl AwsSandboxController {
         }
 
         info!(sandbox_id = %config.id, bundle = %desired_bundle, "rolling MicroVM image onto a new bundle");
+
+        // Only setup rolls a Frozen image, and the runtime never reaps one, so setup reaps the
+        // versions earlier rolls retired while it holds the credentials to.
+        if resource_lifecycle(ctx, &config.id) == Some(alien_core::ResourceLifecycle::Frozen) {
+            let client = ctx
+                .service_provider
+                .get_aws_microvms_client(aws_config)
+                .await?;
+            self.reap_retired_versions(&client, &config.id).await?;
+        }
 
         Ok(HandlerAction::Continue {
             state: UpdatingImage,
@@ -519,8 +546,16 @@ impl AwsSandboxController {
 
         let aws_config = ctx.get_aws_config()?;
         let desired_bundle = desired_bundle_uri(&config, &aws_config.region)?;
+        if resource_lifecycle(ctx, &config.id) == Some(alien_core::ResourceLifecycle::Frozen)
+            && self.granted_bundle_uri.as_deref() != Some(desired_bundle.as_str())
+        {
+            return Err(AlienError::new(ErrorData::DependencyNotReady {
+                resource_id: config.id.clone(),
+                dependency_id: sandbox_build_role_name(ctx.resource_prefix, &config.id),
+            }));
+        }
         let build_role_arn = sandbox_build_role_arn(
-            &aws_config.region,
+            aws_partition(&aws_config.region),
             &aws_config.account_id,
             ctx.resource_prefix,
             &config.id,
@@ -778,23 +813,11 @@ impl AwsSandboxController {
         serde_json::from_value(value)
     }
 
-    /// Whether this controller built the image and therefore owns its deletion.
-    ///
-    /// The lifecycle in stack state is the honest source. A state that carries none falls
-    /// back to the registration's build inputs, which only a runtime-provisioned sandbox has
-    /// — and errs toward not deleting, because destroying a setup-owned image is the failure
-    /// that cannot be retried.
+    /// Whether this controller owns the image's deletion: only a Live sandbox's. A Frozen image is
+    /// deleted by whatever set it up, and a state without a lifecycle is never proof of ownership,
+    /// because destroying a setup-owned image is the failure that cannot be retried.
     fn owns_image_deletion(&self, ctx: &ResourceControllerContext<'_>, resource_id: &str) -> bool {
-        match ctx
-            .state
-            .resources
-            .get(resource_id)
-            .and_then(|resource| resource.lifecycle)
-        {
-            Some(alien_core::ResourceLifecycle::Live) => true,
-            Some(alien_core::ResourceLifecycle::Frozen) => false,
-            None => self.build_role_arn.is_some(),
-        }
+        resource_lifecycle(ctx, resource_id) == Some(alien_core::ResourceLifecycle::Live)
     }
 
     fn require_image(&self, resource_id: &str) -> Result<(String, String)> {
@@ -880,10 +903,38 @@ impl AwsSandboxController {
         Ok(())
     }
 
-    /// Whether this controller built the image and may therefore rebuild it. A Frozen sandbox's
-    /// image belongs to the setup stack, which owns its bundle too.
+    /// Whether this controller built the image and may therefore rebuild it: a Live sandbox, or a
+    /// Frozen one a direct setup registered build inputs for, which only setup steps. A template's
+    /// Frozen image belongs to the setup stack, which owns its bundle too.
     fn owns_image_builds(&self, ctx: &ResourceControllerContext<'_>, resource_id: &str) -> bool {
         self.owns_image_deletion(ctx, resource_id)
+            || (self.build_role_arn.is_some()
+                && ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup)
+    }
+}
+
+fn resource_lifecycle(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+) -> Option<alien_core::ResourceLifecycle> {
+    ctx.state
+        .resources
+        .get(resource_id)
+        .and_then(|resource| resource.lifecycle)
+}
+
+/// A Frozen image is setup's, tagged as the templates tag it; a Live one is the runtime's.
+fn image_tags(ctx: &ResourceControllerContext<'_>, resource_id: &str) -> BTreeMap<String, String> {
+    if resource_lifecycle(ctx, resource_id) == Some(alien_core::ResourceLifecycle::Frozen) {
+        alien_core::setup_resource_tags(
+            ctx.resource_prefix,
+            resource_id,
+            Sandbox::RESOURCE_TYPE.as_ref(),
+        )
+    } else {
+        standard_resource_tags(ctx.resource_prefix, resource_id)
+            .into_iter()
+            .collect()
     }
 }
 
@@ -1014,27 +1065,10 @@ fn build_client_token(image_name: &str, bundle_uri: &str) -> String {
         .collect()
 }
 
-/// The build role setup installs for this sandbox, named the way both generators name it.
-///
-/// Derived rather than read back from the registration: `SandboxBuildRoleNameCheck` refuses at
-/// plan time any id that could reach IAM's 64-character ceiling, so neither generator clamps the
-/// name, and `sandbox/provision` already scopes its `iam:PassRole` to this same shape.
-fn sandbox_build_role_arn(
-    region: &str,
-    account_id: &str,
-    resource_prefix: &str,
-    resource_id: &str,
-) -> String {
-    format!(
-        "arn:{}:iam::{account_id}:role/{resource_prefix}-{resource_id}-build",
-        aws_partition(region)
-    )
-}
-
 /// The pre-create probe has no ARN to adopt yet, and the API answers a bare name with a 400
 /// that no absent-resource check can read as absence. The name is account-unique, so the ARN
 /// it will carry is derivable before the image exists.
-fn sandbox_image_arn(region: &str, account_id: &str, image_name: &str) -> String {
+pub(crate) fn sandbox_image_arn(region: &str, account_id: &str, image_name: &str) -> String {
     format!(
         "arn:{}:lambda:{region}:{account_id}:microvm-image:{image_name}",
         aws_partition(region)
@@ -1060,7 +1094,7 @@ fn internet_egress_connector_arn(region: &str) -> String {
 
 /// Partition for ARNs the controller mints itself, where no CloudFormation pseudo-parameter
 /// can resolve it.
-fn aws_partition(region: &str) -> &'static str {
+pub(crate) fn aws_partition(region: &str) -> &'static str {
     if region.starts_with("us-gov-") {
         "aws-us-gov"
     } else if region.starts_with("cn-") {
@@ -1947,11 +1981,20 @@ mod tests {
         );
     }
 
-    /// A Frozen sandbox's image belongs to the setup stack. Rebuilding it at runtime would use
-    /// credentials that were never granted it, so no declaration reaches the build API — the
-    /// expectation-free mock panics on any call.
+    /// A template's Frozen image belongs to the setup stack. Rebuilding it at runtime would use
+    /// credentials that were never granted it, so no declaration reaches the build API — the mock
+    /// answers only the Ready tick's read and panics on any other call.
     #[tokio::test]
     async fn a_frozen_sandbox_never_rebuilds_its_image() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_get_microvm_image().returning(|_| {
+            Ok(MicrovmImage {
+                image_identifier: None,
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("1.0".to_string()),
+                state: Some("CREATED".to_string()),
+            })
+        });
         let controller = AwsSandboxController {
             state: AwsSandboxState::Ready,
             image_identifier: Some(IMAGE_ARN.to_string()),
@@ -1968,7 +2011,7 @@ mod tests {
             .controller(controller)
             .platform(Platform::Aws)
             .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
-            .service_provider(provider(MockLambdaMicrovmsApi::new()))
+            .service_provider(provider(client))
             .build()
             .await
             .expect("executor should build");
@@ -1978,10 +2021,12 @@ mod tests {
                 "s3://alien-bundles-test/sandbox/bundle-v2.zip",
             ))
             .expect("transition to update");
-        executor
-            .step()
-            .await
-            .expect("a Frozen sandbox settles without touching its image");
+        for _ in 0..3 {
+            executor
+                .step()
+                .await
+                .expect("a Frozen sandbox settles without touching its image");
+        }
 
         let controller = executor
             .internal_state::<AwsSandboxController>()
@@ -1992,6 +2037,168 @@ mod tests {
             "the setup-built version keeps serving"
         );
         assert!(controller.pending_version.is_none(), "nothing was rolled");
+    }
+
+    const NEXT_BUNDLE: &str = "s3://alien-bundles-test/sandbox/bundle-v2.zip";
+
+    /// A Frozen sandbox a direct setup built, stepped as the runtime steps it.
+    async fn direct_frozen_executor(
+        controller: AwsSandboxController,
+        client: MockLambdaMicrovmsApi,
+        authority: alien_core::InitialSetupAuthority,
+    ) -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(sandbox())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
+            .initial_setup_authority(authority)
+            .service_provider(provider(client))
+            .build()
+            .await
+            .expect("executor should build")
+    }
+
+    fn direct_frozen_ready_controller() -> AwsSandboxController {
+        AwsSandboxController {
+            build_role_arn: Some(BUILD_ROLE_ARN.to_string()),
+            bundle_uri: Some(BUNDLE_URI.to_string()),
+            granted_bundle_uri: Some(BUNDLE_URI.to_string()),
+            ..ready_controller()
+        }
+    }
+
+    /// Only setup rolls a Frozen image. Outside it, the runtime identity may reach the image
+    /// through a Live sibling's provision grant, so ownership is decided by who is running, not by
+    /// the build role alone. Any build call panics the mock.
+    #[tokio::test]
+    async fn the_runtime_never_rolls_a_frozen_image_setup_built() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_get_microvm_image().returning(|_| {
+            Ok(MicrovmImage {
+                image_identifier: None,
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("1.0".to_string()),
+                state: Some("CREATED".to_string()),
+            })
+        });
+        let mut executor = direct_frozen_executor(
+            direct_frozen_ready_controller(),
+            client,
+            alien_core::InitialSetupAuthority::ImportedHandoff,
+        )
+        .await;
+
+        executor
+            .update(sandbox_with_bundle(NEXT_BUNDLE))
+            .expect("transition to update");
+        for _ in 0..3 {
+            executor
+                .step()
+                .await
+                .expect("the update settles without a build");
+        }
+        let controller = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        assert!(controller.pending_version.is_none(), "nothing was rolled");
+    }
+
+    /// The build role's policy names one bundle object, so setup regrants it before a roll can
+    /// read the new bundle. Until the registration says it has, the roll waits.
+    #[tokio::test]
+    async fn a_setup_roll_waits_until_setup_has_granted_the_new_bundle() {
+        let mut executor = direct_frozen_executor(
+            direct_frozen_ready_controller(),
+            MockLambdaMicrovmsApi::new(),
+            alien_core::InitialSetupAuthority::DirectSetup,
+        )
+        .await;
+
+        executor
+            .update(sandbox_with_bundle(NEXT_BUNDLE))
+            .expect("transition to update");
+        executor.step().await.expect("updating_sandbox");
+        let error = executor
+            .step()
+            .await
+            .expect_err("the roll must wait for the grant");
+        assert_eq!(error.code, "DEPENDENCY_NOT_READY", "{error}");
+    }
+
+    /// Setup's roll is the only time a Frozen image's retired versions can be reaped, so it reaps
+    /// those past their sessions' lifetime and keeps the rest.
+    #[tokio::test]
+    async fn a_setup_roll_reaps_the_versions_earlier_rolls_retired() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_delete_microvm_image_version()
+            .withf(|identifier, version| identifier == IMAGE_ARN && version == "1.0")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let controller = AwsSandboxController {
+            active_version: Some("2.0".to_string()),
+            granted_bundle_uri: Some(NEXT_BUNDLE.to_string()),
+            max_lifetime_seconds: Some(600),
+            retired_versions: vec![
+                RetiredVersion {
+                    version: "1.0".to_string(),
+                    retired_at: chrono::Utc::now() - chrono::Duration::seconds(3600),
+                },
+                RetiredVersion {
+                    version: "1.5".to_string(),
+                    retired_at: chrono::Utc::now(),
+                },
+            ],
+            ..direct_frozen_ready_controller()
+        };
+        let mut executor = direct_frozen_executor(
+            controller,
+            client,
+            alien_core::InitialSetupAuthority::DirectSetup,
+        )
+        .await;
+
+        executor
+            .update(sandbox_with_bundle(NEXT_BUNDLE))
+            .expect("transition to update");
+        executor.step().await.expect("updating_sandbox reaps");
+        let controller = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        assert_eq!(
+            controller
+                .retired_versions
+                .iter()
+                .map(|retired| retired.version.as_str())
+                .collect::<Vec<_>>(),
+            ["1.5"],
+            "a version sessions may still run from stays"
+        );
+    }
+
+    /// A Frozen image is setup's, and carries setup's tags as the templates' does.
+    #[tokio::test]
+    async fn a_frozen_image_is_created_with_setups_tags() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm_image()
+            .returning(|_| Err(not_found()));
+        client
+            .expect_create_microvm_image()
+            .withf(|request| {
+                request.tags.get("managed-by").map(String::as_str) == Some("setup")
+                    && request.tags.get("resource-type").map(String::as_str) == Some("sandbox")
+            })
+            .times(1)
+            .returning(|_| Ok(created_response()));
+        let mut executor = direct_frozen_executor(
+            runtime_seeded_controller(),
+            client,
+            alien_core::InitialSetupAuthority::DirectSetup,
+        )
+        .await;
+        executor.step().await.expect("creating_image");
     }
 
     /// A Frozen sandbox carries no bundle of its own — setup owns the image and never hands
@@ -2105,14 +2312,47 @@ mod tests {
         assert!(controller.retired_versions.is_empty());
     }
 
-    /// State written before a sandbox's image could be rebuilt carried one version field and no
-    /// notion of an active one. It must re-hydrate with that version serving: reading it as "no
-    /// active version" would withdraw the binding of a deployment that never changed.
-    ///
-    /// Only settled `Ready` state carries across. The transient states such a record could also
-    /// hold name a build or a delete that was already in flight, and resuming one from a
-    /// different controller's notion of progress is not something this can honour.
-    #[test]
+    /// A Frozen sandbox's Ready tick runs as the runtime identity and leaves its retired versions to
+    /// setup, whatever IAM a Live sibling grants. Any version delete panics the mock.
+    #[tokio::test]
+    async fn a_frozen_sandbox_keeps_its_retired_versions_at_runtime() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_get_microvm_image().returning(|_| {
+            Ok(MicrovmImage {
+                image_identifier: None,
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("2.0".to_string()),
+                state: Some("CREATED".to_string()),
+            })
+        });
+        let mut controller = ready_controller();
+        controller.bundle_uri = Some(BUNDLE_URI.to_string());
+        controller.max_lifetime_seconds = Some(1800);
+        controller.retired_versions = vec![RetiredVersion {
+            version: "1.0".to_string(),
+            retired_at: chrono::Utc::now() - chrono::Duration::seconds(3600),
+        }];
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
+            .service_provider(provider(client))
+            .build()
+            .await
+            .expect("executor should build");
+        executor.step().await.expect("ready tick past the window");
+
+        assert_eq!(
+            executor
+                .internal_state::<AwsSandboxController>()
+                .expect("typed controller")
+                .retired_versions
+                .len(),
+            1
+        );
+    }
+
     /// The two state names an earlier controller version wrote that this one lacks must still
     /// load, and land where their meaning survives: a not-yet-observed setup image becomes a
     /// Ready that re-reads it; an in-flight delete resumes at the sweep.
@@ -2150,6 +2390,13 @@ mod tests {
         assert!(unknown.is_err(), "no other unknown state is guessed at");
     }
 
+    /// State written before a sandbox's image could be rebuilt carried one version field and no
+    /// notion of an active one. It must re-hydrate with that version serving: reading it as "no
+    /// active version" would withdraw the binding of a deployment that never changed.
+    ///
+    /// Only settled `Ready` state carries across. The transient states such a record could also
+    /// hold name a build or a delete that was already in flight, and resuming one from a
+    /// different controller's notion of progress is not something this can honour.
     #[test]
     fn state_written_before_versions_were_tracked_keeps_its_binding() {
         let controller: AwsSandboxController = serde_json::from_value(serde_json::json!({

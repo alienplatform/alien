@@ -191,7 +191,8 @@
           // `<prefix>-<id>-build` role, so the pattern is not exclusive; what stops that one being
           // passed here is its trust policy, which names codebuild and not lambda — the image
           // builder cannot assume a role that does not trust it. `iam:PassedToService` would say
-          // so directly, but this model expresses no AWS policy conditions.
+          // so directly, and is left out until the service an image build passes the role to is
+          // confirmed.
           "actions": ["iam:PassRole"]
         },
         "binding": {

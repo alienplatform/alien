@@ -404,7 +404,7 @@ resource "aws_security_group" "default_network_workload" {
 
 === agents.tf ===
 resource "aws_iam_role" "agents" {
-  name               = length(format("%s-%s", local.resource_prefix, "agents-build")) <= 64 ? format("%s-%s", local.resource_prefix, "agents-build") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "agents-build"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "agents-build")), 0, 8))
+  name               = "${local.resource_prefix}-agents-build"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id } } }] })
   tags = {
     "managed-by"    = "setup"
@@ -417,7 +417,7 @@ resource "aws_iam_role" "agents" {
 resource "aws_iam_role_policy" "agents" {
   name   = "sandbox-image-build"
   role   = aws_iam_role.agents.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ "Sid" = "ReadSandboxBundle", "Effect" = "Allow", "Action" = ["s3:GetObject"], "Resource" = "arn:${data.aws_partition.current.partition}:s3:::acme-artifacts/agents/bundle.zip" }, { "Effect" = "Allow", "Action" = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], "Resource" = "*" }] })
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ "Sid" = "ReadSandboxBundle", "Effect" = "Allow", "Action" = ["s3:GetObject"], "Resource" = "arn:${data.aws_partition.current.partition}:s3:::acme-artifacts/agents/bundle.zip" }] })
 }
 
 resource "time_sleep" "agents_iam_propagation" {
@@ -441,7 +441,7 @@ resource "aws_cloudcontrolapi_resource" "agents" {
 }
 
 resource "aws_iam_role" "agents_egress" {
-  name               = length(format("%s-%s", local.resource_prefix, "agents-egress")) <= 64 ? format("%s-%s", local.resource_prefix, "agents-egress") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "agents-egress"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "agents-egress")), 0, 8))
+  name               = "${local.resource_prefix}-agents-egress"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" }, Action = "sts:AssumeRole" }] })
   tags = {
     "managed-by"    = "setup"
@@ -454,7 +454,7 @@ resource "aws_iam_role" "agents_egress" {
 resource "aws_iam_role_policy" "agents_egress" {
   name   = "sandbox-egress-connector"
   role   = aws_iam_role.agents_egress.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ "Sid" = "CreateENI", "Effect" = "Allow", "Action" = "ec2:CreateNetworkInterface", "Resource" = ["arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*", "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subnet/*", "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"] }, { "Sid" = "TagENI", "Effect" = "Allow", "Action" = "ec2:CreateTags", "Resource" = "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*", "Condition" = { "StringEquals" = { "ec2:ManagedResourceOperator" = "network-connectors.lambda.amazonaws.com" } } }] })
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ "Sid" = "CreateENI", "Effect" = "Allow", "Action" = "ec2:CreateNetworkInterface", "Resource" = ["arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*", "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subnet/*", "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"] }, { "Sid" = "TagENI", "Effect" = "Allow", "Action" = "ec2:CreateTags", "Resource" = "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*", "Condition" = { "StringEquals" = { "ec2:CreateAction" = "CreateNetworkInterface", "ec2:ManagedResourceOperator" = "network-connectors.lambda.amazonaws.com" } } }] })
 }
 
 resource "aws_security_group" "agents_egress" {

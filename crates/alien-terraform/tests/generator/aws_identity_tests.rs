@@ -6,11 +6,18 @@ use super::helpers::{
     snapshot_module, try_render,
 };
 use alien_core::{
+    sandbox_build_role::{SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME},
+    sandbox_egress::{
+        sandbox_egress_name, sandbox_egress_operator_policy, sandbox_egress_operator_trust_policy,
+        SandboxEgressConnector, LOOPBACK_ONLY_CIDR, SANDBOX_EGRESS_POLICY_NAME,
+    },
     ManagementPermissions, Network, NetworkSettings, PermissionProfile, RemoteStackManagement,
     ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, ServiceAccount,
     Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_terraform::TerraformTarget;
+use hcl::expr::{BinaryOperator, Operation};
+use serde_json::Value;
 
 #[test]
 fn aws_service_account_with_permission_set() {
@@ -477,7 +484,14 @@ fn live_sandbox_stack(name: &str, egress: SandboxEgress) -> (Stack, StackSetting
 /// declares.
 #[test]
 fn a_live_sandbox_module_keeps_the_build_role_and_drops_the_image() {
-    let (stack, settings) = live_sandbox_stack("acme-sandbox-live", SandboxEgress::Deny);
+    let (mut stack, settings) = live_sandbox_stack("acme-sandbox-live", SandboxEgress::Deny);
+    stack
+        .resources
+        .get_mut("agents")
+        .and_then(|entry| entry.config.downcast_mut::<Sandbox>())
+        .expect("the sandbox is in the stack")
+        .private_base_image =
+        Some("123456789012.dkr.ecr.{region}.amazonaws.com/acme/agents-base:1.4".to_string());
     let module = render(&stack, TerraformTarget::Aws, settings);
     assert_terraform_valid(&module, "live sandbox module");
 
@@ -514,50 +528,38 @@ fn a_live_sandbox_module_keeps_the_build_role_and_drops_the_image() {
         "a Live role reads the prefix the moving key stays inside, not the one object"
     );
 
-    // The runtime build's base image comes from a private registry, and the identity itself
-    // needs all three actions — a repository policy on the registry side is not enough.
-    let allow = statements
+    // The declared base is the one repository the build may pull, in the deployment's region
+    // because its host names `{region}`; the token call has no resource type, so it is `*`.
+    let ecr: Vec<_> = statements
         .iter()
-        .find(|statement| statement["Sid"] == "PullSandboxBaseImage")
-        .unwrap_or_else(|| panic!("a Live build role must authenticate to ECR: {statements:#?}"));
-    assert_eq!(allow["Effect"], "Allow");
+        .filter(|statement| statement["Sid"] != "ReadSandboxBundlePrefix")
+        .collect();
     assert_eq!(
-        allow["Action"],
-        serde_json::json!([
-            "ecr:GetAuthorizationToken",
-            "ecr:BatchGetImage",
-            "ecr:GetDownloadUrlForLayer"
-        ]),
-        "exactly the token call and the two pull actions, nothing wider"
-    );
-    assert_eq!(
-        allow["Resource"],
-        serde_json::json!("*"),
-        "GetAuthorizationToken is only accepted against `*`"
-    );
-    // Same-account pulls are authorized by identity policy alone, so without this Deny the
-    // Allow above makes a customer-authored Dockerfile a reader of every private repository
-    // in the customer's own account. The token call must stay out of the deny.
-    let deny = statements
-        .iter()
-        .find(|statement| statement["Effect"] == "Deny")
-        .unwrap_or_else(|| {
-            panic!("same-account pulls must be denied on a Live build role: {statements:#?}")
-        });
-    assert_eq!(deny["Sid"], "DenySameAccountImagePull");
-    assert_eq!(
-        deny["Action"],
-        serde_json::json!(["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]),
-        "the deny covers exactly the two pull actions — never the token call, which the \
-         cross-account login needs"
-    );
-    assert_eq!(
-        deny["Resource"],
-        serde_json::json!(
-            "arn:${data.aws_partition.current.partition}:ecr:*:\
-             ${data.aws_caller_identity.current.account_id}:repository/*"
-        ),
-        "the deny must name this account's repositories through data sources, not literals"
+        ecr,
+        [
+            &serde_json::json!({
+                "Sid": "AuthorizeSandboxBaseImagePull",
+                "Effect": "Allow",
+                "Action": ["ecr:GetAuthorizationToken"],
+                "Resource": "*"
+            }),
+            &serde_json::json!({
+                "Sid": "PullSandboxBaseImage",
+                "Effect": "Allow",
+                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                "Resource": "arn:${data.aws_partition.current.partition}:ecr:\
+                             ${data.aws_region.current.region}:123456789012:repository/acme/agents-base"
+            }),
+            &serde_json::json!({
+                "Sid": "DenySameAccountImagePull",
+                "Effect": "Deny",
+                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                "Resource": "arn:${data.aws_partition.current.partition}:ecr:*:\
+                             ${data.aws_caller_identity.current.account_id}:repository/*"
+            }),
+        ],
+        "the token call on `*`, the pull on exactly the declared repository, and no pull from \
+         this account"
     );
 }
 
@@ -676,46 +678,8 @@ fn aws_sandbox_deny_builds_a_connector_that_permits_nothing_outbound() {
     let module = render(&stack, TerraformTarget::Aws, settings);
     let rendered: String = module.iter().map(|(_, contents)| contents).collect();
 
-    let security_group = rendered
-        .split("resource \"aws_security_group\" \"agents_egress\"")
-        .nth(1)
-        .unwrap_or_else(|| panic!("the sandbox egress security group must render:\n{rendered}"))
-        .split("\nresource \"")
-        .next()
-        .expect("the block runs to the next resource");
-    assert_eq!(
-        security_group.matches("egress {").count(),
-        1,
-        "exactly one egress rule, or the default allow-all survives:\n{security_group}"
-    );
-    assert!(
-        security_group.contains("\"127.0.0.1/32\""),
-        "the only permitted destination must be the one that reaches nothing:\n{security_group}"
-    );
-    assert!(
-        !security_group.contains("0.0.0.0/0"),
-        "a wide egress rule turns deny back into outbound access:\n{security_group}"
-    );
-
-    let connector = rendered
-        .split("resource \"awscc_lambda_network_connector\" \"agents\"")
-        .nth(1)
-        .unwrap_or_else(|| panic!("the egress connector must render:\n{rendered}"))
-        .split("\nresource \"")
-        .next()
-        .expect("the block runs to the next resource");
-    assert!(
-        connector.contains("aws_security_group.agents_egress.id"),
-        "the connector must carry the group that denies:\n{connector}"
-    );
-    assert!(
-        connector.contains("aws_subnet.default_network_private"),
-        "the connector must place its ENIs in the network's private subnets:\n{connector}"
-    );
-    assert!(
-        connector.contains("\"MicroVm\""),
-        "the connector must be usable by MicroVMs:\n{connector}"
-    );
+    // The group's rules and the connector's configuration are compared whole by the parity
+    // tests below.
 
     // Scoped to the image block rather than the whole module: the binding also names the
     // connector, so a module-wide search passes even when the image has lost its own entry.
@@ -777,6 +741,71 @@ fn aws_sandbox_deny_builds_a_connector_that_permits_nothing_outbound() {
     );
 }
 
+/// The connector attaches where `sandbox_egress_network` says, which is the stack's first network,
+/// whichever of the two is created and whichever is brought.
+#[test]
+fn a_deny_sandbox_attaches_to_the_first_of_two_networks() {
+    let created = || NetworkSettings::Create {
+        cidr: None,
+        availability_zones: 2,
+    };
+    let brought = || NetworkSettings::ByoVpcAws {
+        vpc_id: "vpc-0brought".to_string(),
+        public_subnet_ids: vec!["subnet-public-a".to_string()],
+        private_subnet_ids: vec!["subnet-private-a".to_string()],
+        security_group_ids: vec!["sg-0network".to_string()],
+    };
+    for (first, second, expected) in [
+        (created(), brought(), "aws_subnet.first_net_private[*].id"),
+        (brought(), created(), "var.first_net_private_subnet_ids"),
+    ] {
+        let stack = Stack::new("acme-sandbox-two-networks".to_string())
+            .add(
+                Network::new("first-net".to_string())
+                    .settings(first.clone())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Network::new("second-net".to_string())
+                    .settings(second)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                sandbox_fixture_with(SandboxEgress::Deny, LIVE_BUNDLE),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let chosen =
+            alien_core::sandbox_egress::sandbox_egress_network(&stack, &SandboxEgress::Deny)
+                .expect("both networks are attachable")
+                .expect("deny attaches to a network");
+        assert_eq!(chosen.id, "first-net");
+
+        let module = render(
+            &stack,
+            TerraformTarget::Aws,
+            StackSettings {
+                network: Some(first),
+                ..StackSettings::default()
+            },
+        );
+        let sandbox_file: hcl::Body =
+            hcl::parse(module.get("agents.tf").expect("agents.tf renders")).expect("parses");
+        let connector = resource_blocks(&sandbox_file, "awscc_lambda_network_connector")
+            .next()
+            .expect("the connector renders");
+        let configuration = block_attribute(connector, "configuration")
+            .expr()
+            .to_string();
+        assert!(
+            configuration.contains(expected) && !configuration.contains("second_net"),
+            "expected the subnets to be {expected}: {configuration}"
+        );
+    }
+}
+
 /// Without a VPC there are no subnets, and a connector needs between one and sixteen.
 ///
 /// Rendering one anyway would produce either an apply-time failure the reader cannot act on or —
@@ -833,4 +862,800 @@ fn an_open_sandbox_leaves_the_default_network_selectable() {
         !variables.contains("must name subnets"),
         "an open sandbox must not restrict the network mode:\n{variables}"
     );
+}
+
+const PARITY_PARTITION: &str = "aws-us-gov";
+const PARITY_ACCOUNT: &str = "987654321098";
+const PARITY_REGION: &str = "us-gov-east-1";
+
+/// Every combination the build role's grant branches on: lifecycle, whether the bundle URI
+/// carries the region token, and whether a private base image is declared and where its region
+/// comes from.
+const PARITY_CASES: [(ResourceLifecycle, &str, Option<&str>); 6] = [
+    (
+        ResourceLifecycle::Frozen,
+        "s3://acme-artifacts/agents/bundle.zip",
+        None,
+    ),
+    (
+        ResourceLifecycle::Frozen,
+        "s3://acme-artifacts-{region}/agents/bundle.zip",
+        None,
+    ),
+    (
+        ResourceLifecycle::Live,
+        "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
+        None,
+    ),
+    (
+        ResourceLifecycle::Live,
+        "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
+        None,
+    ),
+    (
+        ResourceLifecycle::Live,
+        "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
+        Some("123456789012.dkr.ecr.eu-west-1.amazonaws.com/acme/agents-base:1.4"),
+    ),
+    (
+        ResourceLifecycle::Live,
+        "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
+        Some("123456789012.dkr.ecr.{region}.amazonaws.com/acme/agents-base@sha256:f00d"),
+    ),
+];
+
+/// Other sets grant role writes on `role/<prefix>-*`. One guard refuses them on the management role
+/// by its name, which the prefix cap keeps short of a hash; the other on every role carrying
+/// setup's sandbox tags, which both roles the module creates for a deny sandbox carry.
+#[test]
+fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
+    let (mut stack, settings) = sandbox_stack("acme-guarded", SandboxEgress::Deny);
+    stack.permissions.management =
+        ManagementPermissions::extend(PermissionProfile::new().global([
+            "sandbox/management",
+            "artifact-registry/management",
+            alien_permissions::SANDBOX_SETUP_ROLES_GUARD,
+            alien_permissions::MANAGEMENT_ROLE_GUARD,
+        ]));
+    stack.resources.insert(
+        "management".to_string(),
+        alien_core::ResourceEntry {
+            config: alien_core::Resource::new(
+                RemoteStackManagement::new("management".to_string()).build(),
+            ),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: vec![],
+            remote_access: false,
+            enabled_when: None,
+        },
+    );
+    let module = render(&stack, TerraformTarget::Aws, settings);
+
+    let mut denies = Vec::new();
+    let mut sandbox_role_tags = Vec::new();
+    for (file, contents) in module.iter() {
+        if !file.ends_with(".tf") {
+            continue;
+        }
+        let body: hcl::Body =
+            hcl::parse(contents).unwrap_or_else(|error| panic!("{file} parses: {error}"));
+        for kind in ["aws_iam_policy", "aws_iam_role_policy"] {
+            for block in resource_blocks(&body, kind) {
+                if block.labels()[1].as_str().starts_with("management") {
+                    collect_denies(jsonencoded(block_attribute(block, "policy")), &mut denies);
+                }
+            }
+        }
+        if file == "agents.tf" {
+            for role in resource_blocks(&body, "aws_iam_role") {
+                sandbox_role_tags.push((
+                    role.labels()[1].as_str().to_string(),
+                    block_attribute(role, "tags").expr().to_string(),
+                ));
+            }
+        }
+    }
+    let own_role = serde_json::json!([format!(
+        "arn:aws:iam::{PARITY_ACCOUNT}:role/{PARITY_PREFIX}-management"
+    )]);
+    let (own_role_denies, denies): (Vec<_>, Vec<_>) = denies
+        .into_iter()
+        .partition(|deny| deny["Resource"] == own_role);
+    assert_eq!(
+        own_role_denies.len(),
+        1,
+        "the management role may not rewrite itself"
+    );
+    assert_eq!(denies.len(), 1, "{denies:#?}");
+    // Typed, so the snapshot keeps field order whether or not a workspace build turns on
+    // serde_json's `preserve_order`, which reorders the raw `Value`'s keys.
+    let guards: Vec<alien_permissions::generators::AwsIamStatement> =
+        [&own_role_denies[0], &denies[0]]
+            .into_iter()
+            .map(|deny| serde_json::from_value(deny.clone()).expect("a deny is an IAM statement"))
+            .collect();
+    insta::assert_snapshot!(
+        "aws_management_role_guards",
+        serde_json::to_string_pretty(&guards).expect("serializes")
+    );
+    assert_eq!(denies[0]["Resource"], serde_json::json!(["*"]));
+    assert_eq!(
+        denies[0]["Condition"],
+        serde_json::json!({
+            "StringEquals": {
+                "aws:ResourceTag/managed-by": "setup",
+                "aws:ResourceTag/resource-type": "sandbox"
+            }
+        })
+    );
+    assert!(
+        !denies[0].to_string().contains("iam:PassRole"),
+        "the build role must stay passable"
+    );
+
+    assert_eq!(
+        sandbox_role_tags.len(),
+        2,
+        "the build and egress operator roles: {sandbox_role_tags:?}"
+    );
+    for (role, tags) in sandbox_role_tags {
+        let tags: hcl::Expression = hcl::from_str(&format!("x = {tags}"))
+            .map(|body: hcl::Body| body.attributes().next().unwrap().expr().clone())
+            .unwrap_or_else(|error| panic!("{role} tags parse: {error}"));
+        let hcl::Expression::Object(object) = tags else {
+            panic!("{role} tags must be an object");
+        };
+        for (key, value) in [("managed-by", "setup"), ("resource-type", "sandbox")] {
+            assert!(
+                object.iter().any(|(k, v)| {
+                    let k = match k {
+                        hcl::ObjectKey::Identifier(identifier) => identifier.to_string(),
+                        hcl::ObjectKey::Expression(expression) => {
+                            expression.to_string().trim_matches('"').to_string()
+                        }
+                        other => format!("{other:?}"),
+                    };
+                    k == key && v == &hcl::Expression::String(value.to_string())
+                }),
+                "{role} must carry {key}={value} for the guard to reach it: {object:?}"
+            );
+        }
+    }
+    assert_terraform_valid(
+        &module,
+        "management_role_may_not_rewrite_sandbox_setup_roles",
+    );
+}
+
+/// Every `Effect = "Deny"` statement under `expression`, evaluated.
+fn collect_denies(expression: &hcl::Expression, denies: &mut Vec<serde_json::Value>) {
+    match expression {
+        hcl::Expression::Array(items) => {
+            for item in items {
+                collect_denies(item, denies);
+            }
+        }
+        hcl::Expression::Object(object) => {
+            let field = |name: &str| {
+                object.iter().find_map(|(key, value)| {
+                    let key = match key {
+                        hcl::ObjectKey::Identifier(identifier) => identifier.to_string(),
+                        hcl::ObjectKey::Expression(hcl::Expression::String(text)) => text.clone(),
+                        _ => return None,
+                    };
+                    (key == name).then_some(value)
+                })
+            };
+            if field("Effect") == Some(&hcl::Expression::String("Deny".to_string())) {
+                denies.push(evaluate_policy_expression(expression));
+            } else if let Some(statements) = field("Statement") {
+                collect_denies(statements, denies);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Evaluates the `jsonencode` argument an IAM document is written as, resolving the data sources
+/// the build role reads to the fixed parity values and panicking on anything else: a placeholder
+/// would let both sides compare equal without either being checked.
+fn evaluate_policy_expression(expression: &hcl::Expression) -> serde_json::Value {
+    let resolve_template = |text: &str| {
+        let resolved = text
+            .replace("${local.resource_prefix}", PARITY_PREFIX)
+            .replace("${data.aws_partition.current.partition}", PARITY_PARTITION)
+            .replace("${data.aws_region.current.region}", PARITY_REGION)
+            .replace(
+                "${data.aws_caller_identity.current.account_id}",
+                PARITY_ACCOUNT,
+            );
+        assert!(
+            !resolved.contains("${"),
+            "unresolved interpolation left in {resolved}"
+        );
+        serde_json::Value::String(resolved)
+    };
+    match expression {
+        hcl::Expression::String(text) => resolve_template(text),
+        hcl::Expression::TemplateExpr(template) => match template.as_ref() {
+            hcl::TemplateExpr::QuotedString(text) => resolve_template(text),
+            heredoc => panic!("the parity test cannot evaluate a heredoc: {heredoc:?}"),
+        },
+        hcl::Expression::Array(items) => {
+            serde_json::Value::Array(items.iter().map(evaluate_policy_expression).collect())
+        }
+        hcl::Expression::Object(object) => serde_json::Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    let key = match key {
+                        hcl::ObjectKey::Identifier(identifier) => identifier.to_string(),
+                        hcl::ObjectKey::Expression(hcl::Expression::String(text)) => text.clone(),
+                        other => panic!("the parity test cannot evaluate the key {other:?}"),
+                    };
+                    (key, evaluate_policy_expression(value))
+                })
+                .collect(),
+        ),
+        hcl::Expression::Traversal(_)
+            if expression.to_string() == "data.aws_caller_identity.current.account_id" =>
+        {
+            serde_json::Value::String(PARITY_ACCOUNT.to_string())
+        }
+        other => panic!("the parity test cannot evaluate {other}"),
+    }
+}
+
+/// The argument of the `jsonencode(...)` call an IAM document attribute holds.
+fn jsonencoded(attribute: &hcl::Attribute) -> &hcl::Expression {
+    match attribute.expr() {
+        hcl::Expression::FuncCall(call) if call.name.name.as_str() == "jsonencode" => {
+            assert_eq!(call.args.len(), 1, "jsonencode takes one argument");
+            &call.args[0]
+        }
+        other => panic!("{} must be a jsonencode call: {other}", attribute.key()),
+    }
+}
+
+/// The `resource "<kind>" "<label>"` blocks of a rendered file.
+fn resource_blocks<'a>(
+    body: &'a hcl::Body,
+    kind: &'a str,
+) -> impl Iterator<Item = &'a hcl::Block> + 'a {
+    body.blocks().filter(move |block| {
+        block.identifier() == "resource"
+            && block.labels().first().map(|label| label.as_str()) == Some(kind)
+    })
+}
+
+fn block_attribute<'a>(block: &'a hcl::Block, key: &str) -> &'a hcl::Attribute {
+    block
+        .body()
+        .attributes()
+        .find(|attribute| attribute.key() == key)
+        .unwrap_or_else(|| panic!("{:?} has no {key}", block.labels()))
+}
+
+/// A direct deploy creates the build role through the IAM API from `SandboxBuildRole`, so a
+/// grant changed in the module alone would give the two install paths different roles.
+#[test]
+fn the_emitted_build_role_matches_the_shared_policy_builder() {
+    for (lifecycle, bundle_uri, private_base_image) in PARITY_CASES {
+        let stack = Stack::new("acme-sandbox-parity".to_string())
+            .add(
+                Sandbox {
+                    private_base_image: private_base_image.map(str::to_string),
+                    ..sandbox_fixture_with(SandboxEgress::Allow, bundle_uri)
+                },
+                lifecycle,
+            )
+            .build();
+        let case =
+            format!("{lifecycle:?} sandbox built from {bundle_uri} on base {private_base_image:?}");
+        let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+        let sandbox_file: hcl::Body =
+            hcl::parse(module.get("agents.tf").expect("agents.tf renders"))
+                .unwrap_or_else(|error| panic!("{case}: agents.tf parses: {error}"));
+
+        let policies: Vec<_> = resource_blocks(&sandbox_file, "aws_iam_role_policy")
+            .filter(|block| {
+                block_attribute(block, "name").expr()
+                    == &hcl::Expression::String(SANDBOX_BUILD_POLICY_NAME.to_string())
+            })
+            .collect();
+        assert_eq!(policies.len(), 1, "{case}: one build policy");
+        let role_label = policies[0].labels()[1].as_str();
+        let role = resource_blocks(&sandbox_file, "aws_iam_role")
+            .find(|block| block.labels()[1].as_str() == role_label)
+            .unwrap_or_else(|| panic!("{case}: the build role {role_label} renders"));
+
+        let expected = SandboxBuildRole::builder()
+            .sandbox_id("agents")
+            .partition(PARITY_PARTITION)
+            .account_id(PARITY_ACCOUNT)
+            .region(PARITY_REGION)
+            .bundle_uri(bundle_uri)
+            .runtime_built(lifecycle == ResourceLifecycle::Live)
+            .maybe_private_base_image(private_base_image)
+            .build();
+
+        assert_eq!(
+            evaluate_policy_expression(jsonencoded(block_attribute(policies[0], "policy"))),
+            serde_json::to_value(expected.policy().expect("the builder accepts the fixture"))
+                .expect("serializes"),
+            "{case}: permission policy"
+        );
+        assert_eq!(
+            evaluate_policy_expression(jsonencoded(block_attribute(role, "assume_role_policy"))),
+            serde_json::to_value(expected.trust_policy()).expect("serializes"),
+            "{case}: trust policy"
+        );
+    }
+}
+
+/// A direct deploy creates the operator role through the IAM API from the shared builder, so a
+/// grant changed in the module alone would give the two install paths different roles.
+#[test]
+fn the_emitted_operator_role_matches_the_shared_builder() {
+    let (stack, settings) = sandbox_stack("acme-sandbox-egress-parity", SandboxEgress::Deny);
+    let module = render(&stack, TerraformTarget::Aws, settings);
+    let sandbox_file: hcl::Body = hcl::parse(module.get("agents.tf").expect("agents.tf renders"))
+        .unwrap_or_else(|error| panic!("agents.tf parses: {error}"));
+
+    let policies: Vec<_> = resource_blocks(&sandbox_file, "aws_iam_role_policy")
+        .filter(|block| {
+            block_attribute(block, "name").expr()
+                == &hcl::Expression::String(SANDBOX_EGRESS_POLICY_NAME.to_string())
+        })
+        .collect();
+    assert_eq!(policies.len(), 1, "one operator policy");
+    let role_label = policies[0].labels()[1].as_str();
+    let role = resource_blocks(&sandbox_file, "aws_iam_role")
+        .find(|block| block.labels()[1].as_str() == role_label)
+        .unwrap_or_else(|| panic!("the operator role {role_label} renders"));
+
+    assert_eq!(
+        evaluate_policy_expression(jsonencoded(block_attribute(policies[0], "policy"))),
+        sandbox_egress_operator_policy(PARITY_PARTITION, PARITY_ACCOUNT, PARITY_REGION),
+        "permission policy"
+    );
+    assert_eq!(
+        evaluate_policy_expression(jsonencoded(block_attribute(role, "assume_role_policy"))),
+        sandbox_egress_operator_trust_policy(),
+        "trust policy"
+    );
+    assert_eq!(
+        evaluate_name(block_attribute(role, "name").expr()),
+        Value::from(sandbox_egress_name(PARITY_PREFIX, "agents")),
+        "the direct path finds the role by this name"
+    );
+}
+
+const PARITY_PREFIX: &str = "acme-parity";
+const PARITY_CONNECTOR_ARN: &str =
+    "arn:aws-us-gov:lambda:us-gov-east-1:987654321098:network-connector:nc-0parity";
+
+/// Evaluates a name template with `local.resource_prefix` bound to the parity prefix. Any other
+/// form panics rather than guessing.
+fn evaluate_name(expression: &hcl::Expression) -> serde_json::Value {
+    match expression {
+        hcl::Expression::TemplateExpr(template) => match template.as_ref() {
+            hcl::TemplateExpr::QuotedString(text) => {
+                let resolved = text.replace("${local.resource_prefix}", PARITY_PREFIX);
+                assert!(
+                    !resolved.contains("${"),
+                    "unresolved interpolation left in {resolved}"
+                );
+                serde_json::Value::from(resolved)
+            }
+            heredoc => panic!("the parity test cannot evaluate a heredoc: {heredoc:?}"),
+        },
+        other => panic!("the parity test cannot evaluate the name {other}"),
+    }
+}
+
+/// Evaluates a sandbox's registration `importData`. The build role resolves from its own `name`,
+/// so the direct side's derivation is compared against what the module would create.
+fn evaluate_registration(sandbox_file: &hcl::Body, expression: &hcl::Expression) -> Value {
+    match expression {
+        hcl::Expression::Bool(flag) => Value::from(*flag),
+        hcl::Expression::Number(number) => {
+            Value::from(number.as_u64().expect("a port is unsigned"))
+        }
+        hcl::Expression::String(_) | hcl::Expression::TemplateExpr(_) => {
+            evaluate_policy_expression(expression)
+        }
+        hcl::Expression::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| evaluate_registration(sandbox_file, item))
+                .collect(),
+        ),
+        hcl::Expression::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    let key = match key {
+                        hcl::ObjectKey::Identifier(identifier) => identifier.to_string(),
+                        other => panic!("the parity test cannot evaluate the key {other:?}"),
+                    };
+                    (key, evaluate_registration(sandbox_file, value))
+                })
+                .collect(),
+        ),
+        hcl::Expression::Traversal(_) => {
+            let path = expression.to_string();
+            let parts: Vec<&str> = path.split('.').collect();
+            match parts.as_slice() {
+                ["aws_iam_role", label, "arn"] => {
+                    let role = resource_blocks(sandbox_file, "aws_iam_role")
+                        .find(|block| block.labels()[1].as_str() == *label)
+                        .unwrap_or_else(|| panic!("{path} names a role that must render"));
+                    assert!(
+                        role.body().attributes().all(|a| a.key() != "path"),
+                        "the pass grant is scoped to the root path"
+                    );
+                    let name = evaluate_name(block_attribute(role, "name").expr());
+                    Value::from(format!(
+                        "arn:{PARITY_PARTITION}:iam::{PARITY_ACCOUNT}:role/{}",
+                        name.as_str().expect("a role name")
+                    ))
+                }
+                ["awscc_lambda_network_connector", label, "arn"] => {
+                    resource_blocks(sandbox_file, "awscc_lambda_network_connector")
+                        .find(|block| block.labels()[1].as_str() == *label)
+                        .unwrap_or_else(|| panic!("{path} names a connector that must render"));
+                    Value::from(PARITY_CONNECTOR_ARN)
+                }
+                _ => panic!("the parity test cannot resolve {path}"),
+            }
+        }
+        other => panic!("the parity test cannot evaluate {other}"),
+    }
+}
+
+/// A direct deploy registers a runtime-built sandbox from `AwsSandboxImportData::runtime_built`
+/// instead of this module, so a field changed in the module alone would hand the controller a
+/// different build role, bundle, egress, or preview set depending on how it was installed.
+#[test]
+fn the_emitted_registration_matches_the_direct_seed() {
+    for (egress, bundle_uri) in [
+        (
+            SandboxEgress::Allow,
+            "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
+        ),
+        (SandboxEgress::Deny, LIVE_BUNDLE),
+        (
+            SandboxEgress::Deny,
+            "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
+        ),
+    ] {
+        let (mut stack, settings) = live_sandbox_stack("acme-sandbox-parity", egress.clone());
+        let sandbox = Sandbox {
+            preview_ports: vec![8080, 3000],
+            ..sandbox_fixture_with(egress.clone(), bundle_uri)
+        };
+        stack
+            .resources
+            .get_mut("agents")
+            .expect("the sandbox is in the stack")
+            .config = alien_core::Resource::new(sandbox.clone());
+        let case = format!("{egress:?} sandbox built from {bundle_uri}");
+        let module = render(&stack, TerraformTarget::Aws, settings);
+        let sandbox_file: hcl::Body =
+            hcl::parse(module.get("agents.tf").expect("agents.tf renders"))
+                .unwrap_or_else(|error| panic!("{case}: agents.tf parses: {error}"));
+        let locals: hcl::Body = hcl::parse(module.get("locals.tf").expect("locals.tf renders"))
+            .unwrap_or_else(|error| panic!("{case}: locals.tf parses: {error}"));
+        let registered = locals
+            .blocks()
+            .flat_map(|block| block.body().attributes())
+            .find(|attribute| attribute.key() == "deployment_resources")
+            .unwrap_or_else(|| panic!("{case}: the registration list renders"));
+        let hcl::Expression::Array(entries) = registered.expr() else {
+            panic!("{case}: the registration list is a list");
+        };
+        let import_data = entries
+            .iter()
+            .find_map(|entry| {
+                let hcl::Expression::Object(object) = entry else {
+                    return None;
+                };
+                let field = |name: &str| {
+                    object.iter().find_map(|(key, value)| {
+                        matches!(key, hcl::ObjectKey::Identifier(id) if id.as_str() == name)
+                            .then_some(value)
+                    })
+                };
+                (field("id") == Some(&hcl::Expression::String("agents".to_string())))
+                    .then(|| field("importData").expect("a registration carries importData"))
+            })
+            .unwrap_or_else(|| panic!("{case}: the sandbox registers"));
+
+        let emitted: alien_core::import::data::AwsSandboxImportData =
+            serde_json::from_value(evaluate_registration(&sandbox_file, import_data))
+                .unwrap_or_else(|error| panic!("{case}: the importer must accept it: {error}"));
+        let direct = alien_core::import::data::AwsSandboxImportData::runtime_built(
+            &sandbox,
+            alien_core::sandbox_build_role::sandbox_build_role_arn(
+                PARITY_PARTITION,
+                PARITY_ACCOUNT,
+                PARITY_PREFIX,
+                "agents",
+            ),
+            PARITY_REGION,
+            Some(PARITY_CONNECTOR_ARN),
+        )
+        .unwrap_or_else(|error| panic!("{case}: the direct seed resolves: {error}"));
+
+        assert_eq!(emitted, direct, "{case}");
+    }
+}
+
+/// The ARN of the operator role the parity module creates; its name is pinned against
+/// `sandbox_egress_name` by `the_emitted_operator_role_matches_the_shared_builder`.
+const PARITY_OPERATOR_ARN: &str = "arn:aws-us-gov:iam::987654321098:role/acme-parity-agents-egress";
+const PARITY_SECURITY_GROUP: &str = "sg-0parity";
+const CREATED_SUBNETS: [&str; 2] = ["subnet-created-1", "subnet-created-2"];
+const EXISTING_SUBNETS: [&str; 2] = ["subnet-existing-a", "subnet-existing-b"];
+
+/// A network `egress: deny` accepts, the `network_mode` an installer picks, and the private
+/// subnets the connector must name once both are bound.
+fn egress_parity_cases() -> [(NetworkSettings, &'static str, [&'static str; 2]); 3] {
+    let create = NetworkSettings::Create {
+        cidr: None,
+        availability_zones: 2,
+    };
+    [
+        (create.clone(), "create-new", CREATED_SUBNETS),
+        (create, "use-existing", EXISTING_SUBNETS),
+        (
+            NetworkSettings::ByoVpcAws {
+                vpc_id: "vpc-0parity".to_string(),
+                public_subnet_ids: vec!["subnet-public-a".to_string()],
+                private_subnet_ids: EXISTING_SUBNETS.map(String::from).to_vec(),
+                security_group_ids: vec!["sg-0network".to_string()],
+            },
+            "use-existing",
+            EXISTING_SUBNETS,
+        ),
+    ]
+}
+
+fn deny_module(network: &NetworkSettings) -> alien_terraform::ModuleFiles {
+    let settings = StackSettings {
+        network: Some(network.clone()),
+        ..StackSettings::default()
+    };
+    let stack = Stack::new("acme-sandbox-egress-parity".to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(network.clone())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            sandbox_fixture_with(SandboxEgress::Deny, LIVE_BUNDLE),
+            ResourceLifecycle::Live,
+        )
+        .build();
+    render(&stack, TerraformTarget::Aws, settings)
+}
+
+fn sandbox_body(module: &alien_terraform::ModuleFiles) -> hcl::Body {
+    hcl::parse(module.get("agents.tf").expect("agents.tf renders"))
+        .unwrap_or_else(|error| panic!("agents.tf parses: {error}"))
+}
+
+fn only_resource<'a>(body: &'a hcl::Body, kind: &'a str, label: &str) -> &'a hcl::Block {
+    let blocks: Vec<_> = resource_blocks(body, kind)
+        .filter(|block| block.labels()[1].as_str() == label)
+        .collect();
+    assert_eq!(blocks.len(), 1, "one {kind}.{label}");
+    blocks[0]
+}
+
+/// `awscc` spells the schema's property names in snake_case; Cloud Control takes them as declared.
+fn schema_name(snake: &str) -> String {
+    snake
+        .split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            chars
+                .next()
+                .map(|first| first.to_ascii_uppercase().to_string() + chars.as_str())
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// Evaluates a connector attribute with the module's references bound to what a deployed module
+/// holds for `network_mode`. Any reference outside this table panics, so a new one cannot compare
+/// equal unchecked.
+fn evaluate_connector(expression: &hcl::Expression, network_mode: &str) -> Value {
+    match expression {
+        hcl::Expression::String(text) => Value::from(text.clone()),
+        hcl::Expression::TemplateExpr(_) => evaluate_name(expression),
+        hcl::Expression::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| evaluate_connector(item, network_mode))
+                .collect(),
+        ),
+        hcl::Expression::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    let key = match key {
+                        hcl::ObjectKey::Identifier(identifier) => identifier.to_string(),
+                        hcl::ObjectKey::Expression(hcl::Expression::String(text)) => text.clone(),
+                        other => panic!("the parity test cannot evaluate the key {other:?}"),
+                    };
+                    (schema_name(&key), evaluate_connector(value, network_mode))
+                })
+                .collect(),
+        ),
+        hcl::Expression::Conditional(conditional) => {
+            match evaluate_connector(&conditional.cond_expr, network_mode) {
+                Value::Bool(true) => evaluate_connector(&conditional.true_expr, network_mode),
+                Value::Bool(false) => evaluate_connector(&conditional.false_expr, network_mode),
+                other => panic!("a condition evaluates to a bool, not {other}"),
+            }
+        }
+        hcl::Expression::Operation(operation) => match operation.as_ref() {
+            Operation::Binary(op) if op.operator == BinaryOperator::Eq => Value::from(
+                evaluate_connector(&op.lhs_expr, network_mode)
+                    == evaluate_connector(&op.rhs_expr, network_mode),
+            ),
+            other => panic!("the parity test cannot evaluate {other:?}"),
+        },
+        hcl::Expression::Traversal(_) => match expression.to_string().as_str() {
+            "local.resource_prefix" => Value::from(PARITY_PREFIX),
+            "var.network_mode" => Value::from(network_mode),
+            "aws_iam_role.agents_egress.arn" => Value::from(PARITY_OPERATOR_ARN),
+            "aws_security_group.agents_egress.id" => Value::from(PARITY_SECURITY_GROUP),
+            "aws_subnet.default_network_private[*].id" => serde_json::json!(CREATED_SUBNETS),
+            "var.private_subnet_ids" | "var.default_network_private_subnet_ids" => {
+                serde_json::json!(EXISTING_SUBNETS)
+            }
+            other => panic!("the parity test cannot resolve {other}"),
+        },
+        other => panic!("the parity test cannot evaluate {other}"),
+    }
+}
+
+/// A direct deploy sends this builder's output to Cloud Control as the connector's desired state;
+/// it must be the resource the module creates for the same sandbox.
+#[test]
+fn the_emitted_connector_matches_the_direct_desired_state() {
+    for (network, network_mode, subnets) in egress_parity_cases() {
+        let case = format!("connector on {network:?} with network_mode={network_mode}");
+        let sandbox_file = sandbox_body(&deny_module(&network));
+        let connector = only_resource(&sandbox_file, "awscc_lambda_network_connector", "agents");
+
+        let emitted = serde_json::Value::Object(
+            connector
+                .body()
+                .attributes()
+                .filter(|attribute| attribute.key() != "depends_on")
+                .map(|attribute| {
+                    (
+                        schema_name(attribute.key()),
+                        evaluate_connector(attribute.expr(), network_mode),
+                    )
+                })
+                .collect(),
+        );
+        let subnets = subnets.map(String::from).to_vec();
+        let direct = SandboxEgressConnector::builder()
+            .resource_prefix(PARITY_PREFIX)
+            .sandbox_id("agents")
+            .operator_role_arn(PARITY_OPERATOR_ARN)
+            .private_subnet_ids(&subnets)
+            .security_group_id(PARITY_SECURITY_GROUP)
+            .build()
+            .desired_state();
+
+        assert_eq!(tags_sorted(emitted), tags_sorted(direct), "{case}");
+    }
+}
+
+/// Tags carry `insertionOrder: false` in the connector's schema, so their order is not state.
+fn tags_sorted(mut properties: serde_json::Value) -> serde_json::Value {
+    if let Some(tags) = properties["Tags"].as_array_mut() {
+        tags.sort_by(|a, b| a["Key"].as_str().cmp(&b["Key"].as_str()));
+    }
+    properties
+}
+
+/// The group is what enforces `egress: deny`, and a direct deploy creates it named
+/// `sandbox_egress_name` with exactly one all-protocol rule to [`LOOPBACK_ONLY_CIDR`] and no
+/// ingress. The module keeps `name_prefix`, which a rename to `name` would replace the group over.
+#[test]
+fn the_emitted_deny_group_matches_the_direct_rule_set() {
+    for (network, _, _) in egress_parity_cases() {
+        let case = format!("deny group on {network:?}");
+        let module = deny_module(&network);
+        let sandbox_file = sandbox_body(&module);
+        let group = only_resource(&sandbox_file, "aws_security_group", "agents_egress");
+        let attributes: Vec<&str> = group.body().attributes().map(|a| a.key()).collect();
+
+        assert_eq!(
+            evaluate_name(block_attribute(group, "name_prefix").expr()),
+            serde_json::json!(format!("{}-", sandbox_egress_name(PARITY_PREFIX, "agents"))),
+            "{case}"
+        );
+        assert!(
+            !attributes.contains(&"name"),
+            "{case}: name_prefix alone names the group"
+        );
+        assert_eq!(
+            block_attribute(group, "description").expr(),
+            &hcl::Expression::String("Sandbox agents session egress".to_string()),
+            "{case}"
+        );
+        assert!(
+            !attributes.contains(&"egress") && !attributes.contains(&"ingress"),
+            "{case}: rules are written as blocks, where they can be counted: {attributes:?}"
+        );
+        assert_eq!(
+            group
+                .body()
+                .blocks()
+                .filter(|block| block.identifier() == "ingress")
+                .count(),
+            0,
+            "{case}: no ingress"
+        );
+
+        let egress: Vec<_> = group
+            .body()
+            .blocks()
+            .filter(|block| block.identifier() == "egress")
+            .collect();
+        assert_eq!(
+            egress.len(),
+            1,
+            "{case}: one rule, or the default allow-all survives"
+        );
+        let rule: Vec<(&str, &hcl::Expression)> = egress[0]
+            .body()
+            .attributes()
+            .map(|attribute| (attribute.key(), attribute.expr()))
+            .collect();
+        assert_eq!(
+            rule,
+            vec![
+                ("from_port", &hcl::Expression::Number(0.into())),
+                ("to_port", &hcl::Expression::Number(0.into())),
+                ("protocol", &hcl::Expression::String("-1".to_string())),
+                (
+                    "cidr_blocks",
+                    &hcl::Expression::Array(vec![hcl::Expression::String(
+                        LOOPBACK_ONLY_CIDR.to_string()
+                    )])
+                ),
+            ],
+            "{case}: all protocols to the destination that reaches nothing, and no other target"
+        );
+
+        // A standalone rule resource widens the group as surely as an inline one.
+        for (file, contents) in module.iter().filter(|(file, _)| file.ends_with(".tf")) {
+            let body: hcl::Body = hcl::parse(contents)
+                .unwrap_or_else(|error| panic!("{case}: {file} parses: {error}"));
+            for kind in [
+                "aws_security_group_rule",
+                "aws_vpc_security_group_egress_rule",
+                "aws_vpc_security_group_ingress_rule",
+            ] {
+                for block in resource_blocks(&body, kind) {
+                    let rendered = hcl::to_string(block).expect("the block renders");
+                    assert!(
+                        !rendered.contains("aws_security_group.agents_egress"),
+                        "{case}: {file} adds a rule to the deny group:\n{rendered}"
+                    );
+                }
+            }
+        }
+    }
 }

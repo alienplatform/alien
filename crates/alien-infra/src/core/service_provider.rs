@@ -5,6 +5,7 @@ use alien_aws_clients::{
     apigatewayv2::{ApiGatewayV2Api, ApiGatewayV2Client},
     autoscaling::{AutoScalingApi, AutoScalingClient},
     bedrock::{BedrockApi, BedrockClient},
+    cloudcontrol::{CloudControlApi, CloudControlClient},
     cloudformation::{CloudFormationApi, CloudFormationClient},
     codebuild::{CodeBuildApi, CodeBuildClient},
     dynamodb::{DynamoDbApi, DynamoDbClient},
@@ -110,6 +111,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn LambdaMicrovmsApi>>;
+    async fn get_aws_cloudcontrol_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn CloudControlApi>>;
     async fn get_aws_s3_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn S3Api>>;
     async fn get_aws_ses_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SesApi>>;
     async fn get_aws_cloudformation_client(
@@ -533,6 +538,22 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             })?;
         Ok(Arc::new(LambdaMicrovmsClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
+    async fn get_aws_cloudcontrol_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn CloudControlApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(CloudControlClient::new(
             reqwest::Client::new(),
             credentials,
         )))

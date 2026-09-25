@@ -117,7 +117,11 @@ pub async fn handle_deleting(
     )?;
 
     let result = if stack_status == StackStatus::Deleted {
-        let next_status = if has_remaining_setup_resources(&step_result.next_state) {
+        let next_status = if has_remaining_setup_resources(&step_result.next_state)
+            || crate::setup_teardown::has_setup_scaffolding(
+                current_cloned.runtime_metadata.as_ref(),
+                current_cloned.platform,
+            ) {
             DeploymentStatus::TeardownRequired
         } else {
             DeploymentStatus::Deleted
@@ -169,6 +173,68 @@ pub async fn handle_deleting(
     };
 
     Ok(result)
+}
+
+/// Where a destroy goes when the runtime never started, or `None` when runtime cleanup has work.
+/// It has none while the management identity has no outputs and no Live resource, synced secrets
+/// vault or Frozen runtime-cleanup type came up. Fails closed on a missing lifecycle.
+pub fn destroy_without_runtime(current: &DeploymentState) -> Option<DeploymentStatus> {
+    let destroying = match current.status {
+        DeploymentStatus::DeletePending | DeploymentStatus::Deleting => true,
+        DeploymentStatus::DeleteFailed => current.retry_requested,
+        _ => false,
+    };
+    if !destroying
+        || !matches!(
+            current.platform,
+            alien_core::Platform::Aws | alien_core::Platform::Gcp | alien_core::Platform::Azure
+        )
+    {
+        return None;
+    }
+    let metadata = current.runtime_metadata.as_ref()?;
+    if metadata.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup {
+        return None;
+    }
+    let stack_state = current.stack_state.as_ref()?;
+    for (resource_id, resource) in &stack_state.resources {
+        let lifecycle = resource.lifecycle?;
+        let resource_type = resource.config.resource_type();
+        if resource_type == alien_core::RemoteStackManagement::RESOURCE_TYPE {
+            if resource.outputs.is_some() {
+                return None;
+            }
+            continue;
+        }
+        if matches!(
+            resource.status,
+            ResourceStatus::Pending | ResourceStatus::Deleted
+        ) {
+            continue;
+        }
+        // A sandbox's delete ends in Deleted, never TeardownRequired, so setup teardown runs all of it.
+        let runtime_cleans_up = match lifecycle {
+            ResourceLifecycle::Live => true,
+            ResourceLifecycle::Frozen => {
+                resource_id == "secrets"
+                    || (resource_type != alien_core::Sandbox::RESOURCE_TYPE
+                        && ownership_policy_for_resource_type(resource_type.as_ref())
+                            .has_runtime_cleanup_before_teardown())
+            }
+        };
+        if runtime_cleans_up {
+            return None;
+        }
+    }
+    Some(
+        if has_remaining_setup_resources(stack_state)
+            || crate::setup_teardown::has_setup_scaffolding(Some(metadata), current.platform)
+        {
+            DeploymentStatus::TeardownRequired
+        } else {
+            DeploymentStatus::Deleted
+        },
+    )
 }
 
 /// Handle TeardownRequired status. This is a synced tombstone state: Live
@@ -372,6 +438,149 @@ mod tests {
         assert!(has_remaining_setup_resources(&stack_state));
     }
 
+    async fn runtime_cleanup_of_an_empty_stack(
+        runtime_metadata: Option<alien_core::RuntimeMetadata>,
+    ) -> DeploymentStatus {
+        let current = DeploymentState {
+            status: DeploymentStatus::Deleting,
+            platform: Platform::Aws,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(StackState::with_resource_prefix(
+                Platform::Aws,
+                "test".to_string(),
+            )),
+            error: None,
+            environment_info: None,
+            runtime_metadata,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        handle_deleting(
+            current,
+            config,
+            alien_core::ClientConfig::Aws(Box::new(
+                <alien_aws_clients::AwsClientConfig as alien_aws_clients::AwsClientConfigExt>::mock(
+                ),
+            )),
+            Arc::new(DefaultPlatformServiceProvider::default()),
+        )
+        .await
+        .expect("runtime cleanup of an empty stack completes")
+        .state
+        .status
+    }
+
+    fn scaffolding_record(
+        authority: alien_core::InitialSetupAuthority,
+    ) -> alien_core::RuntimeMetadata {
+        alien_core::RuntimeMetadata {
+            initial_setup_authority: authority,
+            setup_scaffolding: std::collections::BTreeMap::from([(
+                "agents".to_string(),
+                alien_core::SetupScaffolding::AwsSandbox {
+                    build_role_name: "test-agents-build".to_string(),
+                    egress: None,
+                    image_arn: None,
+                },
+            )]),
+            ..Default::default()
+        }
+    }
+
+    /// A direct setup's scaffolding is not a stack resource, so a stack of only Live resources
+    /// would otherwise read as fully deleted and leave the recorded roles and groups behind.
+    #[tokio::test]
+    async fn recorded_setup_scaffolding_keeps_a_cleaned_up_deployment_for_teardown() {
+        assert_eq!(
+            runtime_cleanup_of_an_empty_stack(Some(scaffolding_record(
+                alien_core::InitialSetupAuthority::DirectSetup
+            )))
+            .await,
+            DeploymentStatus::TeardownRequired
+        );
+    }
+
+    fn prepared_with_a_sandbox(
+        authority: alien_core::InitialSetupAuthority,
+    ) -> alien_core::RuntimeMetadata {
+        let sandbox = alien_core::Sandbox::new("agents".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+            })
+            .egress(alien_core::SandboxEgress::Allow)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        alien_core::RuntimeMetadata {
+            initial_setup_authority: authority,
+            prepared_stack: Some(
+                alien_core::Stack::new("acme".to_string())
+                    .add(sandbox, ResourceLifecycle::Live)
+                    .build(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    /// A step whose checkpoint never landed can leave scaffolding the record does not name, so
+    /// setup teardown still runs to look for it.
+    #[tokio::test]
+    async fn a_scaffolded_stack_with_an_empty_record_is_kept_for_teardown() {
+        assert_eq!(
+            runtime_cleanup_of_an_empty_stack(Some(prepared_with_a_sandbox(
+                alien_core::InitialSetupAuthority::DirectSetup
+            )))
+            .await,
+            DeploymentStatus::TeardownRequired
+        );
+        assert_eq!(
+            runtime_cleanup_of_an_empty_stack(Some(prepared_with_a_sandbox(
+                alien_core::InitialSetupAuthority::ImportedHandoff
+            )))
+            .await,
+            DeploymentStatus::Deleted
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cleaned_up_deployment_with_nothing_left_for_setup_is_deleted() {
+        assert_eq!(
+            runtime_cleanup_of_an_empty_stack(None).await,
+            DeploymentStatus::Deleted
+        );
+        assert_eq!(
+            runtime_cleanup_of_an_empty_stack(Some(alien_core::RuntimeMetadata {
+                initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
+                ..Default::default()
+            }))
+            .await,
+            DeploymentStatus::Deleted,
+            "an emptied record has nothing left to tear down"
+        );
+        assert_eq!(
+            runtime_cleanup_of_an_empty_stack(Some(alien_core::RuntimeMetadata {
+                initial_setup_authority: alien_core::InitialSetupAuthority::ImportedHandoff,
+                ..Default::default()
+            }))
+            .await,
+            DeploymentStatus::Deleted,
+            "a template setup's scaffolding is its template's to remove"
+        );
+    }
+
     #[tokio::test]
     async fn local_daemon_runtime_delete_without_local_provider_fails_at_resource() {
         let daemon = Daemon::new("gateway".to_string())
@@ -462,5 +671,238 @@ mod tests {
             error.message.contains("LocalWorkerManager"),
             "expected LocalWorkerManager error, got {error:?}"
         );
+    }
+
+    fn after_setup_failed(
+        authority: alien_core::InitialSetupAuthority,
+        management_outputs: bool,
+        live_status: ResourceStatus,
+    ) -> DeploymentState {
+        let mut stack_state = StackState::with_resource_prefix(Platform::Aws, "test".to_string());
+        let mut management = resource_state(
+            Resource::new(alien_core::RemoteStackManagement {
+                id: "management".to_string(),
+            }),
+            ResourceLifecycle::Frozen,
+            ResourceStatus::ProvisionFailed,
+        );
+        if management_outputs {
+            management.status = ResourceStatus::Running;
+            management.outputs = Some(alien_core::ResourceOutputs::new(
+                alien_core::RemoteStackManagementOutputs {
+                    management_resource_id: "arn:aws:iam::123456789012:role/test-management"
+                        .to_string(),
+                    access_configuration: "arn:aws:iam::123456789012:role/test-management"
+                        .to_string(),
+                    legacy_remote_bindings_access: None,
+                },
+            ));
+        }
+        stack_state
+            .resources
+            .insert("management".to_string(), management);
+        stack_state.resources.insert(
+            "live-storage".to_string(),
+            resource_state(
+                Resource::new(Storage::new("live-storage".to_string()).build()),
+                ResourceLifecycle::Live,
+                live_status,
+            ),
+        );
+        DeploymentState {
+            status: DeploymentStatus::DeletePending,
+            platform: Platform::Aws,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(stack_state),
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(scaffolding_record(authority)),
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    /// Setup failed on the management identity after building the sandbox's role: runtime
+    /// cleanup could never obtain credentials, so destroy must reach setup teardown without it.
+    #[test]
+    fn a_destroy_before_the_management_identity_existed_goes_to_setup_teardown() {
+        let state = after_setup_failed(
+            alien_core::InitialSetupAuthority::DirectSetup,
+            false,
+            ResourceStatus::Pending,
+        );
+        assert_eq!(
+            super::destroy_without_runtime(&state),
+            Some(DeploymentStatus::TeardownRequired)
+        );
+        for (status, retry_requested) in [
+            (DeploymentStatus::Deleting, false),
+            (DeploymentStatus::DeleteFailed, true),
+        ] {
+            let later = DeploymentState {
+                status,
+                retry_requested,
+                ..state.clone()
+            };
+            assert_eq!(
+                super::destroy_without_runtime(&later),
+                Some(DeploymentStatus::TeardownRequired),
+                "{status:?}"
+            );
+        }
+    }
+
+    fn with_resource(
+        mut state: DeploymentState,
+        id: &str,
+        resource: Resource,
+        lifecycle: Option<ResourceLifecycle>,
+        status: ResourceStatus,
+    ) -> DeploymentState {
+        let mut entry = resource_state(resource, ResourceLifecycle::Frozen, status);
+        entry.lifecycle = lifecycle;
+        state
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .insert(id.to_string(), entry);
+        state
+    }
+
+    fn sandbox(id: &str) -> Resource {
+        Resource::new(
+            alien_core::Sandbox::new(id.to_string())
+                .code(alien_core::SandboxCode::Image {
+                    image: "s3://acme/sandbox-bundle/f00d/bundle.zip".to_string(),
+                })
+                .egress(alien_core::SandboxEgress::Allow)
+                .lifecycle(alien_core::SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+        )
+    }
+
+    /// A stack prepared with no management configuration has no management identity to wait for;
+    /// setup failing on another Frozen resource still leaves nothing for runtime cleanup.
+    #[test]
+    fn a_destroy_with_no_management_identity_planned_goes_to_setup_teardown() {
+        let mut state = after_setup_failed(
+            alien_core::InitialSetupAuthority::DirectSetup,
+            false,
+            ResourceStatus::Pending,
+        );
+        state
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .remove("management");
+        let state = with_resource(
+            state,
+            "frozen-sandbox",
+            sandbox("frozen-sandbox"),
+            Some(ResourceLifecycle::Frozen),
+            ResourceStatus::Running,
+        );
+        assert_eq!(
+            super::destroy_without_runtime(&state),
+            Some(DeploymentStatus::TeardownRequired)
+        );
+    }
+
+    /// What runtime cleanup acts on beyond Live resources: synced secrets, and a Frozen type
+    /// with a runtime share of its delete. Once either came up, the destroy keeps its cleanup.
+    #[test]
+    fn setup_created_objects_runtime_cleanup_owns_keep_it() {
+        let direct = alien_core::InitialSetupAuthority::DirectSetup;
+        let base = || after_setup_failed(direct, false, ResourceStatus::Pending);
+        for (case, state) in [
+            (
+                "a secrets vault setup brought up",
+                with_resource(
+                    base(),
+                    "secrets",
+                    Resource::new(alien_core::Vault::new("secrets".to_string()).build()),
+                    Some(ResourceLifecycle::Frozen),
+                    ResourceStatus::Running,
+                ),
+            ),
+            (
+                "a compute cluster setup brought up",
+                with_resource(
+                    base(),
+                    "compute",
+                    Resource::new(ComputeCluster::new("compute".to_string()).build()),
+                    Some(ResourceLifecycle::Frozen),
+                    ResourceStatus::Running,
+                ),
+            ),
+            (
+                "a resource with no recorded lifecycle",
+                with_resource(
+                    base(),
+                    "unknown",
+                    Resource::new(Storage::new("unknown".to_string()).build()),
+                    None,
+                    ResourceStatus::Pending,
+                ),
+            ),
+        ] {
+            assert_eq!(super::destroy_without_runtime(&state), None, "{case}");
+        }
+    }
+
+    #[test]
+    fn a_runtime_that_started_keeps_its_runtime_cleanup() {
+        let direct = alien_core::InitialSetupAuthority::DirectSetup;
+        for (case, state) in [
+            (
+                "management identity has outputs",
+                after_setup_failed(direct, true, ResourceStatus::Pending),
+            ),
+            (
+                "a Live resource was provisioned",
+                after_setup_failed(direct, false, ResourceStatus::Running),
+            ),
+            (
+                "a Live resource failed mid-provision",
+                after_setup_failed(direct, false, ResourceStatus::ProvisionFailed),
+            ),
+            (
+                "setup was imported from a template",
+                after_setup_failed(
+                    alien_core::InitialSetupAuthority::ImportedHandoff,
+                    false,
+                    ResourceStatus::Pending,
+                ),
+            ),
+            (
+                "the platform has no management identity",
+                DeploymentState {
+                    platform: Platform::Kubernetes,
+                    ..after_setup_failed(direct, false, ResourceStatus::Pending)
+                },
+            ),
+            (
+                "a failed destroy nobody asked to retry",
+                DeploymentState {
+                    status: DeploymentStatus::DeleteFailed,
+                    ..after_setup_failed(direct, false, ResourceStatus::Pending)
+                },
+            ),
+            (
+                "the deployment is not being destroyed",
+                DeploymentState {
+                    status: DeploymentStatus::InitialSetupFailed,
+                    ..after_setup_failed(direct, false, ResourceStatus::Pending)
+                },
+            ),
+        ] {
+            assert_eq!(super::destroy_without_runtime(&state), None, "{case}");
+        }
     }
 }

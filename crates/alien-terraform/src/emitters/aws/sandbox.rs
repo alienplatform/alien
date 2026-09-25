@@ -8,19 +8,22 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        aws_terraform_permission_context, default_network, downcast,
-        emit_iam_role_policy_for_target_with_label, iam_policy_name_sanitize, iam_role_block,
-        iam_role_name_template, iam_role_policy_block, jsonencode, nested_block,
+        aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
+        iam_policy_name_sanitize, iam_role_block, iam_role_policy_block, jsonencode, nested_block,
         private_subnet_ids_expr, required_label, resource_prefix_template,
         service_assume_role_policy, tags, vpc_id_expr,
     },
     expr,
 };
+use alien_core::sandbox_build_role::sandbox_build_role_name;
+use alien_core::sandbox_egress::{
+    sandbox_egress_name, sandbox_egress_network, SandboxEgressVpc, LOOPBACK_ONLY_CIDR,
+};
 use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::{
-    import::EmitContext, permissions::PermissionSetReference, BundleUri, ErrorData,
-    NetworkSettings, RemoteBindings, ResourceLifecycle, Result, Sandbox, SandboxCode,
-    SandboxEgress, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
+    import::EmitContext, permissions::PermissionSetReference, BundleUri, ErrorData, RemoteBindings,
+    ResourceLifecycle, Result, Sandbox, SandboxCode, SandboxEgress, ALIEN_MANAGED_BY_TAG_KEY,
+    ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::AlienError;
 use alien_permissions::BindingTarget;
@@ -62,9 +65,6 @@ const ARCHITECTURE: &str = "ARM_64";
 /// Port the in-sandbox agent serves, both its own protocol and the lifecycle hooks.
 const AGENT_PORT: i64 = AWS_MICROVM.port as i64;
 
-/// The one destination the session's security group permits, which reaches nothing.
-pub const LOOPBACK_ONLY_CIDR: &str = "127.0.0.1/32";
-
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsSandboxEmitter;
 
@@ -73,23 +73,23 @@ impl TfEmitter for AwsSandboxEmitter {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
         let artifact_uri = artifact_uri(sandbox)?;
-        refuse_unsupported_egress(sandbox)?;
         // An open sandbox routes nothing through a VPC: no subnets, and none of the connector
         // apparatus below exists for it.
-        let open = matches!(sandbox.egress, SandboxEgress::Allow);
-        let subnet_ids = if open {
-            None
-        } else {
-            Some(egress_subnet_ids(ctx, sandbox)?)
-        };
+        let subnet_ids = egress_subnet_ids(ctx, sandbox)?;
+        let open = subnet_ids.is_none();
         // The size whose peak stays inside the declared ceilings. A MicroVM bursts to four times
         // its baseline with no way to opt out, so the baseline is a quarter of what was declared.
         let tier = sandbox.microvm_tier()?;
         let egress_label = format!("{label}_egress");
 
+        // Unclamped: `SandboxBuildRoleNameCheck` refuses any id that could reach IAM's ceiling,
+        // and a hashed tail would drop the `-build` the pass grant is scoped to.
         let build_role = iam_role_block(
             label,
-            iam_role_name_template(&format!("{}-build", sandbox.id())),
+            expr::template(sandbox_build_role_name(
+                "${local.resource_prefix}",
+                sandbox.id(),
+            )),
             build_role_trust_policy(),
             tags(ctx, "sandbox"),
         );
@@ -99,55 +99,59 @@ impl TfEmitter for AwsSandboxEmitter {
         // rejects with MalformedPolicyDocument. `terraform validate` cannot see it — the HCL
         // and the string are both well-formed — so it only shows up at apply.
         let runtime_built = provisioned_at_runtime(ctx);
-        let mut build_statements = vec![
-            Expression::from_iter([
+        let mut build_statements = vec![Expression::from_iter([
+            (
+                "Sid",
+                Expression::String(
+                    if runtime_built {
+                        "ReadSandboxBundlePrefix"
+                    } else {
+                        "ReadSandboxBundle"
+                    }
+                    .to_string(),
+                ),
+            ),
+            ("Effect", Expression::String("Allow".to_string())),
+            (
+                "Action",
+                Expression::from(vec![Expression::String("s3:GetObject".to_string())]),
+            ),
+            (
+                "Resource",
+                // A template for the same reason the operator policy's ARNs are: a plain
+                // string literal has its `${` escaped, so the partition would reach IAM as
+                // literal text and the grant would match nothing.
+                expr::template(if runtime_built {
+                    artifact_prefix_arn(sandbox, artifact_uri)?
+                } else {
+                    artifact_object_arn(artifact_uri)
+                }),
+            ),
+        ])];
+        // With no `privateBaseImage` the base is public and pulled anonymously: no ECR grant.
+        if let Some(image) = sandbox.private_base_image.as_deref() {
+            let repository = alien_core::parse_ecr_image_repository(image).map_err(|reason| {
+                AlienError::new(ErrorData::OperationNotSupported {
+                    operation: format!("terraform emit sandbox '{}'", sandbox.id()),
+                    reason,
+                })
+            })?;
+            // ECR also requires these in the caller's own policy; the repository policy alone does not
+            // authorize the pull.
+            build_statements.push(Expression::from_iter([
                 (
                     "Sid",
-                    Expression::String(
-                        if runtime_built {
-                            "ReadSandboxBundlePrefix"
-                        } else {
-                            "ReadSandboxBundle"
-                        }
-                        .to_string(),
-                    ),
+                    Expression::String("AuthorizeSandboxBaseImagePull".to_string()),
                 ),
                 ("Effect", Expression::String("Allow".to_string())),
                 (
                     "Action",
-                    Expression::from(vec![Expression::String("s3:GetObject".to_string())]),
-                ),
-                (
-                    "Resource",
-                    // A template for the same reason the operator policy's ARNs are: a plain
-                    // string literal has its `${` escaped, so the partition would reach IAM as
-                    // literal text and the grant would match nothing.
-                    expr::template(if runtime_built {
-                        artifact_prefix_arn(sandbox, artifact_uri)?
-                    } else {
-                        artifact_object_arn(artifact_uri)
-                    }),
-                ),
-            ]),
-            Expression::from_iter([
-                ("Effect", Expression::String("Allow".to_string())),
-                (
-                    "Action",
-                    Expression::from(vec![
-                        // CreateLogGroup as well as the writes: the build creates no group of
-                        // its own, so without it the first build's logs go nowhere. The house
-                        // build role grants all three.
-                        Expression::String("logs:CreateLogGroup".to_string()),
-                        Expression::String("logs:CreateLogStream".to_string()),
-                        Expression::String("logs:PutLogEvents".to_string()),
-                    ]),
+                    Expression::from(vec![Expression::String(
+                        "ecr:GetAuthorizationToken".to_string(),
+                    )]),
                 ),
                 ("Resource", Expression::String("*".to_string())),
-            ]),
-        ];
-        // A setup-baked image builds from a public base and pulls it anonymously, so the Frozen
-        // role carries no ECR grant; a runtime-built image's base is a private registry image.
-        if runtime_built {
+            ]));
             build_statements.push(Expression::from_iter([
                 (
                     "Sid",
@@ -156,22 +160,20 @@ impl TfEmitter for AwsSandboxEmitter {
                 ("Effect", Expression::String("Allow".to_string())),
                 (
                     "Action",
-                    // The token call plus the two pull actions a live build was observed to be
-                    // denied without — the registry's repository policy alone did not authorize it.
                     Expression::from(vec![
-                        Expression::String("ecr:GetAuthorizationToken".to_string()),
                         Expression::String("ecr:BatchGetImage".to_string()),
                         Expression::String("ecr:GetDownloadUrlForLayer".to_string()),
                     ]),
                 ),
-                // AWS accepts GetAuthorizationToken only against `*`, and the registry hosting
-                // the base image is unknown when the module is rendered, so the pull pair is `*`
-                // too; the Deny below stops it reading this account's own private repositories.
-                ("Resource", Expression::String("*".to_string())),
+                (
+                    "Resource",
+                    expr::template(repository.arn(
+                        "${data.aws_partition.current.partition}",
+                        "${data.aws_region.current.region}",
+                    )),
+                ),
             ]));
-            // Same-account pulls are authorized by identity policy alone — no repository policy
-            // participates — and this role runs a customer-authored Dockerfile. The base image
-            // is cross-account by construction, so a same-account pull is never legitimate.
+            // See `SandboxBuildRole::policy` for why a same-account base is refused.
             build_statements.push(Expression::from_iter([
                 (
                     "Sid",
@@ -199,9 +201,14 @@ impl TfEmitter for AwsSandboxEmitter {
         // Lambda assumes this to manage the connector's ENIs in the customer's VPC. The API
         // documents the permissions it must hold; the field being optional is not a promise
         // that AWS provisions an equivalent role on its own.
+        // Unclamped for the same reason as the build role: the direct path creates it under this
+        // exact name and the length check budgets for it.
         let operator_role = iam_role_block(
             &egress_label,
-            iam_role_name_template(&format!("{}-egress", sandbox.id())),
+            expr::template(sandbox_egress_name(
+                "${local.resource_prefix}",
+                sandbox.id(),
+            )),
             service_assume_role_policy(&["lambda.amazonaws.com"]),
             tags(ctx, "sandbox"),
         );
@@ -265,7 +272,10 @@ impl TfEmitter for AwsSandboxEmitter {
             [
                 attr(
                     "name_prefix",
-                    resource_prefix_template(&format!("{}-egress-", sandbox.id())),
+                    expr::template(format!(
+                        "{}-",
+                        sandbox_egress_name("${local.resource_prefix}", sandbox.id())
+                    )),
                 ),
                 attr(
                     "description",
@@ -755,12 +765,9 @@ fn code_artifact_uri(uri: BundleUri<'_>) -> Expression {
     }
 }
 
-/// What Lambda may do while managing the connector's network interfaces.
-///
-/// Reproduces the role AWS documents as the prerequisite for creating a network connector, and
-/// the contents of its `AWSLambdaNetworkConnectorOperatorPolicy`. Written out rather than
-/// attached so the grant is visible in the module the customer reads and does not change under
-/// them when AWS revises the managed policy.
+/// What Lambda may do while managing the connector's network interfaces: the resolved form is
+/// `sandbox_egress_operator_policy`. Written out rather than attaching AWS's managed policy so the
+/// grant is visible in the module the customer reads and does not change under them.
 fn operator_statements() -> Vec<Expression> {
     vec![
         Expression::from_iter([
@@ -800,54 +807,40 @@ fn operator_statements() -> Vec<Expression> {
                 "Condition",
                 Expression::from_iter([(
                     "StringEquals",
-                    Expression::from_iter([(
-                        "ec2:ManagedResourceOperator",
-                        Expression::String("network-connectors.lambda.amazonaws.com".to_string()),
-                    )]),
+                    Expression::from_iter([
+                        (
+                            "ec2:CreateAction",
+                            Expression::String("CreateNetworkInterface".to_string()),
+                        ),
+                        (
+                            "ec2:ManagedResourceOperator",
+                            Expression::String(
+                                "network-connectors.lambda.amazonaws.com".to_string(),
+                            ),
+                        ),
+                    ]),
                 )]),
             ),
         ]),
     ]
 }
 
-/// The private subnets the connector places its ENIs in.
+/// The private subnets the connector places its ENIs in, or `None` for an open sandbox.
 ///
-/// A connector must name between one and sixteen subnets, and only a created or bring-your-own
-/// VPC yields any. Refusing the other network modes here is what keeps the deny path honest: the
-/// alternative is a connector expression that resolves to an empty list, and a session with no
-/// connector reaches the public internet.
-fn egress_subnet_ids(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Expression> {
-    let refuse = |reason: String| {
-        Err(AlienError::new(ErrorData::OperationNotSupported {
+/// Which network, and which stacks are refused, is [`sandbox_egress_network`]'s decision; a
+/// created or bring-your-own VPC both render through `private_subnet_ids_expr`.
+fn egress_subnet_ids(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Option<Expression>> {
+    let network = sandbox_egress_network(ctx.stack, &sandbox.egress).map_err(|refusal| {
+        AlienError::new(ErrorData::OperationNotSupported {
             operation: format!("terraform emit sandbox '{}'", sandbox.id()),
-            reason,
-        }))
-    };
-
-    let Some((_label, network)) = default_network(ctx) else {
-        return refuse(
-            "an AWS sandbox routes session traffic through a VPC egress connector, and this \
-             stack declares no network for it to attach to"
-                .to_string(),
-        );
-    };
-
-    match &network.settings {
-        NetworkSettings::Create { .. } | NetworkSettings::ByoVpcAws { .. } => {
-            Ok(private_subnet_ids_expr(ctx))
+            reason: refusal.to_string(),
+        })
+    })?;
+    Ok(network.map(|network| match network.vpc {
+        SandboxEgressVpc::Created | SandboxEgressVpc::BroughtByCustomer => {
+            private_subnet_ids_expr(ctx)
         }
-        NetworkSettings::UseDefault => refuse(
-            "an AWS sandbox routes session traffic through a VPC egress connector, which needs \
-             private subnets; the account's default VPC has only public ones. Set the network \
-             to create or byo-vpc-aws"
-                .to_string(),
-        ),
-        _ => refuse(
-            "an AWS sandbox routes session traffic through a VPC egress connector, and this \
-             stack's network settings are for another cloud"
-                .to_string(),
-        ),
-    }
+    }))
 }
 
 /// The connectors a session starts with, which an open sandbox has none of.
@@ -862,33 +855,6 @@ fn egress_connector_arns(sandbox: &Sandbox, label: &str) -> Expression {
             label,
             "arn",
         ])]),
-    }
-}
-
-/// Refuses an egress mode the emitted artifact cannot deliver.
-///
-/// `deny` is built from a connector whose security group carries no egress rule. Outbound
-/// allowances are not: AWS has no domain-filtering primitive at the connector, so `allowDomains`
-/// has nothing to render into. `allow` is accepted and emits no connector at all — a MicroVM
-/// without one reaches the internet.
-/// Emitting a template that silently ignores a declared egress policy is worse than refusing it —
-/// the customer would believe outbound access was configured.
-fn refuse_unsupported_egress(sandbox: &Sandbox) -> Result<()> {
-    let refuse = |mode: &str| {
-        Err(AlienError::new(ErrorData::OperationNotSupported {
-            operation: format!("terraform emit sandbox '{}'", sandbox.id()),
-            reason: format!(
-                "AWS sandboxes reach the network through a VPC egress connector, which this \
-                 module builds to deny outbound traffic; egress '{mode}' has no connector \
-                 configuration to render into. Declare egress: deny for a connector that reaches \
-                 nothing, or egress: allow for no connector at all"
-            ),
-        }))
-    };
-
-    match &sandbox.egress {
-        SandboxEgress::Deny | SandboxEgress::Allow => Ok(()),
-        SandboxEgress::AllowDomains { .. } => refuse("allowDomains"),
     }
 }
 
