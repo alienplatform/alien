@@ -2,13 +2,13 @@ use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{Container, Platform, Stack};
 
-/// Prevents platform-specific Secret mounts from being silently ignored.
-pub struct KubernetesSecretMountsCheck;
+/// Prevents Kubernetes-only workload settings from being silently ignored.
+pub struct KubernetesWorkloadSettingsCheck;
 
 #[async_trait::async_trait]
-impl CompileTimeCheck for KubernetesSecretMountsCheck {
+impl CompileTimeCheck for KubernetesWorkloadSettingsCheck {
     fn description(&self) -> &'static str {
-        "Existing Kubernetes Secret mounts require the Kubernetes platform"
+        "Kubernetes workload settings require the Kubernetes platform"
     }
 
     fn should_run(&self, stack: &Stack, platform: Platform) -> bool {
@@ -17,7 +17,12 @@ impl CompileTimeCheck for KubernetesSecretMountsCheck {
                 entry
                     .config
                     .downcast_ref::<Container>()
-                    .is_some_and(|container| !container.kubernetes_secret_mounts.is_empty())
+                    .is_some_and(|container| {
+                        !container.kubernetes_secret_mounts.is_empty()
+                            || container.kubernetes_liveness_probe.is_some()
+                            || container.kubernetes_readiness_probe.is_some()
+                            || container.kubernetes_restricted_security.is_some()
+                    })
             })
     }
 
@@ -28,10 +33,15 @@ impl CompileTimeCheck for KubernetesSecretMountsCheck {
                 entry
                     .config
                     .downcast_ref::<Container>()
-                    .filter(|container| !container.kubernetes_secret_mounts.is_empty())
+                    .filter(|container| {
+                        !container.kubernetes_secret_mounts.is_empty()
+                            || container.kubernetes_liveness_probe.is_some()
+                            || container.kubernetes_readiness_probe.is_some()
+                            || container.kubernetes_restricted_security.is_some()
+                    })
                     .map(|_| {
                         format!(
-                            "Container '{id}' mounts an existing Kubernetes Secret, but the target platform is {platform}"
+                            "Container '{id}' configures Kubernetes workload settings, but the target platform is {platform}"
                         )
                     })
             })
@@ -93,15 +103,15 @@ mod tests {
             inputs: vec![],
         };
 
-        assert!(!KubernetesSecretMountsCheck.should_run(&stack, Platform::Kubernetes));
+        assert!(!KubernetesWorkloadSettingsCheck.should_run(&stack, Platform::Kubernetes));
         for platform in [
             Platform::Aws,
             Platform::Gcp,
             Platform::Azure,
             Platform::Local,
         ] {
-            assert!(KubernetesSecretMountsCheck.should_run(&stack, platform));
-            let result = KubernetesSecretMountsCheck
+            assert!(KubernetesWorkloadSettingsCheck.should_run(&stack, platform));
+            let result = KubernetesWorkloadSettingsCheck
                 .check(&stack, platform)
                 .await
                 .expect("preflight succeeds");

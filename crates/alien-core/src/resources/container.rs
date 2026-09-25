@@ -90,6 +90,31 @@ pub struct KubernetesSecretMount {
     pub mount_path: String,
 }
 
+/// HTTP probe used by Kubernetes for workload liveness or readiness.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesHttpProbe {
+    /// Absolute HTTP path served by the container.
+    pub path: String,
+    /// Container port to check.
+    pub port: u16,
+}
+
+/// Runs a Kubernetes workload with a non-root identity, read-only filesystem,
+/// RuntimeDefault seccomp profile, no privilege escalation, and no Linux capabilities.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesRestrictedSecurity {
+    /// Numeric UID for the container process.
+    pub run_as_user: i64,
+    /// Numeric GID for the container process.
+    pub run_as_group: i64,
+    /// Supplemental filesystem GID for mounted volumes.
+    pub fs_group: i64,
+}
+
 /// Autoscaling configuration for stateless containers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -227,6 +252,18 @@ pub struct Container {
     #[builder(field)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub public_endpoints: Vec<PublicEndpoint>,
+
+    /// Kubernetes liveness probe. Restarts an unhealthy container.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kubernetes_liveness_probe: Option<KubernetesHttpProbe>,
+
+    /// Kubernetes readiness probe. Removes an unready pod from Service endpoints.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kubernetes_readiness_probe: Option<KubernetesHttpProbe>,
+
+    /// Restricted Kubernetes pod and container security settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kubernetes_restricted_security: Option<KubernetesRestrictedSecurity>,
 
     /// ComputeCluster resource ID that this container runs on.
     /// If None, will be auto-assigned by ComputeClusterMutation at deployment time.
