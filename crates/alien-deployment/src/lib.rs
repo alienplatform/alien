@@ -5,6 +5,7 @@
 //! deployment steps.
 
 mod deleting;
+pub use deleting::destroy_without_runtime;
 mod error;
 mod helpers;
 mod initial_setup;

@@ -50,6 +50,7 @@ pub mod apigatewayv2;
 pub mod autoscaling;
 pub mod aws_request_utils;
 pub mod bedrock;
+pub mod cloudcontrol;
 pub mod cloudformation;
 pub mod cloudwatch;
 pub mod codebuild;

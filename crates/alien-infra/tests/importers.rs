@@ -1390,8 +1390,8 @@ fn aws_sandbox_reimport_preserves_the_built_image_and_takes_the_new_connector() 
     );
 }
 
-/// A Frozen sandbox's image is built and owned by stack creation, so its registration stays
-/// authoritative and a re-import replaces.
+/// A template's Frozen sandbox image is built and owned by stack creation, so its registration
+/// stays authoritative and a re-import replaces.
 #[test]
 fn aws_sandbox_frozen_reimport_replaces() {
     let entry = sandbox_entry(ResourceLifecycle::Frozen, true);
@@ -1449,8 +1449,8 @@ fn aws_sandbox_frozen_reimport_replaces() {
         "stack creation is authoritative about a setup-owned image"
     );
 
-    // Replacement is decided by the lifecycle, not by what the payload names: a Frozen
-    // registration carrying build inputs still replaces rather than merging onto the image.
+    // A Frozen registration naming build inputs is a direct setup's, repeated on every setup pass
+    // while the controller builds the image: it merges, keeping the image that state tracks.
     let existing = registry
         .run(&Sandbox::RESOURCE_TYPE, Platform::Aws, frozen("2.0"), &ctx)
         .expect("existing");
@@ -1474,24 +1474,25 @@ fn aws_sandbox_frozen_reimport_replaces() {
             &ctx,
         )
         .expect("re-import");
-    let replaced = registry
+    let merged = registry
         .merge_reimport(
             &Sandbox::RESOURCE_TYPE,
             Platform::Aws,
             existing,
-            imported.clone(),
+            imported,
             &ctx,
         )
         .expect("merge should succeed");
-    assert_eq!(replaced.status, ResourceStatus::Provisioning);
+    assert_eq!(merged.status, ResourceStatus::Running);
+    assert_eq!(internal_state(&merged)["state"], "ready");
     assert_eq!(
-        internal_state(&replaced)["state"],
-        "creatingImage",
-        "a Frozen sandbox takes the registration as it is"
+        internal_state(&merged)["buildRoleArn"],
+        "arn:aws:iam::123456789012:role/stack-agents-build"
     );
-    assert!(
-        replaced.remote_binding_params.is_none(),
-        "the payload carried no image, so nothing publishes a binding"
+    assert_eq!(
+        controller_binding_params(&merged)["imageVersion"],
+        "2.0",
+        "the image the state tracks keeps serving"
     );
 }
 

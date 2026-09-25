@@ -370,6 +370,23 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// A cloud object setup would create already exists and is not one setup can safely adopt.
+    #[error(
+        code = "SETUP_SCAFFOLDING_NOT_ADOPTABLE",
+        message = "Cannot adopt existing {object} for resource '{resource_id}': {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SetupScaffoldingNotAdoptable {
+        /// Resource the scaffolding was being created for
+        resource_id: String,
+        /// The existing object, named as the cloud names it
+        object: String,
+        /// Every property that differs from what setup would have created
+        reason: String,
+    },
+
     /// Errors originating from cloud platform operations.
     #[error(
         code = "CLOUD_PLATFORM_ERROR",

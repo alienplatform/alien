@@ -3,6 +3,7 @@ use crate::mutations::management_permission_profile::GATE_DERIVED_GLOBAL_SUFFIXE
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
 use alien_core::Stack;
+use alien_permissions::{MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD};
 use std::collections::HashSet;
 
 /// Validates that permission profiles in the stack haven't been modified.
@@ -131,9 +132,10 @@ fn management_differs_outside_gates(
     gated: &GatedContributions,
     allow_email_heartbeat_migration: bool,
 ) -> bool {
-    let (old_management, new_management) =
-        comparable_without_role_guards(old_management, new_management);
-    match (&old_management, &new_management) {
+    match (
+        old_management,
+        &without_added_role_guards(old_management, new_management),
+    ) {
         (ManagementPermissions::Auto, ManagementPermissions::Auto) => false,
         (
             ManagementPermissions::Extend(old_profile),
@@ -157,59 +159,50 @@ fn management_differs_outside_gates(
     }
 }
 
-/// Deny grants a later version adds at stack scope to every AWS stack's management profile. They
-/// only narrow the identity, and a version that does not know them must still accept a stack
-/// prepared by one that does: a manager behind it, or a rollback past it, re-prepares without them.
-const ROLE_GUARDS: [&str; 2] = [
-    "remote-stack-management/protect-management-role",
-    "sandbox/protect-setup-roles",
-];
-
-/// `management` without [`ROLE_GUARDS`] at stack scope, and whether it held nothing else: a
-/// guard-only `Extend` is what `Auto` becomes once the guards are derived.
-fn without_role_guards(management: &ManagementPermissions) -> (ManagementPermissions, bool) {
-    let strip = |profile: &PermissionProfile| {
-        let mut profile = profile.clone();
-        let mut guard_only = false;
-        if let Some(grants) = profile.0.get_mut("*") {
-            let before = grants.len();
-            grants.retain(|grant| {
-                !matches!(grant, PermissionSetReference::Name(name) if ROLE_GUARDS.contains(&name.as_str()))
-            });
-            if grants.len() != before && grants.is_empty() {
-                profile.0.shift_remove("*");
-                guard_only = profile.0.is_empty();
-            }
-        }
-        (profile, guard_only)
-    };
-    match management {
-        ManagementPermissions::Auto => (ManagementPermissions::Auto, false),
-        ManagementPermissions::Extend(profile) => {
-            let (profile, guard_only) = strip(profile);
-            (ManagementPermissions::Extend(profile), guard_only)
-        }
-        ManagementPermissions::Override(profile) => {
-            (ManagementPermissions::Override(strip(profile).0), false)
-        }
-    }
-}
-
-/// Each side without the role guards. A guard-only `Extend` reads as `Auto` against an `Auto`
-/// side, and as the empty `Extend` it is against anything else.
-fn comparable_without_role_guards(
+/// The new management permissions without the role guards this update adds: each is a Deny that
+/// only narrows the identity, and every AWS deployment prepared before them gains them on its next
+/// update. Only the canonical references at stack scope; anything else still reads as drift, and a
+/// guard the old profile held may not leave.
+fn without_added_role_guards(
     old: &ManagementPermissions,
     new: &ManagementPermissions,
-) -> (ManagementPermissions, ManagementPermissions) {
-    let fold = |side: &ManagementPermissions, other: &ManagementPermissions| {
-        let (stripped, guard_only) = without_role_guards(side);
-        if guard_only && matches!(other, ManagementPermissions::Auto) {
-            ManagementPermissions::Auto
-        } else {
-            stripped
+) -> ManagementPermissions {
+    let old_global = match old {
+        ManagementPermissions::Auto => None,
+        ManagementPermissions::Extend(profile) | ManagementPermissions::Override(profile) => {
+            profile.0.get("*")
         }
     };
-    (fold(old, new), fold(new, old))
+    let added: Vec<PermissionSetReference> = [MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD]
+        .into_iter()
+        .map(PermissionSetReference::from_name)
+        .filter(|guard| !old_global.is_some_and(|grants| grants.contains(guard)))
+        .collect();
+    let without = |profile: &PermissionProfile| {
+        let mut profile = profile.clone();
+        if let Some(grants) = profile.0.get_mut("*") {
+            grants.retain(|grant| !added.contains(grant));
+            if grants.is_empty() && old_global.is_none() {
+                profile.0.shift_remove("*");
+            }
+        }
+        profile
+    };
+    match new {
+        ManagementPermissions::Auto => ManagementPermissions::Auto,
+        // A profile the mutation left `Auto` becomes `Extend` only to hold the guards.
+        ManagementPermissions::Extend(profile) => {
+            let profile = without(profile);
+            if profile.0.is_empty() && matches!(old, ManagementPermissions::Auto) {
+                ManagementPermissions::Auto
+            } else {
+                ManagementPermissions::Extend(profile)
+            }
+        }
+        ManagementPermissions::Override(profile) => {
+            ManagementPermissions::Override(without(profile))
+        }
+    }
 }
 
 /// Accepts the one-way profile migration caused by registering the formerly
@@ -348,89 +341,195 @@ fn check_permission_profiles(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mutations::management_permission_profile::ManagementPermissionProfileMutation;
+    use crate::StackMutation;
     use alien_core::permissions::PermissionsConfig;
     use alien_core::{Email, Kv, ResourceLifecycle};
+    use alien_core::{Platform, StackState};
     use indexmap::IndexMap;
 
-    async fn passes(old: ManagementPermissions, new: ManagementPermissions) -> bool {
-        let stack = |management| {
-            Stack::new("s".to_string())
-                .management(management)
+    fn guarded_sandbox_stack(management: ManagementPermissions) -> Stack {
+        Stack::new("s".to_string())
+            .management(management)
+            .add(
+                alien_core::Sandbox::new("agents".to_string())
+                    .code(alien_core::SandboxCode::Image {
+                        image: "s3://acme/sandbox-bundle/f00d/bundle.zip".to_string(),
+                    })
+                    .egress(alien_core::SandboxEgress::Allow)
+                    .lifecycle(alien_core::SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build()
+    }
+
+    async fn update_passes(old: ManagementPermissions, new: ManagementPermissions) -> bool {
+        let result = PermissionProfilesUnchangedCheck
+            .check(&guarded_sandbox_stack(old), &guarded_sandbox_stack(new))
+            .await
+            .expect("check should run");
+        result.success
+    }
+
+    /// A stack as the preparing mutation leaves it.
+    async fn prepared(stack: Stack) -> Stack {
+        let config = alien_core::DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(alien_core::ExternalBindings::default())
+            .build();
+        ManagementPermissionProfileMutation
+            .mutate(stack, &StackState::new(Platform::Aws), &config)
+            .await
+            .expect("the mutation runs")
+    }
+
+    /// `prepared` as it read before the preparing mutation added `guards`.
+    fn without_guards(
+        prepared: &Stack,
+        original: &ManagementPermissions,
+        guards: &[&str],
+    ) -> Stack {
+        let guards: Vec<_> = guards
+            .iter()
+            .map(|guard| PermissionSetReference::from_name(*guard))
+            .collect();
+        let mut stack = prepared.clone();
+        if let ManagementPermissions::Extend(profile) | ManagementPermissions::Override(profile) =
+            &mut stack.permissions.management
+        {
+            if let Some(grants) = profile.0.get_mut("*") {
+                grants.retain(|grant| !guards.contains(grant));
+                if grants.is_empty() {
+                    profile.0.shift_remove("*");
+                }
+            }
+        }
+        let emptied = matches!(
+            &stack.permissions.management,
+            ManagementPermissions::Extend(profile) if profile.0.is_empty()
+        );
+        if emptied && matches!(original, ManagementPermissions::Auto) {
+            stack.permissions.management = ManagementPermissions::Auto;
+        }
+        stack
+    }
+
+    /// A sandbox deployment prepared before either guard existed gains both on its next update.
+    #[tokio::test]
+    async fn an_update_may_add_both_role_guards_to_a_sandbox_stack() {
+        for management in [
+            ManagementPermissions::Auto,
+            ManagementPermissions::Extend(PermissionProfile::new().global(["kv/management"])),
+            ManagementPermissions::Override(PermissionProfile::new().global(["kv/management"])),
+        ] {
+            let now = prepared(guarded_sandbox_stack(management.clone())).await;
+            let before = without_guards(
+                &now,
+                &management,
+                &[MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD],
+            );
+            let result = PermissionProfilesUnchangedCheck
+                .check(&before, &now)
+                .await
+                .expect("check should run");
+            assert!(result.success, "{management:?}: {:?}", result.errors);
+        }
+    }
+
+    /// An AWS deployment prepared before the guard existed gains it on its next update, whatever
+    /// the profile's mode and the stack's resources.
+    #[tokio::test]
+    async fn an_update_may_add_the_management_role_guard() {
+        let mut stacks = Vec::new();
+        for management in [
+            ManagementPermissions::Auto,
+            ManagementPermissions::Extend(PermissionProfile::new().global(["kv/management"])),
+            ManagementPermissions::Override(PermissionProfile::new().global(["kv/management"])),
+        ] {
+            stacks.push((
+                management.clone(),
+                guarded_sandbox_stack(management.clone()),
+            ));
+            let kv_only = Stack::new("s".to_string())
+                .management(management.clone())
                 .add(
                     Kv::new("cache".to_string()).build(),
                     ResourceLifecycle::Frozen,
                 )
-                .build()
-        };
-        PermissionProfilesUnchangedCheck
-            .check(&stack(old), &stack(new))
-            .await
-            .expect("check should run")
-            .success
+                .build();
+            stacks.push((management.clone(), kv_only));
+            let empty = Stack::new("s".to_string())
+                .management(management.clone())
+                .build();
+            stacks.push((management, empty));
+        }
+
+        for (management, stack) in stacks {
+            let now = prepared(stack).await;
+            let result = PermissionProfilesUnchangedCheck
+                .check(
+                    &without_guards(&now, &management, &[MANAGEMENT_ROLE_GUARD]),
+                    &now,
+                )
+                .await
+                .expect("check should run");
+            assert!(
+                result.success,
+                "{management:?} gaining the guard in {:?}: {:?}",
+                now.management(),
+                result.errors
+            );
+        }
     }
 
-    /// A deployment prepared by a version that adds the role guards is updated by one that does
-    /// not, and the reverse.
     #[tokio::test]
-    async fn the_role_guards_are_not_read_as_drift_in_either_direction() {
-        for (without, with) in [
-            (
-                ManagementPermissions::Auto,
-                ManagementPermissions::Extend(PermissionProfile::new().global(ROLE_GUARDS)),
-            ),
-            (
-                ManagementPermissions::Extend(PermissionProfile::new().global(["kv/management"])),
-                ManagementPermissions::Extend(
-                    PermissionProfile::new().global([ROLE_GUARDS[0], "kv/management"]),
-                ),
-            ),
-            (
+    async fn an_update_may_not_remove_a_role_guard() {
+        for guard in [MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD] {
+            assert!(
+                !update_passes(
+                    ManagementPermissions::Extend(PermissionProfile::new().global([guard])),
+                    ManagementPermissions::Extend(PermissionProfile::new()),
+                )
+                .await,
+                "{guard}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_guard_does_not_carry_another_grant_in_with_it() {
+        assert!(
+            !update_passes(
                 ManagementPermissions::Extend(PermissionProfile::new()),
-                ManagementPermissions::Extend(PermissionProfile::new().global(ROLE_GUARDS)),
-            ),
-            (
-                ManagementPermissions::Override(PermissionProfile::new().global(["kv/management"])),
-                ManagementPermissions::Override(
-                    PermissionProfile::new().global(["kv/management", ROLE_GUARDS[1]]),
+                ManagementPermissions::Extend(
+                    PermissionProfile::new().global([MANAGEMENT_ROLE_GUARD, "sandbox/execute"])
                 ),
-            ),
-        ] {
-            assert!(
-                passes(with.clone(), without.clone()).await,
-                "{with:?} -> {without:?}"
-            );
-            assert!(
-                passes(without.clone(), with.clone()).await,
-                "{without:?} -> {with:?}"
-            );
-        }
+            )
+            .await
+        );
     }
 
     #[tokio::test]
-    async fn the_role_guards_hide_no_other_change() {
-        for (old, new) in [
-            (
-                ManagementPermissions::Extend(PermissionProfile::new().global(ROLE_GUARDS)),
-                ManagementPermissions::Extend(PermissionProfile::new().global(["kv/data-write"])),
-            ),
-            (
-                ManagementPermissions::Auto,
+    async fn the_guard_is_exempt_only_at_stack_scope() {
+        assert!(
+            !update_passes(
+                ManagementPermissions::Extend(PermissionProfile::new()),
                 ManagementPermissions::Extend(
-                    PermissionProfile::new().global([ROLE_GUARDS[0], "kv/data-write"]),
+                    PermissionProfile::new().resource("agents", [MANAGEMENT_ROLE_GUARD])
                 ),
-            ),
-            (
-                ManagementPermissions::Auto,
-                ManagementPermissions::Extend(
-                    PermissionProfile::new().resource("cache", [ROLE_GUARDS[0]]),
-                ),
-            ),
-        ] {
-            assert!(
-                !passes(old.clone(), new.clone()).await,
-                "{old:?} -> {new:?}"
-            );
-        }
+            )
+            .await
+        );
     }
 
     /// The deployer said no to a gated live resource: its scoped management

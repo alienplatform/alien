@@ -1124,3 +1124,158 @@ fn is_remote_not_found(error: &alien_error::AlienError<alien_client_core::ErrorD
         Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use alien_aws_clients::iam::{
+        CreatePolicyResponse, CreatePolicyResult, CreateRoleResponse, CreateRoleResult,
+        ListAttachedRolePoliciesResponse, ListAttachedRolePoliciesResult, MockIamApi, Policy, Role,
+    };
+    use alien_core::{
+        RemoteStackManagement, ResourceLifecycle, ResourceStatus, Sandbox, SandboxCode,
+        SandboxEgress, SandboxLifecyclePolicy,
+    };
+
+    use super::*;
+    use crate::core::controller_test::SingleControllerExecutor;
+    use crate::core::MockPlatformServiceProvider;
+
+    /// Other sets grant role writes on `role/<prefix>-*`; direct setup's management role must deny
+    /// them on itself, by the name it is created under, and on every role carrying setup's sandbox
+    /// tags, Live or Frozen, and keep PassRole.
+    #[tokio::test]
+    async fn direct_setup_keeps_a_sandboxs_setup_roles_out_of_managements_reach() {
+        let documents = Arc::new(Mutex::new(Vec::<String>::new()));
+        let created_roles = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut iam = MockIamApi::new();
+        let created = created_roles.clone();
+        iam.expect_create_role().returning(move |request| {
+            created.lock().unwrap().push(request.role_name.clone());
+            Ok(CreateRoleResponse {
+                create_role_result: CreateRoleResult {
+                    role: Role {
+                        path: "/".to_string(),
+                        role_name: request.role_name.clone(),
+                        role_id: "AROAEXAMPLE".to_string(),
+                        arn: format!("arn:aws:iam::123456789012:role/{}", request.role_name),
+                        create_date: "2026-09-24T00:00:00Z".to_string(),
+                        assume_role_policy_document: None,
+                        description: None,
+                        max_session_duration: None,
+                        permissions_boundary: None,
+                        tags: None,
+                        role_last_used: None,
+                    },
+                },
+            })
+        });
+        iam.expect_delete_role_policy().returning(|_, _| Ok(()));
+        iam.expect_list_attached_role_policies().returning(|_| {
+            Ok(ListAttachedRolePoliciesResponse {
+                list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                    attached_policies: None,
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+        let captured = documents.clone();
+        iam.expect_create_policy()
+            .returning(move |name, document, _| {
+                captured.lock().unwrap().push(document.to_string());
+                Ok(CreatePolicyResponse {
+                    create_policy_result: CreatePolicyResult {
+                        policy: Policy {
+                            policy_name: Some(name.to_string()),
+                            policy_id: None,
+                            arn: format!("arn:aws:iam::123456789012:policy/{name}"),
+                            path: None,
+                            default_version_id: None,
+                            attachment_count: None,
+                            is_attachable: None,
+                            create_date: None,
+                            update_date: None,
+                        },
+                    },
+                })
+            });
+        iam.expect_attach_role_policy().returning(|_, _| Ok(()));
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+
+        let sandbox = |id: &str| {
+            Sandbox::new(id.to_string())
+                .code(SandboxCode::Image {
+                    image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build()
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .controller(AwsRemoteStackManagementController::default())
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .with_stack_resource(sandbox("agents"), ResourceLifecycle::Live)
+            .with_stack_resource(sandbox("frozen-box"), ResourceLifecycle::Frozen)
+            .build()
+            .await
+            .expect("executor builds");
+
+        executor.run_until_terminal().await.expect("setup runs");
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let statements: Vec<serde_json::Value> = documents
+            .lock()
+            .unwrap()
+            .iter()
+            .flat_map(|document| {
+                serde_json::from_str::<serde_json::Value>(document).expect("JSON policy")
+                    ["Statement"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect();
+        let created_roles = created_roles.lock().unwrap().clone();
+        assert_eq!(created_roles.len(), 1, "{created_roles:?}");
+        let own_role = serde_json::json!([format!(
+            "arn:aws:iam::123456789012:role/{}",
+            created_roles[0]
+        )]);
+        let (own_role_denies, denies): (Vec<&serde_json::Value>, Vec<&serde_json::Value>) =
+            statements
+                .iter()
+                .filter(|statement| statement["Effect"] == "Deny")
+                .partition(|statement| statement["Resource"] == own_role);
+        assert_eq!(
+            own_role_denies.len(),
+            1,
+            "the management role may not rewrite itself: {statements:#?}"
+        );
+        assert_eq!(denies.len(), 1, "{statements:#?}");
+        assert_eq!(denies[0]["Resource"], serde_json::json!(["*"]));
+        assert_eq!(
+            denies[0]["Condition"],
+            serde_json::json!({
+                "StringEquals": {
+                    "aws:ResourceTag/managed-by": "setup",
+                    "aws:ResourceTag/resource-type": "sandbox"
+                }
+            })
+        );
+        assert!(
+            !denies[0].to_string().contains("iam:PassRole"),
+            "the build role must stay passable"
+        );
+    }
+}

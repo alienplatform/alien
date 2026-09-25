@@ -32,6 +32,8 @@ pub mod sandbox_capability;
 #[cfg(feature = "sandbox-capability")]
 pub mod sandbox_capability_token;
 
+pub mod sandbox_build_role;
+pub mod sandbox_egress;
 pub mod sandbox_image;
 
 #[cfg(feature = "sandbox-process")]

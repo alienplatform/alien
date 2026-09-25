@@ -49,6 +49,8 @@ mod sandbox;
 // has to be able to name them to resolve a controller by type.
 pub use sandbox::*;
 
+pub mod setup_scaffolding;
+
 mod kubernetes_cluster;
 
 #[cfg(feature = "kubernetes")]

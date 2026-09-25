@@ -9,7 +9,7 @@ license-file.workspace = true
 [features]
 default = []  # Minimal default, let consumers choose
 all-platforms = ["aws", "gcp", "azure", "kubernetes", "local", "test"]  # Convenience feature for all providers
-aws = ["dep:alien-aws-clients", "dep:alien-preflights", "alien-client-config/aws"]  # TODO: Remove preflights from here, necessary because of CF
+aws = ["dep:alien-aws-clients", "dep:alien-preflights", "dep:urlencoding", "alien-client-config/aws"]  # TODO: Remove preflights from here, necessary because of CF
 gcp = ["dep:alien-gcp-clients", "alien-client-config/gcp"]
 azure = ["dep:alien-azure-clients", "alien-client-config/azure", "dep:base64"]
 kubernetes = ["dep:alien-k8s-clients", "dep:axum", "dep:base64", "dep:dirs", "dep:ed25519-compact", "alien-core/sandbox-capability", "alien-client-config/kubernetes"]
@@ -63,6 +63,7 @@ uuid = { workspace = true, features = ["v4", "v5", "serde"] }
 k8s-openapi = { version = "0.25.0", features = ["v1_33"] }
 alien-preflights = { workspace = true, optional = true }
 mockall = { workspace = true, optional = true }
+urlencoding = { workspace = true, optional = true }
 pem = { workspace = true }
 p12 = "0.6"
 
@@ -81,6 +82,7 @@ console_error_panic_hook = { workspace = true }
 
 [dev-dependencies]
 alien-infra = { path = ".", features = ["test-utils"] }
+alien-bindings = { workspace = true, features = ["aws"] }
 alien-preflights = { workspace = true }
 alien-aws-clients = { workspace = true }
 alien-gcp-clients = { workspace = true }

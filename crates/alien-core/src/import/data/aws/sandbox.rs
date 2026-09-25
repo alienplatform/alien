@@ -1,4 +1,7 @@
+use alien_error::AlienError;
 use serde::{Deserialize, Serialize};
+
+use crate::{parse_bundle_uri, BundleUri, ErrorData, Result, Sandbox, SandboxCode, SandboxEgress};
 
 /// AWS Sandbox ImportData.
 ///
@@ -53,4 +56,58 @@ pub struct AwsSandboxImportData {
         deserialize_with = "crate::import::data::deserialize_bool_from_bool_or_string"
     )]
     pub allow_egress: bool,
+}
+
+impl AwsSandboxImportData {
+    /// What a runtime-built sandbox registers, with every template expression resolved. The
+    /// setup emitters write the same fields as expressions, and parity tests hold them to this.
+    ///
+    /// `deny` names the connector setup recorded; `allow` names none, whatever is recorded, so a
+    /// connector left over from an earlier `deny` never reaches a session.
+    pub fn runtime_built(
+        sandbox: &Sandbox,
+        build_role_arn: String,
+        region: &str,
+        recorded_connector_arn: Option<&str>,
+    ) -> Result<Self> {
+        let refuse = |reason: String| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: format!("register sandbox '{}'", sandbox.id),
+                reason,
+            })
+        };
+        let SandboxCode::Image { image } = &sandbox.code else {
+            return Err(refuse(
+                "an AWS sandbox is built from a prebuilt s3:// bundle, not from source".to_string(),
+            ));
+        };
+        let bundle_uri = match parse_bundle_uri(image).map_err(refuse)? {
+            BundleUri::Literal(uri) => uri.to_string(),
+            BundleUri::Regional { before, after } => format!("{before}{region}{after}"),
+        };
+        let egress_connector_arns = match &sandbox.egress {
+            SandboxEgress::Allow => Vec::new(),
+            SandboxEgress::Deny => vec![recorded_connector_arn
+                .ok_or_else(|| {
+                    refuse("egress: deny has no egress connector recorded yet".to_string())
+                })?
+                .to_string()],
+            SandboxEgress::AllowDomains { .. } => {
+                return Err(refuse(
+                    "AWS has no connector configuration for egress: allowDomains".to_string(),
+                ))
+            }
+        };
+
+        Ok(Self {
+            image_identifier: None,
+            image_arn: None,
+            image_version: None,
+            build_role_arn: Some(build_role_arn),
+            bundle_uri: Some(bundle_uri),
+            egress_connector_arns,
+            preview_ports: sandbox.preview_ports.clone(),
+            allow_egress: matches!(sandbox.egress, SandboxEgress::Allow),
+        })
+    }
 }
