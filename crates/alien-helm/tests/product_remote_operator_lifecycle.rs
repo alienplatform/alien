@@ -743,8 +743,7 @@ rules:
         "2m",
     );
     run_ok("helm", bridged_enable.iter().map(String::as_str), None);
-    let collector_name =
-        remote_operator_record_name(&helm_namespace, bridge_release, "log-collector");
+    let collector_name = remote_operator_log_collector_name(&helm_namespace, bridge_release);
     run_ok(
         "kubectl",
         [
@@ -2840,6 +2839,19 @@ fn write_chart(directory: &Path, chart: &HelmChart) {
 }
 
 fn remote_operator_record_name(namespace: &str, release: &str, record: &str) -> String {
+    remote_operator_name_with_limit(namespace, release, record, 21)
+}
+
+fn remote_operator_log_collector_name(namespace: &str, release: &str) -> String {
+    remote_operator_name_with_limit(namespace, release, "log-collector", 22)
+}
+
+fn remote_operator_name_with_limit(
+    namespace: &str,
+    release: &str,
+    record: &str,
+    prefix_limit: usize,
+) -> String {
     let digest = format!(
         "{:x}",
         Sha256::digest(format!("{namespace}/{release}").as_bytes())
@@ -2857,7 +2869,7 @@ fn remote_operator_record_name(namespace: &str, release: &str, record: &str) -> 
     }
     let release_prefix = normalized_release
         .chars()
-        .take(21)
+        .take(prefix_limit)
         .collect::<String>()
         .trim_matches('-')
         .to_string();
