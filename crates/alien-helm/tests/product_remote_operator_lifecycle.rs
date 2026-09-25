@@ -810,10 +810,43 @@ rules:
         }
         std::thread::sleep(Duration::from_secs(2));
     }
-    assert!(
-        forwarded.contains("selected-log-marker"),
-        "selected Pod log did not reach the collector receiver"
-    );
+    if !forwarded.contains("selected-log-marker") {
+        let collector_logs = run(
+            "kubectl",
+            [
+                "logs",
+                &format!("daemonset/{collector_name}"),
+                "--namespace",
+                &helm_namespace,
+                "--tail=80",
+            ],
+            None,
+        );
+        let selected_logs = run(
+            "kubectl",
+            ["logs", "selected-log-probe", "--namespace", &helm_namespace],
+            None,
+        );
+        let service = run(
+            "kubectl",
+            [
+                "get",
+                "endpoints",
+                &operator_name,
+                "--namespace",
+                &helm_namespace,
+                "--output=wide",
+            ],
+            None,
+        );
+        panic!(
+            "selected Pod log did not reach the collector receiver; selected={:?}; endpoints={:?}; collector={:?}; receiver={:?}",
+            selected_logs.diagnostic,
+            service.diagnostic,
+            collector_logs.diagnostic,
+            forwarded,
+        );
+    }
     std::thread::sleep(Duration::from_secs(8));
     forwarded = run_ok(
         "kubectl",
