@@ -1,18 +1,11 @@
 {
-  // Allows consuming and acknowledging messages from queues
-  "id": "queue/data-read",
-  "description": "Allows consuming and acknowledging messages from message queues",
+  "id": "queue/publish",
+  "description": "Allows publishing messages without receiving or acknowledging them",
   "platforms": {
     "aws": [
       {
         "grant": {
-          "actions": [
-            "sqs:ReceiveMessage",
-            "sqs:DeleteMessage",
-            "sqs:ChangeMessageVisibility",
-            "sqs:GetQueueAttributes",
-            "sqs:GetQueueUrl"
-          ]
+          "actions": ["sqs:SendMessage", "sqs:GetQueueAttributes", "sqs:GetQueueUrl"]
         },
         "binding": {
           "stack": {
@@ -27,12 +20,12 @@
     "gcp": [
       {
         "grant": {
-          "predefinedRoles": ["roles/pubsub.subscriber", "roles/pubsub.viewer"]
+          "predefinedRoles": ["roles/pubsub.publisher"]
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
           "resource": {
-            "scope": "projects/${projectName}/subscriptions/${resourceName}"
+            "scope": "projects/${projectName}/topics/${resourceName}"
           }
         }
       }
@@ -40,7 +33,7 @@
     "azure": [
       {
         "grant": {
-          "predefinedRoles": ["Azure Service Bus Data Receiver"]
+          "predefinedRoles": ["Azure Service Bus Data Sender"]
         },
         "binding": {
           "stack": {
