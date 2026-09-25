@@ -185,7 +185,7 @@ pub enum Commands {
     Destroy(DestroyArgs),
     /// Manage vault secrets for a deployment
     Vault(commands::VaultRemoteArgs),
-    /// Invoke remote commands on deployments
+    // No doc comment: it would replace the long help defined on `CommandsArgs`.
     #[command(alias = "command")]
     Commands(CommandsArgs),
     /// Run a local command against a deployment using manager-side credentials
@@ -209,9 +209,7 @@ pub enum Commands {
     #[command(alias = "manager")]
     Managers(ManagersArgs),
 
-    /// Build, test, and manage operations plugins (init, check, test,
-    /// permissions, publish, list). `init`/`check`/`test` work fully
-    /// offline; the rest need a linked platform workspace.
+    // No doc comment: it would replace the long help defined on `OperationsArgs`.
     #[command(alias = "operation")]
     Operations(OperationsArgs),
 

@@ -18,7 +18,7 @@ members = [
   "crates/alien-client-core",
   "crates/alien-client-config",
   "crates/alien-aws-clients",
-  "crates/alien-gcp-clients", 
+  "crates/alien-gcp-clients",
   "crates/alien-azure-clients",
   "crates/alien-azure-model-generator",
   "crates/alien-azure-models-1",

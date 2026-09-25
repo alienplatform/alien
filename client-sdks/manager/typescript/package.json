@@ -61,7 +61,7 @@
     "prepublishOnly": "npm run build"
   },
   "peerDependencies": {
-    
+
   },
   "devDependencies": {
     "@eslint/js": "^9.19.0",
