@@ -176,8 +176,9 @@ pub async fn handle_deleting(
 }
 
 /// Where a destroy goes when the runtime never started, or `None` when runtime cleanup has work.
-/// It has none while the management identity has no outputs and no Live resource, synced secrets
-/// vault or Frozen runtime-cleanup type came up. Fails closed on a missing lifecycle.
+/// It has none while the management identity has no outputs and no Live resource or Frozen
+/// runtime-cleanup type came up. Setup teardown deletes synced secrets. Fails closed on a missing
+/// lifecycle.
 pub fn destroy_without_runtime(current: &DeploymentState) -> Option<DeploymentStatus> {
     let destroying = match current.status {
         DeploymentStatus::DeletePending | DeploymentStatus::Deleting => true,
@@ -197,7 +198,7 @@ pub fn destroy_without_runtime(current: &DeploymentState) -> Option<DeploymentSt
         return None;
     }
     let stack_state = current.stack_state.as_ref()?;
-    for (resource_id, resource) in &stack_state.resources {
+    for resource in stack_state.resources.values() {
         let lifecycle = resource.lifecycle?;
         let resource_type = resource.config.resource_type();
         if resource_type == alien_core::RemoteStackManagement::RESOURCE_TYPE {
@@ -216,10 +217,9 @@ pub fn destroy_without_runtime(current: &DeploymentState) -> Option<DeploymentSt
         let runtime_cleans_up = match lifecycle {
             ResourceLifecycle::Live => true,
             ResourceLifecycle::Frozen => {
-                resource_id == "secrets"
-                    || (resource_type != alien_core::Sandbox::RESOURCE_TYPE
-                        && ownership_policy_for_resource_type(resource_type.as_ref())
-                            .has_runtime_cleanup_before_teardown())
+                resource_type != alien_core::Sandbox::RESOURCE_TYPE
+                    && ownership_policy_for_resource_type(resource_type.as_ref())
+                        .has_runtime_cleanup_before_teardown()
             }
         };
         if runtime_cleans_up {
@@ -814,23 +814,37 @@ mod tests {
         );
     }
 
-    /// What runtime cleanup acts on beyond Live resources: synced secrets, and a Frozen type
-    /// with a runtime share of its delete. Once either came up, the destroy keeps its cleanup.
+    /// Setup synced secrets into the vault, then failed before the management identity existed.
+    /// Setup teardown deletes those secrets with its own credentials.
+    #[test]
+    fn a_synced_secrets_vault_goes_to_setup_teardown() {
+        let mut state = with_resource(
+            after_setup_failed(
+                alien_core::InitialSetupAuthority::DirectSetup,
+                false,
+                ResourceStatus::Pending,
+            ),
+            "secrets",
+            Resource::new(alien_core::Vault::new("secrets".to_string()).build()),
+            Some(ResourceLifecycle::Frozen),
+            ResourceStatus::Running,
+        );
+        let metadata = state.runtime_metadata.as_mut().unwrap();
+        metadata.last_synced_env_vars_hash = Some("synced".to_string());
+        metadata.last_synced_secret_names = vec!["API_TOKEN".to_string()];
+        assert_eq!(
+            super::destroy_without_runtime(&state),
+            Some(DeploymentStatus::TeardownRequired)
+        );
+    }
+
+    /// A Frozen type with a runtime share of its delete: once it came up, the destroy keeps its
+    /// runtime cleanup.
     #[test]
     fn setup_created_objects_runtime_cleanup_owns_keep_it() {
         let direct = alien_core::InitialSetupAuthority::DirectSetup;
         let base = || after_setup_failed(direct, false, ResourceStatus::Pending);
         for (case, state) in [
-            (
-                "a secrets vault setup brought up",
-                with_resource(
-                    base(),
-                    "secrets",
-                    Resource::new(alien_core::Vault::new("secrets".to_string()).build()),
-                    Some(ResourceLifecycle::Frozen),
-                    ResourceStatus::Running,
-                ),
-            ),
             (
                 "a compute cluster setup brought up",
                 with_resource(

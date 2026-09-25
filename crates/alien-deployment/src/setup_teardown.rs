@@ -152,6 +152,11 @@ async fn run_setup_teardown_after_handoff_inner(
         sleep(Duration::from_millis(SCAFFOLDING_TEARDOWN_DELAY_MS)).await;
     }
 
+    if let Err(error) = delete_synced_vault_secrets(state, config, client_config).await {
+        fail_setup_teardown(deployment_id, state, config, transport, error.clone()).await?;
+        return Err(error);
+    }
+
     let mut stack_state = state.stack_state.take().ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for setup teardown".to_string(),
@@ -403,6 +408,49 @@ async fn teardown_setup_scaffolding(
         .context(ErrorData::StackExecutionFailed {
             message: "Failed to delete setup scaffolding".to_string(),
         })
+}
+
+/// Runtime cleanup deletes the synced secrets and clears their inventory. A destroy that never
+/// ran it still holds the inventory, and the vault's delete leaves its values behind, so setup
+/// deletes them first. The cleared inventory is what makes a retry skip this.
+async fn delete_synced_vault_secrets(
+    state: &mut DeploymentState,
+    config: &DeploymentConfig,
+    client_config: &ClientConfig,
+) -> Result<()> {
+    let Some(runtime_metadata) = state.runtime_metadata.as_mut() else {
+        return Ok(());
+    };
+    let stack_state = state.stack_state.as_ref().ok_or_else(|| {
+        AlienError::new(ErrorData::MissingConfiguration {
+            message: "Stack state required for vault secret deletion".to_string(),
+        })
+    })?;
+    // Sync records a hash even for a stack with no vault, so the inventory alone is not enough.
+    if !stack_state.resources.contains_key("secrets")
+        || (runtime_metadata.last_synced_env_vars_hash.is_none()
+            && runtime_metadata.last_synced_secret_names.is_empty())
+    {
+        return Ok(());
+    }
+    let prepared_stack = runtime_metadata.prepared_stack.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::MissingConfiguration {
+            message: "Prepared stack required for vault secret deletion".to_string(),
+        })
+    })?;
+    crate::helpers::delete_deployment_vault_secrets(
+        &prepared_stack,
+        stack_state,
+        client_config,
+        config,
+        runtime_metadata,
+    )
+    .await
+    .context(ErrorData::SecretSyncFailed {
+        vault_name: "secrets".to_string(),
+        reason: "Failed to delete deployment-owned secrets before setup teardown".to_string(),
+    })?;
+    Ok(())
 }
 
 async fn fail_setup_teardown(
@@ -1379,5 +1427,207 @@ mod tests {
                 format!("iam:DeleteRole {BUILD_ROLE}"),
             ]
         );
+    }
+
+    /// A direct setup that synced secrets and failed before the management identity existed: the
+    /// vault is setup's, the record holds the inventory, and no scaffolding needs AWS.
+    fn synced_vault_teardown(
+        data_dir: &std::path::Path,
+        synced: &[&str],
+    ) -> (DeploymentState, Arc<dyn alien_bindings::traits::Vault>) {
+        let mut vault = alien_core::StackResourceState::builder()
+            .resource_type(alien_core::Vault::RESOURCE_TYPE.to_string())
+            .status(alien_core::ResourceStatus::Running)
+            .config(alien_core::Resource::new(
+                alien_core::Vault::new("secrets".to_string()).build(),
+            ))
+            .internal_state(serde_json::json!({
+                "_controllerStateVersion": 1,
+                "type": "AwsVaultController",
+                "state": "ready",
+                "accountId": "123456789012",
+                "region": "us-east-1",
+                "vaultPrefix": "test-secrets"
+            }))
+            .lifecycle(ResourceLifecycle::Frozen)
+            .controller_platform(Platform::Aws)
+            .build();
+        vault.remote_binding_params = Some(
+            serde_json::to_value(alien_core::bindings::VaultBinding::local(
+                "secrets",
+                data_dir.to_string_lossy(),
+            ))
+            .unwrap(),
+        );
+        let mut state = teardown_required(InitialSetupAuthority::DirectSetup);
+        state
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .insert("secrets".to_string(), vault);
+        let metadata = state.runtime_metadata.as_mut().unwrap();
+        metadata.setup_scaffolding.clear();
+        metadata.prepared_stack = Some(alien_core::Stack::new("test".to_string()).build());
+        metadata.last_synced_env_vars_hash = Some("synced".to_string());
+        metadata.last_synced_secret_names = synced.iter().map(|name| name.to_string()).collect();
+        let values = alien_bindings::providers::vault::local::LocalVault::new(
+            "secrets".to_string(),
+            data_dir.to_path_buf(),
+        );
+        (state, Arc::new(values))
+    }
+
+    async fn seed(vault: &Arc<dyn alien_bindings::traits::Vault>, names: &[&str]) {
+        for name in names {
+            vault.set_secret(name, "value").await.unwrap();
+        }
+    }
+
+    async fn held(vault: &Arc<dyn alien_bindings::traits::Vault>, names: &[&str]) -> Vec<String> {
+        let mut held = Vec::new();
+        for name in names {
+            if vault.get_secret(name).await.is_ok() {
+                held.push(name.to_string());
+            }
+        }
+        held
+    }
+
+    const TOKEN: &str = alien_core::ENV_ALIEN_COMMANDS_TOKEN;
+
+    #[tokio::test]
+    async fn setup_teardown_deletes_the_synced_secrets_before_the_vault() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut state, vault) = synced_vault_teardown(dir.path(), &["API_KEY", "DB_URL"]);
+        seed(&vault, &["API_KEY", "DB_URL", TOKEN, "UNRELATED"]).await;
+        let transport = RecordingTransport::default();
+
+        run(&mut state, MockPlatformServiceProvider::new(), &transport)
+            .await
+            .unwrap();
+
+        assert_eq!(state.status, DeploymentStatus::Deleted);
+        assert_eq!(
+            held(&vault, &["API_KEY", "DB_URL", TOKEN, "UNRELATED"]).await,
+            vec!["UNRELATED"]
+        );
+        let checkpoints = transport.checkpoints.lock().unwrap();
+        let cleared = checkpoints
+            .iter()
+            .find(|checkpoint| {
+                checkpoint
+                    .runtime_metadata
+                    .as_ref()
+                    .unwrap()
+                    .last_synced_env_vars_hash
+                    .is_none()
+            })
+            .expect("a checkpoint records the deleted inventory");
+        assert!(cleared
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .last_synced_secret_names
+            .is_empty());
+        assert_ne!(
+            cleared.stack_state.as_ref().unwrap().resources["secrets"].status,
+            alien_core::ResourceStatus::Deleted,
+            "the secrets go before the vault"
+        );
+        assert_eq!(
+            state.stack_state.as_ref().unwrap().resources["secrets"].status,
+            alien_core::ResourceStatus::Deleted
+        );
+    }
+
+    /// A teardown interrupted after some deletes kept the full inventory; the next one finishes.
+    #[tokio::test]
+    async fn a_retry_after_a_partial_secret_deletion_converges() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut state, vault) = synced_vault_teardown(dir.path(), &["API_KEY", "DB_URL"]);
+        state.status = DeploymentStatus::TeardownFailed;
+        seed(&vault, &["DB_URL", TOKEN]).await;
+
+        run(
+            &mut state,
+            MockPlatformServiceProvider::new(),
+            &RecordingTransport::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state.status, DeploymentStatus::Deleted);
+        assert!(held(&vault, &["API_KEY", "DB_URL", TOKEN]).await.is_empty());
+    }
+
+    /// Runtime cleanup deleted the secrets and cleared the inventory; setup does not touch them.
+    #[tokio::test]
+    async fn setup_teardown_skips_secrets_runtime_cleanup_already_deleted() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut state, vault) = synced_vault_teardown(dir.path(), &[]);
+        state
+            .runtime_metadata
+            .as_mut()
+            .unwrap()
+            .last_synced_env_vars_hash = None;
+        seed(&vault, &[TOKEN]).await;
+
+        run(
+            &mut state,
+            MockPlatformServiceProvider::new(),
+            &RecordingTransport::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state.status, DeploymentStatus::Deleted);
+        assert_eq!(held(&vault, &[TOKEN]).await, vec![TOKEN]);
+    }
+
+    #[tokio::test]
+    async fn a_synced_hash_without_a_secrets_vault_deletes_nothing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut state, _) = synced_vault_teardown(dir.path(), &[]);
+        state
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .remove("secrets");
+        state.runtime_metadata.as_mut().unwrap().prepared_stack = None;
+
+        run(
+            &mut state,
+            MockPlatformServiceProvider::new(),
+            &RecordingTransport::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state.status, DeploymentStatus::Deleted);
+    }
+
+    #[tokio::test]
+    async fn a_recorded_inventory_without_its_prepared_stack_fails_teardown() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut state, vault) = synced_vault_teardown(dir.path(), &["API_KEY"]);
+        state.runtime_metadata.as_mut().unwrap().prepared_stack = None;
+        seed(&vault, &["API_KEY"]).await;
+
+        assert!(run(
+            &mut state,
+            MockPlatformServiceProvider::new(),
+            &RecordingTransport::default(),
+        )
+        .await
+        .is_err());
+
+        assert_eq!(state.status, DeploymentStatus::TeardownFailed);
+        assert_eq!(
+            state.stack_state.as_ref().unwrap().resources["secrets"].status,
+            alien_core::ResourceStatus::Running
+        );
+        assert_eq!(held(&vault, &["API_KEY"]).await, vec!["API_KEY"]);
     }
 }
