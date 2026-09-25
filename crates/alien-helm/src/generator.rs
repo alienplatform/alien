@@ -2905,6 +2905,8 @@ fn operator_service_doc(
     yaml.push_str("  type: ClusterIP\n");
     yaml.push_str("  selector:\n");
     append_operator_selector_labels(&mut yaml, labels, 4);
+    // The collector shares the release labels but cannot receive Operator logs.
+    yaml.push_str("    app.kubernetes.io/component: operator\n");
     yaml.push_str("  ports:\n");
     yaml.push_str("    - name: http\n");
     yaml.push_str("      port: 8080\n");
