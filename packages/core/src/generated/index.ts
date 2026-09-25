@@ -262,6 +262,7 @@ export type { KubernetesPodRuntimeUnitStatus } from "./zod/kubernetes-pod-runtim
 export type { KubernetesRouteProfile } from "./zod/kubernetes-route-profile-schema.js";
 export type { KubernetesRouteProviderOptions } from "./zod/kubernetes-route-provider-options-schema.js";
 export type { KubernetesSandboxHeartbeatData } from "./zod/kubernetes-sandbox-heartbeat-data-schema.js";
+export type { KubernetesSecretMount } from "./zod/kubernetes-secret-mount-schema.js";
 export type { KubernetesSecretVaultHeartbeatData } from "./zod/kubernetes-secret-vault-heartbeat-data-schema.js";
 export type { KubernetesSettings } from "./zod/kubernetes-settings-schema.js";
 export type { KubernetesTlsSecretRef } from "./zod/kubernetes-tls-secret-ref-schema.js";
@@ -697,6 +698,7 @@ export { KubernetesPodRuntimeUnitStatusSchema } from "./zod/kubernetes-pod-runti
 export { KubernetesRouteProfileSchema } from "./zod/kubernetes-route-profile-schema.js";
 export { KubernetesRouteProviderOptionsSchema } from "./zod/kubernetes-route-provider-options-schema.js";
 export { KubernetesSandboxHeartbeatDataSchema } from "./zod/kubernetes-sandbox-heartbeat-data-schema.js";
+export { KubernetesSecretMountSchema } from "./zod/kubernetes-secret-mount-schema.js";
 export { KubernetesSecretVaultHeartbeatDataSchema } from "./zod/kubernetes-secret-vault-heartbeat-data-schema.js";
 export { KubernetesSettingsSchema } from "./zod/kubernetes-settings-schema.js";
 export { KubernetesTlsSecretRefSchema } from "./zod/kubernetes-tls-secret-ref-schema.js";
