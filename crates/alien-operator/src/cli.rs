@@ -22,6 +22,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Parser, ValueEnum};
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
@@ -153,6 +154,10 @@ pub struct Args {
 
     #[arg(long, env = "STACK_SETTINGS_FILE")]
     pub stack_settings_file: Option<PathBuf>,
+
+    /// JSON map of setup-time stack inputs. Keep this file on a Secret volume.
+    #[arg(long, env = "STACK_INPUT_VALUES_FILE")]
+    pub stack_input_values_file: Option<PathBuf>,
 
     #[arg(long, env = "ALIEN_ENABLE_LOCAL_DEBUG", default_value_t = false)]
     pub enable_local_debug: bool,
@@ -432,6 +437,18 @@ async fn run_operator_cli(
     let operator_scope = args.operator_scope.or_else(|| args.namespace.clone());
     let operator_permission = args.operator_permission;
     let operator_setup_method = args.operator_setup_method;
+    let stack_input_values_json = load_config_value(
+        None,
+        args.stack_input_values_file.as_deref(),
+        "stack input values",
+        false,
+    )
+    .await?;
+    let stack_input_values = parse_json_opt::<HashMap<String, serde_json::Value>>(
+        stack_input_values_json,
+        "stack input values",
+    )?
+    .unwrap_or_default();
     let pinned_legacy_label_domain = env_string("ALIEN_RUNTIME_LEGACY_DEPLOYMENT_LABEL_KEY")
         .map(|key| {
             key.strip_suffix("/deployment")
@@ -482,6 +499,7 @@ async fn run_operator_cli(
                             operator_permission.as_deref(),
                             operator_setup_method.as_deref(),
                             InitialDesiredReleaseArg::None,
+                            &stack_input_values,
                         )
                         .await?;
                         if verified_id != stored_deployment_id || replacement.is_some() {
@@ -529,6 +547,7 @@ async fn run_operator_cli(
                         operator_permission.as_deref(),
                         operator_setup_method.as_deref(),
                         args.initial_desired_release,
+                        &stack_input_values,
                     )
                     .await?;
 
@@ -967,6 +986,7 @@ async fn initialize_with_manager(
     operator_permission: Option<&str>,
     operator_setup_method: Option<&str>,
     initial_desired_release: InitialDesiredReleaseArg,
+    input_values: &HashMap<String, serde_json::Value>,
 ) -> Result<(String, Option<String>)> {
     use alien_manager_api::types::Platform as SdkPlatform;
     use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
@@ -1016,6 +1036,7 @@ async fn initialize_with_manager(
     let mut builder = client.initialize().body_map(|b| {
         b.platform(sdk_platform)
             .initial_desired_release(sdk_initial_desired_release)
+            .input_values(input_values.clone())
     });
 
     if let Some(name) = default_name {
