@@ -124,6 +124,17 @@ impl OperatorConfig {
         self.operator_permission.as_deref() == Some("observe")
     }
 
+    /// Whether this is a Remote Operator installation, which reports the
+    /// application release it finds rather than deploying an Alien release.
+    /// Every permission tier reports it; the tier only changes what the
+    /// Operator may do.
+    pub fn reports_application_release(&self) -> bool {
+        matches!(
+            self.operator_permission.as_deref(),
+            Some("observe" | "diagnostics" | "remediation")
+        )
+    }
+
     /// Check if running in airgapped mode (no sync configuration)
     pub fn is_airgapped(&self) -> bool {
         self.sync.is_none()
@@ -242,6 +253,26 @@ mod tests {
 
         assert!(!application.observes_environment());
         assert!(observer.observes_environment());
+    }
+
+    #[test]
+    fn every_remote_operator_tier_reports_the_application_release() {
+        let config = |permission: Option<&str>| {
+            OperatorConfig::builder()
+                .platform(Platform::Aws)
+                .maybe_operator_permission(permission.map(str::to_string))
+                .encryption_key("key")
+                .build()
+        };
+
+        for permission in ["observe", "diagnostics", "remediation"] {
+            assert!(
+                config(Some(permission)).reports_application_release(),
+                "{permission} should report the application release"
+            );
+        }
+        assert!(!config(None).reports_application_release());
+        assert!(!config(Some("diagnostics")).observes_environment());
     }
 
     #[test]

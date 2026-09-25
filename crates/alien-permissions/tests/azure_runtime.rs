@@ -571,9 +571,18 @@ fn azure_resource_scopes_name_exactly_the_resource_they_are_filed_under() {
     let mut checked = 0;
 
     for (id, provider_path) in [
-        ("postgres/heartbeat", "Microsoft.DBforPostgreSQL/flexibleServers"),
-        ("postgres/management", "Microsoft.DBforPostgreSQL/flexibleServers"),
-        ("postgres/provision", "Microsoft.DBforPostgreSQL/flexibleServers"),
+        (
+            "postgres/heartbeat",
+            "Microsoft.DBforPostgreSQL/flexibleServers",
+        ),
+        (
+            "postgres/management",
+            "Microsoft.DBforPostgreSQL/flexibleServers",
+        ),
+        (
+            "postgres/provision",
+            "Microsoft.DBforPostgreSQL/flexibleServers",
+        ),
         (
             "service-account/heartbeat",
             "Microsoft.ManagedIdentity/userAssignedIdentities",
@@ -594,8 +603,7 @@ fn azure_resource_scopes_name_exactly_the_resource_they_are_filed_under() {
             .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
             .unwrap_or_else(|error| panic!("{id} should generate a resource grant plan: {error}"));
 
-        let expected =
-            format!("{RESOURCE_GROUP}/providers/{provider_path}/my-stack-payments-data");
+        let expected = format!("{RESOURCE_GROUP}/providers/{provider_path}/my-stack-payments-data");
         for binding in &plan.bindings {
             checked += 1;
             assert_eq!(

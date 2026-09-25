@@ -344,8 +344,7 @@ mod tests {
 
         check_task(Some(directory), true, false)
             .expect("--manifest-only must validate without running the generator");
-        check_task(Some(directory), false, false)
-            .expect_err("a full check must run the generator");
+        check_task(Some(directory), false, false).expect_err("a full check must run the generator");
     }
 
     #[test]

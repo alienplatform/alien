@@ -85,5 +85,6 @@ windows-service = "0.8"
 fs2 = "0.4"
 
 [dev-dependencies]
+alien-infra = { workspace = true, features = ["test-utils"] }
 tempfile = { workspace = true }
 temp-env = { workspace = true }

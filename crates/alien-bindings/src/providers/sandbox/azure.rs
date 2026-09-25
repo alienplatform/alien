@@ -1630,7 +1630,10 @@ mod tests {
             _group: &str,
             _sandbox_id: &str,
         ) -> alien_client_core::Result<()> {
-            if self.delete_refuses.load(std::sync::atomic::Ordering::SeqCst) {
+            if self
+                .delete_refuses
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
                 return Err(http_error(503, "gateway timeout"));
             }
             self.deleted

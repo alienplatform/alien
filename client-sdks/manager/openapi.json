@@ -1448,7 +1448,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AgentSyncWireRequest"
+                "$ref": "#/components/schemas/AgentSyncRequest"
               }
             }
           },
@@ -1724,70 +1724,102 @@
         }
       },
       "AgentSyncRequest": {
-        "type": "object",
-        "required": [
-          "deploymentId"
-        ],
-        "properties": {
-          "capabilities": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/OperatorCapabilityReport"
+        "allOf": [
+          {
+            "type": "object",
+            "required": [
+              "deploymentId"
+            ],
+            "properties": {
+              "capabilities": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/OperatorCapabilityReport"
+                }
+              },
+              "currentState": {
+                "description": "Current deployment state as reported by the agent.\nWhen present, the manager updates the deployment record to reflect\nthe agent's progress (status, stack_state, etc.)."
+              },
+              "deploymentId": {
+                "type": "string"
+              },
+              "executionClaim": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ExecutionClaim"
+                  }
+                ]
+              },
+              "observedInventoryBatches": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ObservedInventoryBatch"
+                }
+              },
+              "operationsReport": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OperationsReport",
+                    "description": "The Operator's self-reported operations-plugin catalog and loaded\nbundle hash. Opaque to OSS beyond forwarding it to `reconcile()`."
+                  }
+                ]
+              },
+              "operatorVersion": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "resourceHeartbeats": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ResourceHeartbeat"
+                },
+                "description": "Managed resource status samples emitted by pull-mode deployment steps."
+              },
+              "session": {
+                "type": "string"
+              },
+              "supportsExecutionClaims": {
+                "type": "boolean"
+              }
             }
           },
-          "currentState": {
-            "description": "Current deployment state as reported by the agent.\nWhen present, the manager updates the deployment record to reflect\nthe agent's progress (status, stack_state, etc.)."
-          },
-          "deploymentId": {
-            "type": "string"
-          },
-          "executionClaim": {
-            "oneOf": [
-              {
-                "type": "null"
+          {
+            "type": "object",
+            "properties": {
+              "application": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ObservedApplicationReport",
+                    "description": "Application release the Operator observed in its environment.\nOpaque to OSS beyond forwarding it to `reconcile_request()`."
+                  }
+                ]
               },
-              {
-                "$ref": "#/components/schemas/ExecutionClaim"
+              "operatorImage": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OperatorImageReport",
+                    "description": "Exact immutable Operator image identity reported by the running process."
+                  }
+                ]
               }
-            ]
-          },
-          "observedInventoryBatches": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ObservedInventoryBatch"
             }
-          },
-          "operationsReport": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/OperationsReport",
-                "description": "The Operator's self-reported operations-plugin catalog and loaded\nbundle hash. Opaque to OSS beyond forwarding it to `reconcile()`."
-              }
-            ]
-          },
-          "operatorVersion": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "resourceHeartbeats": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ResourceHeartbeat"
-            },
-            "description": "Managed resource status samples emitted by pull-mode deployment steps."
-          },
-          "session": {
-            "type": "string"
-          },
-          "supportsExecutionClaims": {
-            "type": "boolean"
           }
-        }
+        ],
+        "description": "Body of `POST /v1/sync`."
       },
       "AgentSyncResponse": {
         "type": "object",
@@ -1825,30 +1857,6 @@
             ]
           }
         }
-      },
-      "AgentSyncWireRequest": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/AgentSyncRequest"
-          },
-          {
-            "type": "object",
-            "properties": {
-              "operatorImage": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/OperatorImageReport",
-                    "description": "Exact immutable Operator image identity reported by the running process."
-                  }
-                ]
-              }
-            }
-          }
-        ],
-        "description": "Inbound sync payload that adds optional receipts without expanding the\npublic [`AgentSyncRequest`] struct literal."
       },
       "AiAccessTest": {
         "type": "string",
@@ -7168,6 +7176,31 @@
           }
         ]
       },
+      "ContainerImageIdentity": {
+        "type": "object",
+        "description": "Image a running container reports.",
+        "required": [
+          "name",
+          "image"
+        ],
+        "properties": {
+          "digest": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Registry manifest digest in `sha256:<hex>` form, when the runtime\nreports one."
+          },
+          "image": {
+            "type": "string",
+            "description": "Image reference reported by the container runtime."
+          },
+          "name": {
+            "type": "string",
+            "description": "Container name."
+          }
+        }
+      },
       "CreateCommandRequest": {
         "type": "object",
         "description": "Request to create a new command",
@@ -11268,6 +11301,12 @@
           "ownerReferences"
         ],
         "properties": {
+          "containers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContainerImageIdentity"
+            }
+          },
           "cpu": {
             "oneOf": [
               {
@@ -13728,6 +13767,88 @@
         ],
         "description": "Network configuration for the stack.\n\nControls how VPC/VNet networking is provisioned. Users configure this in\n`StackSettings`; the Network resource itself is auto-generated by preflights.\n\n## Egress policy\n\nContainer cluster VMs are configured for egress based on the mode:\n\n- `UseDefault` → VMs get ephemeral public IPs (no NAT is provisioned)\n- `Create` → VMs use private IPs; Alien provisions a NAT gateway for outbound access\n- `ByoVpc*` / `ByoVnet*` → no public IPs assigned; customer manages egress\n\nFor production workloads, use `Create`. For fast dev/test iteration, `UseDefault` is\nsufficient. For environments with existing VPCs, use the appropriate `ByoVpc*` variant."
       },
+      "ObservedApplicationImage": {
+        "type": "object",
+        "description": "A container image running in one observed application workload.",
+        "required": [
+          "workload",
+          "container",
+          "image"
+        ],
+        "properties": {
+          "container": {
+            "type": "string",
+            "description": "Container name within the workload."
+          },
+          "digest": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Registry manifest digest in `sha256:<hex>` form, when the runtime\nreports one."
+          },
+          "image": {
+            "type": "string",
+            "description": "Image reference reported by the container runtime."
+          },
+          "workload": {
+            "type": "string",
+            "description": "Inventory identity of the workload, matching the `rawIdentity` of its\nobserved resource sample (for example `apps/v1:Deployment:shop:api`)."
+          }
+        }
+      },
+      "ObservedApplicationReport": {
+        "type": "object",
+        "description": "Application release the Operator observes running in its environment.\n\nThis identifies the customer's application, not the Operator: the\nOperator's own image is reported separately as [`OperatorImageReport`].",
+        "required": [
+          "source",
+          "complete",
+          "observedAt"
+        ],
+        "properties": {
+          "chartName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Helm chart name from the workloads' `helm.sh/chart` label. Present only\nwhen every labelled workload names the same chart."
+          },
+          "chartVersion": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Helm chart version from the same label."
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "Whether every workload kind could be listed. When `false`, the chart\nand images describe only the workloads the Operator could read."
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedApplicationImage"
+            },
+            "description": "Distinct container images running in the observed workloads."
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the workloads were read."
+          },
+          "source": {
+            "$ref": "#/components/schemas/ObservedApplicationSource",
+            "description": "Where this identity was read from."
+          }
+        }
+      },
+      "ObservedApplicationSource": {
+        "type": "string",
+        "description": "Where the Operator read the application identity from.",
+        "enum": [
+          "kubernetes"
+        ]
+      },
       "ObservedCounts": {
         "type": "object",
         "properties": {
@@ -13865,6 +13986,13 @@
           },
           "health": {
             "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContainerImageIdentity"
+            },
+            "description": "Distinct container images the resource's running instances report, when\nthe provider exposes them."
           },
           "labels": {
             "type": "object",

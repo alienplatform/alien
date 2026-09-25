@@ -245,12 +245,12 @@ async fn create_task(
             let params: Option<Value> = options
                 .params
                 .map(|raw| {
-                    serde_json::from_str(raw)
-                        .into_alien_error()
-                        .context(ErrorData::ValidationError {
+                    serde_json::from_str(raw).into_alien_error().context(
+                        ErrorData::ValidationError {
                             field: "params".to_string(),
                             message: "Invalid JSON".to_string(),
-                        })
+                        },
+                    )
                 })
                 .transpose()?;
             (Some(operation.to_string()), params, None, None)
@@ -270,8 +270,7 @@ async fn create_task(
     };
 
     let debug_tool = options.debug_tool.map(parse_debug_tool).transpose()?;
-    if options.debug_namespace.is_some() && debug_tool != Some(DebugGrantTool::Kubectl)
-    {
+    if options.debug_namespace.is_some() && debug_tool != Some(DebugGrantTool::Kubectl) {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "debug-namespace".to_string(),
             message: "--debug-namespace requires --debug-tool kubectl.".to_string(),
@@ -283,12 +282,12 @@ async fn create_task(
             message: "--debug-cloud-scope requires --debug-tool.".to_string(),
         }));
     }
-    if options.debug_cloud_scope.is_some() && debug_tool == Some(DebugGrantTool::Kubectl)
-    {
+    if options.debug_cloud_scope.is_some() && debug_tool == Some(DebugGrantTool::Kubectl) {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "debug-cloud-scope".to_string(),
-            message: "--debug-cloud-scope does not apply to --debug-tool kubectl; use --debug-namespace."
-                .to_string(),
+            message:
+                "--debug-cloud-scope does not apply to --debug-tool kubectl; use --debug-namespace."
+                    .to_string(),
         }));
     }
 
@@ -365,11 +364,7 @@ async fn create_task(
                 .or(debug_grant.cloud_scope.as_deref())
                 .map(|s| format!(" ({s})"))
                 .unwrap_or_default();
-            println!(
-                "{} {}{scope}",
-                dim_label("Debug access:"),
-                debug_grant.tool
-            );
+            println!("{} {}{scope}", dim_label("Debug access:"), debug_grant.tool);
         }
         print_kubectl_approve(&kubectl_approve, created.status);
         println!();
@@ -426,7 +421,9 @@ pub(crate) fn parse_debug_tool(value: &str) -> Result<DebugGrantTool> {
         "az" => Ok(DebugGrantTool::Az),
         other => Err(AlienError::new(ErrorData::ValidationError {
             field: "debug-tool".to_string(),
-            message: format!("'{other}' is not a supported debug tool. Use kubectl, aws, gcloud, or az."),
+            message: format!(
+                "'{other}' is not a supported debug tool. Use kubectl, aws, gcloud, or az."
+            ),
         })),
     }
 }
@@ -488,11 +485,7 @@ async fn get_task(
                 .or(debug_grant.cloud_scope.as_deref())
                 .map(|s| format!(" ({s})"))
                 .unwrap_or_default();
-            println!(
-                "{} {}{scope}",
-                dim_label("Debug access:"),
-                debug_grant.tool
-            );
+            println!("{} {}{scope}", dim_label("Debug access:"), debug_grant.tool);
         }
         if let Some(until) = &request.approved_until {
             println!("{} {}", dim_label("Approved until"), until);
@@ -684,7 +677,10 @@ pub(crate) async fn wait_for_approval(
             alien_platform_api::types::AccessRequestStatus::Rejected
             | alien_platform_api::types::AccessRequestStatus::Expired => {
                 return Err(AlienError::new(ErrorData::ApiRequestFailed {
-                    message: format!("access request '{id}' is '{}', not approved", request.status),
+                    message: format!(
+                        "access request '{id}' is '{}', not approved",
+                        request.status
+                    ),
                     url: None,
                 }));
             }

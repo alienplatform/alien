@@ -40,9 +40,9 @@ pub use init::init_task;
 pub use package::package_task;
 pub use permissions::{permissions_task, Cloud};
 #[cfg(feature = "platform")]
-pub use platform_actions::{invoke_task, list_task, publish_task};
-#[cfg(feature = "platform")]
 use platform_actions::InvokeTaskOptions;
+#[cfg(feature = "platform")]
+pub use platform_actions::{invoke_task, list_task, publish_task};
 pub use test::test_task;
 
 #[derive(Parser, Debug, Clone)]
@@ -226,9 +226,9 @@ pub async fn local_operations_task(args: &OperationsArgs) -> Option<Result<()>> 
             Some(package_task(directory.as_deref(), args.json))
         }
         #[cfg(feature = "platform")]
-        OperationsAction::Publish { .. } | OperationsAction::List | OperationsAction::Invoke { .. } => {
-            None
-        }
+        OperationsAction::Publish { .. }
+        | OperationsAction::List
+        | OperationsAction::Invoke { .. } => None,
     }
 }
 

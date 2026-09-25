@@ -13,6 +13,7 @@ import { Leases } from "./leases.js";
 import { Releases } from "./releases.js";
 import { StackImport } from "./stackimport.js";
 import { Sync } from "./sync.js";
+import { Vault } from "./vault.js";
 import { Whoami } from "./whoami.js";
 
 export class AlienManager extends ClientSDK {
@@ -49,6 +50,11 @@ export class AlienManager extends ClientSDK {
   private _deployments?: Deployments;
   get deployments(): Deployments {
     return (this._deployments ??= new Deployments(this._options));
+  }
+
+  private _vault?: Vault;
+  get vault(): Vault {
+    return (this._vault ??= new Vault(this._options));
   }
 
   private _sync?: Sync;

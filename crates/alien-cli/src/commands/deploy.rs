@@ -1243,16 +1243,17 @@ async fn deploy_task_with_environment(
 
     // Validate runner-local provider configuration before creating any durable
     // deployment record or token. Machines does not use a local cloud client.
-    let client_config =
-        if platform == Platform::Machines {
-            None
-        } else {
-            Some(ClientConfig::from_env(platform, environment).await.context(
-                ErrorData::ConfigurationError {
+    let client_config = if platform == Platform::Machines {
+        None
+    } else {
+        Some(
+            ClientConfig::from_env(platform, environment)
+                .await
+                .context(ErrorData::ConfigurationError {
                     message: format!("Failed to build client config for platform {:?}", platform),
-                },
-            )?)
-        };
+                })?,
+        )
+    };
 
     let base_url = ctx.base_url();
 
