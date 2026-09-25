@@ -427,7 +427,7 @@ async fn delete_synced_vault_secrets(
         })
     })?;
     // Sync records a hash even for a stack with no vault, so the inventory alone is not enough.
-    if !stack_state.resources.contains_key("secrets")
+    if !crate::helpers::has_secrets_vault(stack_state)
         || (runtime_metadata.last_synced_env_vars_hash.is_none()
             && runtime_metadata.last_synced_secret_names.is_empty())
     {
@@ -445,11 +445,7 @@ async fn delete_synced_vault_secrets(
         config,
         runtime_metadata,
     )
-    .await
-    .context(ErrorData::SecretSyncFailed {
-        vault_name: "secrets".to_string(),
-        reason: "Failed to delete deployment-owned secrets before setup teardown".to_string(),
-    })?;
+    .await?;
     Ok(())
 }
 
@@ -1485,13 +1481,12 @@ mod tests {
     }
 
     async fn held(vault: &Arc<dyn alien_bindings::traits::Vault>, names: &[&str]) -> Vec<String> {
-        let mut held = Vec::new();
-        for name in names {
-            if vault.get_secret(name).await.is_ok() {
-                held.push(name.to_string());
-            }
-        }
-        held
+        let listed = vault.list_secrets().await.unwrap();
+        names
+            .iter()
+            .filter(|name| listed.iter().any(|listed| listed == *name))
+            .map(|name| name.to_string())
+            .collect()
     }
 
     const TOKEN: &str = alien_core::ENV_ALIEN_COMMANDS_TOKEN;
@@ -1579,7 +1574,7 @@ mod tests {
             ["API_KEY", "DB_URL", "ZONE"].map(|name| (name.to_string(), "value".to_string())),
         );
 
-        assert!(crate::helpers::write_owned_vault_secrets(
+        let error = crate::helpers::write_owned_vault_secrets(
             &failing,
             &desired,
             &[],
@@ -1587,7 +1582,8 @@ mod tests {
             metadata,
         )
         .await
-        .is_err());
+        .unwrap_err();
+        assert_eq!(error.code, "SECRET_SYNC_FAILED");
         assert_eq!(
             metadata.last_synced_secret_names,
             vec!["API_KEY", "DB_URL", "ZONE"]
@@ -1683,14 +1679,15 @@ mod tests {
         state.runtime_metadata.as_mut().unwrap().prepared_stack = None;
         seed(&vault, &["API_KEY"]).await;
 
-        assert!(run(
+        let error = run(
             &mut state,
             MockPlatformServiceProvider::new(),
             &RecordingTransport::default(),
         )
         .await
-        .is_err());
+        .unwrap_err();
 
+        assert_eq!(error.code, "MISSING_CONFIGURATION");
         assert_eq!(state.status, DeploymentStatus::TeardownFailed);
         assert_eq!(
             state.stack_state.as_ref().unwrap().resources["secrets"].status,

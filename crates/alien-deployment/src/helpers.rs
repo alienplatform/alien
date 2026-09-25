@@ -672,10 +672,10 @@ pub(crate) async fn write_owned_vault_secrets(
         debug!("Synced deployment-owned secret '{name}' to vault");
     }
 
-    // Delete names recorded by a previous successful sync. The command token is the sole
-    // exception: it is a reserved, control-plane-owned key that pre-v2 sync wrote without an
-    // ownership inventory. The sync-schema hash forces one idempotent cleanup after upgrade.
-    // Never list or infer any other ownership from the shared vault.
+    // Delete names an earlier sync, complete or partial, recorded in the inventory. The command
+    // token is the sole exception: it is a reserved, control-plane-owned key that pre-v2 sync
+    // wrote without an ownership inventory. The sync-schema hash forces one idempotent cleanup
+    // after upgrade. Never list or infer any other ownership from the shared vault.
     for name in removed_secret_names {
         vault
             .delete_secret(name)
@@ -760,7 +760,7 @@ pub async fn delete_deployment_vault_secrets(
     Ok(true)
 }
 
-fn has_secrets_vault(stack_state: &StackState) -> bool {
+pub(crate) fn has_secrets_vault(stack_state: &StackState) -> bool {
     stack_state
         .resources
         .get("secrets")
