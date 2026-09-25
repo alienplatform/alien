@@ -8,9 +8,9 @@
 
 use alien_aws_clients::{
     iam::{CreateRoleRequest, IamApi, IamClient},
-    sqs::{CreateQueueRequest, SqsApi, SqsClient},
+    sqs::{CreateQueueRequest, GetQueueUrlRequest, SqsApi, SqsClient},
     sts::{AssumeRoleRequest, StsApi, StsClient},
-    AwsClientConfig, AwsClientConfigExt, AwsCredentialProvider, AwsCredentials,
+    AwsClientConfig, AwsClientConfigExt, AwsCredentialProvider, AwsCredentials, ErrorData,
 };
 use alien_bindings::{
     traits::{BindingsProviderApi, MessagePayload},
@@ -22,10 +22,31 @@ use alien_permissions::{
     PermissionContext,
 };
 use serde_json::json;
-use std::{collections::HashMap, env, time::Duration};
+use std::{collections::HashMap, env, future::Future, time::Duration};
 use test_context::AsyncTestContext;
 
 type TestResult<T> = Result<T, String>;
+
+async fn retry_cleanup<F, Fut>(operation: &str, mut run: F) -> TestResult<()>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = alien_aws_clients::Result<()>>,
+{
+    let mut attempt = 0;
+    loop {
+        match run().await {
+            Ok(()) => return Ok(()),
+            Err(error) if matches!(error.error, Some(ErrorData::RemoteResourceNotFound { .. })) => {
+                return Ok(());
+            }
+            Err(error) if attempt == 4 => return Err(format!("{operation}: {error}")),
+            Err(_) => {
+                attempt += 1;
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+}
 
 fn expect_access_denied<T>(
     result: alien_bindings::error::Result<T>,
@@ -151,6 +172,7 @@ impl AwsQueueContext {
                     "Action": "sts:AssumeRole"
                 }]
             });
+            self.roles.push(role_name.clone());
             self.iam
                 .create_role(
                     CreateRoleRequest::builder()
@@ -163,7 +185,6 @@ impl AwsQueueContext {
                 )
                 .await
                 .map_err(|error| format!("create {suffix} role: {error}"))?;
-            self.roles.push(role_name.clone());
 
             let context = PermissionContext::new()
                 .with_aws_account_id(&self.account_id)
@@ -301,6 +322,9 @@ impl AwsQueueContext {
         let mut messages = None;
         for attempt in 0..12 {
             match consumer.receive("jobs", 1).await {
+                Ok(received) if received.is_empty() && attempt < 11 => {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
                 Ok(received) => {
                     messages = Some(received);
                     break;
@@ -344,16 +368,50 @@ impl AwsQueueContext {
     async fn cleanup(&self) -> Vec<String> {
         let mut failures = Vec::new();
         for role in &self.roles {
-            if let Err(error) = self.iam.delete_role_policy(role, "QueueAccess").await {
-                failures.push(format!("delete policy on {role}: {error}"));
+            if let Err(error) = retry_cleanup("delete role policy", || {
+                self.iam.delete_role_policy(role, "QueueAccess")
+            })
+            .await
+            {
+                failures.push(format!("{role}: {error}"));
             }
-            if let Err(error) = self.iam.delete_role(role).await {
-                failures.push(format!("delete role {role}: {error}"));
+            if let Err(error) = retry_cleanup("delete role", || self.iam.delete_role(role)).await {
+                failures.push(format!("{role}: {error}"));
             }
         }
-        if let Some(queue_url) = &self.queue_url {
-            if let Err(error) = self.sqs.delete_queue(queue_url).await {
-                failures.push(format!("delete queue {queue_url}: {error}"));
+        let mut queue_url = self.queue_url.clone();
+        if queue_url.is_none() {
+            // CreateQueue may have succeeded remotely before its response was lost.
+            let queue_name = format!("{}-queue", self.prefix);
+            for attempt in 0..5 {
+                let request = GetQueueUrlRequest::builder()
+                    .queue_name(queue_name.clone())
+                    .build();
+                match self.sqs.get_queue_url(request).await {
+                    Ok(response) => {
+                        queue_url = Some(response.get_queue_url_result.queue_url);
+                        break;
+                    }
+                    Err(error)
+                        if matches!(
+                            error.error,
+                            Some(ErrorData::RemoteResourceNotFound { .. })
+                        ) && attempt == 4 =>
+                    {
+                        break;
+                    }
+                    Err(error) if attempt == 4 => {
+                        failures.push(format!("find queue {queue_name}: {error}"));
+                    }
+                    Err(_) => tokio::time::sleep(Duration::from_secs(2)).await,
+                }
+            }
+        }
+        if let Some(queue_url) = &queue_url {
+            if let Err(error) =
+                retry_cleanup("delete queue", || self.sqs.delete_queue(queue_url)).await
+            {
+                failures.push(format!("{queue_url}: {error}"));
             }
         }
         failures
