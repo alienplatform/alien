@@ -628,40 +628,9 @@ pub async fn sync_secrets_to_vault(
             reason: "Failed to load secrets vault".to_string(),
         })?;
 
-    write_owned_vault_secrets(
-        vault.as_ref(),
-        &desired_secrets,
-        &removed_secret_names,
-        sync_hash,
-        runtime_metadata,
-    )
-    .await?;
-
-    info!("Successfully reconciled deployment-owned vault secrets");
-    Ok(true)
-}
-
-/// Writes the desired values, then deletes the removed ones. The names about to be written join
-/// the inventory first, so a sync that fails partway still owns what it wrote and deployment
-/// deletion removes it. The hash is recorded only on success, so the next reconcile retries.
-pub(crate) async fn write_owned_vault_secrets(
-    vault: &dyn alien_bindings::traits::Vault,
-    desired_secrets: &BTreeMap<String, String>,
-    removed_secret_names: &[String],
-    sync_hash: String,
-    runtime_metadata: &mut alien_core::RuntimeMetadata,
-) -> Result<()> {
-    let attempted = runtime_metadata
-        .last_synced_secret_names
-        .iter()
-        .chain(desired_secrets.keys())
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>();
-    runtime_metadata.last_synced_secret_names = attempted.into_iter().collect();
-
     // Set desired values first so renames never create a window with neither
     // the old nor new key available. Values are already decrypted.
-    for (name, value) in desired_secrets {
+    for (name, value) in &desired_secrets {
         vault
             .set_secret(name, value)
             .await
@@ -672,11 +641,11 @@ pub(crate) async fn write_owned_vault_secrets(
         debug!("Synced deployment-owned secret '{name}' to vault");
     }
 
-    // Delete names an earlier sync, complete or partial, recorded in the inventory. The command
-    // token is the sole exception: it is a reserved, control-plane-owned key that pre-v2 sync
-    // wrote without an ownership inventory. The sync-schema hash forces one idempotent cleanup
-    // after upgrade. Never list or infer any other ownership from the shared vault.
-    for name in removed_secret_names {
+    // Delete names recorded by a previous successful sync. The command token is the sole
+    // exception: it is a reserved, control-plane-owned key that pre-v2 sync wrote without an
+    // ownership inventory. The sync-schema hash forces one idempotent cleanup after upgrade.
+    // Never list or infer any other ownership from the shared vault.
+    for name in &removed_secret_names {
         vault
             .delete_secret(name)
             .await
@@ -687,9 +656,39 @@ pub(crate) async fn write_owned_vault_secrets(
         debug!("Deleted removed deployment-owned secret '{name}' from vault");
     }
 
+    // Record ownership only after every mutation succeeds. A partial failure
+    // leaves the prior inventory in place so the next reconcile retries.
     runtime_metadata.last_synced_env_vars_hash = Some(sync_hash);
-    runtime_metadata.last_synced_secret_names = desired_secrets.keys().cloned().collect();
-    Ok(())
+    runtime_metadata.last_synced_secret_names = desired_secret_names;
+
+    info!("Successfully reconciled deployment-owned vault secrets");
+    Ok(true)
+}
+
+/// Adds the names a sync is about to write to the inventory, and reports whether any were missing.
+/// A caller that gets `true` persists the inventory before syncing, so a deployment with no recorded
+/// names has written nothing of its own to the vault.
+pub(crate) fn record_vault_secret_names(
+    stack: &Stack,
+    platform: Platform,
+    config: &DeploymentConfig,
+    runtime_metadata: &mut alien_core::RuntimeMetadata,
+) -> bool {
+    if platform == Platform::Machines {
+        return false;
+    }
+    let desired = desired_vault_secrets(stack, platform, config);
+    let recorded = &runtime_metadata.last_synced_secret_names;
+    if desired.keys().all(|name| recorded.contains(name)) {
+        return false;
+    }
+    let names = recorded
+        .iter()
+        .chain(desired.keys())
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    runtime_metadata.last_synced_secret_names = names.into_iter().collect();
+    true
 }
 
 /// Delete only vault keys that this deployment owns before its runtime resources are destroyed.

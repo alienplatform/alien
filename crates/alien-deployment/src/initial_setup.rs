@@ -83,26 +83,40 @@ pub async fn handle_initial_setup(
         .map(|r| r.status == ResourceStatus::Running)
         .unwrap_or(false);
 
+    // The names reach durable state in a step of their own, before any value is written: destroy
+    // deletes from the recorded names, so an unrecorded write would outlive the deployment.
+    if vault_is_running
+        && crate::helpers::record_vault_secret_names(
+            &target_stack,
+            client_config.platform(),
+            &config,
+            &mut runtime_metadata,
+        )
+    {
+        let mut next = current_cloned;
+        next.stack_state = Some(stack_state);
+        next.runtime_metadata = Some(runtime_metadata);
+        return Ok(DeploymentStepResult {
+            state: next,
+            suggested_delay_ms: None,
+            update_heartbeat: false,
+            heartbeats: vec![],
+            observed_inventory_batches: vec![],
+        });
+    }
+
     if vault_is_running {
-        match crate::helpers::sync_secrets_to_vault(
+        let synced = crate::helpers::sync_secrets_to_vault(
             &target_stack,
             &stack_state,
             &client_config,
             &config,
             &mut runtime_metadata,
         )
-        .await
-        {
-            Ok(true) => info!("Secrets synced to vault during InitialSetup"),
-            Ok(false) => {}
-            Err(error) => {
-                return Ok(failed_keeping_record(
-                    current_cloned,
-                    stack_state,
-                    runtime_metadata,
-                    error,
-                ))
-            }
+        .await?;
+
+        if synced {
+            info!("Secrets synced to vault during InitialSetup");
         }
     }
 
@@ -316,9 +330,9 @@ pub async fn handle_initial_setup(
 
 const SCAFFOLDING_POLL_DELAY_MS: u64 = 5_000;
 
-/// Setup scaffolding and secret sync record what they create in `runtime_metadata` as they go, and
-/// the runner's failure path would persist the state from before the step, dropping those records.
-/// So once either has run, a step fails itself with the record it holds.
+/// Setup scaffolding records each object in `runtime_metadata` as it is created, and the runner's
+/// failure path would persist the state from before the step, dropping those records. So once
+/// scaffolding has run, a step fails itself with the record it holds.
 fn failed_keeping_record(
     current: DeploymentState,
     stack_state: StackState,
@@ -1938,23 +1952,34 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn a_secret_sync_that_fails_keeps_the_names_it_attempted() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let not_a_dir = dir.path().join("not-a-dir");
-        std::fs::write(&not_a_dir, b"").unwrap();
+    /// Initial setup with the `secrets` vault already Running and one secret to sync into it.
+    fn setup_with_running_vault(
+        data_dir: &std::path::Path,
+    ) -> (
+        DeploymentState,
+        DeploymentConfig,
+        alien_bindings::providers::vault::local::LocalVault,
+    ) {
+        let data_dir = data_dir.to_string_lossy().to_string();
         let mut vault = alien_core::StackResourceState::builder()
             .resource_type(alien_core::Vault::RESOURCE_TYPE.to_string())
             .status(ResourceStatus::Running)
             .config(alien_core::Resource::new(
                 alien_core::Vault::new("secrets".to_string()).build(),
             ))
+            .internal_state(serde_json::json!({
+                "_controllerStateVersion": 1,
+                "type": "TestVaultController",
+                "state": "ready",
+                "vaultId": "test:vault:secrets",
+                "dataDir": data_dir
+            }))
             .lifecycle(ResourceLifecycle::Frozen)
+            .controller_platform(Platform::Test)
             .build();
         vault.remote_binding_params = Some(
             serde_json::to_value(alien_core::bindings::VaultBinding::local(
-                "secrets",
-                not_a_dir.to_string_lossy(),
+                "secrets", &data_dir,
             ))
             .unwrap(),
         );
@@ -1967,6 +1992,10 @@ mod tests {
             .permissions("default".to_string())
             .build();
         let prepared = Stack::new("test".to_string())
+            .add(
+                alien_core::Vault::new("secrets".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
             .add(worker, ResourceLifecycle::Live)
             .build();
         let mut config = config();
@@ -1992,20 +2021,110 @@ mod tests {
                 ..Default::default()
             }),
         };
+        let values = alien_bindings::providers::vault::local::LocalVault::new(
+            "secrets".to_string(),
+            std::path::PathBuf::from(data_dir),
+        );
+        (state, config, values)
+    }
 
-        let failed = handle_initial_setup(
+    async fn setup_step(state: DeploymentState, config: &DeploymentConfig) -> DeploymentState {
+        handle_initial_setup(
             state,
-            config,
+            config.clone(),
             ClientConfig::Test,
             Arc::new(MockPlatformServiceProvider::new()),
         )
         .await
-        .expect("the step fails itself with the record it holds")
-        .state;
+        .unwrap()
+        .state
+    }
 
-        assert_eq!(failed.status, DeploymentStatus::InitialSetupFailed);
-        let metadata = failed.runtime_metadata.unwrap();
+    async fn vault_names(
+        vault: &alien_bindings::providers::vault::local::LocalVault,
+    ) -> Vec<String> {
+        use alien_bindings::traits::Vault as _;
+        vault.list_secrets().await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn setup_records_the_secret_names_in_a_step_that_writes_nothing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (state, config, vault) = setup_with_running_vault(dir.path());
+
+        let recorded = setup_step(state, &config).await;
+
+        assert_eq!(recorded.status, DeploymentStatus::InitialSetup);
+        let metadata = recorded.runtime_metadata.unwrap();
         assert_eq!(metadata.last_synced_secret_names, vec!["API_TOKEN"]);
         assert!(metadata.last_synced_env_vars_hash.is_none());
+        assert!(vault_names(&vault).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_step_after_the_record_writes_the_secrets() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (state, config, vault) = setup_with_running_vault(dir.path());
+
+        let recorded = setup_step(state, &config).await;
+        let synced = setup_step(recorded, &config).await;
+
+        assert_eq!(vault_names(&vault).await, vec!["API_TOKEN"]);
+        let metadata = synced.runtime_metadata.unwrap();
+        assert_eq!(metadata.last_synced_secret_names, vec!["API_TOKEN"]);
+        assert!(metadata.last_synced_env_vars_hash.is_some());
+    }
+
+    #[derive(Default)]
+    struct AcceptingTransport;
+
+    #[async_trait::async_trait]
+    impl crate::transport::DeploymentLoopTransport for AcceptingTransport {
+        async fn reconcile_step(
+            &self,
+            _deployment_id: &str,
+            _state: &DeploymentState,
+            _config: &DeploymentConfig,
+            _update_heartbeat: bool,
+            _suggested_delay_ms: Option<u64>,
+            _heartbeats: Vec<alien_core::ResourceHeartbeat>,
+            _observed_inventory_batches: Vec<alien_core::ObservedInventoryBatch>,
+        ) -> std::result::Result<crate::transport::StepReconcileResult, AlienError> {
+            Ok(crate::transport::StepReconcileResult {
+                state: None,
+                config: None,
+            })
+        }
+    }
+
+    /// The values may already be written when the step that wrote them never checkpointed; the
+    /// recorded names are what teardown deletes.
+    #[tokio::test]
+    async fn setup_teardown_deletes_names_recorded_before_an_interrupted_sync() {
+        use alien_bindings::traits::Vault as _;
+        let dir = tempfile::TempDir::new().unwrap();
+        let (state, mut config, vault) = setup_with_running_vault(dir.path());
+        let mut checkpointed = setup_step(state, &config).await;
+        vault.set_secret("API_TOKEN", "secret").await.unwrap();
+        checkpointed.status = DeploymentStatus::TeardownRequired;
+
+        crate::setup_teardown::run_setup_teardown_after_handoff(
+            &mut checkpointed,
+            &mut config,
+            &ClientConfig::Test,
+            "dep_test",
+            &crate::runner::RunnerPolicy {
+                operation: crate::loop_contract::LoopOperation::Delete,
+                delay_strategy: crate::runner::DelayStrategy::Inline,
+                ..Default::default()
+            },
+            &AcceptingTransport,
+            Some(Arc::new(MockPlatformServiceProvider::new())),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(checkpointed.status, DeploymentStatus::Deleted);
+        assert!(vault_names(&vault).await.is_empty());
     }
 }

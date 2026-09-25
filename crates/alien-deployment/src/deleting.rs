@@ -818,7 +818,7 @@ mod tests {
     /// Setup teardown deletes those secrets with its own credentials.
     #[test]
     fn a_synced_secrets_vault_goes_to_setup_teardown() {
-        let mut state = with_resource(
+        let state = with_resource(
             after_setup_failed(
                 alien_core::InitialSetupAuthority::DirectSetup,
                 false,
@@ -829,9 +829,6 @@ mod tests {
             Some(ResourceLifecycle::Frozen),
             ResourceStatus::Running,
         );
-        let metadata = state.runtime_metadata.as_mut().unwrap();
-        metadata.last_synced_env_vars_hash = Some("synced".to_string());
-        metadata.last_synced_secret_names = vec!["API_TOKEN".to_string()];
         assert_eq!(
             super::destroy_without_runtime(&state),
             Some(DeploymentStatus::TeardownRequired)
