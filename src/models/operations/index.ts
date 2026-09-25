@@ -4,6 +4,7 @@
  */
 
 export * from "./acceptremoteoperatorimage.js";
+export * from "./acceptremoteoperatorpermissions.js";
 export * from "./acceptworkspaceinvitation.js";
 export * from "./addworkspacemember.js";
 export * from "./applycontainerregistrymanagersnapshot.js";

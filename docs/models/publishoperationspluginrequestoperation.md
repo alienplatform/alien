@@ -1,14 +1,18 @@
-# Operation
+# PublishOperationsPluginRequestOperation
 
 ## Example Usage
 
 ```typescript
-import { Operation } from "@alienplatform/platform-api/models";
+import { PublishOperationsPluginRequestOperation } from "@alienplatform/platform-api/models";
 
-let value: Operation = {
+let value: PublishOperationsPluginRequestOperation = {
   name: "<value>",
   permissions: [
-    "<value>",
+    {
+      id: "<id>",
+      description: "ragged alert cruelly determined ack ruddy",
+      platforms: {},
+    },
   ],
 };
 ```

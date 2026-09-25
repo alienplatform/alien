@@ -6,7 +6,7 @@
 import { NextAction } from "@alienplatform/platform-api/models/operations";
 
 let value: NextAction = {
-  kind: "reconnect",
+  kind: "verify",
   target: "access",
   deploymentId: "<id>",
   message: "<value>",

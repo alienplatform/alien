@@ -4,6 +4,7 @@
  */
 
 import { projectsAcceptRemoteOperatorImage } from "../funcs/projectsAcceptRemoteOperatorImage.js";
+import { projectsAcceptRemoteOperatorPermissions } from "../funcs/projectsAcceptRemoteOperatorPermissions.js";
 import { projectsConfigureAiProviderHeaders } from "../funcs/projectsConfigureAiProviderHeaders.js";
 import { projectsConfigureBuckets } from "../funcs/projectsConfigureBuckets.js";
 import { projectsConfigureDeployments } from "../funcs/projectsConfigureDeployments.js";
@@ -411,6 +412,23 @@ export class Projects extends ClientSDK {
     options?: RequestOptions,
   ): Promise<operations.AcceptRemoteOperatorImageResponse> {
     return unwrapAsync(projectsAcceptRemoteOperatorImage(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Record that a Remote Operator installation's setup was re-applied
+   *
+   * @remarks
+   * Records the permissions compiled from the currently enabled operations as the installation's installed permissions. Call it after re-applying the installation's Helm release, manifest, cloud access, or CloudFormation stack.
+   */
+  async acceptRemoteOperatorPermissions(
+    request: operations.AcceptRemoteOperatorPermissionsRequest,
+    options?: RequestOptions,
+  ): Promise<operations.AcceptRemoteOperatorPermissionsResponse> {
+    return unwrapAsync(projectsAcceptRemoteOperatorPermissions(
       this,
       request,
       options,

@@ -272,6 +272,14 @@ export type CreateChildDeploymentRequestOverrideAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -285,6 +293,14 @@ export type CreateChildDeploymentRequestOverrideAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -633,6 +649,14 @@ export type CreateChildDeploymentRequestExtendAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -646,6 +670,14 @@ export type CreateChildDeploymentRequestExtendAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -1000,6 +1032,14 @@ export type CreateChildDeploymentRequestProfileAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -1013,6 +1053,14 @@ export type CreateChildDeploymentRequestProfileAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -1874,6 +1922,7 @@ export const CreateChildDeploymentRequestManagementEnum$outboundSchema:
 /** @internal */
 export type CreateChildDeploymentRequestOverrideAwResource$Outbound = {
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  notResources?: Array<string> | undefined;
   resources: Array<string>;
 };
 
@@ -1886,6 +1935,7 @@ export const CreateChildDeploymentRequestOverrideAwResource$outboundSchema:
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -1903,6 +1953,7 @@ export function createChildDeploymentRequestOverrideAwResourceToJSON(
 /** @internal */
 export type CreateChildDeploymentRequestOverrideAwStack$Outbound = {
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  notResources?: Array<string> | undefined;
   resources: Array<string>;
 };
 
@@ -1915,6 +1966,7 @@ export const CreateChildDeploymentRequestOverrideAwStack$outboundSchema:
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -2611,6 +2663,7 @@ export function createChildDeploymentRequestManagement2ToJSON(
 /** @internal */
 export type CreateChildDeploymentRequestExtendAwResource$Outbound = {
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  notResources?: Array<string> | undefined;
   resources: Array<string>;
 };
 
@@ -2623,6 +2676,7 @@ export const CreateChildDeploymentRequestExtendAwResource$outboundSchema:
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -2640,6 +2694,7 @@ export function createChildDeploymentRequestExtendAwResourceToJSON(
 /** @internal */
 export type CreateChildDeploymentRequestExtendAwStack$Outbound = {
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  notResources?: Array<string> | undefined;
   resources: Array<string>;
 };
 
@@ -2652,6 +2707,7 @@ export const CreateChildDeploymentRequestExtendAwStack$outboundSchema:
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -3362,6 +3418,7 @@ export function createChildDeploymentRequestManagementUnionToJSON(
 /** @internal */
 export type CreateChildDeploymentRequestProfileAwResource$Outbound = {
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  notResources?: Array<string> | undefined;
   resources: Array<string>;
 };
 
@@ -3374,6 +3431,7 @@ export const CreateChildDeploymentRequestProfileAwResource$outboundSchema:
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -3391,6 +3449,7 @@ export function createChildDeploymentRequestProfileAwResourceToJSON(
 /** @internal */
 export type CreateChildDeploymentRequestProfileAwStack$Outbound = {
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  notResources?: Array<string> | undefined;
   resources: Array<string>;
 };
 
@@ -3403,6 +3462,7 @@ export const CreateChildDeploymentRequestProfileAwStack$outboundSchema:
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 

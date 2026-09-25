@@ -17,6 +17,7 @@ let value: Pod2 = {
 
 | Field                                                    | Type                                                     | Required                                                 | Description                                              |
 | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
+| `containers`                                             | [models.Container2](../models/container2.md)[]           | :heavy_minus_sign:                                       | N/A                                                      |
 | `cpu`                                                    | *models.PodCpuUnion2*                                    | :heavy_minus_sign:                                       | N/A                                                      |
 | `memory`                                                 | *models.PodMemoryUnion2*                                 | :heavy_minus_sign:                                       | N/A                                                      |
 | `name`                                                   | *string*                                                 | :heavy_check_mark:                                       | N/A                                                      |

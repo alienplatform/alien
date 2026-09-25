@@ -11,5 +11,5 @@ let value: NextActionKind = "connect";
 ## Values
 
 ```typescript
-"connect" | "inspect" | "reconnect" | "verify" | "wait" | "none"
+"connect" | "inspect" | "reconnect" | "verify" | "update" | "wait" | "none"
 ```

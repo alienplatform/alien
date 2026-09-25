@@ -39,7 +39,7 @@ export class ChildDeployments extends ClientSDK {
   }
 
   /**
-   * Create a workspace domain and optional initial endpoints.
+   * Create a debug-session audit row. Called by the manager when a pull or push debug tunnel is opened. Workspace + project derived from deployment.
    */
   async create(
     request: operations.CreateChildDeploymentRequest,
@@ -53,7 +53,7 @@ export class ChildDeployments extends ClientSDK {
   }
 
   /**
-   * List system domains and workspace domains.
+   * Retrieve debug sessions for dashboard audit. Filters: project, deployment, state, mode.
    */
   async list(
     request: operations.ListChildDeploymentsRequest,
@@ -67,7 +67,7 @@ export class ChildDeployments extends ClientSDK {
   }
 
   /**
-   * Get cloud regions supported by this Alien environment.
+   * Retrieve a debug session by ID.
    */
   async get(
     request: operations.GetChildDeploymentRequest,
@@ -80,9 +80,6 @@ export class ChildDeployments extends ClientSDK {
     ));
   }
 
-  /**
-   * Delete a workspace domain.
-   */
   async delete(
     request: operations.DeleteChildDeploymentRequest,
     options?: RequestOptions,

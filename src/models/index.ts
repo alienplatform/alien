@@ -245,6 +245,7 @@ export * from "./remotebindingsexternalaccessrequest.js";
 export * from "./remotebindingsexternalaccessresponse.js";
 export * from "./remoteoperatorimageidentity.js";
 export * from "./remoteoperatorinstallreceipt.js";
+export * from "./remoteoperatorpermissionplugin.js";
 export * from "./removemachinesmachineresponse.js";
 export * from "./renderoperatorecscloudformationrequest.js";
 export * from "./renderoperatorecscloudformationresponse.js";

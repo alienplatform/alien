@@ -14,7 +14,7 @@ let value: GetRemoteOperatorProjectSummaryResponse = {
     name: "<value>",
   },
   nextAction: {
-    kind: "wait",
+    kind: "update",
     target: "access",
     deploymentId: null,
     message: "<value>",

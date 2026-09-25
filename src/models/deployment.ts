@@ -1946,6 +1946,14 @@ export type DeploymentPendingPreparedStackOverrideAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -1959,6 +1967,14 @@ export type DeploymentPendingPreparedStackOverrideAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -2307,6 +2323,14 @@ export type DeploymentPendingPreparedStackExtendAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -2320,6 +2344,14 @@ export type DeploymentPendingPreparedStackExtendAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -2674,6 +2706,14 @@ export type DeploymentPendingPreparedStackProfileAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -2687,6 +2727,14 @@ export type DeploymentPendingPreparedStackProfileAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -3433,6 +3481,14 @@ export type DeploymentPreparedStackOverrideAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -3446,6 +3502,14 @@ export type DeploymentPreparedStackOverrideAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -3792,6 +3856,14 @@ export type DeploymentPreparedStackExtendAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -3805,6 +3877,14 @@ export type DeploymentPreparedStackExtendAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -4159,6 +4239,14 @@ export type DeploymentPreparedStackProfileAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -4172,6 +4260,14 @@ export type DeploymentPreparedStackProfileAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -7667,6 +7763,7 @@ export const DeploymentPendingPreparedStackOverrideAwResource$inboundSchema:
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -7692,6 +7789,7 @@ export const DeploymentPendingPreparedStackOverrideAwStack$inboundSchema:
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -8302,6 +8400,7 @@ export const DeploymentPendingPreparedStackExtendAwResource$inboundSchema:
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     },
   );
@@ -8328,6 +8427,7 @@ export const DeploymentPendingPreparedStackExtendAwStack$inboundSchema:
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -8959,6 +9059,7 @@ export const DeploymentPendingPreparedStackProfileAwResource$inboundSchema:
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -8984,6 +9085,7 @@ export const DeploymentPendingPreparedStackProfileAwStack$inboundSchema:
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -10017,6 +10119,7 @@ export const DeploymentPreparedStackOverrideAwResource$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
     .optional(),
+  notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
 
@@ -10043,6 +10146,7 @@ export const DeploymentPreparedStackOverrideAwStack$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
     .optional(),
+  notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
 
@@ -10602,6 +10706,7 @@ export const DeploymentPreparedStackExtendAwResource$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
     .optional(),
+  notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
 
@@ -10628,6 +10733,7 @@ export const DeploymentPreparedStackExtendAwStack$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
     .optional(),
+  notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
 
@@ -11186,6 +11292,7 @@ export const DeploymentPreparedStackProfileAwResource$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
     .optional(),
+  notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
 
@@ -11212,6 +11319,7 @@ export const DeploymentPreparedStackProfileAwStack$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
     .optional(),
+  notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
 

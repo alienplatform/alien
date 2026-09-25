@@ -34,6 +34,7 @@ export const NextActionKind = {
   Inspect: "inspect",
   Reconnect: "reconnect",
   Verify: "verify",
+  Update: "update",
   Wait: "wait",
   None: "none",
 } as const;
@@ -119,6 +120,34 @@ export type OperationSync = {
   error: string | null;
 };
 
+/**
+ * Whether the Kubernetes RBAC and cloud IAM recorded for this installation match the permissions compiled from the currently enabled operations.
+ */
+export const PermissionsStatus = {
+  Current: "current",
+  Outdated: "outdated",
+  Unknown: "unknown",
+} as const;
+/**
+ * Whether the Kubernetes RBAC and cloud IAM recorded for this installation match the permissions compiled from the currently enabled operations.
+ */
+export type PermissionsStatus = ClosedEnum<typeof PermissionsStatus>;
+
+/**
+ * Installed cloud and Kubernetes permissions. Setup applies them, so enabling or disabling operations changes them only after the installation's setup is re-applied.
+ */
+export type Permissions = {
+  /**
+   * Whether the Kubernetes RBAC and cloud IAM recorded for this installation match the permissions compiled from the currently enabled operations.
+   */
+  status: PermissionsStatus;
+  /**
+   * When setup was issued or last re-applied; null when nothing was recorded.
+   */
+  recordedAt: Date | null;
+  reason: string;
+};
+
 export type GetRemoteOperatorProjectSummaryItem = {
   id: string;
   name: string;
@@ -138,6 +167,10 @@ export type GetRemoteOperatorProjectSummaryItem = {
   runningImage: models.ObservedRemoteOperatorImageIdentity | null;
   imageStatus: ImageStatus;
   operationSync: OperationSync | null;
+  /**
+   * Installed cloud and Kubernetes permissions. Setup applies them, so enabling or disabling operations changes them only after the installation's setup is re-applied.
+   */
+  permissions: Permissions;
 };
 
 export type InstallationsData = {
@@ -708,6 +741,31 @@ export function operationSyncFromJSON(
 }
 
 /** @internal */
+export const PermissionsStatus$inboundSchema: z.ZodEnum<
+  typeof PermissionsStatus
+> = z.enum(PermissionsStatus);
+
+/** @internal */
+export const Permissions$inboundSchema: z.ZodType<Permissions, unknown> = z
+  .object({
+    status: PermissionsStatus$inboundSchema,
+    recordedAt: z.nullable(
+      z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+    ),
+    reason: z.string(),
+  });
+
+export function permissionsFromJSON(
+  jsonString: string,
+): SafeParseResult<Permissions, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Permissions$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Permissions' from JSON`,
+  );
+}
+
+/** @internal */
 export const GetRemoteOperatorProjectSummaryItem$inboundSchema: z.ZodType<
   GetRemoteOperatorProjectSummaryItem,
   unknown
@@ -738,6 +796,7 @@ export const GetRemoteOperatorProjectSummaryItem$inboundSchema: z.ZodType<
   ),
   imageStatus: ImageStatus$inboundSchema,
   operationSync: z.nullable(z.lazy(() => OperationSync$inboundSchema)),
+  permissions: z.lazy(() => Permissions$inboundSchema),
 });
 
 export function getRemoteOperatorProjectSummaryItemFromJSON(

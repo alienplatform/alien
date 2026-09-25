@@ -1706,6 +1706,14 @@ export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAwResour
      */
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
     /**
+     * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+     *
+     * @remarks
+     * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+     * refuses it anywhere else.
+     */
+    notResources?: Array<string> | undefined;
+    /**
      * Resource ARNs to bind to
      */
     resources: Array<string>;
@@ -1720,6 +1728,14 @@ export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAwStack 
      * Optional condition for additional filtering (rare)
      */
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    /**
+     * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+     *
+     * @remarks
+     * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+     * refuses it anywhere else.
+     */
+    notResources?: Array<string> | undefined;
     /**
      * Resource ARNs to bind to
      */
@@ -2115,6 +2131,14 @@ export type PersistImportedDeploymentRequestPendingPreparedStackExtendAwResource
      */
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
     /**
+     * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+     *
+     * @remarks
+     * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+     * refuses it anywhere else.
+     */
+    notResources?: Array<string> | undefined;
+    /**
      * Resource ARNs to bind to
      */
     resources: Array<string>;
@@ -2129,6 +2153,14 @@ export type PersistImportedDeploymentRequestPendingPreparedStackExtendAwStack =
      * Optional condition for additional filtering (rare)
      */
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    /**
+     * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+     *
+     * @remarks
+     * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+     * refuses it anywhere else.
+     */
+    notResources?: Array<string> | undefined;
     /**
      * Resource ARNs to bind to
      */
@@ -2528,6 +2560,14 @@ export type PersistImportedDeploymentRequestPendingPreparedStackProfileAwResourc
      */
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
     /**
+     * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+     *
+     * @remarks
+     * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+     * refuses it anywhere else.
+     */
+    notResources?: Array<string> | undefined;
+    /**
      * Resource ARNs to bind to
      */
     resources: Array<string>;
@@ -2542,6 +2582,14 @@ export type PersistImportedDeploymentRequestPendingPreparedStackProfileAwStack =
      * Optional condition for additional filtering (rare)
      */
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    /**
+     * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+     *
+     * @remarks
+     * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+     * refuses it anywhere else.
+     */
+    notResources?: Array<string> | undefined;
     /**
      * Resource ARNs to bind to
      */
@@ -3352,6 +3400,14 @@ export type PersistImportedDeploymentRequestPreparedStackOverrideAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -3365,6 +3421,14 @@ export type PersistImportedDeploymentRequestPreparedStackOverrideAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -3743,6 +3807,14 @@ export type PersistImportedDeploymentRequestPreparedStackExtendAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -3756,6 +3828,14 @@ export type PersistImportedDeploymentRequestPreparedStackExtendAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -4138,6 +4218,14 @@ export type PersistImportedDeploymentRequestPreparedStackProfileAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -4151,6 +4239,14 @@ export type PersistImportedDeploymentRequestPreparedStackProfileAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -8533,6 +8629,7 @@ export const PersistImportedDeploymentRequestPendingPreparedStackManagementEnum$
 export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAwResource$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -8545,6 +8642,7 @@ export const PersistImportedDeploymentRequestPendingPreparedStackOverrideAwResou
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -8564,6 +8662,7 @@ export function persistImportedDeploymentRequestPendingPreparedStackOverrideAwRe
 export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAwStack$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -8576,6 +8675,7 @@ export const PersistImportedDeploymentRequestPendingPreparedStackOverrideAwStack
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -9339,6 +9439,7 @@ export function persistImportedDeploymentRequestPendingPreparedStackManagement2T
 export type PersistImportedDeploymentRequestPendingPreparedStackExtendAwResource$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -9351,6 +9452,7 @@ export const PersistImportedDeploymentRequestPendingPreparedStackExtendAwResourc
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -9370,6 +9472,7 @@ export function persistImportedDeploymentRequestPendingPreparedStackExtendAwReso
 export type PersistImportedDeploymentRequestPendingPreparedStackExtendAwStack$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -9382,6 +9485,7 @@ export const PersistImportedDeploymentRequestPendingPreparedStackExtendAwStack$o
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -10172,6 +10276,7 @@ export function persistImportedDeploymentRequestPendingPreparedStackManagementUn
 export type PersistImportedDeploymentRequestPendingPreparedStackProfileAwResource$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -10184,6 +10289,7 @@ export const PersistImportedDeploymentRequestPendingPreparedStackProfileAwResour
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -10203,6 +10309,7 @@ export function persistImportedDeploymentRequestPendingPreparedStackProfileAwRes
 export type PersistImportedDeploymentRequestPendingPreparedStackProfileAwStack$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -10215,6 +10322,7 @@ export const PersistImportedDeploymentRequestPendingPreparedStackProfileAwStack$
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -11615,6 +11723,7 @@ export const PersistImportedDeploymentRequestPreparedStackManagementEnum$outboun
 export type PersistImportedDeploymentRequestPreparedStackOverrideAwResource$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -11627,6 +11736,7 @@ export const PersistImportedDeploymentRequestPreparedStackOverrideAwResource$out
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -11644,6 +11754,7 @@ export function persistImportedDeploymentRequestPreparedStackOverrideAwResourceT
 export type PersistImportedDeploymentRequestPreparedStackOverrideAwStack$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -11656,6 +11767,7 @@ export const PersistImportedDeploymentRequestPreparedStackOverrideAwStack$outbou
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -12388,6 +12500,7 @@ export function persistImportedDeploymentRequestPreparedStackManagement2ToJSON(
 export type PersistImportedDeploymentRequestPreparedStackExtendAwResource$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -12400,6 +12513,7 @@ export const PersistImportedDeploymentRequestPreparedStackExtendAwResource$outbo
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -12417,6 +12531,7 @@ export function persistImportedDeploymentRequestPreparedStackExtendAwResourceToJ
 export type PersistImportedDeploymentRequestPreparedStackExtendAwStack$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -12429,6 +12544,7 @@ export const PersistImportedDeploymentRequestPreparedStackExtendAwStack$outbound
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -13185,6 +13301,7 @@ export function persistImportedDeploymentRequestPreparedStackManagementUnionToJS
 export type PersistImportedDeploymentRequestPreparedStackProfileAwResource$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -13197,6 +13314,7 @@ export const PersistImportedDeploymentRequestPreparedStackProfileAwResource$outb
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -13214,6 +13332,7 @@ export function persistImportedDeploymentRequestPreparedStackProfileAwResourceTo
 export type PersistImportedDeploymentRequestPreparedStackProfileAwStack$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -13226,6 +13345,7 @@ export const PersistImportedDeploymentRequestPreparedStackProfileAwStack$outboun
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 

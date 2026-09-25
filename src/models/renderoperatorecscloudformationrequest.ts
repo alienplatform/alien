@@ -55,13 +55,13 @@ export type RenderOperatorEcsCloudFormationRequest = {
   securityGroupIds: Array<string>;
   assignPublicIp?: AssignPublicIp | undefined;
   /**
-   * Exact customer-owned EFS filesystem ID
+   * Existing EFS filesystem ID for the Operator identity. Omit it, with efsAccessPointId, to have the stack create retained EFS storage.
    */
-  efsFileSystemId: string;
+  efsFileSystemId?: string | undefined;
   /**
-   * Exact customer-owned EFS access point ID
+   * Existing EFS access point ID (POSIX UID and GID 1000) on efsFileSystemId. Supply it together with efsFileSystemId.
    */
-  efsAccessPointId: string;
+  efsAccessPointId?: string | undefined;
   /**
    * Ready operator-image package to pin in the task definition. If omitted, the current project package is prepared or reused.
    */
@@ -97,8 +97,8 @@ export type RenderOperatorEcsCloudFormationRequest$Outbound = {
   subnetIds: Array<string>;
   securityGroupIds: Array<string>;
   assignPublicIp: string;
-  efsFileSystemId: string;
-  efsAccessPointId: string;
+  efsFileSystemId?: string | undefined;
+  efsAccessPointId?: string | undefined;
   operatorImagePackageId?: string | undefined;
   s3BucketArns?: Array<string> | undefined;
   sqsQueueArns?: Array<string> | undefined;
@@ -119,8 +119,8 @@ export const RenderOperatorEcsCloudFormationRequest$outboundSchema: z.ZodType<
   subnetIds: z.array(z.string()),
   securityGroupIds: z.array(z.string()),
   assignPublicIp: AssignPublicIp$outboundSchema.default("DISABLED"),
-  efsFileSystemId: z.string(),
-  efsAccessPointId: z.string(),
+  efsFileSystemId: z.string().optional(),
+  efsAccessPointId: z.string().optional(),
   operatorImagePackageId: z.string().optional(),
   s3BucketArns: z.array(z.string()).optional(),
   sqsQueueArns: z.array(z.string()).optional(),

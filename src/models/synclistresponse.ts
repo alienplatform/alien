@@ -2002,6 +2002,14 @@ export type SyncListResponsePendingPreparedStackOverrideAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -2015,6 +2023,14 @@ export type SyncListResponsePendingPreparedStackOverrideAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -2376,6 +2392,14 @@ export type SyncListResponsePendingPreparedStackExtendAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -2389,6 +2413,14 @@ export type SyncListResponsePendingPreparedStackExtendAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -2750,6 +2782,14 @@ export type SyncListResponsePendingPreparedStackProfileAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -2763,6 +2803,14 @@ export type SyncListResponsePendingPreparedStackProfileAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -3517,6 +3565,14 @@ export type SyncListResponsePreparedStackOverrideAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -3530,6 +3586,14 @@ export type SyncListResponsePreparedStackOverrideAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -3878,6 +3942,14 @@ export type SyncListResponsePreparedStackExtendAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -3891,6 +3963,14 @@ export type SyncListResponsePreparedStackExtendAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -4245,6 +4325,14 @@ export type SyncListResponsePreparedStackProfileAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -4258,6 +4346,14 @@ export type SyncListResponsePreparedStackProfileAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -8034,6 +8130,7 @@ export const SyncListResponsePendingPreparedStackOverrideAwResource$inboundSchem
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -8059,6 +8156,7 @@ export const SyncListResponsePendingPreparedStackOverrideAwStack$inboundSchema:
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -8675,6 +8773,7 @@ export const SyncListResponsePendingPreparedStackExtendAwResource$inboundSchema:
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -8701,6 +8800,7 @@ export const SyncListResponsePendingPreparedStackExtendAwStack$inboundSchema:
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -9344,6 +9444,7 @@ export const SyncListResponsePendingPreparedStackProfileAwResource$inboundSchema
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -9370,6 +9471,7 @@ export const SyncListResponsePendingPreparedStackProfileAwStack$inboundSchema:
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -10465,6 +10567,7 @@ export const SyncListResponsePreparedStackOverrideAwResource$inboundSchema:
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     });
 
@@ -10490,6 +10593,7 @@ export const SyncListResponsePreparedStackOverrideAwStack$inboundSchema:
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -11091,6 +11195,7 @@ export const SyncListResponsePreparedStackExtendAwResource$inboundSchema:
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -11116,6 +11221,7 @@ export const SyncListResponsePreparedStackExtendAwStack$inboundSchema:
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -11732,6 +11838,7 @@ export const SyncListResponsePreparedStackProfileAwResource$inboundSchema:
       condition: z.nullable(
         z.record(z.string(), z.record(z.string(), z.string())),
       ).optional(),
+      notResources: z.array(z.string()).optional(),
       resources: z.array(z.string()),
     },
   );
@@ -11758,6 +11865,7 @@ export const SyncListResponsePreparedStackProfileAwStack$inboundSchema:
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 

@@ -5980,6 +5980,27 @@ export type Memory6 = {
 
 export type MemoryUnion6 = Memory6 | any;
 
+/**
+ * Image a running container reports.
+ */
+export type Container3 = {
+  /**
+   * Registry manifest digest in `sha256:<hex>` form, when the runtime
+   *
+   * @remarks
+   * reports one.
+   */
+  digest?: string | null | undefined;
+  /**
+   * Image reference reported by the container runtime.
+   */
+  image: string;
+  /**
+   * Container name.
+   */
+  name: string;
+};
+
 export const CpuPodUnit3 = {
   Count: "count",
   Percent: "percent",
@@ -6022,6 +6043,7 @@ export type OwnerReference3 = {
 };
 
 export type Pod3 = {
+  containers?: Array<Container3> | undefined;
   cpu?: CpuPod3 | any | null | undefined;
   memory?: MemoryPod3 | any | null | undefined;
   name: string;
@@ -7087,6 +7109,27 @@ export type Memory4 = {
 
 export type MemoryUnion4 = Memory4 | any;
 
+/**
+ * Image a running container reports.
+ */
+export type Container2 = {
+  /**
+   * Registry manifest digest in `sha256:<hex>` form, when the runtime
+   *
+   * @remarks
+   * reports one.
+   */
+  digest?: string | null | undefined;
+  /**
+   * Image reference reported by the container runtime.
+   */
+  image: string;
+  /**
+   * Container name.
+   */
+  name: string;
+};
+
 export const CpuPodUnit2 = {
   Count: "count",
   Percent: "percent",
@@ -7129,6 +7172,7 @@ export type OwnerReference2 = {
 };
 
 export type Pod2 = {
+  containers?: Array<Container2> | undefined;
   cpu?: CpuPod2 | any | null | undefined;
   memory?: MemoryPod2 | any | null | undefined;
   name: string;
@@ -7725,6 +7769,27 @@ export type Memory1 = {
 
 export type MemoryUnion1 = Memory1 | any;
 
+/**
+ * Image a running container reports.
+ */
+export type Container1 = {
+  /**
+   * Registry manifest digest in `sha256:<hex>` form, when the runtime
+   *
+   * @remarks
+   * reports one.
+   */
+  digest?: string | null | undefined;
+  /**
+   * Image reference reported by the container runtime.
+   */
+  image: string;
+  /**
+   * Container name.
+   */
+  name: string;
+};
+
 export const CpuPodUnit1 = {
   Count: "count",
   Percent: "percent",
@@ -7767,6 +7832,7 @@ export type OwnerReference1 = {
 };
 
 export type Pod1 = {
+  containers?: Array<Container1> | undefined;
   cpu?: CpuPod1 | any | null | undefined;
   memory?: MemoryPod1 | any | null | undefined;
   name: string;
@@ -17974,6 +18040,24 @@ export function memoryUnion6FromJSON(
 }
 
 /** @internal */
+export const Container3$inboundSchema: z.ZodType<Container3, unknown> = z
+  .object({
+    digest: z.nullable(z.string()).optional(),
+    image: z.string(),
+    name: z.string(),
+  });
+
+export function container3FromJSON(
+  jsonString: string,
+): SafeParseResult<Container3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Container3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Container3' from JSON`,
+  );
+}
+
+/** @internal */
 export const CpuPodUnit3$inboundSchema: z.ZodEnum<typeof CpuPodUnit3> = z.enum(
   CpuPodUnit3,
 );
@@ -18068,6 +18152,7 @@ export function ownerReference3FromJSON(
 
 /** @internal */
 export const Pod3$inboundSchema: z.ZodType<Pod3, unknown> = z.object({
+  containers: z.array(z.lazy(() => Container3$inboundSchema)).optional(),
   cpu: z.nullable(z.union([z.lazy(() => CpuPod3$inboundSchema), z.any()]))
     .optional(),
   memory: z.nullable(z.union([z.lazy(() => MemoryPod3$inboundSchema), z.any()]))
@@ -20168,6 +20253,24 @@ export function memoryUnion4FromJSON(
 }
 
 /** @internal */
+export const Container2$inboundSchema: z.ZodType<Container2, unknown> = z
+  .object({
+    digest: z.nullable(z.string()).optional(),
+    image: z.string(),
+    name: z.string(),
+  });
+
+export function container2FromJSON(
+  jsonString: string,
+): SafeParseResult<Container2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Container2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Container2' from JSON`,
+  );
+}
+
+/** @internal */
 export const CpuPodUnit2$inboundSchema: z.ZodEnum<typeof CpuPodUnit2> = z.enum(
   CpuPodUnit2,
 );
@@ -20262,6 +20365,7 @@ export function ownerReference2FromJSON(
 
 /** @internal */
 export const Pod2$inboundSchema: z.ZodType<Pod2, unknown> = z.object({
+  containers: z.array(z.lazy(() => Container2$inboundSchema)).optional(),
   cpu: z.nullable(z.union([z.lazy(() => CpuPod2$inboundSchema), z.any()]))
     .optional(),
   memory: z.nullable(z.union([z.lazy(() => MemoryPod2$inboundSchema), z.any()]))
@@ -21452,6 +21556,24 @@ export function memoryUnion1FromJSON(
 }
 
 /** @internal */
+export const Container1$inboundSchema: z.ZodType<Container1, unknown> = z
+  .object({
+    digest: z.nullable(z.string()).optional(),
+    image: z.string(),
+    name: z.string(),
+  });
+
+export function container1FromJSON(
+  jsonString: string,
+): SafeParseResult<Container1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Container1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Container1' from JSON`,
+  );
+}
+
+/** @internal */
 export const CpuPodUnit1$inboundSchema: z.ZodEnum<typeof CpuPodUnit1> = z.enum(
   CpuPodUnit1,
 );
@@ -21546,6 +21668,7 @@ export function ownerReference1FromJSON(
 
 /** @internal */
 export const Pod1$inboundSchema: z.ZodType<Pod1, unknown> = z.object({
+  containers: z.array(z.lazy(() => Container1$inboundSchema)).optional(),
   cpu: z.nullable(z.union([z.lazy(() => CpuPod1$inboundSchema), z.any()]))
     .optional(),
   memory: z.nullable(z.union([z.lazy(() => MemoryPod1$inboundSchema), z.any()]))

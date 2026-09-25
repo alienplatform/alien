@@ -31,6 +31,7 @@
 * [getCapabilityOverview](#getcapabilityoverview) - Get safe, server-derived capability status for a Project.
 * [getRemoteOperatorSummary](#getremoteoperatorsummary) - Get the authoritative Remote Operator project summary
 * [acceptRemoteOperatorImage](#acceptremoteoperatorimage) - Accept a reported image for a Remote Operator installation
+* [acceptRemoteOperatorPermissions](#acceptremoteoperatorpermissions) - Record that a Remote Operator installation's setup was re-applied
 * [getAiUsage](#getaiusage)
 * [getEncryptionUsage](#getencryptionusage)
 * [getSandboxMetrics](#getsandboxmetrics)
@@ -2165,6 +2166,85 @@ run();
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 400, 404, 409            | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## acceptRemoteOperatorPermissions
+
+Records the permissions compiled from the currently enabled operations as the installation's installed permissions. Call it after re-applying the installation's Helm release, manifest, cloud access, or CloudFormation stack.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="acceptRemoteOperatorPermissions" method="post" path="/v1/projects/{idOrName}/remote-operator-summary/installations/{deploymentId}/accept-permissions" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.acceptRemoteOperatorPermissions({
+    idOrName: "my-project",
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsAcceptRemoteOperatorPermissions } from "@alienplatform/platform-api/funcs/projectsAcceptRemoteOperatorPermissions.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsAcceptRemoteOperatorPermissions(alien, {
+    idOrName: "my-project",
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsAcceptRemoteOperatorPermissions failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.AcceptRemoteOperatorPermissionsRequest](../../models/operations/acceptremoteoperatorpermissionsrequest.md)                                                         | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[operations.AcceptRemoteOperatorPermissionsResponse](../../models/operations/acceptremoteoperatorpermissionsresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 403, 404, 409       | application/json         |
+| errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## getAiUsage
