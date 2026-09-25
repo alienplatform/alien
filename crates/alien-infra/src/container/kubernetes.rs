@@ -1802,6 +1802,7 @@ impl KubernetesContainerController {
             container_id: Some("test-container".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
             env_secret: EnvSecretRotationTracker::default(),
+            update_generation: None,
             _internal_stay_count: None,
         }
     }
