@@ -30,9 +30,10 @@ use alien_macros::controller;
 
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Container as K8sContainer, ContainerPort, LocalObjectReference, PersistentVolumeClaim,
-    PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, ResourceRequirements, SecretVolumeSource,
-    Service, ServicePort, ServiceSpec, Volume, VolumeMount,
+    Capabilities, Container as K8sContainer, ContainerPort, HTTPGetAction, LocalObjectReference,
+    PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSecurityContext, PodSpec, PodTemplateSpec,
+    Probe, ResourceRequirements, SeccompProfile, SecretVolumeSource, SecurityContext, Service,
+    ServicePort, ServiceSpec, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
@@ -2177,6 +2178,43 @@ impl KubernetesContainerController {
         let memory_request = config.memory.min.clone();
         let memory_limit = config.memory.desired.clone();
 
+        let http_probe = |probe: &alien_core::KubernetesHttpProbe| -> Result<Probe> {
+            if !probe.path.starts_with('/') || probe.port == 0 {
+                return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message: "Kubernetes HTTP probes need an absolute path and a nonzero port"
+                        .to_string(),
+                }));
+            }
+            Ok(Probe {
+                http_get: Some(HTTPGetAction {
+                    path: Some(probe.path.clone()),
+                    port: IntOrString::Int(i32::from(probe.port)),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        };
+        let liveness_probe = config
+            .kubernetes_liveness_probe
+            .as_ref()
+            .map(http_probe)
+            .transpose()?;
+        let readiness_probe = config
+            .kubernetes_readiness_probe
+            .as_ref()
+            .map(http_probe)
+            .transpose()?;
+        let security = config.kubernetes_restricted_security.as_ref();
+        if security.is_some_and(|settings| {
+            settings.run_as_user <= 0 || settings.run_as_group <= 0 || settings.fs_group < 0
+        }) {
+            return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "Restricted Kubernetes security needs positive user and group IDs and a nonnegative filesystem group ID".to_string(),
+            }));
+        }
+
         let container = K8sContainer {
             name: "container".to_string(),
             image: Some(image),
@@ -2194,6 +2232,17 @@ impl KubernetesContainerController {
                     .collect(),
             ),
             env: Some(env_vars),
+            liveness_probe,
+            readiness_probe,
+            security_context: security.map(|_| SecurityContext {
+                allow_privilege_escalation: Some(false),
+                read_only_root_filesystem: Some(true),
+                capabilities: Some(Capabilities {
+                    drop: Some(vec!["ALL".to_string()]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
             volume_mounts: if volume_mounts.is_empty() {
                 None
             } else {
@@ -2248,6 +2297,17 @@ impl KubernetesContainerController {
 
         let pod_spec = PodSpec {
             service_account_name: Some(service_account_name.to_string()),
+            security_context: security.map(|settings| PodSecurityContext {
+                run_as_non_root: Some(true),
+                run_as_user: Some(settings.run_as_user),
+                run_as_group: Some(settings.run_as_group),
+                fs_group: Some(settings.fs_group),
+                seccomp_profile: Some(SeccompProfile {
+                    type_: "RuntimeDefault".to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
             containers: vec![container],
             image_pull_secrets: image_pull_secret_name.map(|name| {
                 vec![LocalObjectReference {
@@ -2532,9 +2592,10 @@ mod tests {
         OTEL_EXPORTER_OTLP_METRICS_HEADERS,
     };
     use alien_core::{
-        KubernetesSecretMount, OtlpConfig, Resource, ENV_ALIEN_COMMANDS_TOKEN,
-        ENV_ALIEN_LAMBDA_MODE, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_RUNTIME_SEND_OTLP,
-        ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
+        KubernetesHttpProbe, KubernetesRestrictedSecurity, KubernetesSecretMount, OtlpConfig,
+        Resource, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_LAMBDA_MODE, ENV_ALIEN_RUNTIME_SECRETS,
+        ENV_ALIEN_RUNTIME_SEND_OTLP, ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT,
+        ENV_ALIEN_WORKER_GRPC_ADDRESS,
     };
     fn manifest_test_container(environment: &[(&str, &str)], stateful: bool) -> Container {
         let mut config = Container::new("web".to_string())
@@ -2577,6 +2638,19 @@ mod tests {
             secret_name: "enrollment-token".to_string(),
             mount_path: "/var/run/enrollment".to_string(),
         });
+        config.kubernetes_liveness_probe = Some(KubernetesHttpProbe {
+            path: "/healthz".to_string(),
+            port: 8080,
+        });
+        config.kubernetes_readiness_probe = Some(KubernetesHttpProbe {
+            path: "/readyz".to_string(),
+            port: 8080,
+        });
+        config.kubernetes_restricted_security = Some(KubernetesRestrictedSecurity {
+            run_as_user: 65532,
+            run_as_group: 65532,
+            fs_group: 65532,
+        });
         let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
         let deployment = manifest_test_controller()
             .build_deployment(
@@ -2615,6 +2689,45 @@ mod tests {
         assert_eq!(mount.name, "existing-secret-0");
         assert_eq!(mount.mount_path, "/var/run/enrollment");
         assert_eq!(mount.read_only, Some(true));
+        let pod_security = pod.security_context.as_ref().expect("pod security");
+        assert_eq!(pod_security.run_as_non_root, Some(true));
+        assert_eq!(pod_security.run_as_user, Some(65532));
+        assert_eq!(pod_security.run_as_group, Some(65532));
+        assert_eq!(pod_security.fs_group, Some(65532));
+        assert_eq!(
+            pod_security
+                .seccomp_profile
+                .as_ref()
+                .map(|profile| profile.type_.as_str()),
+            Some("RuntimeDefault")
+        );
+        let container_security = pod.containers[0]
+            .security_context
+            .as_ref()
+            .expect("container security");
+        assert_eq!(container_security.allow_privilege_escalation, Some(false));
+        assert_eq!(container_security.read_only_root_filesystem, Some(true));
+        assert_eq!(
+            container_security
+                .capabilities
+                .as_ref()
+                .and_then(|caps| caps.drop.as_ref()),
+            Some(&vec!["ALL".to_string()])
+        );
+        let liveness = pod.containers[0]
+            .liveness_probe
+            .as_ref()
+            .and_then(|probe| probe.http_get.as_ref())
+            .expect("liveness HTTP probe");
+        assert_eq!(liveness.path.as_deref(), Some("/healthz"));
+        assert_eq!(liveness.port, IntOrString::Int(8080));
+        let readiness = pod.containers[0]
+            .readiness_probe
+            .as_ref()
+            .and_then(|probe| probe.http_get.as_ref())
+            .expect("readiness HTTP probe");
+        assert_eq!(readiness.path.as_deref(), Some("/readyz"));
+        assert_eq!(readiness.port, IntOrString::Int(8080));
     }
 
     #[tokio::test]

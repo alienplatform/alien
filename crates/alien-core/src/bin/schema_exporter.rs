@@ -31,6 +31,8 @@ use utoipa::OpenApi;
     PublicEndpointOutput,
     PersistentStorage,
     KubernetesSecretMount,
+    KubernetesHttpProbe,
+    KubernetesRestrictedSecurity,
     HealthCheck,
     ResourceSpec,
     ReplicaStatus,
