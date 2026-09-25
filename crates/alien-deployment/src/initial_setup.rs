@@ -83,6 +83,28 @@ pub async fn handle_initial_setup(
         .map(|r| r.status == ResourceStatus::Running)
         .unwrap_or(false);
 
+    // The names reach durable state in a step of their own, before any value is written: destroy
+    // deletes from the recorded names, so an unrecorded write would outlive the deployment.
+    if vault_is_running
+        && crate::helpers::record_vault_secret_names(
+            &target_stack,
+            client_config.platform(),
+            &config,
+            &mut runtime_metadata,
+        )
+    {
+        let mut next = current_cloned;
+        next.stack_state = Some(stack_state);
+        next.runtime_metadata = Some(runtime_metadata);
+        return Ok(DeploymentStepResult {
+            state: next,
+            suggested_delay_ms: None,
+            update_heartbeat: false,
+            heartbeats: vec![],
+            observed_inventory_batches: vec![],
+        });
+    }
+
     if vault_is_running {
         let synced = crate::helpers::sync_secrets_to_vault(
             &target_stack,
@@ -498,7 +520,7 @@ pub async fn handle_initial_setup_failed(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use alien_aws_clients::iam::{
         CreateRoleResponse, CreateRoleResult, GetRoleResponse, GetRoleResult,
@@ -509,6 +531,7 @@ mod tests {
         CreateMicrovmImageResponse, MicrovmImage, MicrovmImageVersion, MockLambdaMicrovmsApi,
     };
     use alien_aws_clients::AwsClientConfigExt as _;
+    use alien_bindings::traits::Vault as _;
     use alien_bindings::{BindingsProvider, BindingsProviderApi};
     use alien_core::{
         ClientConfig, EnvironmentVariablesSnapshot, Platform, RuntimeMetadata, SetupScaffolding,
@@ -1928,5 +1951,179 @@ mod tests {
             serde_json::to_value(&retried.stack_state.as_ref().unwrap().resources["live"]).unwrap(),
             before_retry
         );
+    }
+
+    /// Initial setup with the `secrets` vault already Running and one secret to sync into it.
+    pub(crate) fn setup_with_running_vault(
+        data_dir: &std::path::Path,
+    ) -> (
+        DeploymentState,
+        DeploymentConfig,
+        alien_bindings::providers::vault::local::LocalVault,
+    ) {
+        let data_dir = data_dir.to_string_lossy().to_string();
+        let mut vault = alien_core::StackResourceState::builder()
+            .resource_type(alien_core::Vault::RESOURCE_TYPE.to_string())
+            .status(ResourceStatus::Running)
+            .config(alien_core::Resource::new(
+                alien_core::Vault::new("secrets".to_string()).build(),
+            ))
+            .internal_state(serde_json::json!({
+                "_controllerStateVersion": 1,
+                "type": "TestVaultController",
+                "state": "ready",
+                "vaultId": "test:vault:secrets",
+                "dataDir": data_dir
+            }))
+            .lifecycle(ResourceLifecycle::Frozen)
+            .controller_platform(Platform::Test)
+            .build();
+        vault.remote_binding_params = Some(
+            serde_json::to_value(alien_core::bindings::VaultBinding::local(
+                "secrets", &data_dir,
+            ))
+            .unwrap(),
+        );
+        let mut stack_state = StackState::new(Platform::Test);
+        stack_state.resources.insert("secrets".to_string(), vault);
+        let worker = alien_core::Worker::new("worker".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        let prepared = Stack::new("test".to_string())
+            .add(
+                alien_core::Vault::new("secrets".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+        let mut config = config();
+        config.environment_variables.variables = vec![alien_core::EnvironmentVariable {
+            name: "API_TOKEN".to_string(),
+            value: "secret".to_string(),
+            var_type: alien_core::EnvironmentVariableType::Secret,
+            target_resources: None,
+        }];
+        let state = DeploymentState {
+            status: DeploymentStatus::InitialSetup,
+            platform: Platform::Test,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(stack_state),
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            runtime_metadata: Some(RuntimeMetadata {
+                prepared_stack: Some(prepared),
+                initial_setup_authority: InitialSetupAuthority::DirectSetup,
+                ..Default::default()
+            }),
+        };
+        let values = alien_bindings::providers::vault::local::LocalVault::new(
+            "secrets".to_string(),
+            std::path::PathBuf::from(data_dir),
+        );
+        (state, config, values)
+    }
+
+    async fn setup_step(state: DeploymentState, config: &DeploymentConfig) -> DeploymentState {
+        handle_initial_setup(
+            state,
+            config.clone(),
+            ClientConfig::Test,
+            Arc::new(MockPlatformServiceProvider::new()),
+        )
+        .await
+        .unwrap()
+        .state
+    }
+
+    pub(crate) async fn vault_names(
+        vault: &alien_bindings::providers::vault::local::LocalVault,
+    ) -> Vec<String> {
+        vault.list_secrets().await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn setup_records_the_secret_names_in_a_step_that_writes_nothing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (state, config, vault) = setup_with_running_vault(dir.path());
+
+        let recorded = setup_step(state, &config).await;
+
+        assert_eq!(recorded.status, DeploymentStatus::InitialSetup);
+        let metadata = recorded.runtime_metadata.unwrap();
+        assert_eq!(metadata.last_synced_secret_names, vec!["API_TOKEN"]);
+        assert!(metadata.last_synced_env_vars_hash.is_none());
+        assert!(vault_names(&vault).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_step_after_the_record_writes_the_secrets() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (state, config, vault) = setup_with_running_vault(dir.path());
+
+        let recorded = setup_step(state, &config).await;
+        let synced = setup_step(recorded, &config).await;
+
+        assert_eq!(vault_names(&vault).await, vec!["API_TOKEN"]);
+        let metadata = synced.runtime_metadata.unwrap();
+        assert_eq!(metadata.last_synced_secret_names, vec!["API_TOKEN"]);
+        assert!(metadata.last_synced_env_vars_hash.is_some());
+    }
+
+    #[derive(Default)]
+    struct AcceptingTransport;
+
+    #[async_trait::async_trait]
+    impl crate::transport::DeploymentLoopTransport for AcceptingTransport {
+        async fn reconcile_step(
+            &self,
+            _deployment_id: &str,
+            _state: &DeploymentState,
+            _config: &DeploymentConfig,
+            _update_heartbeat: bool,
+            _suggested_delay_ms: Option<u64>,
+            _heartbeats: Vec<alien_core::ResourceHeartbeat>,
+            _observed_inventory_batches: Vec<alien_core::ObservedInventoryBatch>,
+        ) -> std::result::Result<crate::transport::StepReconcileResult, AlienError> {
+            Ok(crate::transport::StepReconcileResult {
+                state: None,
+                config: None,
+            })
+        }
+    }
+
+    /// The values may already be written when the step that wrote them never checkpointed; the
+    /// recorded names are what teardown deletes.
+    #[tokio::test]
+    async fn setup_teardown_deletes_names_recorded_before_an_interrupted_sync() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (state, mut config, vault) = setup_with_running_vault(dir.path());
+        let mut checkpointed = setup_step(state, &config).await;
+        vault.set_secret("API_TOKEN", "secret").await.unwrap();
+        checkpointed.status = DeploymentStatus::TeardownRequired;
+
+        crate::setup_teardown::run_setup_teardown_after_handoff(
+            &mut checkpointed,
+            &mut config,
+            &ClientConfig::Test,
+            "dep_test",
+            &crate::runner::RunnerPolicy {
+                operation: crate::loop_contract::LoopOperation::Delete,
+                delay_strategy: crate::runner::DelayStrategy::Inline,
+                ..Default::default()
+            },
+            &AcceptingTransport,
+            Some(Arc::new(MockPlatformServiceProvider::new())),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(checkpointed.status, DeploymentStatus::Deleted);
+        assert!(vault_names(&vault).await.is_empty());
     }
 }

@@ -383,6 +383,32 @@ async fn stale_waiting_for_machines_returns_to_provisioning() {
     assert_eq!(result.state.status, DeploymentStatus::Provisioning);
 }
 
+/// The first Provisioning step records the secret names and returns before writing them or
+/// stepping any live resource; the sync runs on the step after it.
+async fn step_past_secret_record(
+    state: DeploymentState,
+    config: &DeploymentConfig,
+    names: &[&str],
+) -> DeploymentState {
+    let before = serde_json::to_value(&state.stack_state).unwrap();
+    let recorded = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("record step should succeed")
+        .state;
+    let metadata = recorded.runtime_metadata.as_ref().unwrap();
+    assert_eq!(metadata.last_synced_secret_names, names);
+    assert!(
+        metadata.last_synced_env_vars_hash.is_none(),
+        "InitialSetup must not have synced; the first Provisioning step is the record point"
+    );
+    assert_eq!(
+        serde_json::to_value(&recorded.stack_state).unwrap(),
+        before,
+        "the record step steps no resource"
+    );
+    recorded
+}
+
 /// B) Secrets sync behavior tests
 
 #[tokio::test]
@@ -405,8 +431,8 @@ async fn test_provisioning_syncs_secrets_before_live_compute() {
     )
     .await;
 
-    // Execute one provisioning step. It must sync secrets before stepping
-    // the live function.
+    // The step after the record must sync secrets before stepping the live function.
+    state = step_past_secret_record(state, &config, &["SECRET_VAR"]).await;
     let result = alien_deployment::step(state.clone(), config.clone(), ClientConfig::Test, None)
         .await
         .expect("Step should succeed");
@@ -471,7 +497,8 @@ async fn test_provisioning_syncs_secrets_once_per_hash() {
     )
     .await;
 
-    // Execute one provisioning step to trigger secret sync
+    // The step after the record triggers the secret sync
+    state = step_past_secret_record(state, &config, &["SECRET_VAR"]).await;
     let result = alien_deployment::step(state.clone(), config.clone(), ClientConfig::Test, None)
         .await
         .expect("Step should succeed");
@@ -528,6 +555,7 @@ async fn test_provisioning_resyncs_when_hash_changes() {
         &[DeploymentStatus::Provisioning],
     )
     .await;
+    state = step_past_secret_record(state, &config1, &["SECRET_VAR"]).await;
     let result = alien_deployment::step(state.clone(), config1.clone(), ClientConfig::Test, None)
         .await
         .expect("Step should succeed");
