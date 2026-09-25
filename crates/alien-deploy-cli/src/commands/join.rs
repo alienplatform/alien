@@ -59,6 +59,10 @@ pub struct JoinArgs {
     #[arg(long)]
     pub wireguard_endpoint: Option<String>,
 
+    /// IP used for public endpoint DNS (including a VPN-reachable private IP), or "auto" to clear it.
+    #[arg(long)]
+    pub public_ip: Option<String>,
+
     /// Machine bootstrap bundle manifest URL. Packaged CLIs embed this.
     #[arg(long)]
     pub bundle_url: Option<String>,
@@ -103,6 +107,7 @@ struct JoinPlan {
     zone: Option<String>,
     network_interface: Option<String>,
     wireguard_endpoint: Option<String>,
+    public_ip: Option<String>,
     reconcile_network: bool,
     bundle_url: String,
     control_plane_url: String,
@@ -300,6 +305,7 @@ enum MachineBundleConfigSource {
     BundleVersion,
     NetworkInterface,
     WireguardEndpoint,
+    PublicIp,
     ReconcileNetwork,
 }
 
@@ -340,6 +346,8 @@ struct MachineInstallState {
     network_interface: Option<String>,
     #[serde(default)]
     wireguard_endpoint: Option<String>,
+    #[serde(default)]
+    public_ip: Option<String>,
 }
 
 #[derive(Debug)]
@@ -429,6 +437,13 @@ fn build_join_request(
             .and_then(|state| state.wireguard_endpoint.clone()),
         validate_wireguard_endpoint,
     )?;
+    let public_ip = resolve_persisted_override(
+        args.public_ip.as_deref(),
+        previous_state
+            .as_ref()
+            .and_then(|state| state.public_ip.clone()),
+        validate_public_ip,
+    )?;
     let reconcile_network = args.network_interface.is_some()
         || args.wireguard_endpoint.is_some()
         || network_interface.is_some()
@@ -449,6 +464,7 @@ fn build_join_request(
                 .transpose()?,
             network_interface,
             wireguard_endpoint,
+            public_ip,
             reconcile_network,
             bundle_url,
             control_plane_url,
@@ -493,6 +509,23 @@ fn validate_wireguard_endpoint(value: &str) -> Result<String> {
         }));
     }
     Ok(value)
+}
+
+fn validate_public_ip(value: &str) -> Result<String> {
+    let value = normalize_non_empty("public-ip", value)?;
+    let ip = value.parse::<IpAddr>().map_err(|error| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "public-ip".to_string(),
+            message: format!("expected an IPv4 or IPv6 address: {error}"),
+        })
+    })?;
+    if ip.is_unspecified() || ip.is_loopback() || ip.is_multicast() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "public-ip".to_string(),
+            message: "address cannot be unspecified, loopback, or multicast".to_string(),
+        }));
+    }
+    Ok(ip.to_string())
 }
 
 fn resolve_join_token(args: &JoinArgs) -> Result<(String, TokenSource)> {
@@ -717,6 +750,7 @@ async fn classify_join_action(
     }
     if state.network_interface != request.plan.network_interface
         || state.wireguard_endpoint != request.plan.wireguard_endpoint
+        || state.public_ip != request.plan.public_ip
     {
         return Ok(JoinAction::Reconfigure);
     }
@@ -895,6 +929,7 @@ async fn install_join(request: JoinRequest) -> Result<()> {
         machine_id: None,
         network_interface: request.plan.network_interface.clone(),
         wireguard_endpoint: request.plan.wireguard_endpoint.clone(),
+        public_ip: request.plan.public_ip.clone(),
     };
 
     output::step(5, 6, "Installing machine service");
@@ -951,6 +986,7 @@ async fn reconcile_existing_join(
     state.cluster_id = Some(request.plan.cluster_id.clone());
     state.network_interface = request.plan.network_interface.clone();
     state.wireguard_endpoint = request.plan.wireguard_endpoint.clone();
+    state.public_ip = request.plan.public_ip.clone();
     write_install_state(paths, &state)?;
 
     output::step(3, 4, "Reconciling machine service");
@@ -1073,6 +1109,7 @@ fn install_state_matches_request(
     install_state_matches_bundle_context(state, request, manifest)
         && state.network_interface == request.plan.network_interface
         && state.wireguard_endpoint == request.plan.wireguard_endpoint
+        && state.public_ip == request.plan.public_ip
 }
 
 fn machine_service_status(service_label: &str) -> Result<ServiceStatus> {
@@ -1561,6 +1598,19 @@ fn render_machine_config(
     manifest: &MachineBundleManifest,
     token_path: &Path,
 ) -> Result<String> {
+    if request.plan.public_ip.is_some()
+        && !manifest
+            .config
+            .entries
+            .iter()
+            .any(|entry| matches!(&entry.source, MachineBundleConfigSource::PublicIp))
+    {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "bundle.config.entries".to_string(),
+            message: "this machine bundle does not support --public-ip; use a newer bundle"
+                .to_string(),
+        }));
+    }
     let mut config = toml::Table::new();
     for entry in &manifest.config.entries {
         match resolve_config_entry_value(entry, request, manifest, &token_path)? {
@@ -1639,6 +1689,7 @@ fn resolve_config_entry_value(
         MachineBundleConfigSource::WireguardEndpoint => {
             Ok(request.plan.wireguard_endpoint.clone().map(Into::into))
         }
+        MachineBundleConfigSource::PublicIp => Ok(request.plan.public_ip.clone().map(Into::into)),
         MachineBundleConfigSource::ReconcileNetwork => {
             Ok(Some(request.plan.reconcile_network.into()))
         }
@@ -2494,6 +2545,7 @@ mod tests {
             zone: None,
             network_interface: None,
             wireguard_endpoint: None,
+            public_ip: None,
             bundle_url: Some("https://packages.example.com/manifest.json".to_string()),
             control_plane_url: Some("https://control.example.com".to_string()),
             cluster_id: Some("cluster-123".to_string()),
@@ -2828,6 +2880,7 @@ mod tests {
             machine_id: Some("machine-test".to_string()),
             network_interface: None,
             wireguard_endpoint: None,
+            public_ip: None,
         };
 
         assert!(request_machine_drain(&state).await.unwrap());
@@ -2900,6 +2953,11 @@ mod tests {
                     MachineBundleConfigEntry {
                         key: "wireguardEndpoint".to_string(),
                         source: MachineBundleConfigSource::WireguardEndpoint,
+                        optional: true,
+                    },
+                    MachineBundleConfigEntry {
+                        key: "publicIp".to_string(),
+                        source: MachineBundleConfigSource::PublicIp,
                         optional: true,
                     },
                     MachineBundleConfigEntry {
@@ -3345,6 +3403,7 @@ mod tests {
             zone: Some("rack-1".to_string()),
             network_interface: Some("ens3f0np0".to_string()),
             wireguard_endpoint: Some("203.0.113.10:51820".to_string()),
+            public_ip: Some("10.0.1.12".to_string()),
             install_root: root.path().to_path_buf(),
             ..test_join_args()
         };
@@ -3371,12 +3430,34 @@ mod tests {
         assert!(config.contains("clusterId = \"cluster-123\""));
         assert!(config.contains("networkInterface = \"ens3f0np0\""));
         assert!(config.contains("wireguardEndpoint = \"203.0.113.10:51820\""));
+        assert!(config.contains("publicIp = \"10.0.1.12\""));
         assert!(config.contains("joinTokenFile = "));
         assert_eq!(
             std::fs::read_to_string(root.path().join("var/lib/machine-service/join-token"))
                 .expect("token"),
             "jt_secret"
         );
+    }
+
+    #[test]
+    fn public_ip_override_requires_a_supporting_machine_bundle() {
+        let root = tempfile::tempdir().expect("install root");
+        let args = JoinArgs {
+            public_ip: Some("10.0.1.12".to_string()),
+            install_root: root.path().to_path_buf(),
+            ..test_join_args()
+        };
+        let request = build_join_request(&args, None, linux_host(root.path())).expect("request");
+        let mut manifest = test_manifest();
+        manifest
+            .config
+            .entries
+            .retain(|entry| !matches!(&entry.source, MachineBundleConfigSource::PublicIp));
+
+        let error = render_machine_config(&request, &manifest, &root.path().join("join-token"))
+            .expect_err("old bundle must reject the override");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(error.message.contains("newer bundle"));
     }
 
     #[test]
@@ -3535,6 +3616,7 @@ mod tests {
             machine_id: None,
             network_interface: None,
             wireguard_endpoint: None,
+            public_ip: None,
         };
         let second = MachineInstallState {
             bundle_version: "new".to_string(),
@@ -3550,6 +3632,7 @@ mod tests {
             machine_id: Some("machine-new".to_string()),
             network_interface: Some("ens3f0np0".to_string()),
             wireguard_endpoint: Some("203.0.113.10:51820".to_string()),
+            public_ip: Some("10.0.1.12".to_string()),
         };
 
         write_install_state(&paths, &first).expect("write first state");
@@ -3580,6 +3663,7 @@ mod tests {
             stored.wireguard_endpoint.as_deref(),
             Some("203.0.113.10:51820")
         );
+        assert_eq!(stored.public_ip.as_deref(), Some("10.0.1.12"));
     }
 
     #[test]
@@ -3600,6 +3684,7 @@ mod tests {
             machine_id: Some("machine-123".to_string()),
             network_interface: Some("ens3f0np0".to_string()),
             wireguard_endpoint: Some("203.0.113.10:51820".to_string()),
+            public_ip: Some("10.0.1.12".to_string()),
         };
         write_install_state(&paths, &state).expect("write state");
 
@@ -3618,6 +3703,7 @@ mod tests {
             request.plan.wireguard_endpoint.as_deref(),
             Some("203.0.113.10:51820")
         );
+        assert_eq!(request.plan.public_ip.as_deref(), Some("10.0.1.12"));
     }
 
     #[test]
@@ -3638,6 +3724,7 @@ mod tests {
             machine_id: Some("machine-123".to_string()),
             network_interface: Some("ens3f0np0".to_string()),
             wireguard_endpoint: Some("203.0.113.10:51820".to_string()),
+            public_ip: Some("10.0.1.12".to_string()),
         };
         write_install_state(&paths, &state).expect("write state");
 
@@ -3646,6 +3733,7 @@ mod tests {
                 install_root: root.path().to_path_buf(),
                 network_interface: Some("auto".to_string()),
                 wireguard_endpoint: Some("auto".to_string()),
+                public_ip: Some("auto".to_string()),
                 ..test_join_args()
             },
             None,
@@ -3655,16 +3743,17 @@ mod tests {
 
         assert_eq!(request.plan.network_interface, None);
         assert_eq!(request.plan.wireguard_endpoint, None);
+        assert_eq!(request.plan.public_ip, None);
         assert!(request.plan.reconcile_network);
     }
 
     #[tokio::test]
-    async fn changed_network_override_is_reconfigured_without_reinstalling() {
+    async fn changed_public_ip_override_is_reconfigured_without_reinstalling() {
         let root = tempfile::tempdir().expect("install root");
         let request = build_join_request(
             &JoinArgs {
                 install_root: root.path().to_path_buf(),
-                network_interface: Some("ens3f0np0".to_string()),
+                public_ip: Some("10.0.1.12".to_string()),
                 ..test_join_args()
             },
             None,
@@ -3693,6 +3782,7 @@ mod tests {
                 machine_id: Some("machine-123".to_string()),
                 network_interface: None,
                 wireguard_endpoint: None,
+                public_ip: None,
             },
         )
         .expect("write state");
@@ -3732,6 +3822,7 @@ mod tests {
             machine_id: Some("machine-123".to_string()),
             network_interface: None,
             wireguard_endpoint: None,
+            public_ip: None,
         };
 
         assert_eq!(
@@ -3748,6 +3839,22 @@ mod tests {
         );
         assert!(validate_wireguard_endpoint("203.0.113.10").is_err());
         assert!(validate_wireguard_endpoint("[2001:db8::1]:51820").is_err());
+    }
+
+    #[test]
+    fn public_ip_accepts_private_addresses_and_rejects_unusable_targets() {
+        assert_eq!(
+            validate_public_ip("10.0.1.12").expect("private IP"),
+            "10.0.1.12"
+        );
+        assert_eq!(
+            validate_public_ip("2001:db8::1").expect("IPv6"),
+            "2001:db8::1"
+        );
+        for value in ["", "example.com", "127.0.0.1", "0.0.0.0", "224.0.0.1"] {
+            let error = validate_public_ip(value).expect_err("unusable IP must fail");
+            assert_eq!(error.code, "VALIDATION_ERROR");
+        }
     }
 
     #[test]
@@ -3768,6 +3875,7 @@ mod tests {
             machine_id: Some("machine-123".to_string()),
             network_interface: None,
             wireguard_endpoint: None,
+            public_ip: None,
         };
         write_install_state(&paths, &state).expect("write state");
 
@@ -3813,6 +3921,7 @@ mod tests {
             machine_id: Some("machine-123".to_string()),
             network_interface: None,
             wireguard_endpoint: None,
+            public_ip: None,
         };
 
         assert!(install_state_matches_request(&state, &request, &manifest));
