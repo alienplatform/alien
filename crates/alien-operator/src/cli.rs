@@ -22,7 +22,6 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Parser, ValueEnum};
-use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
@@ -444,7 +443,7 @@ async fn run_operator_cli(
         false,
     )
     .await?;
-    let stack_input_values = parse_json_opt::<HashMap<String, serde_json::Value>>(
+    let stack_input_values = parse_json_opt::<serde_json::Map<String, serde_json::Value>>(
         stack_input_values_json,
         "stack input values",
     )?
@@ -986,7 +985,7 @@ async fn initialize_with_manager(
     operator_permission: Option<&str>,
     operator_setup_method: Option<&str>,
     initial_desired_release: InitialDesiredReleaseArg,
-    input_values: &HashMap<String, serde_json::Value>,
+    input_values: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(String, Option<String>)> {
     use alien_manager_api::types::Platform as SdkPlatform;
     use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
