@@ -792,13 +792,15 @@ rules:
     }
     let operator_name =
         remote_operator_record_name(&helm_namespace, bridge_release, "remote-operator");
+    let operator_selector =
+        format!("app.kubernetes.io/instance={operator_name},app.kubernetes.io/component=operator");
     let mut forwarded = String::new();
     for _ in 0..30 {
         let logs = run_ok(
             "kubectl",
             [
                 "logs",
-                &format!("deployment/{operator_name}"),
+                &format!("--selector={operator_selector}"),
                 "--namespace",
                 &helm_namespace,
             ],
@@ -852,7 +854,7 @@ rules:
         "kubectl",
         [
             "logs",
-            &format!("deployment/{operator_name}"),
+            &format!("--selector={operator_selector}"),
             "--namespace",
             &helm_namespace,
         ],
