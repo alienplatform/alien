@@ -554,46 +554,11 @@ async fn release_task_core(
                 build_proxy_push_settings(&per_platform, &platform).await?
             };
 
-            // Load push cache — maps content-hashed dir names to previously pushed URIs.
-            // Cache entries are reusable only within the resolved destination repository;
-            // the same local build may be released to multiple managers or projects.
-            let mut push_cache = load_push_cache(&output_dir, platform_str);
-
-            // Keep a copy of the stack before cache application so we can map
-            // original local paths → pushed URIs for cache updates later.
-            let pre_push_stack = built_stack.clone();
-
-            // Apply cached URIs to skip pushing already-pushed artifacts.
-            let cache_hits =
-                apply_push_cache(&mut built_stack, &push_cache, &push_settings.repository);
-            if cache_hits > 0 {
-                info!(
-                    "   Skipping push for {} resource(s) (already pushed)",
-                    cache_hits
-                );
-            }
-
-            info!("   Pushing images to {}...", push_settings.repository);
-
-            let push_started = Instant::now();
-            let pushed = alien_build::push_stack(built_stack, platform.clone(), &push_settings)
+            push_stack_with_cache(built_stack, platform.clone(), &output_dir, &push_settings)
                 .await
                 .context(ErrorData::ReleaseFailed {
                     message: format!("Failed to push images for {} platform", platform_str),
-                })?;
-            info!(
-                "Push for platform '{}' completed in {:.2}s",
-                platform_str,
-                push_started.elapsed().as_secs_f64()
-            );
-
-            // Update and persist the push cache with newly pushed URIs
-            collect_push_cache_entries(&pushed, &pre_push_stack, &mut push_cache);
-            if let Err(e) = save_push_cache(&output_dir, platform_str, &push_cache) {
-                info!("Warning: Failed to save push cache: {}", e);
-            }
-
-            pushed
+                })?
         } else {
             built_stack
         };
@@ -1056,7 +1021,7 @@ async fn auto_build_for_platforms(
     Ok(())
 }
 
-fn auto_build_settings_for_platform(
+pub(crate) fn auto_build_settings_for_platform(
     platform_str: &str,
     output_dir: &PathBuf,
     override_base_image: Option<String>,
@@ -1312,15 +1277,21 @@ async fn build_proxy_push_settings(
             })?
     };
 
-    // Strip scheme to get the registry host (OCI clients use host:port, not URLs).
-    let registry_host = alien_core::image_rewrite::strip_url_scheme(manager_url);
+    manager_proxy_push_settings(manager_url, &repo_name, manager)
+}
 
-    // Translate host.docker.internal → localhost for CLI access (dev mode).
+/// Push settings for `repository` on the manager's OCI proxy at `registry_host`, which forwards
+/// the push to the upstream cloud registry. `registry_host` may carry a URL scheme.
+pub(crate) fn manager_proxy_push_settings(
+    registry_host: &str,
+    repository: &str,
+    manager: &ManagerContext,
+) -> Result<PushSettings> {
+    // OCI clients address a registry as host:port, not as a URL.
+    let registry_host = alien_core::image_rewrite::strip_url_scheme(registry_host);
     let (registry_host, protocol) =
-        translate_registry_url_for_cli(&registry_host, &Platform::Local)?;
-
-    // Full repository: host/repo_name (e.g., "manager.alien.dev/alien-e2e")
-    let repository = format!("{}/{}", registry_host, repo_name);
+        translate_registry_url_for_cli(registry_host, &Platform::Local)?;
+    let repository = format!("{registry_host}/{repository}");
 
     // OCI speaks Basic — the token rides in the password slot, the
     // workspace rides in the username slot. OCI clients can't add custom
@@ -1731,6 +1702,45 @@ fn prebuilt_source_error(resource_type: &str, resource_id: &str) -> AlienError<E
 
 /// Push cache file name, stored at `.alien/build/{platform}/push-cache.json`.
 const PUSH_CACHE_FILE: &str = "push-cache.json";
+
+/// Pushes the built stack's local images, reusing the pushed reference of any artifact already
+/// pushed to the same repository. `push_stack` tags every push afresh, so this cache is what
+/// keeps an unchanged artifact's reference stable across runs.
+pub(crate) async fn push_stack_with_cache(
+    mut built_stack: Stack,
+    platform: Platform,
+    output_dir: &PathBuf,
+    push_settings: &PushSettings,
+) -> alien_error::Result<Stack, alien_build::error::ErrorData> {
+    let platform_str = platform.as_str();
+    let mut push_cache = load_push_cache(output_dir, platform_str);
+    let pre_push_stack = built_stack.clone();
+
+    let cache_hits = apply_push_cache(&mut built_stack, &push_cache, &push_settings.repository);
+    if cache_hits > 0 {
+        info!(
+            "   Skipping push for {} resource(s) (already pushed)",
+            cache_hits
+        );
+    }
+
+    info!("   Pushing images to {}...", push_settings.repository);
+
+    let push_started = Instant::now();
+    let pushed = alien_build::push_stack(built_stack, platform.clone(), push_settings).await?;
+    info!(
+        "Push for platform '{}' completed in {:.2}s",
+        platform_str,
+        push_started.elapsed().as_secs_f64()
+    );
+
+    collect_push_cache_entries(&pushed, &pre_push_stack, &mut push_cache);
+    if let Err(e) = save_push_cache(output_dir, platform_str, &push_cache) {
+        info!("Warning: Failed to save push cache: {}", e);
+    }
+
+    Ok(pushed)
+}
 
 /// Load the push cache for a platform. Returns an empty map on any error.
 fn load_push_cache(output_dir: &PathBuf, platform: &str) -> HashMap<String, String> {
