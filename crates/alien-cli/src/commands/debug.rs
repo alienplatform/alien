@@ -282,7 +282,9 @@ async fn request_debug_access_then_wait(
 ) -> Result<String> {
     let debug_tool = crate::commands::access_requests::parse_debug_tool(tool)?;
     let is_kubectl = debug_tool == alien_platform_api::types::DebugGrantTool::Kubectl;
-    let debug_namespace = is_kubectl.then(|| kubectl_namespace_from_args(cmd)).flatten();
+    let debug_namespace = is_kubectl
+        .then(|| kubectl_namespace_from_args(cmd))
+        .flatten();
     validate_access_cloud_scope(access_cloud_scope, is_kubectl)?;
     let requested_expires_at = crate::commands::access_requests::requested_expiration(
         chrono::Utc::now(),

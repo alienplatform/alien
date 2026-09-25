@@ -21,12 +21,17 @@ export type ResolveCommandTargetRequest = {
    * Explicit resource id to resolve; must be a command-capable resource
    */
   target?: string | undefined;
+  /**
+   * Command name being invoked. A name that is an operation enabled for the deployment fails with COMMAND_IS_OPERATION, which gives the `alien operations invoke` command to run instead.
+   */
+  command?: string | undefined;
 };
 
 /** @internal */
 export type ResolveCommandTargetRequest$Outbound = {
   deploymentId: string;
   target?: string | undefined;
+  command?: string | undefined;
 };
 
 /** @internal */
@@ -36,6 +41,7 @@ export const ResolveCommandTargetRequest$outboundSchema: z.ZodType<
 > = z.object({
   deploymentId: z.string(),
   target: z.string().optional(),
+  command: z.string().optional(),
 });
 
 export function resolveCommandTargetRequestToJSON(

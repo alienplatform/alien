@@ -200,6 +200,7 @@ impl CommandRegistry for SqliteCommandRegistry {
     async fn resolve_target(
         &self,
         deployment_id: &str,
+        _command: &str,
         requested: Option<&str>,
     ) -> alien_commands::error::Result<ResolvedCommandTarget> {
         // Single-tenant SQLite registry — resolution reads deployment + release

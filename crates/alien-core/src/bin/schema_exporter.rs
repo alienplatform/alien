@@ -1,4 +1,5 @@
 use alien_core::sync::{
+    ObservedApplicationImage, ObservedApplicationReport, ObservedApplicationSource,
     OperationsBundleDownload, OperationsReport, OperatorImageReport, OperatorImageSource,
     ReportedOperation, TargetOperationsBundleSet,
 };
@@ -246,6 +247,9 @@ use utoipa::OpenApi;
     OperationsReport,
     OperatorImageReport,
     OperatorImageSource,
+    ObservedApplicationReport,
+    ObservedApplicationImage,
+    ObservedApplicationSource,
     OperationsBundleDownload,
     TargetOperationsBundleSet,
 )))]

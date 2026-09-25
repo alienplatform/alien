@@ -1,28 +1,54 @@
 //! The [`Plugin`] trait and [`run_plugin`] entry point.
 //!
-//! A plugin author implements [`Plugin`] and calls [`run_plugin`] from
-//! `main`. This replaces the hand-copied stdin-read / dispatch /
-//! stdout-write boilerplate every `alien-op-*` plugin previously wrote by
-//! hand — reading the invocation, checking the protocol version, and
-//! writing the result back are all handled here.
+//! [`run_plugin`] reads one invocation from stdin, checks the protocol
+//! version, calls the plugin, and writes the result to stdout.
+//!
+//! Build plugins with [`TypedOperations`](crate::TypedOperations), which
+//! implements [`Plugin`]. Each operation is one typed
+//! [`OperationDefinition`](crate::OperationDefinition): the same definition
+//! registers the handler, validates parameters, and generates the operation's
+//! `metadata.json` entry, so dispatch and metadata cannot drift. Do not
+//! implement [`Plugin`] with a handwritten `match` on the operation name and a
+//! separately maintained `metadata.json`; `alien operations init` scaffolds the
+//! typed layout, including the `generate-metadata` binary that
+//! `alien operations check` runs.
 //!
 //! ```no_run
-//! use alien_operations_sdk::plugin::{run_plugin, Plugin};
-//! use alien_operations_sdk::protocol::{PluginInvocation, PluginResult};
-//! use async_trait::async_trait;
+//! use std::process::ExitCode;
 //!
-//! struct Postgres;
+//! use alien_operations_sdk::{
+//!     run_plugin, OperationDefinition, OperationFailure, RiskTier, TypedOperations,
+//! };
+//! use schemars::JsonSchema;
+//! use serde::{Deserialize, Serialize};
 //!
-//! #[async_trait]
-//! impl Plugin for Postgres {
-//!     async fn handle(&self, invocation: &PluginInvocation) -> PluginResult {
-//!         PluginResult::error("NOT_IMPLEMENTED", "example plugin")
-//!     }
+//! #[derive(Deserialize, JsonSchema)]
+//! #[serde(rename_all = "camelCase", deny_unknown_fields)]
+//! struct HealthParams {}
+//!
+//! #[derive(Serialize, JsonSchema)]
+//! #[serde(rename_all = "camelCase")]
+//! struct HealthOutput {
+//!     status: String,
+//! }
+//!
+//! async fn health(_params: HealthParams) -> Result<HealthOutput, OperationFailure> {
+//!     Ok(HealthOutput {
+//!         status: "healthy".to_string(),
+//!     })
 //! }
 //!
 //! #[tokio::main]
-//! async fn main() -> std::process::ExitCode {
-//!     run_plugin(Postgres).await
+//! async fn main() -> ExitCode {
+//!     let mut operations = TypedOperations::new();
+//!     let health_definition =
+//!         OperationDefinition::new("health", RiskTier::ReadOnly, "Report plugin health.")
+//!             .with_no_permissions();
+//!     if let Err(error) = operations.register(health_definition, health) {
+//!         eprintln!("plugin definition is invalid: {error}");
+//!         return ExitCode::FAILURE;
+//!     }
+//!     run_plugin(operations).await
 //! }
 //! ```
 
@@ -51,7 +77,8 @@ const MAX_INVOCATION_BYTES: usize = COMMANDS_INLINE_MAX_BYTES / 3 * 4 + 4096;
 
 /// Implemented by a plugin binary. `handle` is called once per invocation;
 /// [`run_plugin`] owns everything around it (stdin/stdout, protocol version
-/// checking, result encoding).
+/// checking, result encoding). Use [`TypedOperations`](crate::TypedOperations)
+/// rather than implementing this trait by hand.
 #[async_trait]
 pub trait Plugin: Send + Sync {
     /// Run one operation and return its result. Implementations should

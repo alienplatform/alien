@@ -10,7 +10,9 @@ use crate::{
     registry::HelmRegistry,
 };
 use alien_core::{
-    access_request_crd::AccessRequestCrdNames, branded_tag_key, import::EmitContext,
+    access_request_crd::AccessRequestCrdNames,
+    branded_tag_key,
+    import::EmitContext,
     sync::{OperatorImageReport, OperatorImageSource},
     AzureResourceGroupOutputs, Container, ContainerCode, Daemon, DaemonCode, ErrorData,
     KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
@@ -1670,7 +1672,12 @@ pub fn generate_product_operator_manifest_with_image_identity(
     options: ProductOperatorManifestOptions<'_>,
     image_identity: OperatorImageIdentityOptions<'_>,
 ) -> Result<String> {
-    generate_product_operator_manifest_with_identity_marker(options, None, None, Some(image_identity))
+    generate_product_operator_manifest_with_identity_marker(
+        options,
+        None,
+        None,
+        Some(image_identity),
+    )
 }
 
 fn generate_product_operator_manifest_with_identity_marker(

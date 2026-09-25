@@ -8,12 +8,13 @@ mod gcp;
 #[cfg(feature = "kubernetes")]
 mod kubernetes;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use alien_core::{
-    HeartbeatBackend, HeartbeatCollectionIssue, ObservedCounts, ObservedHealth,
-    ObservedInventoryBatch, ObservedResourceSample, Platform, ProviderLifecycleState,
-    RawHeartbeatSnippet, ResourceHeartbeatData, ResourceType,
+    ContainerHeartbeatData, ContainerImageIdentity, DaemonHeartbeatData, HeartbeatBackend,
+    HeartbeatCollectionIssue, ObservedCounts, ObservedHealth, ObservedInventoryBatch,
+    ObservedResourceSample, Platform, ProviderLifecycleState, RawHeartbeatSnippet,
+    ResourceHeartbeatData, ResourceType, WorkerHeartbeatData,
 };
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
@@ -87,6 +88,7 @@ pub(crate) fn observed_resource_sample(
     );
 
     let version = observed_version_from_labels(&input.labels);
+    let images = container_images(&input.data);
 
     ObservedResourceSample {
         deployment_id: Some(input.deployment_id),
@@ -130,7 +132,24 @@ pub(crate) fn observed_resource_sample(
         labels: input.labels,
         attributes,
         raw: input.raw,
+        images,
     }
+}
+
+/// Distinct container images across a workload's pods. A rollout in progress
+/// reports both the old and the new image.
+fn container_images(data: &ResourceHeartbeatData) -> Vec<ContainerImageIdentity> {
+    let pods = match data {
+        ResourceHeartbeatData::Container(ContainerHeartbeatData::Kubernetes(data)) => &data.pods,
+        ResourceHeartbeatData::Worker(WorkerHeartbeatData::Kubernetes(data)) => &data.pods,
+        ResourceHeartbeatData::Daemon(DaemonHeartbeatData::Kubernetes(data)) => &data.pods,
+        _ => return Vec::new(),
+    };
+    pods.iter()
+        .flat_map(|pod| pod.containers.iter().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn observed_version_from_labels(labels: &BTreeMap<String, String>) -> Option<String> {
