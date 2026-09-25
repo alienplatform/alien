@@ -203,6 +203,41 @@ fn test_aws_cloudformation_compute_management_can_use_setup_security_group() {
     );
 }
 
+#[rstest]
+#[case::stack(BindingTarget::Stack)]
+#[case::resource(BindingTarget::Resource)]
+fn test_frozen_postgres_management_lists_instances_without_resource_scope(
+    #[case] binding_target: BindingTarget,
+) {
+    let permission_set = get_permission_set("postgres/management").expect("permission set exists");
+    let policy = AwsCloudFormationPermissionsGenerator::new()
+        .generate_policy(
+            permission_set,
+            binding_target,
+            &create_cloudformation_context(),
+        )
+        .expect("management policy should generate");
+
+    let instance_reads: Vec<_> = policy
+        .statement
+        .iter()
+        .filter(|statement| statement.action.contains(&json!("rds:DescribeDBInstances")))
+        .collect();
+    assert_eq!(instance_reads.len(), 1);
+    assert_eq!(instance_reads[0].resource, vec![json!("*")]);
+    assert!(!instance_reads[0]
+        .action
+        .contains(&json!("rds:ModifyDBInstance")));
+
+    let instance_modifications: Vec<_> = policy
+        .statement
+        .iter()
+        .filter(|statement| statement.action.contains(&json!("rds:ModifyDBInstance")))
+        .collect();
+    assert_eq!(instance_modifications.len(), 1);
+    assert!(!instance_modifications[0].resource.contains(&json!("*")));
+}
+
 #[test]
 fn test_aws_cloudformation_compute_management_cannot_mutate_instance_role_policy() {
     let generator = AwsCloudFormationPermissionsGenerator::new();
