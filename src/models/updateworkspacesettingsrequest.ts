@@ -4,29 +4,8 @@
  */
 
 import * as z from "zod/v4";
-import { ClosedEnum } from "../types/enums.js";
-
-/**
- * Workspace-level policy for ai-agent debug commands. `auto` runs `alien_debug` tool calls without asking; `ask` halts each session before every debug command and waits for a human approval from dashboard or Slack.
- */
-export const UpdateWorkspaceSettingsRequestDebugPermissionMode = {
-  Auto: "auto",
-  Ask: "ask",
-} as const;
-/**
- * Workspace-level policy for ai-agent debug commands. `auto` runs `alien_debug` tool calls without asking; `ask` halts each session before every debug command and waits for a human approval from dashboard or Slack.
- */
-export type UpdateWorkspaceSettingsRequestDebugPermissionMode = ClosedEnum<
-  typeof UpdateWorkspaceSettingsRequestDebugPermissionMode
->;
 
 export type UpdateWorkspaceSettingsRequest = {
-  /**
-   * Workspace-level policy for ai-agent debug commands. `auto` runs `alien_debug` tool calls without asking; `ask` halts each session before every debug command and waits for a human approval from dashboard or Slack.
-   */
-  debugPermissionMode?:
-    | UpdateWorkspaceSettingsRequestDebugPermissionMode
-    | undefined;
   /**
    * Turn the ai-agent on (`true`) or off (`false`) for this workspace.
    */
@@ -34,14 +13,7 @@ export type UpdateWorkspaceSettingsRequest = {
 };
 
 /** @internal */
-export const UpdateWorkspaceSettingsRequestDebugPermissionMode$outboundSchema:
-  z.ZodEnum<typeof UpdateWorkspaceSettingsRequestDebugPermissionMode> = z.enum(
-    UpdateWorkspaceSettingsRequestDebugPermissionMode,
-  );
-
-/** @internal */
 export type UpdateWorkspaceSettingsRequest$Outbound = {
-  debugPermissionMode?: string | undefined;
   enabled?: boolean | undefined;
 };
 
@@ -50,8 +22,6 @@ export const UpdateWorkspaceSettingsRequest$outboundSchema: z.ZodType<
   UpdateWorkspaceSettingsRequest$Outbound,
   UpdateWorkspaceSettingsRequest
 > = z.object({
-  debugPermissionMode:
-    UpdateWorkspaceSettingsRequestDebugPermissionMode$outboundSchema.optional(),
   enabled: z.boolean().optional(),
 });
 

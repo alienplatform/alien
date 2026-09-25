@@ -7,6 +7,10 @@ import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  RemoteOperatorInstallReceipt,
+  RemoteOperatorInstallReceipt$inboundSchema,
+} from "./remoteoperatorinstallreceipt.js";
 
 export type RenderOperatorManifestResponse = {
   /**
@@ -29,6 +33,7 @@ export type RenderOperatorManifestResponse = {
    * True when the operator image is still building. The manifest contains a placeholder image (<PENDING_IMAGE>) and must not be applied yet — re-render once the operator-image package is ready to get the real image.
    */
   imagePending: boolean;
+  operatorImage: RemoteOperatorInstallReceipt | null;
 };
 
 /** @internal */
@@ -41,6 +46,7 @@ export const RenderOperatorManifestResponse$inboundSchema: z.ZodType<
   filename: z.string(),
   managerUrl: z.string(),
   imagePending: z.boolean(),
+  operatorImage: z.nullable(RemoteOperatorInstallReceipt$inboundSchema),
 });
 
 export function renderOperatorManifestResponseFromJSON(

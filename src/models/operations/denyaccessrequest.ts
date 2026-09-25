@@ -67,6 +67,8 @@ export type DenyAccessRequestCommand = {
    * How risky an operation is (declared by the plugin metadata).
    */
   tier?: DenyAccessRequestTier | undefined;
+  pluginVersion?: string | undefined;
+  operationContractHash?: string | undefined;
 };
 
 /**
@@ -103,6 +105,7 @@ export type DenyAccessRequestResponse = {
    * How risky an operation is (declared by the plugin metadata).
    */
   maxRisk: DenyAccessRequestMaxRisk | null;
+  debugGrant: models.AccessRequestDebugGrant | null;
   status: models.AccessRequestStatus;
   approvedUntil: string | null;
 };
@@ -201,6 +204,8 @@ export const DenyAccessRequestCommand$inboundSchema: z.ZodType<
   summary: z.string(),
   params: z.nullable(z.any()).optional(),
   tier: DenyAccessRequestTier$inboundSchema.optional(),
+  pluginVersion: z.string().optional(),
+  operationContractHash: z.string().optional(),
 });
 
 export function denyAccessRequestCommandFromJSON(
@@ -236,6 +241,7 @@ export const DenyAccessRequestResponse$inboundSchema: z.ZodType<
   commands: z.array(z.lazy(() => DenyAccessRequestCommand$inboundSchema)),
   operationPattern: z.nullable(z.string()),
   maxRisk: z.nullable(DenyAccessRequestMaxRisk$inboundSchema),
+  debugGrant: z.nullable(models.AccessRequestDebugGrant$inboundSchema),
   status: models.AccessRequestStatus$inboundSchema,
   approvedUntil: z.nullable(z.string()),
 });

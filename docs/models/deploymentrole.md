@@ -7,11 +7,11 @@ Role for deployment-scoped service accounts
 ```typescript
 import { DeploymentRole } from "@alienplatform/platform-api/models";
 
-let value: DeploymentRole = "deployment.telemetry-writer";
+let value: DeploymentRole = "deployment.child-deployer";
 ```
 
 ## Values
 
 ```typescript
-"deployment.viewer" | "deployment.manager" | "deployment.telemetry-writer"
+"deployment.viewer" | "deployment.manager" | "deployment.telemetry-writer" | "deployment.child-deployer"
 ```

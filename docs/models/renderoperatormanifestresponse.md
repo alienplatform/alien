@@ -11,6 +11,14 @@ let value: RenderOperatorManifestResponse = {
   filename: "example.file",
   managerUrl: "https://red-citizen.net",
   imagePending: true,
+  operatorImage: {
+    source: "package",
+    packageId: "<id>",
+    packageVersion: "<value>",
+    image: "https://picsum.photos/seed/msGGlsLY/2206/1710",
+    digest: "<value>",
+    renderedAt: new Date("2025-12-05T21:59:46.408Z"),
+  },
 };
 ```
 
@@ -23,3 +31,4 @@ let value: RenderOperatorManifestResponse = {
 | `filename`                                                                                                                                                                                                          | *string*                                                                                                                                                                                                            | :heavy_check_mark:                                                                                                                                                                                                  | Suggested local filename                                                                                                                                                                                            |
 | `managerUrl`                                                                                                                                                                                                        | *string*                                                                                                                                                                                                            | :heavy_check_mark:                                                                                                                                                                                                  | Manager URL embedded in the manifest                                                                                                                                                                                |
 | `imagePending`                                                                                                                                                                                                      | *boolean*                                                                                                                                                                                                           | :heavy_check_mark:                                                                                                                                                                                                  | True when the operator image is still building. The manifest contains a placeholder image (<PENDING_IMAGE>) and must not be applied yet — re-render once the operator-image package is ready to get the real image. |
+| `operatorImage`                                                                                                                                                                                                     | [models.RemoteOperatorInstallReceipt](../models/remoteoperatorinstallreceipt.md)                                                                                                                                    | :heavy_check_mark:                                                                                                                                                                                                  | N/A                                                                                                                                                                                                                 |

@@ -347,7 +347,7 @@ export type PublishOperationsPluginRequestSensitiveOutputUnion =
   | PublishOperationsPluginRequestSensitiveOutputRedact
   | PublishOperationsPluginRequestSensitiveOutputRequireConfirmation;
 
-export type Operation = {
+export type PublishOperationsPluginRequestOperation = {
   name: string;
   tier?: OperationTier | null | undefined;
   description?: string | null | undefined;
@@ -377,7 +377,7 @@ export type Metadata = {
   binaries:
     | PublishOperationsPluginRequestBinaries1
     | PublishOperationsPluginRequestBinaries2;
-  operations?: Array<Operation> | undefined;
+  operations?: Array<PublishOperationsPluginRequestOperation> | undefined;
 };
 
 export type PublishOperationsPluginRequest = {
@@ -1718,7 +1718,7 @@ export function publishOperationsPluginRequestSensitiveOutputUnionToJSON(
 }
 
 /** @internal */
-export type Operation$Outbound = {
+export type PublishOperationsPluginRequestOperation$Outbound = {
   name: string;
   tier?: string | null | undefined;
   description?: string | null | undefined;
@@ -1744,9 +1744,9 @@ export type Operation$Outbound = {
 };
 
 /** @internal */
-export const Operation$outboundSchema: z.ZodType<
-  Operation$Outbound,
-  Operation
+export const PublishOperationsPluginRequestOperation$outboundSchema: z.ZodType<
+  PublishOperationsPluginRequestOperation$Outbound,
+  PublishOperationsPluginRequestOperation
 > = z.object({
   name: z.string(),
   tier: z.nullable(OperationTier$outboundSchema).optional(),
@@ -1786,8 +1786,15 @@ export const Operation$outboundSchema: z.ZodType<
   kubernetesPermissions: KubernetesPermissions$outboundSchema.optional(),
 });
 
-export function operationToJSON(operation: Operation): string {
-  return JSON.stringify(Operation$outboundSchema.parse(operation));
+export function publishOperationsPluginRequestOperationToJSON(
+  publishOperationsPluginRequestOperation:
+    PublishOperationsPluginRequestOperation,
+): string {
+  return JSON.stringify(
+    PublishOperationsPluginRequestOperation$outboundSchema.parse(
+      publishOperationsPluginRequestOperation,
+    ),
+  );
 }
 
 /** @internal */
@@ -1798,7 +1805,9 @@ export type Metadata$Outbound = {
   binaries:
     | PublishOperationsPluginRequestBinaries1$Outbound
     | PublishOperationsPluginRequestBinaries2$Outbound;
-  operations?: Array<Operation$Outbound> | undefined;
+  operations?:
+    | Array<PublishOperationsPluginRequestOperation$Outbound>
+    | undefined;
 };
 
 /** @internal */
@@ -1811,7 +1820,9 @@ export const Metadata$outboundSchema: z.ZodType<Metadata$Outbound, Metadata> = z
       z.lazy(() => PublishOperationsPluginRequestBinaries1$outboundSchema),
       z.lazy(() => PublishOperationsPluginRequestBinaries2$outboundSchema),
     ]),
-    operations: z.array(z.lazy(() => Operation$outboundSchema)).optional(),
+    operations: z.array(
+      z.lazy(() => PublishOperationsPluginRequestOperation$outboundSchema),
+    ).optional(),
   });
 
 export function metadataToJSON(metadata: Metadata): string {

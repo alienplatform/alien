@@ -210,6 +210,13 @@ export type TargetDeploymentComputeBackendType = ClosedEnum<
  */
 export type TargetDeploymentComputeBackendHorizon = {
   /**
+   * Capacity groups approved for workloads in a borrowed cluster.
+   *
+   * @remarks
+   * Empty for dedicated clusters, whose groups are owned by the stack.
+   */
+  borrowedCapacityGroups?: Array<string> | undefined;
+  /**
    * Cluster configurations (one per ComputeCluster resource)
    *
    * @remarks
@@ -226,6 +233,13 @@ export type TargetDeploymentComputeBackendHorizon = {
    * Horizon control-plane API base URL.
    */
   url: string;
+  /**
+   * Namespace for workloads sharing a cluster with another deployment.
+   *
+   * @remarks
+   * Absent for dedicated clusters to preserve their existing service names.
+   */
+  workloadNamespace?: string | null | undefined;
   type: TargetDeploymentComputeBackendType;
 };
 
@@ -5147,6 +5161,14 @@ export type TargetDeploymentOverrideAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -5160,6 +5182,14 @@ export type TargetDeploymentOverrideAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -5500,6 +5530,14 @@ export type TargetDeploymentExtendAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -5513,6 +5551,14 @@ export type TargetDeploymentExtendAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -5857,6 +5903,14 @@ export type TargetDeploymentProfileAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -5870,6 +5924,14 @@ export type TargetDeploymentProfileAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -6709,6 +6771,7 @@ export const TargetDeploymentComputeBackendHorizon$inboundSchema: z.ZodType<
   TargetDeploymentComputeBackendHorizon,
   unknown
 > = z.object({
+  borrowedCapacityGroups: z.array(z.string()).optional(),
   clusters: z.record(
     z.string(),
     z.lazy(() => TargetDeploymentClusters$inboundSchema),
@@ -6720,6 +6783,7 @@ export const TargetDeploymentComputeBackendHorizon$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   url: z.string(),
+  workloadNamespace: z.nullable(z.string()).optional(),
   type: TargetDeploymentComputeBackendType$inboundSchema,
 });
 
@@ -14943,6 +15007,7 @@ export const TargetDeploymentOverrideAwResource$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
     .optional(),
+  notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
 
@@ -14964,6 +15029,7 @@ export const TargetDeploymentOverrideAwStack$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
     .optional(),
+  notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
 
@@ -15443,6 +15509,7 @@ export const TargetDeploymentExtendAwResource$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
     .optional(),
+  notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
 
@@ -15463,6 +15530,7 @@ export const TargetDeploymentExtendAwStack$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
     .optional(),
+  notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
 
@@ -15954,6 +16022,7 @@ export const TargetDeploymentProfileAwResource$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
     .optional(),
+  notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
 
@@ -15974,6 +16043,7 @@ export const TargetDeploymentProfileAwStack$inboundSchema: z.ZodType<
 > = z.object({
   condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
     .optional(),
+  notResources: z.array(z.string()).optional(),
   resources: z.array(z.string()),
 });
 

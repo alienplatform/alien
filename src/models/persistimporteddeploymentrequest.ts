@@ -1706,6 +1706,14 @@ export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAwResour
      */
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
     /**
+     * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+     *
+     * @remarks
+     * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+     * refuses it anywhere else.
+     */
+    notResources?: Array<string> | undefined;
+    /**
      * Resource ARNs to bind to
      */
     resources: Array<string>;
@@ -1720,6 +1728,14 @@ export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAwStack 
      * Optional condition for additional filtering (rare)
      */
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    /**
+     * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+     *
+     * @remarks
+     * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+     * refuses it anywhere else.
+     */
+    notResources?: Array<string> | undefined;
     /**
      * Resource ARNs to bind to
      */
@@ -2115,6 +2131,14 @@ export type PersistImportedDeploymentRequestPendingPreparedStackExtendAwResource
      */
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
     /**
+     * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+     *
+     * @remarks
+     * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+     * refuses it anywhere else.
+     */
+    notResources?: Array<string> | undefined;
+    /**
      * Resource ARNs to bind to
      */
     resources: Array<string>;
@@ -2129,6 +2153,14 @@ export type PersistImportedDeploymentRequestPendingPreparedStackExtendAwStack =
      * Optional condition for additional filtering (rare)
      */
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    /**
+     * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+     *
+     * @remarks
+     * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+     * refuses it anywhere else.
+     */
+    notResources?: Array<string> | undefined;
     /**
      * Resource ARNs to bind to
      */
@@ -2528,6 +2560,14 @@ export type PersistImportedDeploymentRequestPendingPreparedStackProfileAwResourc
      */
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
     /**
+     * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+     *
+     * @remarks
+     * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+     * refuses it anywhere else.
+     */
+    notResources?: Array<string> | undefined;
+    /**
      * Resource ARNs to bind to
      */
     resources: Array<string>;
@@ -2542,6 +2582,14 @@ export type PersistImportedDeploymentRequestPendingPreparedStackProfileAwStack =
      * Optional condition for additional filtering (rare)
      */
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    /**
+     * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+     *
+     * @remarks
+     * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+     * refuses it anywhere else.
+     */
+    notResources?: Array<string> | undefined;
     /**
      * Resource ARNs to bind to
      */
@@ -3352,6 +3400,14 @@ export type PersistImportedDeploymentRequestPreparedStackOverrideAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -3365,6 +3421,14 @@ export type PersistImportedDeploymentRequestPreparedStackOverrideAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -3743,6 +3807,14 @@ export type PersistImportedDeploymentRequestPreparedStackExtendAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -3756,6 +3828,14 @@ export type PersistImportedDeploymentRequestPreparedStackExtendAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -4138,6 +4218,14 @@ export type PersistImportedDeploymentRequestPreparedStackProfileAwResource = {
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
    * Resource ARNs to bind to
    */
   resources: Array<string>;
@@ -4151,6 +4239,14 @@ export type PersistImportedDeploymentRequestPreparedStackProfileAwStack = {
    * Optional condition for additional filtering (rare)
    */
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
   /**
    * Resource ARNs to bind to
    */
@@ -4667,6 +4763,85 @@ export type PersistImportedDeploymentRequestPreparedStackUnion =
   | any;
 
 /**
+ * The cross-account read a manager opened on Alien's registry for one deployment.
+ */
+export type PersistImportedDeploymentRequestRegistryAccess = {
+  /**
+   * Repository identifiers the grant names, sorted.
+   */
+  repositories?: Array<string> | undefined;
+  /**
+   * Compute services the grant admits, sorted. Each pulls as its own principal, so a service
+   *
+   * @remarks
+   * added later needs the policy rewritten.
+   */
+  serviceTypes?: Array<string> | undefined;
+};
+
+export type PersistImportedDeploymentRequestRegistryAccessUnion =
+  | PersistImportedDeploymentRequestRegistryAccess
+  | any;
+
+/**
+ * The objects that keep an AWS deny sandbox's sessions inside the VPC. Each id is recorded as
+ *
+ * @remarks
+ * soon as the object exists and cleared once it is deleted.
+ */
+export type PersistImportedDeploymentRequestEgress = {
+  /**
+   * `AWS::Lambda::NetworkConnector` the sessions start with.
+   */
+  connectorArn?: string | null | undefined;
+  /**
+   * Cloud Control request creating or deleting the connector that AWS has not finished. Kept
+   *
+   * @remarks
+   * so the request's outcome, and AWS's reason when it fails, is read on a later call.
+   */
+  connectorRequest?: string | null | undefined;
+  /**
+   * IAM role Lambda assumes to place the connector's network interfaces.
+   */
+  operatorRoleName: string;
+  /**
+   * Security group permitting egress to loopback only.
+   */
+  securityGroupId?: string | null | undefined;
+};
+
+export type PersistImportedDeploymentRequestEgressUnion =
+  | PersistImportedDeploymentRequestEgress
+  | any;
+
+export const PersistImportedDeploymentRequestTypeAwsSandbox = {
+  AwsSandbox: "awsSandbox",
+} as const;
+export type PersistImportedDeploymentRequestTypeAwsSandbox = ClosedEnum<
+  typeof PersistImportedDeploymentRequestTypeAwsSandbox
+>;
+
+/**
+ * Cloud objects a direct setup created so a runtime-owned resource can run.
+ */
+export type PersistImportedDeploymentRequestSetupScaffolding = {
+  /**
+   * IAM role the image build runs as.
+   */
+  buildRoleName: string;
+  egress?: PersistImportedDeploymentRequestEgress | any | null | undefined;
+  /**
+   * A Frozen sandbox's MicroVM image, built during setup. A Live one's image belongs to its
+   *
+   * @remarks
+   * runtime controller.
+   */
+  imageArn?: string | null | undefined;
+  type: PersistImportedDeploymentRequestTypeAwsSandbox;
+};
+
+/**
  * One-shot authority for a setup re-import to replace setup-owned resources.
  */
 export type PersistImportedDeploymentRequestSetupUpdateAuthorization = {
@@ -4763,6 +4938,11 @@ export type PersistImportedDeploymentRequestRuntimeMetadata = {
     | any
     | null
     | undefined;
+  registryAccess?:
+    | PersistImportedDeploymentRequestRegistryAccess
+    | any
+    | null
+    | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
    *
@@ -4772,6 +4952,15 @@ export type PersistImportedDeploymentRequestRuntimeMetadata = {
    * every reconcile tick.
    */
   registryAccessGranted?: boolean | undefined;
+  /**
+   * What a direct setup created for resources it does not own, keyed by resource id. Setup
+   *
+   * @remarks
+   * teardown removes exactly what is recorded here.
+   */
+  setupScaffolding?: {
+    [k: string]: PersistImportedDeploymentRequestSetupScaffolding;
+  } | undefined;
   setupUpdateAuthorization?:
     | PersistImportedDeploymentRequestSetupUpdateAuthorization
     | any
@@ -8507,6 +8696,7 @@ export const PersistImportedDeploymentRequestPendingPreparedStackManagementEnum$
 export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAwResource$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -8519,6 +8709,7 @@ export const PersistImportedDeploymentRequestPendingPreparedStackOverrideAwResou
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -8538,6 +8729,7 @@ export function persistImportedDeploymentRequestPendingPreparedStackOverrideAwRe
 export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAwStack$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -8550,6 +8742,7 @@ export const PersistImportedDeploymentRequestPendingPreparedStackOverrideAwStack
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -9313,6 +9506,7 @@ export function persistImportedDeploymentRequestPendingPreparedStackManagement2T
 export type PersistImportedDeploymentRequestPendingPreparedStackExtendAwResource$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -9325,6 +9519,7 @@ export const PersistImportedDeploymentRequestPendingPreparedStackExtendAwResourc
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -9344,6 +9539,7 @@ export function persistImportedDeploymentRequestPendingPreparedStackExtendAwReso
 export type PersistImportedDeploymentRequestPendingPreparedStackExtendAwStack$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -9356,6 +9552,7 @@ export const PersistImportedDeploymentRequestPendingPreparedStackExtendAwStack$o
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -10146,6 +10343,7 @@ export function persistImportedDeploymentRequestPendingPreparedStackManagementUn
 export type PersistImportedDeploymentRequestPendingPreparedStackProfileAwResource$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -10158,6 +10356,7 @@ export const PersistImportedDeploymentRequestPendingPreparedStackProfileAwResour
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -10177,6 +10376,7 @@ export function persistImportedDeploymentRequestPendingPreparedStackProfileAwRes
 export type PersistImportedDeploymentRequestPendingPreparedStackProfileAwStack$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -10189,6 +10389,7 @@ export const PersistImportedDeploymentRequestPendingPreparedStackProfileAwStack$
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -11589,6 +11790,7 @@ export const PersistImportedDeploymentRequestPreparedStackManagementEnum$outboun
 export type PersistImportedDeploymentRequestPreparedStackOverrideAwResource$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -11601,6 +11803,7 @@ export const PersistImportedDeploymentRequestPreparedStackOverrideAwResource$out
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -11618,6 +11821,7 @@ export function persistImportedDeploymentRequestPreparedStackOverrideAwResourceT
 export type PersistImportedDeploymentRequestPreparedStackOverrideAwStack$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -11630,6 +11834,7 @@ export const PersistImportedDeploymentRequestPreparedStackOverrideAwStack$outbou
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -12362,6 +12567,7 @@ export function persistImportedDeploymentRequestPreparedStackManagement2ToJSON(
 export type PersistImportedDeploymentRequestPreparedStackExtendAwResource$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -12374,6 +12580,7 @@ export const PersistImportedDeploymentRequestPreparedStackExtendAwResource$outbo
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -12391,6 +12598,7 @@ export function persistImportedDeploymentRequestPreparedStackExtendAwResourceToJ
 export type PersistImportedDeploymentRequestPreparedStackExtendAwStack$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -12403,6 +12611,7 @@ export const PersistImportedDeploymentRequestPreparedStackExtendAwStack$outbound
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -13159,6 +13368,7 @@ export function persistImportedDeploymentRequestPreparedStackManagementUnionToJS
 export type PersistImportedDeploymentRequestPreparedStackProfileAwResource$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -13171,6 +13381,7 @@ export const PersistImportedDeploymentRequestPreparedStackProfileAwResource$outb
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -13188,6 +13399,7 @@ export function persistImportedDeploymentRequestPreparedStackProfileAwResourceTo
 export type PersistImportedDeploymentRequestPreparedStackProfileAwStack$Outbound =
   {
     condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+    notResources?: Array<string> | undefined;
     resources: Array<string>;
   };
 
@@ -13200,6 +13412,7 @@ export const PersistImportedDeploymentRequestPreparedStackProfileAwStack$outboun
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    notResources: z.array(z.string()).optional(),
     resources: z.array(z.string()),
   });
 
@@ -14142,6 +14355,161 @@ export function persistImportedDeploymentRequestPreparedStackUnionToJSON(
 }
 
 /** @internal */
+export type PersistImportedDeploymentRequestRegistryAccess$Outbound = {
+  repositories?: Array<string> | undefined;
+  serviceTypes?: Array<string> | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestRegistryAccess$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestRegistryAccess$Outbound,
+    PersistImportedDeploymentRequestRegistryAccess
+  > = z.object({
+    repositories: z.array(z.string()).optional(),
+    serviceTypes: z.array(z.string()).optional(),
+  });
+
+export function persistImportedDeploymentRequestRegistryAccessToJSON(
+  persistImportedDeploymentRequestRegistryAccess:
+    PersistImportedDeploymentRequestRegistryAccess,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestRegistryAccess$outboundSchema.parse(
+      persistImportedDeploymentRequestRegistryAccess,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestRegistryAccessUnion$Outbound =
+  | PersistImportedDeploymentRequestRegistryAccess$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestRegistryAccessUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestRegistryAccessUnion$Outbound,
+    PersistImportedDeploymentRequestRegistryAccessUnion
+  > = z.union([
+    z.lazy(() => PersistImportedDeploymentRequestRegistryAccess$outboundSchema),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestRegistryAccessUnionToJSON(
+  persistImportedDeploymentRequestRegistryAccessUnion:
+    PersistImportedDeploymentRequestRegistryAccessUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestRegistryAccessUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestRegistryAccessUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestEgress$Outbound = {
+  connectorArn?: string | null | undefined;
+  connectorRequest?: string | null | undefined;
+  operatorRoleName: string;
+  securityGroupId?: string | null | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestEgress$outboundSchema: z.ZodType<
+  PersistImportedDeploymentRequestEgress$Outbound,
+  PersistImportedDeploymentRequestEgress
+> = z.object({
+  connectorArn: z.nullable(z.string()).optional(),
+  connectorRequest: z.nullable(z.string()).optional(),
+  operatorRoleName: z.string(),
+  securityGroupId: z.nullable(z.string()).optional(),
+});
+
+export function persistImportedDeploymentRequestEgressToJSON(
+  persistImportedDeploymentRequestEgress:
+    PersistImportedDeploymentRequestEgress,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestEgress$outboundSchema.parse(
+      persistImportedDeploymentRequestEgress,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestEgressUnion$Outbound =
+  | PersistImportedDeploymentRequestEgress$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestEgressUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestEgressUnion$Outbound,
+    PersistImportedDeploymentRequestEgressUnion
+  > = z.union([
+    z.lazy(() => PersistImportedDeploymentRequestEgress$outboundSchema),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestEgressUnionToJSON(
+  persistImportedDeploymentRequestEgressUnion:
+    PersistImportedDeploymentRequestEgressUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestEgressUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestEgressUnion,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestTypeAwsSandbox$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestTypeAwsSandbox> = z.enum(
+    PersistImportedDeploymentRequestTypeAwsSandbox,
+  );
+
+/** @internal */
+export type PersistImportedDeploymentRequestSetupScaffolding$Outbound = {
+  buildRoleName: string;
+  egress?:
+    | PersistImportedDeploymentRequestEgress$Outbound
+    | any
+    | null
+    | undefined;
+  imageArn?: string | null | undefined;
+  type: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestSetupScaffolding$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestSetupScaffolding$Outbound,
+    PersistImportedDeploymentRequestSetupScaffolding
+  > = z.object({
+    buildRoleName: z.string(),
+    egress: z.nullable(
+      z.union([
+        z.lazy(() => PersistImportedDeploymentRequestEgress$outboundSchema),
+        z.any(),
+      ]),
+    ).optional(),
+    imageArn: z.nullable(z.string()).optional(),
+    type: PersistImportedDeploymentRequestTypeAwsSandbox$outboundSchema,
+  });
+
+export function persistImportedDeploymentRequestSetupScaffoldingToJSON(
+  persistImportedDeploymentRequestSetupScaffolding:
+    PersistImportedDeploymentRequestSetupScaffolding,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestSetupScaffolding$outboundSchema.parse(
+      persistImportedDeploymentRequestSetupScaffolding,
+    ),
+  );
+}
+
+/** @internal */
 export type PersistImportedDeploymentRequestSetupUpdateAuthorization$Outbound =
   {
     baselineFrozenDigest: string;
@@ -14222,7 +14590,15 @@ export type PersistImportedDeploymentRequestRuntimeMetadata$Outbound = {
     | any
     | null
     | undefined;
+  registryAccess?:
+    | PersistImportedDeploymentRequestRegistryAccess$Outbound
+    | any
+    | null
+    | undefined;
   registryAccessGranted?: boolean | undefined;
+  setupScaffolding?: {
+    [k: string]: PersistImportedDeploymentRequestSetupScaffolding$Outbound;
+  } | undefined;
   setupUpdateAuthorization?:
     | PersistImportedDeploymentRequestSetupUpdateAuthorization$Outbound
     | any
@@ -14259,7 +14635,21 @@ export const PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema:
         z.any(),
       ]),
     ).optional(),
+    registryAccess: z.nullable(
+      z.union([
+        z.lazy(() =>
+          PersistImportedDeploymentRequestRegistryAccess$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
     registryAccessGranted: z.boolean().optional(),
+    setupScaffolding: z.record(
+      z.string(),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestSetupScaffolding$outboundSchema
+      ),
+    ).optional(),
     setupUpdateAuthorization: z.nullable(
       z.union([
         z.lazy(() =>

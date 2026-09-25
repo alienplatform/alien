@@ -17,7 +17,7 @@ const value: operations.DataAwsMicrovm = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
+        reason: "forbidden",
         severity: "info",
         source: "<value>",
       },
@@ -75,7 +75,7 @@ const value: operations.DataKubernetesPods = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "collection-failed",
         severity: "warning",
         source: "<value>",
       },

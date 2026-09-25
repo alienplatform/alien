@@ -14,15 +14,17 @@ export type CreateContainerRegistryCredentialGlobals = {
   workspace?: string | undefined;
 };
 
-export const Scope = {
+export const CreateContainerRegistryCredentialScope = {
   Pull: "pull",
   PushPull: "pushPull",
 } as const;
-export type Scope = ClosedEnum<typeof Scope>;
+export type CreateContainerRegistryCredentialScope = ClosedEnum<
+  typeof CreateContainerRegistryCredentialScope
+>;
 
 export type CreateContainerRegistryCredentialRequestBody = {
   label: string;
-  scope: Scope;
+  scope: CreateContainerRegistryCredentialScope;
   repositorySubset?: Array<string> | null | undefined;
   expiresAt?: Date | null | undefined;
 };
@@ -36,7 +38,9 @@ export type CreateContainerRegistryCredentialRequest = {
 };
 
 /** @internal */
-export const Scope$outboundSchema: z.ZodEnum<typeof Scope> = z.enum(Scope);
+export const CreateContainerRegistryCredentialScope$outboundSchema: z.ZodEnum<
+  typeof CreateContainerRegistryCredentialScope
+> = z.enum(CreateContainerRegistryCredentialScope);
 
 /** @internal */
 export type CreateContainerRegistryCredentialRequestBody$Outbound = {
@@ -53,7 +57,7 @@ export const CreateContainerRegistryCredentialRequestBody$outboundSchema:
     CreateContainerRegistryCredentialRequestBody
   > = z.object({
     label: z.string(),
-    scope: Scope$outboundSchema,
+    scope: CreateContainerRegistryCredentialScope$outboundSchema,
     repositorySubset: z.nullable(z.array(z.string())).optional(),
     expiresAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
   });

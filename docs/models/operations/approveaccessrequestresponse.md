@@ -36,8 +36,13 @@ let value: ApproveAccessRequestResponse = {
   ],
   operationPattern: "<value>",
   maxRisk: "read-only",
-  status: "rejected",
-  approvedUntil: null,
+  debugGrant: {
+    tool: "gcloud",
+    namespace: "braintrust",
+    cloudScope: "123456789012/prod-readonly",
+  },
+  status: "pending-approval",
+  approvedUntil: "<value>",
   approvalMethod: "slack",
 };
 ```
@@ -58,6 +63,7 @@ let value: ApproveAccessRequestResponse = {
 | `commands`                                                                                                   | [operations.ApproveAccessRequestCommand](../../models/operations/approveaccessrequestcommand.md)[]           | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
 | `operationPattern`                                                                                           | *string*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
 | `maxRisk`                                                                                                    | [operations.ApproveAccessRequestMaxRisk](../../models/operations/approveaccessrequestmaxrisk.md)             | :heavy_check_mark:                                                                                           | How risky an operation is (declared by the plugin metadata).                                                 |                                                                                                              |
+| `debugGrant`                                                                                                 | [models.AccessRequestDebugGrant](../../models/accessrequestdebuggrant.md)                                    | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
 | `status`                                                                                                     | [models.AccessRequestStatus](../../models/accessrequeststatus.md)                                            | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
 | `approvedUntil`                                                                                              | *string*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
 | `approvalMethod`                                                                                             | *string*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          | slack                                                                                                        |

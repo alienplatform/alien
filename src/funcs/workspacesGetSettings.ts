@@ -28,7 +28,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Read the ai-agent settings for a workspace. Returns defaults (`enabled: true`, `debugPermissionMode: auto`) when the workspace has never customized them.
+ * Read the ai-agent settings for a workspace. Returns defaults (`enabled: true`) when the workspace has never customized them.
  */
 export function workspacesGetSettings(
   client: AlienCore,

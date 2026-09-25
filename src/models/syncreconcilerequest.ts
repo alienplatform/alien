@@ -25,6 +25,11 @@ import {
   OperatorCapabilityReport$Outbound,
   OperatorCapabilityReport$outboundSchema,
 } from "./operatorcapabilityreport.js";
+import {
+  RemoteOperatorImageIdentity,
+  RemoteOperatorImageIdentity$Outbound,
+  RemoteOperatorImageIdentity$outboundSchema,
+} from "./remoteoperatorimageidentity.js";
 
 export const SyncReconcileRequestBackendEnum = {
   Aws: "aws",
@@ -6097,6 +6102,27 @@ export type SyncReconcileRequestMemory6 = {
 
 export type MemoryUnion6 = SyncReconcileRequestMemory6 | any;
 
+/**
+ * Image a running container reports.
+ */
+export type Container3 = {
+  /**
+   * Registry manifest digest in `sha256:<hex>` form, when the runtime
+   *
+   * @remarks
+   * reports one.
+   */
+  digest?: string | null | undefined;
+  /**
+   * Image reference reported by the container runtime.
+   */
+  image: string;
+  /**
+   * Container name.
+   */
+  name: string;
+};
+
 export const CpuPodUnit3 = {
   Count: "count",
   Percent: "percent",
@@ -6139,6 +6165,7 @@ export type OwnerReference3 = {
 };
 
 export type Pod3 = {
+  containers?: Array<Container3> | undefined;
   cpu?: CpuPod3 | any | null | undefined;
   memory?: MemoryPod3 | any | null | undefined;
   name: string;
@@ -7218,6 +7245,27 @@ export type SyncReconcileRequestMemory4 = {
 
 export type MemoryUnion4 = SyncReconcileRequestMemory4 | any;
 
+/**
+ * Image a running container reports.
+ */
+export type Container2 = {
+  /**
+   * Registry manifest digest in `sha256:<hex>` form, when the runtime
+   *
+   * @remarks
+   * reports one.
+   */
+  digest?: string | null | undefined;
+  /**
+   * Image reference reported by the container runtime.
+   */
+  image: string;
+  /**
+   * Container name.
+   */
+  name: string;
+};
+
 export const CpuPodUnit2 = {
   Count: "count",
   Percent: "percent",
@@ -7260,6 +7308,7 @@ export type OwnerReference2 = {
 };
 
 export type Pod2 = {
+  containers?: Array<Container2> | undefined;
   cpu?: CpuPod2 | any | null | undefined;
   memory?: MemoryPod2 | any | null | undefined;
   name: string;
@@ -7867,6 +7916,27 @@ export type SyncReconcileRequestMemory1 = {
 
 export type MemoryUnion1 = SyncReconcileRequestMemory1 | any;
 
+/**
+ * Image a running container reports.
+ */
+export type Container1 = {
+  /**
+   * Registry manifest digest in `sha256:<hex>` form, when the runtime
+   *
+   * @remarks
+   * reports one.
+   */
+  digest?: string | null | undefined;
+  /**
+   * Image reference reported by the container runtime.
+   */
+  image: string;
+  /**
+   * Container name.
+   */
+  name: string;
+};
+
 export const CpuPodUnit1 = {
   Count: "count",
   Percent: "percent",
@@ -7909,6 +7979,7 @@ export type OwnerReference1 = {
 };
 
 export type Pod1 = {
+  containers?: Array<Container1> | undefined;
   cpu?: CpuPod1 | any | null | undefined;
   memory?: MemoryPod1 | any | null | undefined;
   name: string;
@@ -8764,6 +8835,10 @@ export type SyncReconcileRequest = {
    * Operator binary version reported by the runtime.
    */
   operatorVersion?: string | undefined;
+  /**
+   * Immutable installer receipt self-reported by a running Remote Operator. This is not independent runtime image inspection.
+   */
+  operatorImage?: RemoteOperatorImageIdentity | undefined;
   /**
    * Operations bundle set the Operator currently has loaded, for plugin-sync status tracking.
    */
@@ -20491,6 +20566,27 @@ export function memoryUnion6ToJSON(memoryUnion6: MemoryUnion6): string {
 }
 
 /** @internal */
+export type Container3$Outbound = {
+  digest?: string | null | undefined;
+  image: string;
+  name: string;
+};
+
+/** @internal */
+export const Container3$outboundSchema: z.ZodType<
+  Container3$Outbound,
+  Container3
+> = z.object({
+  digest: z.nullable(z.string()).optional(),
+  image: z.string(),
+  name: z.string(),
+});
+
+export function container3ToJSON(container3: Container3): string {
+  return JSON.stringify(Container3$outboundSchema.parse(container3));
+}
+
+/** @internal */
 export const CpuPodUnit3$outboundSchema: z.ZodEnum<typeof CpuPodUnit3> = z.enum(
   CpuPodUnit3,
 );
@@ -20590,6 +20686,7 @@ export function ownerReference3ToJSON(
 
 /** @internal */
 export type Pod3$Outbound = {
+  containers?: Array<Container3$Outbound> | undefined;
   cpu?: CpuPod3$Outbound | any | null | undefined;
   memory?: MemoryPod3$Outbound | any | null | undefined;
   name: string;
@@ -20606,6 +20703,7 @@ export type Pod3$Outbound = {
 
 /** @internal */
 export const Pod3$outboundSchema: z.ZodType<Pod3$Outbound, Pod3> = z.object({
+  containers: z.array(z.lazy(() => Container3$outboundSchema)).optional(),
   cpu: z.nullable(z.union([z.lazy(() => CpuPod3$outboundSchema), z.any()]))
     .optional(),
   memory: z.nullable(
@@ -23266,6 +23364,27 @@ export function memoryUnion4ToJSON(memoryUnion4: MemoryUnion4): string {
 }
 
 /** @internal */
+export type Container2$Outbound = {
+  digest?: string | null | undefined;
+  image: string;
+  name: string;
+};
+
+/** @internal */
+export const Container2$outboundSchema: z.ZodType<
+  Container2$Outbound,
+  Container2
+> = z.object({
+  digest: z.nullable(z.string()).optional(),
+  image: z.string(),
+  name: z.string(),
+});
+
+export function container2ToJSON(container2: Container2): string {
+  return JSON.stringify(Container2$outboundSchema.parse(container2));
+}
+
+/** @internal */
 export const CpuPodUnit2$outboundSchema: z.ZodEnum<typeof CpuPodUnit2> = z.enum(
   CpuPodUnit2,
 );
@@ -23365,6 +23484,7 @@ export function ownerReference2ToJSON(
 
 /** @internal */
 export type Pod2$Outbound = {
+  containers?: Array<Container2$Outbound> | undefined;
   cpu?: CpuPod2$Outbound | any | null | undefined;
   memory?: MemoryPod2$Outbound | any | null | undefined;
   name: string;
@@ -23381,6 +23501,7 @@ export type Pod2$Outbound = {
 
 /** @internal */
 export const Pod2$outboundSchema: z.ZodType<Pod2$Outbound, Pod2> = z.object({
+  containers: z.array(z.lazy(() => Container2$outboundSchema)).optional(),
   cpu: z.nullable(z.union([z.lazy(() => CpuPod2$outboundSchema), z.any()]))
     .optional(),
   memory: z.nullable(
@@ -24873,6 +24994,27 @@ export function memoryUnion1ToJSON(memoryUnion1: MemoryUnion1): string {
 }
 
 /** @internal */
+export type Container1$Outbound = {
+  digest?: string | null | undefined;
+  image: string;
+  name: string;
+};
+
+/** @internal */
+export const Container1$outboundSchema: z.ZodType<
+  Container1$Outbound,
+  Container1
+> = z.object({
+  digest: z.nullable(z.string()).optional(),
+  image: z.string(),
+  name: z.string(),
+});
+
+export function container1ToJSON(container1: Container1): string {
+  return JSON.stringify(Container1$outboundSchema.parse(container1));
+}
+
+/** @internal */
 export const CpuPodUnit1$outboundSchema: z.ZodEnum<typeof CpuPodUnit1> = z.enum(
   CpuPodUnit1,
 );
@@ -24972,6 +25114,7 @@ export function ownerReference1ToJSON(
 
 /** @internal */
 export type Pod1$Outbound = {
+  containers?: Array<Container1$Outbound> | undefined;
   cpu?: CpuPod1$Outbound | any | null | undefined;
   memory?: MemoryPod1$Outbound | any | null | undefined;
   name: string;
@@ -24988,6 +25131,7 @@ export type Pod1$Outbound = {
 
 /** @internal */
 export const Pod1$outboundSchema: z.ZodType<Pod1$Outbound, Pod1> = z.object({
+  containers: z.array(z.lazy(() => Container1$outboundSchema)).optional(),
   cpu: z.nullable(z.union([z.lazy(() => CpuPod1$outboundSchema), z.any()]))
     .optional(),
   memory: z.nullable(
@@ -26504,6 +26648,7 @@ export type SyncReconcileRequest$Outbound = {
   observedInventoryBatches?: Array<ObservedInventoryBatch$Outbound> | undefined;
   capabilities?: Array<OperatorCapabilityReport$Outbound> | undefined;
   operatorVersion?: string | undefined;
+  operatorImage?: RemoteOperatorImageIdentity$Outbound | undefined;
   operationsReport?: OperationsReport$Outbound | undefined;
 };
 
@@ -26525,6 +26670,7 @@ export const SyncReconcileRequest$outboundSchema: z.ZodType<
     .optional(),
   capabilities: z.array(OperatorCapabilityReport$outboundSchema).optional(),
   operatorVersion: z.string().optional(),
+  operatorImage: RemoteOperatorImageIdentity$outboundSchema.optional(),
   operationsReport: OperationsReport$outboundSchema.optional(),
 });
 

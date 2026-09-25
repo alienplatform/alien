@@ -10,8 +10,8 @@ let value: DataGcpCloudKms = {
     cryptoKeyName: "<value>",
     purpose: "<value>",
     status: {
-      health: "healthy",
-      lifecycle: "deleted",
+      health: "degraded",
+      lifecycle: "updating",
     },
   },
   provider: "gcp-cloud-kms",
@@ -20,7 +20,7 @@ let value: DataGcpCloudKms = {
 
 ## Fields
 
-| Field                                                | Type                                                 | Required                                             | Description                                          |
-| ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
-| `data`                                               | [operations.Data7](../../models/operations/data7.md) | :heavy_check_mark:                                   | N/A                                                  |
-| `provider`                                           | *"gcp-cloud-kms"*                                    | :heavy_check_mark:                                   | N/A                                                  |
+| Field                                                                                                      | Type                                                                                                       | Required                                                                                                   | Description                                                                                                |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `data`                                                                                                     | [operations.GetResourceDeploymentDetailData7](../../models/operations/getresourcedeploymentdetaildata7.md) | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
+| `provider`                                                                                                 | *"gcp-cloud-kms"*                                                                                          | :heavy_check_mark:                                                                                         | N/A                                                                                                        |

@@ -20,7 +20,7 @@ export type ListCommandsGlobals = {
 /**
  * Filter by command state
  */
-export const State = {
+export const ListCommandsState = {
   PendingUpload: "PENDING_UPLOAD",
   Pending: "PENDING",
   Dispatched: "DISPATCHED",
@@ -31,7 +31,7 @@ export const State = {
 /**
  * Filter by command state
  */
-export type State = ClosedEnum<typeof State>;
+export type ListCommandsState = ClosedEnum<typeof ListCommandsState>;
 
 export const ListCommandsInclude = {
   Deployment: "deployment",
@@ -51,7 +51,7 @@ export type ListCommandsRequest = {
   /**
    * Filter by command state
    */
-  state?: State | undefined;
+  state?: ListCommandsState | undefined;
   /**
    * Filter by command name
    */
@@ -97,7 +97,9 @@ export type ListCommandsResponse = {
 };
 
 /** @internal */
-export const State$outboundSchema: z.ZodEnum<typeof State> = z.enum(State);
+export const ListCommandsState$outboundSchema: z.ZodEnum<
+  typeof ListCommandsState
+> = z.enum(ListCommandsState);
 
 /** @internal */
 export const ListCommandsInclude$outboundSchema: z.ZodEnum<
@@ -125,7 +127,7 @@ export const ListCommandsRequest$outboundSchema: z.ZodType<
 > = z.object({
   project: z.string().optional(),
   deploymentId: z.string().optional(),
-  state: State$outboundSchema.optional(),
+  state: ListCommandsState$outboundSchema.optional(),
   name: z.string().optional(),
   search: z.string().optional(),
   createdAfter: z.nullable(z.date().transform(v => v.toISOString())).optional(),

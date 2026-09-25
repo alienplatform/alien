@@ -90,6 +90,27 @@ export type ObservedInventoryBatchHealth = ClosedEnum<
   typeof ObservedInventoryBatchHealth
 >;
 
+/**
+ * Image a running container reports.
+ */
+export type Image = {
+  /**
+   * Registry manifest digest in `sha256:<hex>` form, when the runtime
+   *
+   * @remarks
+   * reports one.
+   */
+  digest?: string | null | undefined;
+  /**
+   * Image reference reported by the container runtime.
+   */
+  image: string;
+  /**
+   * Container name.
+   */
+  name: string;
+};
+
 export const ObservedInventoryBatchLifecycle = {
   Unknown: "unknown",
   Creating: "creating",
@@ -133,6 +154,13 @@ export type ObservedInventoryBatchResource = {
   deploymentId?: string | null | undefined;
   displayName: string;
   health: ObservedInventoryBatchHealth;
+  /**
+   * Distinct container images the resource's running instances report, when
+   *
+   * @remarks
+   * the provider exposes them.
+   */
+  images?: Array<Image> | undefined;
   labels?: { [k: string]: string } | undefined;
   lifecycle: ObservedInventoryBatchLifecycle;
   message?: string | null | undefined;
@@ -286,6 +314,24 @@ export const ObservedInventoryBatchHealth$outboundSchema: z.ZodEnum<
 > = z.enum(ObservedInventoryBatchHealth);
 
 /** @internal */
+export type Image$Outbound = {
+  digest?: string | null | undefined;
+  image: string;
+  name: string;
+};
+
+/** @internal */
+export const Image$outboundSchema: z.ZodType<Image$Outbound, Image> = z.object({
+  digest: z.nullable(z.string()).optional(),
+  image: z.string(),
+  name: z.string(),
+});
+
+export function imageToJSON(image: Image): string {
+  return JSON.stringify(Image$outboundSchema.parse(image));
+}
+
+/** @internal */
 export const ObservedInventoryBatchLifecycle$outboundSchema: z.ZodEnum<
   typeof ObservedInventoryBatchLifecycle
 > = z.enum(ObservedInventoryBatchLifecycle);
@@ -352,6 +398,7 @@ export type ObservedInventoryBatchResource$Outbound = {
   deploymentId?: string | null | undefined;
   displayName: string;
   health: string;
+  images?: Array<Image$Outbound> | undefined;
   labels?: { [k: string]: string } | undefined;
   lifecycle: string;
   message?: string | null | undefined;
@@ -382,6 +429,7 @@ export const ObservedInventoryBatchResource$outboundSchema: z.ZodType<
   deploymentId: z.nullable(z.string()).optional(),
   displayName: z.string(),
   health: ObservedInventoryBatchHealth$outboundSchema,
+  images: z.array(z.lazy(() => Image$outboundSchema)).optional(),
   labels: z.record(z.string(), z.string()).optional(),
   lifecycle: ObservedInventoryBatchLifecycle$outboundSchema,
   message: z.nullable(z.string()).optional(),
