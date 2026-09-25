@@ -520,7 +520,7 @@ pub async fn handle_initial_setup_failed(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use alien_aws_clients::iam::{
         CreateRoleResponse, CreateRoleResult, GetRoleResponse, GetRoleResult,
@@ -531,6 +531,7 @@ mod tests {
         CreateMicrovmImageResponse, MicrovmImage, MicrovmImageVersion, MockLambdaMicrovmsApi,
     };
     use alien_aws_clients::AwsClientConfigExt as _;
+    use alien_bindings::traits::Vault as _;
     use alien_bindings::{BindingsProvider, BindingsProviderApi};
     use alien_core::{
         ClientConfig, EnvironmentVariablesSnapshot, Platform, RuntimeMetadata, SetupScaffolding,
@@ -1953,7 +1954,7 @@ mod tests {
     }
 
     /// Initial setup with the `secrets` vault already Running and one secret to sync into it.
-    fn setup_with_running_vault(
+    pub(crate) fn setup_with_running_vault(
         data_dir: &std::path::Path,
     ) -> (
         DeploymentState,
@@ -2040,10 +2041,9 @@ mod tests {
         .state
     }
 
-    async fn vault_names(
+    pub(crate) async fn vault_names(
         vault: &alien_bindings::providers::vault::local::LocalVault,
     ) -> Vec<String> {
-        use alien_bindings::traits::Vault as _;
         vault.list_secrets().await.unwrap()
     }
 
@@ -2101,7 +2101,6 @@ mod tests {
     /// recorded names are what teardown deletes.
     #[tokio::test]
     async fn setup_teardown_deletes_names_recorded_before_an_interrupted_sync() {
-        use alien_bindings::traits::Vault as _;
         let dir = tempfile::TempDir::new().unwrap();
         let (state, mut config, vault) = setup_with_running_vault(dir.path());
         let mut checkpointed = setup_step(state, &config).await;

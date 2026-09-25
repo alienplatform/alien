@@ -814,11 +814,11 @@ mod tests {
         );
     }
 
-    /// Setup synced secrets into the vault, then failed before the management identity existed.
-    /// Setup teardown deletes those secrets with its own credentials.
+    /// A stack with no management identity, whose vault came up and took synced secrets. Setup
+    /// teardown deletes those secrets with its own credentials.
     #[test]
     fn a_synced_secrets_vault_goes_to_setup_teardown() {
-        let state = with_resource(
+        let mut state = with_resource(
             after_setup_failed(
                 alien_core::InitialSetupAuthority::DirectSetup,
                 false,
@@ -829,6 +829,12 @@ mod tests {
             Some(ResourceLifecycle::Frozen),
             ResourceStatus::Running,
         );
+        state
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .remove("management");
         assert_eq!(
             super::destroy_without_runtime(&state),
             Some(DeploymentStatus::TeardownRequired)

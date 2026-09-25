@@ -287,6 +287,16 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         .context(ErrorData::ConfigurationError {
             message: "Failed to deserialize stack_state".to_string(),
         })?;
+    // The config here carries no variables, so the recorded secret names are the only list the
+    // destroy deletes from; a step that ran before the lock may have added to them.
+    current.runtime_metadata = deployment
+        .runtime_metadata
+        .map(|rm| serde_json::to_value(rm).and_then(serde_json::from_value))
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize runtime_metadata".to_string(),
+        })?;
 
     let transport = ManagerApiTransport::with_execution_claim(
         manager_client.clone(),

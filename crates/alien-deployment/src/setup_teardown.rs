@@ -85,6 +85,11 @@ async fn run_setup_teardown_after_handoff_inner(
     let service_provider = service_provider
         .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
 
+    if let Err(error) = delete_synced_vault_secrets(state, config, client_config).await {
+        fail_setup_teardown(deployment_id, state, config, transport, error.clone()).await?;
+        return Err(error);
+    }
+
     // Frozen teardown waits for this: the network cannot go while the scaffolding's group and
     // connector still hold interfaces in its subnets.
     let mut scaffolding_steps = 0;
@@ -150,11 +155,6 @@ async fn run_setup_teardown_after_handoff_inner(
             }));
         }
         sleep(Duration::from_millis(SCAFFOLDING_TEARDOWN_DELAY_MS)).await;
-    }
-
-    if let Err(error) = delete_synced_vault_secrets(state, config, client_config).await {
-        fail_setup_teardown(deployment_id, state, config, transport, error.clone()).await?;
-        return Err(error);
     }
 
     let mut stack_state = state.stack_state.take().ok_or_else(|| {
@@ -411,7 +411,7 @@ async fn teardown_setup_scaffolding(
 }
 
 /// Deletes the values this deployment wrote to its `secrets` vault, which the vault's own delete
-/// leaves behind. Initial setup records each name durably before writing it, and runtime cleanup
+/// leaves behind. Every sync records each name durably before writing it, and runtime cleanup
 /// clears the inventory once it deleted them, so an empty inventory means nothing to delete.
 async fn delete_synced_vault_secrets(
     state: &mut DeploymentState,

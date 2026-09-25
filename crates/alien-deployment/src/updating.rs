@@ -351,6 +351,26 @@ pub async fn handle_updating(
         )?;
     }
 
+    // Record-before-write, as in initial setup: destroy deletes from the recorded names.
+    if crate::helpers::has_secrets_vault(&stack_state)
+        && crate::helpers::record_vault_secret_names(
+            &target_stack,
+            client_config.platform(),
+            &config,
+            &mut runtime_metadata,
+        )
+    {
+        next.stack_state = Some(stack_state);
+        next.runtime_metadata = Some(runtime_metadata);
+        return Ok(DeploymentStepResult {
+            state: next,
+            suggested_delay_ms: None,
+            update_heartbeat: false,
+            heartbeats: vec![],
+            observed_inventory_batches: vec![],
+        });
+    }
+
     // Sync secrets to vault before updating workload resources.
     // The vault is Running and secrets may have been updated
     // This checks the hash and only syncs if needed
@@ -602,7 +622,49 @@ fn prune_deprovisioned_resources(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::initial_setup::tests::{setup_with_running_vault, vault_names};
+    use alien_bindings::traits::Vault as _;
     use alien_core::{Kv, Resource, ResourceLifecycle, StackResourceState, Worker, WorkerCode};
+
+    /// An update that swaps a secret records the new name in a step that writes nothing, then
+    /// writes it and deletes the old one.
+    #[tokio::test]
+    async fn an_update_records_a_new_secret_name_before_writing_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut state, config, vault) = setup_with_running_vault(dir.path());
+        state.status = DeploymentStatus::Updating;
+        let metadata = state.runtime_metadata.as_mut().unwrap();
+        metadata.pending_prepared_stack = metadata.prepared_stack.clone();
+        metadata.last_synced_secret_names = vec!["OLD_TOKEN".to_string()];
+        metadata.last_synced_env_vars_hash = Some("old".to_string());
+
+        vault.set_secret("OLD_TOKEN", "old").await.unwrap();
+        let step = |state| {
+            handle_updating(
+                state,
+                config.clone(),
+                alien_core::ClientConfig::Test,
+                std::sync::Arc::new(alien_infra::MockPlatformServiceProvider::new()),
+            )
+        };
+
+        let recorded = step(state).await.unwrap().state;
+
+        let metadata = recorded.runtime_metadata.as_ref().unwrap();
+        assert_eq!(
+            metadata.last_synced_secret_names,
+            vec!["API_TOKEN", "OLD_TOKEN"]
+        );
+        assert_eq!(metadata.last_synced_env_vars_hash.as_deref(), Some("old"));
+        assert_eq!(vault_names(&vault).await, vec!["OLD_TOKEN"]);
+
+        let synced = step(recorded).await.unwrap().state;
+
+        assert_eq!(vault_names(&vault).await, vec!["API_TOKEN"]);
+        let metadata = synced.runtime_metadata.unwrap();
+        assert_eq!(metadata.last_synced_secret_names, vec!["API_TOKEN"]);
+        assert_ne!(metadata.last_synced_env_vars_hash.as_deref(), Some("old"));
+    }
 
     mod setup_scaffolding_drift {
         use super::super::*;

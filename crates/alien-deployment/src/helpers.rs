@@ -12,7 +12,7 @@ use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use tracing::{debug, info};
 
 const OTEL_RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
@@ -686,7 +686,7 @@ pub(crate) fn record_vault_secret_names(
         .iter()
         .chain(desired.keys())
         .cloned()
-        .collect::<std::collections::BTreeSet<_>>();
+        .collect::<BTreeSet<_>>();
     runtime_metadata.last_synced_secret_names = names.into_iter().collect();
     true
 }
