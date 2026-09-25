@@ -126,6 +126,7 @@ pub(crate) fn validate_borrowed_cluster_stack(
         }
         if !container.public_endpoints.is_empty()
             || container.persistent_storage.is_some()
+            || container.stateful
             || !container.links.is_empty()
         {
             return Err(reject(
@@ -1251,6 +1252,18 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("cloud permission profiles"));
+
+        let mut stateful = stack.clone();
+        stateful.resources["api"]
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .stateful = true;
+        let error = mutation
+            .mutate(stateful, &state, &config)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("private stateless containers"));
 
         stack.resources["api"]
             .config
