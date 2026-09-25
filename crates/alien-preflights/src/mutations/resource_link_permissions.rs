@@ -346,7 +346,7 @@ mod tests {
                 "sender",
                 PermissionProfile::new()
                     .resource("objects", ["storage/data-read"])
-                    .resource("messages", ["queue/data-write"]),
+                    .resource("messages", ["queue/publish"]),
             )
             .permission(
                 "receiver",
@@ -383,7 +383,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(permission_ids("sender", "objects"), ["storage/data-read"]);
-        assert_eq!(permission_ids("sender", "messages"), ["queue/data-write"]);
+        assert_eq!(permission_ids("sender", "messages"), ["queue/publish"]);
         assert_eq!(
             permission_ids("receiver", "objects"),
             ["storage/data-read", "storage/data-write"]
