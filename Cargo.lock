@@ -318,6 +318,7 @@ dependencies = [
  "alien-gcp-clients",
  "alien-k8s-clients",
  "alien-manager-api",
+ "alien-permissions",
  "alien-platform-api",
  "async-trait",
  "axum 0.8.9",

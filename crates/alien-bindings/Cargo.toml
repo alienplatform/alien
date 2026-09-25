@@ -61,6 +61,7 @@ base64 = { workspace = true, optional = true }
 k8s-openapi = { version = "0.25.0", features = ["v1_33"], optional = true }
 
 [dev-dependencies]
+alien-permissions = { workspace = true }
 # `test-utils` on each cloud client crate enables its mockall `Mock*Api` doubles, which
 # the cloud Postgres providers' unit tests use to fake the secret store.
 alien-aws-clients = { workspace = true, features = ["test-utils"] }
