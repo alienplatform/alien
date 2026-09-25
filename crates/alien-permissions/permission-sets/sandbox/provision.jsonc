@@ -68,6 +68,40 @@
       },
       {
         "grant": {
+          // The tagged create performs an implicit TagResource, which AWS authorizes against "*"
+          // rather than the image ARN: a grant on `microvm-image:<prefix>-*` was refused with
+          // "TagResource on resource: *". Excluding every Lambda ARN leaves only that implicit
+          // check, so this cannot tag an existing function or image; verified live. The partition
+          // is a wildcard because an exclusion fails open: a pattern naming only `aws` would
+          // exclude nothing in GovCloud or China.
+          "actions": ["lambda:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [],
+            "notResources": ["arn:*:lambda:*:*:*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [],
+            "notResources": ["arn:*:lambda:*:*:*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
           // The same build under the tag CloudFormation and Terraform put on a Frozen image.
           "actions": ["lambda:CreateMicrovmImage"]
         },
@@ -83,6 +117,35 @@
           },
           "resource": {
             "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "setup"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          // The implicit tag of that build, held to it the same way.
+          "actions": ["lambda:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [],
+            "notResources": ["arn:*:lambda:*:*:*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "setup"
+              }
+            }
+          },
+          "resource": {
+            "resources": [],
+            "notResources": ["arn:*:lambda:*:*:*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",

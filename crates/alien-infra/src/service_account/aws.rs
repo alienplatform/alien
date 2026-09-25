@@ -935,6 +935,7 @@ impl AwsServiceAccountController {
                         effect: "Allow".to_string(),
                         action: vec!["ecr:GetAuthorizationToken".to_string()],
                         resource: vec!["*".to_string()],
+                        not_resource: Vec::new(),
                         condition: None,
                     });
                     all_statements.push(AwsIamStatement {
@@ -945,6 +946,7 @@ impl AwsServiceAccountController {
                             "ecr:GetDownloadUrlForLayer".to_string(),
                         ],
                         resource: vec![format!("arn:aws:ecr:*:{}:repository/*", mgmt_account)],
+                        not_resource: Vec::new(),
                         condition: None,
                     });
                 }
