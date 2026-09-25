@@ -3470,6 +3470,9 @@ logCollector:
     deploymentLabelKey: "alien.dev/deployment"
     legacyDeploymentLabelKey: ""
     deploymentLabelValue: ""
+    # For an observed workload that lacks the deployment label, set both fields.
+    podLabelKey: ""
+    podLabelValue: ""
 
 heartbeat:
   collection:
@@ -4231,7 +4234,17 @@ fn values_schema_json() -> String {
               "maxLength": 264,
               "pattern": "^$|^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*/deployment$"
             },
-            "deploymentLabelValue": { "type": "string" }
+            "deploymentLabelValue": { "type": "string" },
+            "podLabelKey": {
+              "type": "string",
+              "maxLength": 317,
+              "pattern": "^$|^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+            },
+            "podLabelValue": {
+              "type": "string",
+              "maxLength": 63,
+              "pattern": "^$|^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+            }
           }
         }
       }
@@ -5792,12 +5805,17 @@ data:
         Labels              On
         Annotations         Off
 
-    {{- if and .Values.logCollector.scope.deploymentLabelKey .Values.logCollector.scope.deploymentLabelValue }}
+    {{- $podLabelKey := .Values.logCollector.scope.podLabelKey -}}
+    {{- $podLabelValue := .Values.logCollector.scope.podLabelValue -}}
+    {{- if ne (empty $podLabelKey) (empty $podLabelValue) -}}
+      {{- fail "logCollector.scope.podLabelKey and podLabelValue must be set together" -}}
+    {{- end -}}
+    {{- $logLabelKey := default .Values.logCollector.scope.deploymentLabelKey $podLabelKey -}}
+    {{- $logLabelValue := default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
     [FILTER]
         Name                grep
         Match               kube.*
-        Regex               $kubernetes['labels']['{{ .Values.logCollector.scope.deploymentLabelKey }}'] ^{{ .Values.logCollector.scope.deploymentLabelValue }}$
-    {{- end }}
+        Regex               $kubernetes['labels']['{{ $logLabelKey }}'] ^{{ $logLabelValue | regexQuoteMeta }}$
 
     [OUTPUT]
         Name          http
