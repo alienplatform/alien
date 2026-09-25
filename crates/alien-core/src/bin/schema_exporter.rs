@@ -1,3 +1,4 @@
+use alien_core::ai_catalog::{ModelApiCapabilities, ModelCapabilitySupport};
 use alien_core::sync::{
     OperationsBundleDownload, OperationsReport, OperatorImageReport, OperatorImageSource,
     ReportedOperation, TargetOperationsBundleSet,
@@ -109,6 +110,8 @@ use utoipa::OpenApi;
     PostgresOutputs,
     Ai,
     AiOutputs,
+    ModelApiCapabilities,
+    ModelCapabilitySupport,
     Queue,
     QueueOutputs,
     Sandbox,

@@ -307,6 +307,8 @@ export type { ManagementPermissions } from "./zod/management-permissions-schema.
 export type { MessagePayload } from "./zod/message-payload-schema.js";
 export type { MetricSample } from "./zod/metric-sample-schema.js";
 export type { MetricUnit } from "./zod/metric-unit-schema.js";
+export type { ModelApiCapabilities } from "./zod/model-api-capabilities-schema.js";
+export type { ModelCapabilitySupport } from "./zod/model-capability-support-schema.js";
 export type { MonitoringConfig } from "./zod/monitoring-config-schema.js";
 export type { NetworkHeartbeatData } from "./zod/network-heartbeat-data-schema.js";
 export type { NetworkHeartbeatStatus } from "./zod/network-heartbeat-status-schema.js";
@@ -738,6 +740,8 @@ export { ManagementPermissionsSchema } from "./zod/management-permissions-schema
 export { MessagePayloadSchema } from "./zod/message-payload-schema.js";
 export { MetricSampleSchema } from "./zod/metric-sample-schema.js";
 export { MetricUnitSchema } from "./zod/metric-unit-schema.js";
+export { ModelApiCapabilitiesSchema } from "./zod/model-api-capabilities-schema.js";
+export { ModelCapabilitySupportSchema } from "./zod/model-capability-support-schema.js";
 export { MonitoringConfigSchema } from "./zod/monitoring-config-schema.js";
 export { NetworkHeartbeatDataSchema } from "./zod/network-heartbeat-data-schema.js";
 export { NetworkHeartbeatStatusSchema } from "./zod/network-heartbeat-status-schema.js";

@@ -307,6 +307,8 @@ export type { ManagementPermissions } from "./management-permissions-schema.js";
 export type { MessagePayload } from "./message-payload-schema.js";
 export type { MetricSample } from "./metric-sample-schema.js";
 export type { MetricUnit } from "./metric-unit-schema.js";
+export type { ModelApiCapabilities } from "./model-api-capabilities-schema.js";
+export type { ModelCapabilitySupport } from "./model-capability-support-schema.js";
 export type { MonitoringConfig } from "./monitoring-config-schema.js";
 export type { NetworkHeartbeatData } from "./network-heartbeat-data-schema.js";
 export type { NetworkHeartbeatStatus } from "./network-heartbeat-status-schema.js";
@@ -738,6 +740,8 @@ export { ManagementPermissionsSchema } from "./management-permissions-schema.js"
 export { MessagePayloadSchema } from "./message-payload-schema.js";
 export { MetricSampleSchema } from "./metric-sample-schema.js";
 export { MetricUnitSchema } from "./metric-unit-schema.js";
+export { ModelApiCapabilitiesSchema } from "./model-api-capabilities-schema.js";
+export { ModelCapabilitySupportSchema } from "./model-capability-support-schema.js";
 export { MonitoringConfigSchema } from "./monitoring-config-schema.js";
 export { NetworkHeartbeatDataSchema } from "./network-heartbeat-data-schema.js";
 export { NetworkHeartbeatStatusSchema } from "./network-heartbeat-status-schema.js";
