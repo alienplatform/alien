@@ -41,6 +41,46 @@ fn pure_worker_chart_emits_service_for_public_ingress() {
 }
 
 #[test]
+fn log_collector_requires_a_scope_and_can_select_an_existing_pod_label() {
+    let chart = render(
+        &Stack::new("logs".to_string()).build(),
+        StackSettings::default(),
+    );
+    let default_values = chart.files["values.yaml"].replacen(
+        "logCollector:\n  enabled: false",
+        "logCollector:\n  enabled: true",
+        1,
+    );
+    let default_render = test_utils::helm_template(&chart.files, Some(&default_values));
+    default_render.assert_ok("collector with managed deployment scope");
+    assert!(default_render.stdout.contains(
+        "Regex               $kubernetes['labels']['alien.dev/deployment'] ^test-release$"
+    ));
+
+    let selected_values = default_values
+        .replacen("    podLabelKey: \"\"", "    podLabelKey: app", 1)
+        .replacen(
+            "    podLabelValue: \"\"",
+            "    podLabelValue: external.agent",
+            1,
+        );
+    let selected_render = test_utils::helm_template(&chart.files, Some(&selected_values));
+    selected_render.assert_ok("collector with external pod scope");
+    assert!(selected_render
+        .stdout
+        .contains("Regex               $kubernetes['labels']['app'] ^external\\.agent$"));
+    assert!(!selected_render
+        .stdout
+        .contains("Regex               $kubernetes['labels']['alien.dev/deployment']"));
+
+    let incomplete_values =
+        default_values.replacen("    podLabelKey: \"\"", "    podLabelKey: app", 1);
+    let incomplete_render = test_utils::helm_template(&chart.files, Some(&incomplete_values));
+    assert!(matches!(incomplete_render.status, LinterStatus::Failed(_)));
+    assert!(incomplete_render.stderr.contains("must be set together"));
+}
+
+#[test]
 fn chart_values_include_kubernetes_exposure_contract() {
     let stack = Stack::new("k8s-exposure".to_string()).build();
     let settings = StackSettings {
