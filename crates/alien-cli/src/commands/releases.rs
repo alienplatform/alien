@@ -192,7 +192,7 @@ async fn list_platform_releases_task(
         println!("(no releases)");
         return Ok(());
     }
-    let mut table = make_table(&["ID", "Created", "Commit", "Ref", "Channels"]);
+    let mut table = make_table(&["ID", "Title", "Created", "Commit", "Ref", "Channels"]);
     for release in &response.items {
         let value = serde_json::to_value(release).unwrap_or_default();
         let text = |pointer: &str| {
@@ -204,6 +204,7 @@ async fn list_platform_releases_task(
         };
         table.add_row(vec![
             comfy_table::Cell::new(release.id.to_string()),
+            comfy_table::Cell::new(text("/title")),
             comfy_table::Cell::new(release.created_at.to_string()),
             comfy_table::Cell::new(text("/gitMetadata/commitSha")),
             comfy_table::Cell::new(text("/gitMetadata/commitRef")),
