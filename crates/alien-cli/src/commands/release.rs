@@ -554,7 +554,7 @@ async fn release_task_core(
                 build_proxy_push_settings(&per_platform, &platform).await?
             };
 
-            push_stack_with_cache(built_stack, platform.clone(), &output_dir, &push_settings)
+            push_stack_with_cache(built_stack, platform, &output_dir, &push_settings)
                 .await
                 .context(ErrorData::ReleaseFailed {
                     message: format!("Failed to push images for {} platform", platform_str),
@@ -1727,7 +1727,7 @@ pub(crate) async fn push_stack_with_cache(
     info!("   Pushing images to {}...", push_settings.repository);
 
     let push_started = Instant::now();
-    let pushed = alien_build::push_stack(built_stack, platform.clone(), push_settings).await?;
+    let pushed = alien_build::push_stack(built_stack, platform, push_settings).await?;
     info!(
         "Push for platform '{}' completed in {:.2}s",
         platform_str,

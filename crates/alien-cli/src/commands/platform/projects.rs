@@ -536,6 +536,9 @@ async fn build_and_push_sandbox_base_image(
         .await
         .context(ErrorData::BuildFailed)?;
 
+    let manager = ctx
+        .resolve_manager_metadata_only(project, Platform::Aws.as_str())
+        .await?;
     let mut request = http
         .sdk_client()
         .ensure_project_sandbox_base_image_repository()
@@ -553,9 +556,6 @@ async fn build_and_push_sandbox_base_image(
         })?
         .into_inner();
 
-    let manager = ctx
-        .resolve_manager_metadata_only(project, Platform::Aws.as_str())
-        .await?;
     let push_settings = manager_proxy_push_settings(
         &destination.registry_host,
         &destination.repository,
@@ -566,9 +566,8 @@ async fn build_and_push_sandbox_base_image(
     }
     let pushed = push_stack_with_cache(built, Platform::Aws, &output_dir, &push_settings)
         .await
-        .context(ErrorData::ApiRequestFailed {
-            message: "Failed to push the sandbox base image".to_string(),
-            url: None,
+        .context(ErrorData::SandboxImagePushFailed {
+            repository: push_settings.repository.clone(),
         })?;
 
     configured_base_image(
@@ -586,7 +585,7 @@ fn sandbox_source_stack(src: &Path, dockerfile: Option<String>) -> Result<Stack>
             .context(ErrorData::FileOperationFailed {
                 operation: "resolve".to_string(),
                 file_path: src.display().to_string(),
-                reason: "The --src directory could not be found".to_string(),
+                reason: "Could not resolve the --src directory".to_string(),
             })?;
     let sandbox = Sandbox::new("remote-sandbox".to_string())
         .code(SandboxCode::Source {
@@ -618,7 +617,7 @@ fn pushed_sandbox_image(stack: &Stack) -> Result<String> {
             },
         )
         .ok_or_else(|| {
-            AlienError::new(ErrorData::ConfigurationError {
+            AlienError::new(ErrorData::GenericError {
                 message: "The push did not produce a sandbox base image reference".to_string(),
             })
         })
@@ -635,7 +634,7 @@ fn configured_base_image(
         .strip_prefix(pushed_repository)
         .filter(|rest| rest.starts_with(':') || rest.starts_with('@'))
         .ok_or_else(|| {
-            AlienError::new(ErrorData::ConfigurationError {
+            AlienError::new(ErrorData::GenericError {
                 message: format!(
                     "Pushed image '{pushed}' is not in the repository '{pushed_repository}'"
                 ),

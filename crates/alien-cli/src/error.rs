@@ -268,6 +268,19 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// Pushing a remote sandbox base image failed.
+    #[error(
+        code = "SANDBOX_IMAGE_PUSH_FAILED",
+        message = "Failed to push the sandbox base image to {repository}",
+        retryable = "inherit",
+        internal = "inherit",
+        human = "transparent"
+    )]
+    SandboxImagePushFailed {
+        /// Repository the push addressed
+        repository: String,
+    },
+
     /// Deployment operation failed.
     #[error(
         code = "DEPLOYMENT_FAILED",
