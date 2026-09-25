@@ -28,6 +28,9 @@ pub enum WorkloadKind {
     /// Long-lived native process (DaemonSet on Kubernetes, host process on
     /// Local); its binary is the image entrypoint.
     Daemon,
+    /// Root filesystem a sandbox session runs in. It sets no entrypoint: the bundle layers the
+    /// sandbox agent on afterwards, and the agent is what runs.
+    SandboxBase,
 }
 
 impl WorkloadKind {
@@ -37,6 +40,7 @@ impl WorkloadKind {
             Self::Worker => "worker",
             Self::Container => "container",
             Self::Daemon => "daemon",
+            Self::SandboxBase => "sandbox",
         }
     }
 }

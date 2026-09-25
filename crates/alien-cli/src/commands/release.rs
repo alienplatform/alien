@@ -6,8 +6,9 @@ use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
 use alien_build::settings::PushSettings;
 use alien_core::{
-    alien_event, AlienEvent, Container, ContainerCode, Daemon, DaemonCode, Platform, Stack,
-    StackInputDefinition, StackInputKind, StackInputProvider, Worker, WorkerCode,
+    alien_event, AlienEvent, Container, ContainerCode, Daemon, DaemonCode, Platform, Sandbox,
+    SandboxCode, Stack, StackInputDefinition, StackInputKind, StackInputProvider, Worker,
+    WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::{
@@ -1582,6 +1583,21 @@ fn rebase_prebuilt_stack_image_paths(stack: &mut Stack, output_dir: &Path) -> Re
                     return Err(prebuilt_source_error("Daemon", &daemon.id));
                 }
             }
+        } else if let Some(sandbox) = resource_entry.config.downcast_ref::<Sandbox>() {
+            match &sandbox.code {
+                SandboxCode::Image { image } => {
+                    if let Some(rebased) =
+                        rebase_prebuilt_image_path("sandbox", &sandbox.id, image, output_dir)?
+                    {
+                        let mut updated = sandbox.clone();
+                        updated.code = SandboxCode::Image { image: rebased };
+                        resource_entry.config = alien_core::Resource::new(updated);
+                    }
+                }
+                SandboxCode::Source { .. } => {
+                    return Err(prebuilt_source_error("Sandbox", &sandbox.id));
+                }
+            }
         }
     }
     Ok(())
@@ -1793,6 +1809,24 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>, reposito
                     }
                 }
             }
+        } else if let Some(sandbox) = resource_entry.config.downcast_mut::<Sandbox>() {
+            if let SandboxCode::Image { ref image } = sandbox.code {
+                if let Some(key) = cache_key_from_path(image) {
+                    if let Some(cached_uri) = cache
+                        .get(&key)
+                        .filter(|uri| image_uri_belongs_to_repository(uri, repository))
+                    {
+                        info!(
+                            "Push cache hit for sandbox '{}': {} → {}",
+                            sandbox.id, key, cached_uri
+                        );
+                        sandbox.code = SandboxCode::Image {
+                            image: cached_uri.clone(),
+                        };
+                        hits += 1;
+                    }
+                }
+            }
         }
     }
 
@@ -1831,6 +1865,11 @@ fn collect_push_cache_entries(
                     return Some((id.clone(), image.clone()));
                 }
             }
+            if let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() {
+                if let SandboxCode::Image { ref image } = sandbox.code {
+                    return Some((id.clone(), image.clone()));
+                }
+            }
             None
         })
         .collect();
@@ -1850,6 +1889,12 @@ fn collect_push_cache_entries(
             }
         } else if let Some(daemon) = resource_entry.config.downcast_ref::<Daemon>() {
             if let DaemonCode::Image { ref image } = daemon.code {
+                Some(image.clone())
+            } else {
+                None
+            }
+        } else if let Some(sandbox) = resource_entry.config.downcast_ref::<Sandbox>() {
+            if let SandboxCode::Image { ref image } = sandbox.code {
                 Some(image.clone())
             } else {
                 None
@@ -1899,6 +1944,77 @@ mod tests {
                 image: image.to_string(),
             })
             .build()
+    }
+
+    fn sandbox_with_image(image: &str) -> Sandbox {
+        Sandbox::new("sbx".to_string())
+            .code(SandboxCode::Image {
+                image: image.to_string(),
+            })
+            .egress(alien_core::SandboxEgress::Allow)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build()
+    }
+
+    /// A sandbox earns the same cache the other compute types do, so an unchanged one is not
+    /// re-pushed on every release. A bundle URI is left alone: it names no local artifact.
+    #[test]
+    fn push_cache_applies_and_collects_for_sandboxes() {
+        let local_dir = tempfile::tempdir().unwrap();
+        let artifact_dir = local_dir.path().join("sbx-9f8e7d6c");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let local_path = artifact_dir.to_string_lossy().into_owned();
+
+        let mut stack = Stack::new("cache-test".to_string())
+            .add(sandbox_with_image(&local_path), ResourceLifecycle::Live)
+            .build();
+        let cache = HashMap::from([(
+            "sbx-9f8e7d6c".to_string(),
+            "registry.example.com/base:tag".to_string(),
+        )]);
+        let hits = apply_push_cache(&mut stack, &cache, "registry.example.com/base");
+        assert_eq!(hits, 1, "sandbox local path should hit the cache");
+        let sandbox = stack
+            .resources()
+            .find_map(|(_, e)| e.config.downcast_ref::<Sandbox>().cloned())
+            .expect("sandbox should exist");
+        assert_eq!(
+            sandbox.code,
+            SandboxCode::Image {
+                image: "registry.example.com/base:tag".to_string()
+            }
+        );
+
+        let pre_push = Stack::new("cache-test".to_string())
+            .add(sandbox_with_image(&local_path), ResourceLifecycle::Live)
+            .build();
+        let pushed = Stack::new("cache-test".to_string())
+            .add(
+                sandbox_with_image("registry.example.com/base:pushed"),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let mut collected = HashMap::new();
+        collect_push_cache_entries(&pushed, &pre_push, &mut collected);
+        assert_eq!(
+            collected.get("sbx-9f8e7d6c").map(String::as_str),
+            Some("registry.example.com/base:pushed")
+        );
+
+        let mut bundle_stack = Stack::new("cache-test".to_string())
+            .add(
+                sandbox_with_image("s3://acme-bundles-us-east-1/sandbox-bundle/abc/bundle.zip"),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        assert_eq!(
+            apply_push_cache(&mut bundle_stack, &cache, "registry.example.com/base"),
+            0,
+            "a bundle URI names no artifact the cache could have pushed"
+        );
     }
 
     #[test]

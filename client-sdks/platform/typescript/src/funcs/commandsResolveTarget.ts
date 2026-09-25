@@ -91,6 +91,7 @@ async function $do(
   const path = pathToFunc("/v1/commands/target")();
 
   const query = encodeFormQuery({
+    "command": payload.command,
     "deploymentId": payload.deploymentId,
     "target": payload.target,
     "workspace": client._options.workspace,

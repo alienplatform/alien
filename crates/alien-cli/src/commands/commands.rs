@@ -32,7 +32,11 @@ EXAMPLES:
     alien commands invoke --deployment acme-corp --command generate-report \\
       --params '{\"startDate\": \"2025-01-01\"}'
 
-See also: https://alien.dev/docs/commands"
+Commands are application RPC handled by your Worker, Container, or Daemon.
+See also: `alien operations --help` for Remote Operator operations, which carry
+a risk tier, approval policy, and access requests.
+
+Docs: https://alien.dev/docs/commands"
 )]
 pub struct CommandsArgs {
     #[command(subcommand)]

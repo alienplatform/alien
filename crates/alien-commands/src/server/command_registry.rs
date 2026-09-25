@@ -248,6 +248,11 @@ pub trait CommandRegistry: Send + Sync {
 
     /// Resolve which command-capable resource a command is addressed to.
     ///
+    /// `command` is the name being invoked. Registries that know about
+    /// commands served outside the deployment stack (for example operations)
+    /// can use it to reject a name that must be invoked another way, with an
+    /// error that says how. The standalone registries ignore it.
+    ///
     /// - `requested = Some(id)`: the target must exist and be command-capable,
     ///   else `COMMAND_TARGET_NOT_FOUND` (an empty id never resolves).
     /// - `requested = None` (single-target shorthand): exactly one
@@ -262,6 +267,7 @@ pub trait CommandRegistry: Send + Sync {
     async fn resolve_target(
         &self,
         deployment_id: &str,
+        command: &str,
         requested: Option<&str>,
     ) -> Result<ResolvedCommandTarget>;
 
@@ -441,6 +447,7 @@ impl CommandRegistry for InMemoryCommandRegistry {
     async fn resolve_target(
         &self,
         deployment_id: &str,
+        _command: &str,
         requested: Option<&str>,
     ) -> Result<ResolvedCommandTarget> {
         let targets = self.targets.read().await;
@@ -634,7 +641,9 @@ mod tests {
         registry: &InMemoryCommandRegistry,
         requested: Option<&str>,
     ) -> Result<ResolvedCommandTarget> {
-        registry.resolve_target("dep-1", requested).await
+        registry
+            .resolve_target("dep-1", "test-command", requested)
+            .await
     }
 
     #[tokio::test]
@@ -788,7 +797,7 @@ mod tests {
             .await
             .unwrap();
         let push_worker = push_registry
-            .resolve_target("dep-1", Some("worker-1"))
+            .resolve_target("dep-1", "test-command", Some("worker-1"))
             .await
             .unwrap();
         assert_eq!(push_worker.delivery_mode, CommandDeliveryMode::Push);
@@ -802,7 +811,7 @@ mod tests {
             .await
             .unwrap();
         let pull_worker = pull_registry
-            .resolve_target("dep-1", Some("worker-1"))
+            .resolve_target("dep-1", "test-command", Some("worker-1"))
             .await
             .unwrap();
         assert_eq!(pull_worker.delivery_mode, CommandDeliveryMode::Pull);
@@ -816,7 +825,10 @@ mod tests {
             .await
             .unwrap();
 
-        let resolved_target = registry.resolve_target("dep-1", None).await.unwrap();
+        let resolved_target = registry
+            .resolve_target("dep-1", "test-command", None)
+            .await
+            .unwrap();
         let metadata = registry
             .create_command(
                 "dep-1",
@@ -857,7 +869,10 @@ mod tests {
             .register_target("daemon-1", CommandTargetType::Daemon)
             .await
             .unwrap();
-        let target = registry.resolve_target("dep-1", None).await.unwrap();
+        let target = registry
+            .resolve_target("dep-1", "test-command", None)
+            .await
+            .unwrap();
         let command = registry
             .create_command(
                 "dep-1",
@@ -910,7 +925,10 @@ mod tests {
             .register_target("worker-1", CommandTargetType::Worker)
             .await
             .unwrap();
-        let target = registry.resolve_target("dep-1", None).await.unwrap();
+        let target = registry
+            .resolve_target("dep-1", "test-command", None)
+            .await
+            .unwrap();
         let command = registry
             .create_command(
                 "dep-1",
