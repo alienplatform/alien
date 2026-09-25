@@ -391,8 +391,8 @@ pub trait LambdaMicrovmsApi: Send + Sync + std::fmt::Debug {
         image_version: &str,
     ) -> Result<Vec<MicrovmImageBuild>>;
 
-    /// Deletes one image version. The versions hold the image: deleting the image while
-    /// versions remain is accepted by the API and removes nothing.
+    /// Deletes one image version. AWS refuses to delete an image's last version; deleting the
+    /// image removes every version with it.
     async fn delete_microvm_image_version(
         &self,
         image_identifier: &str,
@@ -1411,10 +1411,8 @@ mod live_image_create {
         )
     }
 
-    /// Deletes an image the way the API wants it, versions first.
-    ///
-    /// CloudControl accepts a delete on a `CREATED` image and never removes it — the versions
-    /// hold it. `DeleteMicrovmImageVersion` is in `sandbox/provision` for exactly this reason.
+    /// Probes whether deleting versions can clear an image. AWS refuses to delete its last version
+    /// on its own, so only the whole-image delete removes it, and that is the call teardown makes.
     #[tokio::test]
     #[ignore]
     async fn delete_images_versions_first() {
