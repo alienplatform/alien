@@ -14,6 +14,7 @@ import { finalizeAwsVirtualKeyDeletion } from "../funcs/finalizeAwsVirtualKeyDel
 import { getAwsVirtualKey } from "../funcs/getAwsVirtualKey.js";
 import { getDeploymentCredentialRotation } from "../funcs/getDeploymentCredentialRotation.js";
 import { getDeploymentCredentialRotationValues } from "../funcs/getDeploymentCredentialRotationValues.js";
+import { getPendingWorkspaceInvitation } from "../funcs/getPendingWorkspaceInvitation.js";
 import { getWorkspaceInvitationPreview } from "../funcs/getWorkspaceInvitationPreview.js";
 import { getWorkspaceInviteLink } from "../funcs/getWorkspaceInviteLink.js";
 import { listAwsVirtualKeys } from "../funcs/listAwsVirtualKeys.js";
@@ -32,6 +33,7 @@ import { AgentSessions } from "./agentsessions.js";
 import { ApiKeys } from "./apikeys.js";
 import { Auth } from "./auth.js";
 import { Billing } from "./billing.js";
+import { ChildDeployments } from "./childdeployments.js";
 import { CloudRegions } from "./cloudregions.js";
 import { Commands } from "./commands.js";
 import { ContainerRegistry } from "./containerregistry.js";
@@ -118,6 +120,11 @@ export class Alien extends ClientSDK {
   private _deployments?: Deployments;
   get deployments(): Deployments {
     return (this._deployments ??= new Deployments(this._options));
+  }
+
+  private _childDeployments?: ChildDeployments;
+  get childDeployments(): ChildDeployments {
+    return (this._childDeployments ??= new ChildDeployments(this._options));
   }
 
   private _managers?: Managers;
@@ -215,6 +222,17 @@ export class Alien extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.WorkspaceInvitationPreview> {
     return unwrapAsync(getWorkspaceInvitationPreview(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async getPendingWorkspaceInvitation(
+    request?: operations.GetPendingWorkspaceInvitationRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<operations.GetPendingWorkspaceInvitationResponse> {
+    return unwrapAsync(getPendingWorkspaceInvitation(
       this,
       request,
       options,

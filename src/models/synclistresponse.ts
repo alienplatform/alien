@@ -4740,6 +4740,27 @@ export type SyncListResponsePreparedStackUnion =
   | any;
 
 /**
+ * The cross-account read a manager opened on Alien's registry for one deployment.
+ */
+export type SyncListResponseRegistryAccess = {
+  /**
+   * Repository identifiers the grant names, sorted.
+   */
+  repositories?: Array<string> | undefined;
+  /**
+   * Compute services the grant admits, sorted. Each pulls as its own principal, so a service
+   *
+   * @remarks
+   * added later needs the policy rewritten.
+   */
+  serviceTypes?: Array<string> | undefined;
+};
+
+export type SyncListResponseRegistryAccessUnion =
+  | SyncListResponseRegistryAccess
+  | any;
+
+/**
  * One-shot authority for a setup re-import to replace setup-owned resources.
  */
 export type SyncListResponseSetupUpdateAuthorization = {
@@ -4826,6 +4847,7 @@ export type SyncListResponseRuntimeMetadata = {
    */
   persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?: SyncListResponsePreparedStack | any | null | undefined;
+  registryAccess?: SyncListResponseRegistryAccess | any | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
    *
@@ -12483,6 +12505,45 @@ export function syncListResponsePreparedStackUnionFromJSON(
 }
 
 /** @internal */
+export const SyncListResponseRegistryAccess$inboundSchema: z.ZodType<
+  SyncListResponseRegistryAccess,
+  unknown
+> = z.object({
+  repositories: z.array(z.string()).optional(),
+  serviceTypes: z.array(z.string()).optional(),
+});
+
+export function syncListResponseRegistryAccessFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseRegistryAccess, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseRegistryAccess$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseRegistryAccess' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseRegistryAccessUnion$inboundSchema: z.ZodType<
+  SyncListResponseRegistryAccessUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponseRegistryAccess$inboundSchema),
+  z.any(),
+]);
+
+export function syncListResponseRegistryAccessUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseRegistryAccessUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseRegistryAccessUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseRegistryAccessUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncListResponseSetupUpdateAuthorization$inboundSchema: z.ZodType<
   SyncListResponseSetupUpdateAuthorization,
   unknown
@@ -12555,6 +12616,12 @@ export const SyncListResponseRuntimeMetadata$inboundSchema: z.ZodType<
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => SyncListResponsePreparedStack$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  registryAccess: z.nullable(
+    z.union([
+      z.lazy(() => SyncListResponseRegistryAccess$inboundSchema),
       z.any(),
     ]),
   ).optional(),

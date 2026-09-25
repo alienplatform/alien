@@ -132,7 +132,7 @@ export class Workspaces extends ClientSDK {
   }
 
   /**
-   * Read the ai-agent settings for a workspace. Returns defaults (`enabled: true`, `debugPermissionMode: auto`) when the workspace has never customized them.
+   * Read the ai-agent settings for a workspace. Returns defaults (`enabled: true`) when the workspace has never customized them.
    */
   async getSettings(
     request: operations.GetWorkspaceSettingsRequest,
@@ -146,7 +146,7 @@ export class Workspaces extends ClientSDK {
   }
 
   /**
-   * Update the ai-agent settings for a workspace. Supports `debugPermissionMode` (`ask` requires human approval on every ai-agent debug command, `auto` runs them without asking) and `enabled` (`false` turns the ai-agent off so incoming triggers are rejected before any session runs).
+   * Update the ai-agent settings for a workspace. Supports `enabled` (`false` turns the ai-agent off so incoming triggers are rejected before any session runs).
    */
   async updateSettings(
     request: operations.UpdateWorkspaceSettingsRequest,

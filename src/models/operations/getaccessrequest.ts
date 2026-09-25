@@ -56,6 +56,8 @@ export type GetAccessRequestCommand = {
    * How risky an operation is (declared by the plugin metadata).
    */
   tier?: GetAccessRequestTier | undefined;
+  pluginVersion?: string | undefined;
+  operationContractHash?: string | undefined;
 };
 
 /**
@@ -92,6 +94,7 @@ export type GetAccessRequestResponse = {
    * How risky an operation is (declared by the plugin metadata).
    */
   maxRisk: GetAccessRequestMaxRisk | null;
+  debugGrant: models.AccessRequestDebugGrant | null;
   status: models.AccessRequestStatus;
   approvedUntil: string | null;
 };
@@ -156,6 +159,8 @@ export const GetAccessRequestCommand$inboundSchema: z.ZodType<
   summary: z.string(),
   params: z.nullable(z.any()).optional(),
   tier: GetAccessRequestTier$inboundSchema.optional(),
+  pluginVersion: z.string().optional(),
+  operationContractHash: z.string().optional(),
 });
 
 export function getAccessRequestCommandFromJSON(
@@ -190,6 +195,7 @@ export const GetAccessRequestResponse$inboundSchema: z.ZodType<
   commands: z.array(z.lazy(() => GetAccessRequestCommand$inboundSchema)),
   operationPattern: z.nullable(z.string()),
   maxRisk: z.nullable(GetAccessRequestMaxRisk$inboundSchema),
+  debugGrant: z.nullable(models.AccessRequestDebugGrant$inboundSchema),
   status: models.AccessRequestStatus$inboundSchema,
   approvedUntil: z.nullable(z.string()),
 });

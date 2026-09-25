@@ -70,17 +70,17 @@ const value: operations.DataGcp1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "info",
+        reason: "api-unavailable",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "degraded",
+    health: "unhealthy",
     lifecycle: "running",
     partial: false,
     stale: true,
   },
-  unavailableInstances: 530018,
+  unavailableInstances: 673342,
   backend: "gcp",
 };
 ```

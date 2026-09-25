@@ -4738,6 +4738,27 @@ export type DeploymentStatePreparedStackUnion =
   | any;
 
 /**
+ * The cross-account read a manager opened on Alien's registry for one deployment.
+ */
+export type DeploymentStateRegistryAccess = {
+  /**
+   * Repository identifiers the grant names, sorted.
+   */
+  repositories?: Array<string> | undefined;
+  /**
+   * Compute services the grant admits, sorted. Each pulls as its own principal, so a service
+   *
+   * @remarks
+   * added later needs the policy rewritten.
+   */
+  serviceTypes?: Array<string> | undefined;
+};
+
+export type DeploymentStateRegistryAccessUnion =
+  | DeploymentStateRegistryAccess
+  | any;
+
+/**
  * One-shot authority for a setup re-import to replace setup-owned resources.
  */
 export type DeploymentStateSetupUpdateAuthorization = {
@@ -4828,6 +4849,7 @@ export type DeploymentStateRuntimeMetadata = {
    */
   persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?: DeploymentStatePreparedStack | any | null | undefined;
+  registryAccess?: DeploymentStateRegistryAccess | any | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
    *
@@ -21392,6 +21414,90 @@ export function deploymentStatePreparedStackUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentStateRegistryAccess$inboundSchema: z.ZodType<
+  DeploymentStateRegistryAccess,
+  unknown
+> = z.object({
+  repositories: z.array(z.string()).optional(),
+  serviceTypes: z.array(z.string()).optional(),
+});
+/** @internal */
+export type DeploymentStateRegistryAccess$Outbound = {
+  repositories?: Array<string> | undefined;
+  serviceTypes?: Array<string> | undefined;
+};
+
+/** @internal */
+export const DeploymentStateRegistryAccess$outboundSchema: z.ZodType<
+  DeploymentStateRegistryAccess$Outbound,
+  DeploymentStateRegistryAccess
+> = z.object({
+  repositories: z.array(z.string()).optional(),
+  serviceTypes: z.array(z.string()).optional(),
+});
+
+export function deploymentStateRegistryAccessToJSON(
+  deploymentStateRegistryAccess: DeploymentStateRegistryAccess,
+): string {
+  return JSON.stringify(
+    DeploymentStateRegistryAccess$outboundSchema.parse(
+      deploymentStateRegistryAccess,
+    ),
+  );
+}
+export function deploymentStateRegistryAccessFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentStateRegistryAccess, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentStateRegistryAccess$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentStateRegistryAccess' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentStateRegistryAccessUnion$inboundSchema: z.ZodType<
+  DeploymentStateRegistryAccessUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentStateRegistryAccess$inboundSchema),
+  z.any(),
+]);
+/** @internal */
+export type DeploymentStateRegistryAccessUnion$Outbound =
+  | DeploymentStateRegistryAccess$Outbound
+  | any;
+
+/** @internal */
+export const DeploymentStateRegistryAccessUnion$outboundSchema: z.ZodType<
+  DeploymentStateRegistryAccessUnion$Outbound,
+  DeploymentStateRegistryAccessUnion
+> = z.union([
+  z.lazy(() => DeploymentStateRegistryAccess$outboundSchema),
+  z.any(),
+]);
+
+export function deploymentStateRegistryAccessUnionToJSON(
+  deploymentStateRegistryAccessUnion: DeploymentStateRegistryAccessUnion,
+): string {
+  return JSON.stringify(
+    DeploymentStateRegistryAccessUnion$outboundSchema.parse(
+      deploymentStateRegistryAccessUnion,
+    ),
+  );
+}
+export function deploymentStateRegistryAccessUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentStateRegistryAccessUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentStateRegistryAccessUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentStateRegistryAccessUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentStateSetupUpdateAuthorization$inboundSchema: z.ZodType<
   DeploymentStateSetupUpdateAuthorization,
   unknown
@@ -21525,6 +21631,12 @@ export const DeploymentStateRuntimeMetadata$inboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
+  registryAccess: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentStateRegistryAccess$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   registryAccessGranted: z.boolean().optional(),
   setupUpdateAuthorization: z.nullable(
     z.union([
@@ -21547,6 +21659,11 @@ export type DeploymentStateRuntimeMetadata$Outbound = {
   persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?:
     | DeploymentStatePreparedStack$Outbound
+    | any
+    | null
+    | undefined;
+  registryAccess?:
+    | DeploymentStateRegistryAccess$Outbound
     | any
     | null
     | undefined;
@@ -21578,6 +21695,12 @@ export const DeploymentStateRuntimeMetadata$outboundSchema: z.ZodType<
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => DeploymentStatePreparedStack$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  registryAccess: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentStateRegistryAccess$outboundSchema),
       z.any(),
     ]),
   ).optional(),

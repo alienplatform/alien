@@ -58,14 +58,14 @@ const value: operations.DataAzureKeyVault1 = {
       {
         message: "<value>",
         reason: "timed-out",
-        severity: "error",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "updating",
-    partial: false,
-    stale: false,
+    health: "unhealthy",
+    lifecycle: "deleting",
+    partial: true,
+    stale: true,
   },
   backend: "azureKeyVault",
 };
@@ -82,13 +82,13 @@ const value: operations.DataKubernetesSecret = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "info",
+        reason: "forbidden",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "deleting",
+    health: "unhealthy",
+    lifecycle: "stopped",
     partial: false,
     stale: false,
   },
@@ -107,8 +107,8 @@ const value: operations.DataLocal9 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "info",
+        reason: "api-unavailable",
+        severity: "warning",
         source: "<value>",
       },
     ],

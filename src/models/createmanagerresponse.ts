@@ -25,6 +25,40 @@ export type CreateManagerResponseSetupStatus = ClosedEnum<
   typeof CreateManagerResponseSetupStatus
 >;
 
+/**
+ * Represents the target cloud platform.
+ */
+export const CreateManagerResponsePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Machines: "machines",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type CreateManagerResponsePlatform = ClosedEnum<
+  typeof CreateManagerResponsePlatform
+>;
+
+/**
+ * Immutable Release whose schema validated first-party inputs for this platform and channel.
+ */
+export type CreateManagerResponseValidatedReleaseSelection = {
+  /**
+   * Unique identifier for the release.
+   */
+  releaseId: string;
+  releaseChannel: string;
+  /**
+   * Represents the target cloud platform.
+   */
+  platform: CreateManagerResponsePlatform;
+};
+
 export const CreateManagerResponseItemEnum = {
   Deployment: "deployment",
   Models: "models",
@@ -144,6 +178,12 @@ export type CreateManagerResponseSetupConfig = {
   metadata: { [k: string]: any | null };
   policy: DeploymentSetupPolicy;
   inputValues?: { [k: string]: EncryptedStackInputValue } | undefined;
+  /**
+   * Immutable Release whose schema validated first-party inputs for this platform and channel.
+   */
+  validatedReleaseSelection?:
+    | CreateManagerResponseValidatedReleaseSelection
+    | undefined;
   /**
    * Immutable setup items and exact sources captured when this setup link is created.
    */
@@ -3866,6 +3906,37 @@ export const CreateManagerResponseSetupStatus$inboundSchema: z.ZodEnum<
 > = z.enum(CreateManagerResponseSetupStatus);
 
 /** @internal */
+export const CreateManagerResponsePlatform$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponsePlatform
+> = z.enum(CreateManagerResponsePlatform);
+
+/** @internal */
+export const CreateManagerResponseValidatedReleaseSelection$inboundSchema:
+  z.ZodType<CreateManagerResponseValidatedReleaseSelection, unknown> = z.object(
+    {
+      releaseId: z.string(),
+      releaseChannel: z.string(),
+      platform: CreateManagerResponsePlatform$inboundSchema,
+    },
+  );
+
+export function createManagerResponseValidatedReleaseSelectionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseValidatedReleaseSelection,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseValidatedReleaseSelection$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseValidatedReleaseSelection' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateManagerResponseItemEnum$inboundSchema: z.ZodEnum<
   typeof CreateManagerResponseItemEnum
 > = z.enum(CreateManagerResponseItemEnum);
@@ -4071,6 +4142,9 @@ export const CreateManagerResponseSetupConfig$inboundSchema: z.ZodType<
   policy: DeploymentSetupPolicy$inboundSchema,
   inputValues: z.record(z.string(), EncryptedStackInputValue$inboundSchema)
     .optional(),
+  validatedReleaseSelection: z.lazy(() =>
+    CreateManagerResponseValidatedReleaseSelection$inboundSchema
+  ).optional(),
   items: z.array(z.lazy(() => CreateManagerResponseItem$inboundSchema))
     .optional(),
   publicSubdomain: z.string().optional(),

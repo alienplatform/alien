@@ -65,7 +65,7 @@ export const OperationEnum = {
 } as const;
 export type OperationEnum = ClosedEnum<typeof OperationEnum>;
 
-export type Operation = {
+export type GetProjectEncryptionUsageOperation = {
   requests: number;
   successfulRequests: number;
   errorRequests: number;
@@ -79,7 +79,7 @@ export type GetProjectEncryptionUsageAvailable = {
   range: GetProjectEncryptionUsageRangeResponse;
   totals: GetProjectEncryptionUsageTotals;
   timeSeries: Array<GetProjectEncryptionUsageTimeSery>;
-  operations: Array<Operation>;
+  operations: Array<GetProjectEncryptionUsageOperation>;
 };
 
 export const GetProjectEncryptionUsageReason = {
@@ -187,7 +187,10 @@ export const OperationEnum$inboundSchema: z.ZodEnum<typeof OperationEnum> = z
   .enum(OperationEnum);
 
 /** @internal */
-export const Operation$inboundSchema: z.ZodType<Operation, unknown> = z.object({
+export const GetProjectEncryptionUsageOperation$inboundSchema: z.ZodType<
+  GetProjectEncryptionUsageOperation,
+  unknown
+> = z.object({
   requests: z.int(),
   successfulRequests: z.int(),
   errorRequests: z.int(),
@@ -196,13 +199,14 @@ export const Operation$inboundSchema: z.ZodType<Operation, unknown> = z.object({
   operation: OperationEnum$inboundSchema,
 });
 
-export function operationFromJSON(
+export function getProjectEncryptionUsageOperationFromJSON(
   jsonString: string,
-): SafeParseResult<Operation, SDKValidationError> {
+): SafeParseResult<GetProjectEncryptionUsageOperation, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Operation$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Operation' from JSON`,
+    (x) =>
+      GetProjectEncryptionUsageOperation$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetProjectEncryptionUsageOperation' from JSON`,
   );
 }
 
@@ -217,7 +221,9 @@ export const GetProjectEncryptionUsageAvailable$inboundSchema: z.ZodType<
   timeSeries: z.array(
     z.lazy(() => GetProjectEncryptionUsageTimeSery$inboundSchema),
   ),
-  operations: z.array(z.lazy(() => Operation$inboundSchema)),
+  operations: z.array(
+    z.lazy(() => GetProjectEncryptionUsageOperation$inboundSchema),
+  ),
 });
 
 export function getProjectEncryptionUsageAvailableFromJSON(

@@ -4652,6 +4652,25 @@ export type DeploymentPreparedStack = {
 export type DeploymentPreparedStackUnion = DeploymentPreparedStack | any;
 
 /**
+ * The cross-account read a manager opened on Alien's registry for one deployment.
+ */
+export type DeploymentRegistryAccess = {
+  /**
+   * Repository identifiers the grant names, sorted.
+   */
+  repositories?: Array<string> | undefined;
+  /**
+   * Compute services the grant admits, sorted. Each pulls as its own principal, so a service
+   *
+   * @remarks
+   * added later needs the policy rewritten.
+   */
+  serviceTypes?: Array<string> | undefined;
+};
+
+export type DeploymentRegistryAccessUnion = DeploymentRegistryAccess | any;
+
+/**
  * One-shot authority for a setup re-import to replace setup-owned resources.
  */
 export type DeploymentSetupUpdateAuthorization = {
@@ -4738,6 +4757,7 @@ export type DeploymentRuntimeMetadata = {
    */
   persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?: DeploymentPreparedStack | any | null | undefined;
+  registryAccess?: DeploymentRegistryAccess | any | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
    *
@@ -11864,6 +11884,41 @@ export function deploymentPreparedStackUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentRegistryAccess$inboundSchema: z.ZodType<
+  DeploymentRegistryAccess,
+  unknown
+> = z.object({
+  repositories: z.array(z.string()).optional(),
+  serviceTypes: z.array(z.string()).optional(),
+});
+
+export function deploymentRegistryAccessFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentRegistryAccess, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentRegistryAccess$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentRegistryAccess' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentRegistryAccessUnion$inboundSchema: z.ZodType<
+  DeploymentRegistryAccessUnion,
+  unknown
+> = z.union([z.lazy(() => DeploymentRegistryAccess$inboundSchema), z.any()]);
+
+export function deploymentRegistryAccessUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentRegistryAccessUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentRegistryAccessUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentRegistryAccessUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentSetupUpdateAuthorization$inboundSchema: z.ZodType<
   DeploymentSetupUpdateAuthorization,
   unknown
@@ -11932,6 +11987,9 @@ export const DeploymentRuntimeMetadata$inboundSchema: z.ZodType<
   persistedGateAnswers: z.record(z.string(), z.boolean()).optional(),
   preparedStack: z.nullable(
     z.union([z.lazy(() => DeploymentPreparedStack$inboundSchema), z.any()]),
+  ).optional(),
+  registryAccess: z.nullable(
+    z.union([z.lazy(() => DeploymentRegistryAccess$inboundSchema), z.any()]),
   ).optional(),
   registryAccessGranted: z.boolean().optional(),
   setupUpdateAuthorization: z.nullable(

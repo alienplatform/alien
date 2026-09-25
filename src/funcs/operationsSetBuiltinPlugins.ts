@@ -28,7 +28,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Replace the complete set of enabled built-in operations plugins for a project.
+ * Replace the complete set of enabled built-in operations plugins for a project. Returns the cloud permission delta versus the previously enabled set.
  */
 export function operationsSetBuiltinPlugins(
   client: AlienCore,

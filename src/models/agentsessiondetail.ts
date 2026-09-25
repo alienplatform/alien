@@ -12,13 +12,6 @@ import {
 } from "./agentsessionsubject.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
-export type PendingApproval = {
-  approvalId: string;
-  toolCallId: string;
-  toolName: string;
-  input?: any | null | undefined;
-};
-
 export type AgentSessionDetail = {
   id: string;
   triggerType: string;
@@ -30,29 +23,7 @@ export type AgentSessionDetail = {
   resultText: string | null;
   toolNames: Array<string> | null;
   error: string | null;
-  pendingApproval: PendingApproval | null;
 };
-
-/** @internal */
-export const PendingApproval$inboundSchema: z.ZodType<
-  PendingApproval,
-  unknown
-> = z.object({
-  approvalId: z.string(),
-  toolCallId: z.string(),
-  toolName: z.string(),
-  input: z.nullable(z.any()).optional(),
-});
-
-export function pendingApprovalFromJSON(
-  jsonString: string,
-): SafeParseResult<PendingApproval, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => PendingApproval$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'PendingApproval' from JSON`,
-  );
-}
 
 /** @internal */
 export const AgentSessionDetail$inboundSchema: z.ZodType<
@@ -69,7 +40,6 @@ export const AgentSessionDetail$inboundSchema: z.ZodType<
   resultText: z.nullable(z.string()),
   toolNames: z.nullable(z.array(z.string())),
   error: z.nullable(z.string()),
-  pendingApproval: z.nullable(z.lazy(() => PendingApproval$inboundSchema)),
 });
 
 export function agentSessionDetailFromJSON(

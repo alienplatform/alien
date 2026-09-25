@@ -3,7 +3,6 @@
  * @generated-id: a6414d61dbf7
  */
 
-import { agentSessionsApprove } from "../funcs/agentSessionsApprove.js";
 import { agentSessionsEvents } from "../funcs/agentSessionsEvents.js";
 import { agentSessionsGet } from "../funcs/agentSessionsGet.js";
 import { agentSessionsList } from "../funcs/agentSessionsList.js";
@@ -57,21 +56,7 @@ export class AgentSessions extends ClientSDK {
   }
 
   /**
-   * Approve a halted ai-agent monitor session. Proxies to the ai-agent service, minting a fresh CLI session for the caller so the ai-agent's own auth applies.
-   */
-  async approve(
-    request: operations.ApproveAgentSessionRequest,
-    options?: RequestOptions,
-  ): Promise<models.AgentSessionApproveResponse> {
-    return unwrapAsync(agentSessionsApprove(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
-   * Stop (cancel) a running, queued, or halted ai-agent monitor session. Proxies to the ai-agent service, minting a fresh CLI session for the caller so the ai-agent's own auth applies. Idempotent — stopping an already-terminal session is a 200 no-op.
+   * Stop (cancel) a running or queued ai-agent monitor session. Proxies to the ai-agent service, minting a fresh CLI session for the caller so the ai-agent's own auth applies. Idempotent — stopping an already-terminal session is a 200 no-op.
    */
   async stop(
     request: operations.StopAgentSessionRequest,

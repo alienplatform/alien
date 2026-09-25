@@ -28,8 +28,13 @@ let value: QueueAccessRequestResponse = {
   commands: [],
   operationPattern: null,
   maxRisk: "mutating",
-  status: "queued",
-  approvedUntil: null,
+  debugGrant: {
+    tool: "gcloud",
+    namespace: "braintrust",
+    cloudScope: "123456789012/prod-readonly",
+  },
+  status: "pending-approval",
+  approvedUntil: "<value>",
   kubectlApprove: "<value>",
 };
 ```
@@ -50,6 +55,7 @@ let value: QueueAccessRequestResponse = {
 | `commands`                                                                                               | [operations.QueueAccessRequestCommand](../../models/operations/queueaccessrequestcommand.md)[]           | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `operationPattern`                                                                                       | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `maxRisk`                                                                                                | [operations.QueueAccessRequestMaxRisk](../../models/operations/queueaccessrequestmaxrisk.md)             | :heavy_check_mark:                                                                                       | How risky an operation is (declared by the plugin metadata).                                             |
+| `debugGrant`                                                                                             | [models.AccessRequestDebugGrant](../../models/accessrequestdebuggrant.md)                                | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `status`                                                                                                 | [models.AccessRequestStatus](../../models/accessrequeststatus.md)                                        | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `approvedUntil`                                                                                          | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `kubectlApprove`                                                                                         | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |

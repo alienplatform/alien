@@ -20,15 +20,20 @@ let value: CreateManagerResponse = {
       allowedPlatforms: [],
       allowedSetupMethods: [],
     },
+    validatedReleaseSelection: {
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      releaseChannel: "<value>",
+      platform: "local",
+    },
     items: [
       {
-        item: "registry",
+        item: "models",
         source: {
           type: "project-release",
           releaseChannel: "<value>",
           releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         },
-        required: true,
+        required: false,
       },
     ],
     environmentVariables: [],

@@ -210,6 +210,13 @@ export type TargetDeploymentComputeBackendType = ClosedEnum<
  */
 export type TargetDeploymentComputeBackendHorizon = {
   /**
+   * Capacity groups approved for workloads in a borrowed cluster.
+   *
+   * @remarks
+   * Empty for dedicated clusters, whose groups are owned by the stack.
+   */
+  borrowedCapacityGroups?: Array<string> | undefined;
+  /**
    * Cluster configurations (one per ComputeCluster resource)
    *
    * @remarks
@@ -226,6 +233,13 @@ export type TargetDeploymentComputeBackendHorizon = {
    * Horizon control-plane API base URL.
    */
   url: string;
+  /**
+   * Namespace for workloads sharing a cluster with another deployment.
+   *
+   * @remarks
+   * Absent for dedicated clusters to preserve their existing service names.
+   */
+  workloadNamespace?: string | null | undefined;
   type: TargetDeploymentComputeBackendType;
 };
 
@@ -6709,6 +6723,7 @@ export const TargetDeploymentComputeBackendHorizon$inboundSchema: z.ZodType<
   TargetDeploymentComputeBackendHorizon,
   unknown
 > = z.object({
+  borrowedCapacityGroups: z.array(z.string()).optional(),
   clusters: z.record(
     z.string(),
     z.lazy(() => TargetDeploymentClusters$inboundSchema),
@@ -6720,6 +6735,7 @@ export const TargetDeploymentComputeBackendHorizon$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   url: z.string(),
+  workloadNamespace: z.nullable(z.string()).optional(),
   type: TargetDeploymentComputeBackendType$inboundSchema,
 });
 

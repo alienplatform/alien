@@ -5,6 +5,10 @@
 
 import * as z from "zod/v4";
 import { ClosedEnum } from "../types/enums.js";
+import {
+  DebugGrantTool,
+  DebugGrantTool$outboundSchema,
+} from "./debuggranttool.js";
 
 /**
  * How risky an operation is (declared by the plugin metadata).
@@ -29,6 +33,8 @@ export type CreateAccessRequestCommand = {
    * How risky an operation is (declared by the plugin metadata).
    */
   tier?: CreateAccessRequestTier | undefined;
+  pluginVersion?: string | undefined;
+  operationContractHash?: string | undefined;
 };
 
 /**
@@ -61,7 +67,7 @@ export type CreateAccessRequest = {
    */
   remediationPlanId?: string | undefined;
   /**
-   * Required for a plan-backed request; defaults to the operation/pattern for a plan-less one.
+   * Required for a plan-backed request; defaults to the operation/pattern/debug-tool for a plan-less one.
    */
   title?: string | undefined;
   reason?: string | undefined;
@@ -85,6 +91,15 @@ export type CreateAccessRequest = {
    * Required with `operationPattern`: the highest risk tier the wildcard grant may cover.
    */
   maxRisk?: CreateAccessRequestMaxRisk | undefined;
+  debugTool?: DebugGrantTool | undefined;
+  /**
+   * Scopes a `kubectl` debug grant to one Kubernetes namespace. Requires `debugTool: kubectl`.
+   */
+  debugNamespace?: string | undefined;
+  /**
+   * Scopes an `aws`/`gcloud`/`az` debug grant to a customer-meaningful account/project/subscription string. Requires `debugTool` set to that provider.
+   */
+  debugCloudScope?: string | undefined;
 };
 
 /** @internal */
@@ -98,6 +113,8 @@ export type CreateAccessRequestCommand$Outbound = {
   summary: string;
   params?: any | null | undefined;
   tier?: string | undefined;
+  pluginVersion?: string | undefined;
+  operationContractHash?: string | undefined;
 };
 
 /** @internal */
@@ -109,6 +126,8 @@ export const CreateAccessRequestCommand$outboundSchema: z.ZodType<
   summary: z.string(),
   params: z.nullable(z.any()).optional(),
   tier: CreateAccessRequestTier$outboundSchema.optional(),
+  pluginVersion: z.string().optional(),
+  operationContractHash: z.string().optional(),
 });
 
 export function createAccessRequestCommandToJSON(
@@ -137,6 +156,9 @@ export type CreateAccessRequest$Outbound = {
   operationPattern?: string | undefined;
   params?: any | null | undefined;
   maxRisk?: string | undefined;
+  debugTool?: string | undefined;
+  debugNamespace?: string | undefined;
+  debugCloudScope?: string | undefined;
 };
 
 /** @internal */
@@ -156,6 +178,9 @@ export const CreateAccessRequest$outboundSchema: z.ZodType<
   operationPattern: z.string().optional(),
   params: z.nullable(z.any()).optional(),
   maxRisk: CreateAccessRequestMaxRisk$outboundSchema.optional(),
+  debugTool: DebugGrantTool$outboundSchema.optional(),
+  debugNamespace: z.string().optional(),
+  debugCloudScope: z.string().optional(),
 });
 
 export function createAccessRequestToJSON(

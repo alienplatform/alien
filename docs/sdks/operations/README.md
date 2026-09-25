@@ -5,10 +5,10 @@
 ### Available Operations
 
 * [listPlugins](#listplugins) - List available operations plugins (builtin + custom) for a project, with their operations and risk tiers.
-* [publishPlugin](#publishplugin) - Register a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Replaces any existing plugin of the same name in that project. New custom plugins are enabled by default.
-* [setBuiltinPlugins](#setbuiltinplugins) - Replace the complete set of enabled built-in operations plugins for a project.
+* [publishPlugin](#publishplugin) - Register a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Replaces any existing plugin of the same name in that project. New custom plugins are enabled by default. Returns the cloud permission delta versus the previously enabled set.
+* [setBuiltinPlugins](#setbuiltinplugins) - Replace the complete set of enabled built-in operations plugins for a project. Returns the cloud permission delta versus the previously enabled set.
 * [createBundleUploadUrl](#createbundleuploadurl) - Get a presigned S3 URL to upload a custom operations plugin bundle ZIP. Upload the ZIP with a PUT to the returned url (sending the given Content-Type), then call POST /plugins to register it.
-* [setPluginEnabled](#setpluginenabled) - Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are baked into the operator image and can be invoked.
+* [setPluginEnabled](#setpluginenabled) - Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are distributed to Operators and can be invoked. Returns the cloud permission delta versus the previously enabled set. With `dryRun`, validates the change and returns the delta without saving it.
 * [getPolicy](#getpolicy) - Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual.
 * [updatePolicy](#updatepolicy) - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
 * [invoke](#invoke) - Invoke a plugin operation against a deployment. Honors the project's per-command approval policy.
@@ -19,6 +19,7 @@
 * [approveAccessRequest](#approveaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
 * [denyAccessRequest](#denyaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
 * [getAccessRequestCoordinates](#getaccessrequestcoordinates) - The customer's kubectl approve command for a queued access request, or null until the operator has materialized the grant CR and reported its coordinates. Polled by the Slack handler to update the access-plan card.
+* [getLiveDebugGrant](#getlivedebuggrant) - Find an approved, unexpired access request whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request.
 * [getAccessRequest](#getaccessrequest) - Get an access request by id.
 
 ## listPlugins
@@ -100,7 +101,7 @@ run();
 
 ## publishPlugin
 
-Register a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Replaces any existing plugin of the same name in that project. New custom plugins are enabled by default.
+Register a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Replaces any existing plugin of the same name in that project. New custom plugins are enabled by default. Returns the cloud permission delta versus the previously enabled set.
 
 ### Example Usage
 
@@ -177,7 +178,7 @@ run();
 
 ## setBuiltinPlugins
 
-Replace the complete set of enabled built-in operations plugins for a project.
+Replace the complete set of enabled built-in operations plugins for a project. Returns the cloud permission delta versus the previously enabled set.
 
 ### Example Usage
 
@@ -331,7 +332,7 @@ run();
 
 ## setPluginEnabled
 
-Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are baked into the operator image and can be invoked.
+Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are distributed to Operators and can be invoked. Returns the cloud permission delta versus the previously enabled set. With `dryRun`, validates the change and returns the delta without saving it.
 
 ### Example Usage
 
@@ -404,7 +405,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404                      | application/json         |
+| errors.APIError          | 404, 409                 | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -744,6 +745,8 @@ async function run() {
     commands: [],
     operation: "kubernetes/restart-pod",
     operationPattern: "kubernetes/*",
+    debugNamespace: "braintrust",
+    debugCloudScope: "123456789012/prod-readonly",
   });
 
   console.log(result);
@@ -773,6 +776,8 @@ async function run() {
     commands: [],
     operation: "kubernetes/restart-pod",
     operationPattern: "kubernetes/*",
+    debugNamespace: "braintrust",
+    debugCloudScope: "123456789012/prod-readonly",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1195,6 +1200,84 @@ run();
 ### Response
 
 **Promise\<[operations.GetAccessRequestCoordinatesResponse](../../models/operations/getaccessrequestcoordinatesresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## getLiveDebugGrant
+
+Find an approved, unexpired access request whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="getLiveDebugGrant" method="get" path="/v1/access-requests/live-debug-grant" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.operations.getLiveDebugGrant({
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    debugTool: "gcloud",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { operationsGetLiveDebugGrant } from "@alienplatform/platform-api/funcs/operationsGetLiveDebugGrant.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await operationsGetLiveDebugGrant(alien, {
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    debugTool: "gcloud",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("operationsGetLiveDebugGrant failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetLiveDebugGrantRequest](../../models/operations/getlivedebuggrantrequest.md)                                                                                     | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[operations.GetLiveDebugGrantResponse](../../models/operations/getlivedebuggrantresponse.md)\>**
 
 ### Errors
 

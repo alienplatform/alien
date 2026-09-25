@@ -4667,6 +4667,27 @@ export type PersistImportedDeploymentRequestPreparedStackUnion =
   | any;
 
 /**
+ * The cross-account read a manager opened on Alien's registry for one deployment.
+ */
+export type PersistImportedDeploymentRequestRegistryAccess = {
+  /**
+   * Repository identifiers the grant names, sorted.
+   */
+  repositories?: Array<string> | undefined;
+  /**
+   * Compute services the grant admits, sorted. Each pulls as its own principal, so a service
+   *
+   * @remarks
+   * added later needs the policy rewritten.
+   */
+  serviceTypes?: Array<string> | undefined;
+};
+
+export type PersistImportedDeploymentRequestRegistryAccessUnion =
+  | PersistImportedDeploymentRequestRegistryAccess
+  | any;
+
+/**
  * One-shot authority for a setup re-import to replace setup-owned resources.
  */
 export type PersistImportedDeploymentRequestSetupUpdateAuthorization = {
@@ -4760,6 +4781,11 @@ export type PersistImportedDeploymentRequestRuntimeMetadata = {
   persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?:
     | PersistImportedDeploymentRequestPreparedStack
+    | any
+    | null
+    | undefined;
+  registryAccess?:
+    | PersistImportedDeploymentRequestRegistryAccess
     | any
     | null
     | undefined;
@@ -14142,6 +14168,59 @@ export function persistImportedDeploymentRequestPreparedStackUnionToJSON(
 }
 
 /** @internal */
+export type PersistImportedDeploymentRequestRegistryAccess$Outbound = {
+  repositories?: Array<string> | undefined;
+  serviceTypes?: Array<string> | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestRegistryAccess$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestRegistryAccess$Outbound,
+    PersistImportedDeploymentRequestRegistryAccess
+  > = z.object({
+    repositories: z.array(z.string()).optional(),
+    serviceTypes: z.array(z.string()).optional(),
+  });
+
+export function persistImportedDeploymentRequestRegistryAccessToJSON(
+  persistImportedDeploymentRequestRegistryAccess:
+    PersistImportedDeploymentRequestRegistryAccess,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestRegistryAccess$outboundSchema.parse(
+      persistImportedDeploymentRequestRegistryAccess,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestRegistryAccessUnion$Outbound =
+  | PersistImportedDeploymentRequestRegistryAccess$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestRegistryAccessUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestRegistryAccessUnion$Outbound,
+    PersistImportedDeploymentRequestRegistryAccessUnion
+  > = z.union([
+    z.lazy(() => PersistImportedDeploymentRequestRegistryAccess$outboundSchema),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestRegistryAccessUnionToJSON(
+  persistImportedDeploymentRequestRegistryAccessUnion:
+    PersistImportedDeploymentRequestRegistryAccessUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestRegistryAccessUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestRegistryAccessUnion,
+    ),
+  );
+}
+
+/** @internal */
 export type PersistImportedDeploymentRequestSetupUpdateAuthorization$Outbound =
   {
     baselineFrozenDigest: string;
@@ -14222,6 +14301,11 @@ export type PersistImportedDeploymentRequestRuntimeMetadata$Outbound = {
     | any
     | null
     | undefined;
+  registryAccess?:
+    | PersistImportedDeploymentRequestRegistryAccess$Outbound
+    | any
+    | null
+    | undefined;
   registryAccessGranted?: boolean | undefined;
   setupUpdateAuthorization?:
     | PersistImportedDeploymentRequestSetupUpdateAuthorization$Outbound
@@ -14255,6 +14339,14 @@ export const PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema:
       z.union([
         z.lazy(() =>
           PersistImportedDeploymentRequestPreparedStack$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    registryAccess: z.nullable(
+      z.union([
+        z.lazy(() =>
+          PersistImportedDeploymentRequestRegistryAccess$outboundSchema
         ),
         z.any(),
       ]),

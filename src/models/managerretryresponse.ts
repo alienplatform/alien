@@ -22,6 +22,40 @@ import {
   ManagerRetryDeploymentResponse$inboundSchema,
 } from "./managerretrydeploymentresponse.js";
 
+/**
+ * Represents the target cloud platform.
+ */
+export const ManagerRetryResponsePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Machines: "machines",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type ManagerRetryResponsePlatform = ClosedEnum<
+  typeof ManagerRetryResponsePlatform
+>;
+
+/**
+ * Immutable Release whose schema validated first-party inputs for this platform and channel.
+ */
+export type ManagerRetryResponseValidatedReleaseSelection = {
+  /**
+   * Unique identifier for the release.
+   */
+  releaseId: string;
+  releaseChannel: string;
+  /**
+   * Represents the target cloud platform.
+   */
+  platform: ManagerRetryResponsePlatform;
+};
+
 export const ManagerRetryResponseItemEnum = {
   Deployment: "deployment",
   Models: "models",
@@ -141,6 +175,12 @@ export type ManagerRetryResponseSetupConfig = {
   metadata: { [k: string]: any | null };
   policy: DeploymentSetupPolicy;
   inputValues?: { [k: string]: EncryptedStackInputValue } | undefined;
+  /**
+   * Immutable Release whose schema validated first-party inputs for this platform and channel.
+   */
+  validatedReleaseSelection?:
+    | ManagerRetryResponseValidatedReleaseSelection
+    | undefined;
   /**
    * Immutable setup items and exact sources captured when this setup link is created.
    */
@@ -3820,6 +3860,35 @@ export type ManagerRetryResponse =
   | ManagerRetryDeploymentResponse;
 
 /** @internal */
+export const ManagerRetryResponsePlatform$inboundSchema: z.ZodEnum<
+  typeof ManagerRetryResponsePlatform
+> = z.enum(ManagerRetryResponsePlatform);
+
+/** @internal */
+export const ManagerRetryResponseValidatedReleaseSelection$inboundSchema:
+  z.ZodType<ManagerRetryResponseValidatedReleaseSelection, unknown> = z.object({
+    releaseId: z.string(),
+    releaseChannel: z.string(),
+    platform: ManagerRetryResponsePlatform$inboundSchema,
+  });
+
+export function managerRetryResponseValidatedReleaseSelectionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponseValidatedReleaseSelection,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponseValidatedReleaseSelection$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ManagerRetryResponseValidatedReleaseSelection' from JSON`,
+  );
+}
+
+/** @internal */
 export const ManagerRetryResponseItemEnum$inboundSchema: z.ZodEnum<
   typeof ManagerRetryResponseItemEnum
 > = z.enum(ManagerRetryResponseItemEnum);
@@ -4023,6 +4092,9 @@ export const ManagerRetryResponseSetupConfig$inboundSchema: z.ZodType<
   policy: DeploymentSetupPolicy$inboundSchema,
   inputValues: z.record(z.string(), EncryptedStackInputValue$inboundSchema)
     .optional(),
+  validatedReleaseSelection: z.lazy(() =>
+    ManagerRetryResponseValidatedReleaseSelection$inboundSchema
+  ).optional(),
   items: z.array(z.lazy(() => ManagerRetryResponseItem$inboundSchema))
     .optional(),
   publicSubdomain: z.string().optional(),

@@ -14,7 +14,7 @@ let value: DataSandbox = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
+          reason: "collection-failed",
           severity: "warning",
           source: "<value>",
         },

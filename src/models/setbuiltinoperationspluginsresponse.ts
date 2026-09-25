@@ -7,9 +7,17 @@ import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  OperationsPermissionDiff,
+  OperationsPermissionDiff$inboundSchema,
+} from "./operationspermissiondiff.js";
 
 export type SetBuiltinOperationsPluginsResponse = {
   names: Array<string>;
+  /**
+   * Cloud permission delta versus the previously enabled set.
+   */
+  permissionDiff: OperationsPermissionDiff;
 };
 
 /** @internal */
@@ -18,6 +26,7 @@ export const SetBuiltinOperationsPluginsResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   names: z.array(z.string()),
+  permissionDiff: OperationsPermissionDiff$inboundSchema,
 });
 
 export function setBuiltinOperationsPluginsResponseFromJSON(

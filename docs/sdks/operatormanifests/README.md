@@ -187,6 +187,16 @@ async function run() {
   const result = await alien.operatorManifests.renderOperatorEcsCloudFormation({
     project: "<value>",
     environmentName: "<value>",
+    accountId: "<id>",
+    region: "<value>",
+    clusterArn: "<value>",
+    subnetIds: [
+      "<value 1>",
+      "<value 2>",
+    ],
+    securityGroupIds: [],
+    efsFileSystemId: "<id>",
+    efsAccessPointId: "<id>",
     operatorImagePackageId: "pkg_jebo2o5jmm7raefl2m1pe3cz",
   });
 
@@ -215,6 +225,16 @@ async function run() {
   const res = await operatorManifestsRenderOperatorEcsCloudFormation(alien, {
     project: "<value>",
     environmentName: "<value>",
+    accountId: "<id>",
+    region: "<value>",
+    clusterArn: "<value>",
+    subnetIds: [
+      "<value 1>",
+      "<value 2>",
+    ],
+    securityGroupIds: [],
+    efsFileSystemId: "<id>",
+    efsAccessPointId: "<id>",
     operatorImagePackageId: "pkg_jebo2o5jmm7raefl2m1pe3cz",
   });
   if (res.ok) {

@@ -755,20 +755,11 @@ async function run() {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     createDeploymentGroupTokenRequest: {
       deploymentSetupConfig: {
-        metadata: {
-          "key": "<value>",
-          "key1": "<value>",
-          "key2": "<value>",
+        validatedReleaseSelection: {
+          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+          releaseChannel: "<value>",
+          platform: "local",
         },
-        policy: {
-          allowedPlatforms: [
-            "kubernetes",
-          ],
-          allowedSetupMethods: [
-            "manual",
-          ],
-        },
-        environmentVariables: [],
       },
     },
   });
@@ -799,20 +790,11 @@ async function run() {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     createDeploymentGroupTokenRequest: {
       deploymentSetupConfig: {
-        metadata: {
-          "key": "<value>",
-          "key1": "<value>",
-          "key2": "<value>",
+        validatedReleaseSelection: {
+          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+          releaseChannel: "<value>",
+          platform: "local",
         },
-        policy: {
-          allowedPlatforms: [
-            "kubernetes",
-          ],
-          allowedSetupMethods: [
-            "manual",
-          ],
-        },
-        environmentVariables: [],
       },
     },
   });

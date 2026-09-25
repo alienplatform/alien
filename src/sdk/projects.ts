@@ -3,6 +3,7 @@
  * @generated-id: 91d5cfe290c1
  */
 
+import { projectsAcceptRemoteOperatorImage } from "../funcs/projectsAcceptRemoteOperatorImage.js";
 import { projectsConfigureAiProviderHeaders } from "../funcs/projectsConfigureAiProviderHeaders.js";
 import { projectsConfigureBuckets } from "../funcs/projectsConfigureBuckets.js";
 import { projectsConfigureDeployments } from "../funcs/projectsConfigureDeployments.js";
@@ -14,6 +15,7 @@ import { projectsConfigureSource } from "../funcs/projectsConfigureSource.js";
 import { projectsCreate } from "../funcs/projectsCreate.js";
 import { projectsCreateFromTemplate } from "../funcs/projectsCreateFromTemplate.js";
 import { projectsDelete } from "../funcs/projectsDelete.js";
+import { projectsEnsureSandboxBaseImageRepository } from "../funcs/projectsEnsureSandboxBaseImageRepository.js";
 import { projectsGet } from "../funcs/projectsGet.js";
 import { projectsGetActiveRelease } from "../funcs/projectsGetActiveRelease.js";
 import { projectsGetAiProviderHeaders } from "../funcs/projectsGetAiProviderHeaders.js";
@@ -23,6 +25,7 @@ import { projectsGetDeploymentLinkSetup } from "../funcs/projectsGetDeploymentLi
 import { projectsGetDeploymentPortalDomain } from "../funcs/projectsGetDeploymentPortalDomain.js";
 import { projectsGetEncryptionUsage } from "../funcs/projectsGetEncryptionUsage.js";
 import { projectsGetGcpOAuthProvider } from "../funcs/projectsGetGcpOAuthProvider.js";
+import { projectsGetRemoteOperatorSummary } from "../funcs/projectsGetRemoteOperatorSummary.js";
 import { projectsGetSandboxMetrics } from "../funcs/projectsGetSandboxMetrics.js";
 import { projectsGetTemplateUrls } from "../funcs/projectsGetTemplateUrls.js";
 import { projectsList } from "../funcs/projectsList.js";
@@ -359,6 +362,20 @@ export class Projects extends ClientSDK {
   }
 
   /**
+   * Ensure the project's private image repository exists and return where to push a private sandbox base image. Name the pushed image as the remote sandbox base image afterwards.
+   */
+  async ensureSandboxBaseImageRepository(
+    request: operations.EnsureProjectSandboxBaseImageRepositoryRequest,
+    options?: RequestOptions,
+  ): Promise<models.SandboxBaseImageRepository> {
+    return unwrapAsync(projectsEnsureSandboxBaseImageRepository(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
    * Get safe, server-derived capability status for a Project.
    */
   async getCapabilityOverview(
@@ -366,6 +383,34 @@ export class Projects extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.ProjectCapabilityOverview> {
     return unwrapAsync(projectsGetCapabilityOverview(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Get the authoritative Remote Operator project summary
+   */
+  async getRemoteOperatorSummary(
+    request: operations.GetRemoteOperatorProjectSummaryRequest,
+    options?: RequestOptions,
+  ): Promise<operations.GetRemoteOperatorProjectSummaryResponse> {
+    return unwrapAsync(projectsGetRemoteOperatorSummary(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Accept a reported image for a Remote Operator installation
+   */
+  async acceptRemoteOperatorImage(
+    request: operations.AcceptRemoteOperatorImageRequest,
+    options?: RequestOptions,
+  ): Promise<operations.AcceptRemoteOperatorImageResponse> {
+    return unwrapAsync(projectsAcceptRemoteOperatorImage(
       this,
       request,
       options,

@@ -20,6 +20,12 @@ export type RenderOperatorEcsCloudFormationRequestPermission = ClosedEnum<
   typeof RenderOperatorEcsCloudFormationRequestPermission
 >;
 
+export const AssignPublicIp = {
+  Disabled: "DISABLED",
+  Enabled: "ENABLED",
+} as const;
+export type AssignPublicIp = ClosedEnum<typeof AssignPublicIp>;
+
 export type RenderOperatorEcsCloudFormationRequest = {
   /**
    * Filter by project ID or name.
@@ -33,6 +39,29 @@ export type RenderOperatorEcsCloudFormationRequest = {
    * Operator permission tier
    */
   permission?: RenderOperatorEcsCloudFormationRequestPermission | undefined;
+  /**
+   * Exact AWS account that owns the Remote Operator stack
+   */
+  accountId: string;
+  /**
+   * Exact AWS Region for the Remote Operator stack
+   */
+  region: string;
+  /**
+   * Exact ARN of the customer-owned ECS cluster
+   */
+  clusterArn: string;
+  subnetIds: Array<string>;
+  securityGroupIds: Array<string>;
+  assignPublicIp?: AssignPublicIp | undefined;
+  /**
+   * Exact customer-owned EFS filesystem ID
+   */
+  efsFileSystemId: string;
+  /**
+   * Exact customer-owned EFS access point ID
+   */
+  efsAccessPointId: string;
   /**
    * Ready operator-image package to pin in the task definition. If omitted, the current project package is prepared or reused.
    */
@@ -54,10 +83,22 @@ export const RenderOperatorEcsCloudFormationRequestPermission$outboundSchema:
   );
 
 /** @internal */
+export const AssignPublicIp$outboundSchema: z.ZodEnum<typeof AssignPublicIp> = z
+  .enum(AssignPublicIp);
+
+/** @internal */
 export type RenderOperatorEcsCloudFormationRequest$Outbound = {
   project: string;
   environmentName: string;
   permission: string;
+  accountId: string;
+  region: string;
+  clusterArn: string;
+  subnetIds: Array<string>;
+  securityGroupIds: Array<string>;
+  assignPublicIp: string;
+  efsFileSystemId: string;
+  efsAccessPointId: string;
   operatorImagePackageId?: string | undefined;
   s3BucketArns?: Array<string> | undefined;
   sqsQueueArns?: Array<string> | undefined;
@@ -72,6 +113,14 @@ export const RenderOperatorEcsCloudFormationRequest$outboundSchema: z.ZodType<
   environmentName: z.string(),
   permission: RenderOperatorEcsCloudFormationRequestPermission$outboundSchema
     .default("diagnostics"),
+  accountId: z.string(),
+  region: z.string(),
+  clusterArn: z.string(),
+  subnetIds: z.array(z.string()),
+  securityGroupIds: z.array(z.string()),
+  assignPublicIp: AssignPublicIp$outboundSchema.default("DISABLED"),
+  efsFileSystemId: z.string(),
+  efsAccessPointId: z.string(),
   operatorImagePackageId: z.string().optional(),
   s3BucketArns: z.array(z.string()).optional(),
   sqsQueueArns: z.array(z.string()).optional(),
