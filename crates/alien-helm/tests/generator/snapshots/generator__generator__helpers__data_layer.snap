@@ -772,6 +772,10 @@ ephemeralStorage:
 {{- printf "%s-%s%s" $base $hash $suffix -}}
 {{- end -}}
 
+{{- define "deployment.logCollectorName" -}}
+{{- include "deployment.releaseScopedName" (dict "root" . "suffix" "-logs") -}}
+{{- end -}}
+
 {{- define "deployment.labels" -}}
 app.kubernetes.io/name: {{ include "deployment.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
@@ -1285,10 +1289,10 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 automountServiceAccountToken: true
 {{- end }}
 
@@ -1297,10 +1301,10 @@ automountServiceAccountToken: true
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -1312,17 +1316,17 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+    name: {{ include "deployment.logCollectorName" . }}
     namespace: {{ .Release.Namespace }}
 {{- end }}
 
@@ -1331,10 +1335,10 @@ subjects:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 data:
   collector.conf: |
     [SERVICE]
@@ -1352,7 +1356,7 @@ data:
         Path_Key          filename
         multiline.parser  docker, cri
         Tag               kube.*
-        DB                /buffers/{{ include "deployment.fullname" . }}-whitelabeled-log-collector.db
+        DB                /buffers/{{ include "deployment.logCollectorName" . }}.db
         Mem_Buf_Limit     64MB
         Skip_Long_Lines   On
         Read_from_Head    On
@@ -1408,24 +1412,24 @@ data:
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "deployment.name" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
-      app.kubernetes.io/component: whitelabeled-log-collector
+      app.kubernetes.io/component: log-collector
   template:
     metadata:
       labels:
         {{- include "deployment.labels" . | nindent 8 }}
-        app.kubernetes.io/component: whitelabeled-log-collector
+        app.kubernetes.io/component: log-collector
         alien.dev/log-collector-exclude: "true"
     spec:
-      serviceAccountName: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+      serviceAccountName: {{ include "deployment.logCollectorName" . }}
       tolerations:
         - operator: Exists
       containers:
@@ -1458,7 +1462,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+            name: {{ include "deployment.logCollectorName" . }}
         - name: varlog
           hostPath:
             path: /var/log

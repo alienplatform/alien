@@ -4709,6 +4709,10 @@ fn helpers_tpl() -> String {
 {{- printf "%s-%s%s" $base $hash $suffix -}}
 {{- end -}}
 
+{{- define "deployment.logCollectorName" -}}
+{{- include "deployment.releaseScopedName" (dict "root" . "suffix" "-logs") -}}
+{{- end -}}
+
 {{- define "deployment.labels" -}}
 app.kubernetes.io/name: {{ include "deployment.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
@@ -5898,10 +5902,10 @@ fn whitelabeled_log_collector_serviceaccount_tpl() -> String {
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 automountServiceAccountToken: true
 {{- end }}
 "#
@@ -5913,10 +5917,10 @@ fn whitelabeled_log_collector_role_tpl() -> String {
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -5931,17 +5935,17 @@ fn whitelabeled_log_collector_rolebinding_tpl() -> String {
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+    name: {{ include "deployment.logCollectorName" . }}
     namespace: {{ .Release.Namespace }}
 {{- end }}
 "#
@@ -5953,10 +5957,10 @@ fn whitelabeled_log_collector_configmap_tpl() -> String {
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 data:
   collector.conf: |
     [SERVICE]
@@ -5974,7 +5978,7 @@ data:
         Path_Key          filename
         multiline.parser  docker, cri
         Tag               kube.*
-        DB                /buffers/{{ include "deployment.fullname" . }}-whitelabeled-log-collector.db
+        DB                /buffers/{{ include "deployment.logCollectorName" . }}.db
         Mem_Buf_Limit     64MB
         Skip_Long_Lines   On
         Read_from_Head    On
@@ -6033,24 +6037,24 @@ fn whitelabeled_log_collector_daemonset_tpl() -> String {
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "deployment.name" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
-      app.kubernetes.io/component: whitelabeled-log-collector
+      app.kubernetes.io/component: log-collector
   template:
     metadata:
       labels:
         {{- include "deployment.labels" . | nindent 8 }}
-        app.kubernetes.io/component: whitelabeled-log-collector
+        app.kubernetes.io/component: log-collector
         alien.dev/log-collector-exclude: "true"
     spec:
-      serviceAccountName: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+      serviceAccountName: {{ include "deployment.logCollectorName" . }}
       tolerations:
         - operator: Exists
       containers:
@@ -6083,7 +6087,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+            name: {{ include "deployment.logCollectorName" . }}
         - name: varlog
           hostPath:
             path: /var/log
@@ -8881,7 +8885,9 @@ logCollector:
         let rendered = crate::test_utils::helm_template(&files, Some(values));
         rendered.assert_ok("helm render log collector");
         assert!(rendered.stdout.contains("kind: DaemonSet"));
-        assert!(rendered.stdout.contains("whitelabeled-log-collector"));
+        assert!(rendered
+            .stdout
+            .contains("app.kubernetes.io/component: log-collector"));
         assert!(rendered.stdout.contains("COLLECTOR_TOKEN_FILE"));
         assert!(rendered
             .stdout
@@ -8902,6 +8908,37 @@ logCollector:
             .stdout
             .contains("\"pods\", \"pods/log\", \"persistentvolumeclaims\""));
         assert!(!rendered.stdout.contains("void"));
+
+        let long_release = format!("sample-{}", "a".repeat(46));
+        let long_rendered =
+            crate::test_utils::helm_template_for_release(&files, Some(values), &long_release);
+        long_rendered.assert_ok("helm render log collector with long release name");
+        let long_docs = parse_manifest_docs(&long_rendered.stdout);
+        let collector_names = long_docs
+            .iter()
+            .filter(|document| {
+                [
+                    "ServiceAccount",
+                    "Role",
+                    "RoleBinding",
+                    "ConfigMap",
+                    "DaemonSet",
+                ]
+                .contains(&yaml_str(document, "kind").unwrap_or_default())
+                    && document["metadata"]["labels"]["app.kubernetes.io/component"]
+                        == "log-collector"
+            })
+            .map(|document| {
+                document["metadata"]["name"]
+                    .as_str()
+                    .expect("collector resource name")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(collector_names.len(), 5);
+        assert!(collector_names.iter().all(|name| name.len() <= 63));
+        assert!(collector_names
+            .iter()
+            .all(|name| *name == collector_names[0]));
     }
 
     #[test]
