@@ -347,9 +347,14 @@ pub async fn sign_send_no_response(builder: RequestBuilder, config: &AwsSignConf
 mod tests {
     use super::{AwsRequestBuilderExt, AwsRequestSigner, AwsSignConfig};
     use aws_credential_types::Credentials;
+    use aws_sigv4::{
+        http_request::{sign as sigv4_sign, SignableBody, SignableRequest, SigningSettings},
+        sign::v4,
+    };
     use http::header::HOST;
     use httpmock::{Method::POST, MockServer};
     use reqwest::Client;
+    use std::time::{Duration, UNIX_EPOCH};
 
     fn sign(url: &str, explicit_host: &str) -> reqwest::Request {
         let config = AwsSignConfig {
@@ -368,6 +373,67 @@ mod tests {
             .expect("signed request should build")
     }
 
+    fn signature_for_host(request: &reqwest::Request, host: &str) -> String {
+        let authorization = request.headers()["authorization"]
+            .to_str()
+            .expect("authorization should be text");
+        let signed_headers = authorization
+            .split("SignedHeaders=")
+            .nth(1)
+            .expect("signed headers should exist")
+            .split(',')
+            .next()
+            .expect("signed headers should terminate");
+        let headers: Vec<(String, String)> = signed_headers
+            .split(';')
+            .map(|name| {
+                let value = if name == "host" {
+                    host.to_string()
+                } else {
+                    request.headers()[name]
+                        .to_str()
+                        .expect("signed header should be text")
+                        .to_string()
+                };
+                (name.to_string(), value)
+            })
+            .collect();
+        let date = request.headers()["x-amz-date"]
+            .to_str()
+            .expect("signing date should be text");
+        let seconds = chrono::NaiveDateTime::parse_from_str(date, "%Y%m%dT%H%M%SZ")
+            .expect("signing date should parse")
+            .and_utc()
+            .timestamp();
+        let identity = Credentials::new("test-key", "test-secret", None, None, "test").into();
+        let params = v4::SigningParams::builder()
+            .identity(&identity)
+            .region("us-east-1")
+            .name("ec2")
+            .time(UNIX_EPOCH + Duration::from_secs(seconds as u64))
+            .settings(SigningSettings::default())
+            .build()
+            .expect("signing parameters should build")
+            .into();
+        let body = request
+            .body()
+            .and_then(|body| body.as_bytes())
+            .expect("request body should be buffered");
+        let signable = SignableRequest::new(
+            request.method().as_str(),
+            request.url().as_str(),
+            headers
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str())),
+            SignableBody::Bytes(body),
+        )
+        .expect("request should be signable");
+        let (_, signature) = sigv4_sign(signable, &params)
+            .expect("independent signing should succeed")
+            .into_parts();
+        signature
+    }
+
     #[test]
     fn endpoint_override_host_matches_signed_destination() {
         let request = sign(
@@ -379,6 +445,23 @@ mod tests {
             .to_str()
             .expect("authorization should be text")
             .contains("SignedHeaders=host"));
+        let authorization = request.headers()["authorization"]
+            .to_str()
+            .expect("authorization should be text");
+        let signature = authorization
+            .split("Signature=")
+            .nth(1)
+            .expect("signature should exist");
+        assert_eq!(
+            signature_for_host(&request, "worlds.staging.alien.dev"),
+            signature,
+            "the signature must validate against the destination Host"
+        );
+        assert_ne!(
+            signature_for_host(&request, "ec2.us-east-1.amazonaws.com"),
+            signature,
+            "the original AWS Host must not validate the override signature"
+        );
     }
 
     #[test]
