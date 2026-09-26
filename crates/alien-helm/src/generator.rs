@@ -1906,7 +1906,7 @@ fn generate_operator_manifest_inner(
     if let Some(log_collector) = options.log_collector.as_ref() {
         // Product charts manage workloads under the chart's runtime scope, not
         // under the separately named Remote Operator Deployment.
-        let default_collector_scope = if resource_name.is_some()
+        let default_collector_scope = if identity_initialized_config_map.is_some()
             && options.format == OperatorOutputFormat::HelmTemplate
         {
             (
