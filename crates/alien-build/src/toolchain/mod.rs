@@ -63,6 +63,8 @@ pub struct ToolchainContext {
     pub runtime_platform_name: String,
     /// Whether to build in debug mode (faster builds, larger binaries)
     pub debug_mode: bool,
+    /// Re-resolve base images from their registry instead of reusing a local copy.
+    pub pull_base_images: bool,
     /// Which compute workload this build is for (decides the image shape).
     pub workload: WorkloadKind,
 }
@@ -412,6 +414,7 @@ mod tests {
             build_target: BinaryTarget::LinuxX64,
             runtime_platform_name: platform.to_string(),
             debug_mode: false,
+            pull_base_images: false,
             workload,
         }
     }

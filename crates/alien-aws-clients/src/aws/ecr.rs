@@ -1,4 +1,6 @@
-use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
+use crate::aws::aws_request_utils::{
+    sign_send_json, sign_send_json_once, AwsRequestBuilderExt, AwsSignConfig,
+};
 use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, Result};
 use alien_error::{Context, ContextError, IntoAlienError};
@@ -55,6 +57,12 @@ pub trait EcrApi: Send + Sync + Debug {
     ) -> Result<PutReplicationConfigurationResponse>;
 }
 
+#[derive(Debug, Clone, Copy)]
+enum Attempts {
+    Retried,
+    Once,
+}
+
 /// AWS ECR client using the new request/error abstractions.
 #[derive(Debug, Clone)]
 pub struct EcrClient {
@@ -94,6 +102,17 @@ impl EcrClient {
         body: String,
         resource_name: &str,
     ) -> Result<T> {
+        self.post_json_with(Attempts::Retried, operation, body, resource_name)
+            .await
+    }
+
+    async fn post_json_with<T: serde::de::DeserializeOwned + Send + 'static>(
+        &self,
+        attempts: Attempts,
+        operation: &str,
+        body: String,
+        resource_name: &str,
+    ) -> Result<T> {
         self.credentials.ensure_fresh().await?;
         let base_url = self.get_base_url();
         let url = format!("{}/", base_url.trim_end_matches('/'));
@@ -107,8 +126,10 @@ impl EcrClient {
             .header("Content-Type", "application/x-amz-json-1.1")
             .body(body.clone());
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_json(builder, &self.sign_config()).await;
+        let result = match attempts {
+            Attempts::Retried => sign_send_json(builder, &self.sign_config()).await,
+            Attempts::Once => sign_send_json_once(builder, &self.sign_config()).await,
+        };
 
         match result {
             Ok(v) => Ok(v),
@@ -307,8 +328,13 @@ impl EcrApi for EcrClient {
             },
         )?;
 
-        self.post_json("CreateRepository", body, &request.repository_name)
-            .await
+        self.post_json_with(
+            Attempts::Once,
+            "CreateRepository",
+            body,
+            &request.repository_name,
+        )
+        .await
     }
 
     async fn delete_repository(
@@ -789,4 +815,64 @@ pub struct ImageFailure {
     pub image_id: ImageIdentifier,
     pub failure_code: String,
     pub failure_reason: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ServiceOverrides;
+    use alien_core::{AwsClientConfig, AwsCredentials};
+    use httpmock::prelude::*;
+    use std::collections::HashMap;
+
+    fn client(server: &MockServer) -> EcrClient {
+        let config = AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-1".to_string(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "test-access-key".to_string(),
+                secret_access_key: "test-secret-key".to_string(),
+                session_token: None,
+            },
+            service_overrides: Some(ServiceOverrides {
+                endpoints: HashMap::from([("ecr".to_string(), server.base_url())]),
+            }),
+        };
+        EcrClient::new(
+            reqwest::Client::new(),
+            AwsCredentialProvider::from_config_sync(config),
+        )
+    }
+
+    #[tokio::test]
+    async fn an_existing_repository_is_one_request_that_maps_to_a_conflict() {
+        let server = MockServer::start_async().await;
+        let create = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/").header(
+                    "x-amz-target",
+                    "AmazonEC2ContainerRegistry_V20150921.CreateRepository",
+                );
+                then.status(400)
+                    .header("content-type", "application/x-amz-json-1.1")
+                    .json_body(serde_json::json!({
+                        "__type": "RepositoryAlreadyExistsException",
+                        "message": "The repository with name 'acme' already exists"
+                    }));
+            })
+            .await;
+
+        let error = client(&server)
+            .create_repository(
+                CreateRepositoryRequest::builder()
+                    .repository_name("acme".to_string())
+                    .build(),
+            )
+            .await
+            .expect_err("an existing repository is not created again");
+
+        assert_eq!(create.hits_async().await, 1);
+        assert_eq!(error.code, "REMOTE_RESOURCE_CONFLICT");
+        assert!(error.to_string().contains("acme"), "{error}");
+    }
 }

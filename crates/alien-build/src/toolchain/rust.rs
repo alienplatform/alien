@@ -718,6 +718,7 @@ version = "0.1.0"
             build_target: alien_core::BinaryTarget::LinuxX64,
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
+            pull_base_images: false,
             workload: crate::toolchain::WorkloadKind::Worker,
         };
 

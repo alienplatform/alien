@@ -322,6 +322,17 @@ pub async fn sign_send_json<T: DeserializeOwned + Send + 'static>(
         .await
 }
 
+/// Sign the request and deserialize a JSON response into `T`, in a single attempt.
+///
+/// For a create whose "already exists" answer is final: retrying that 400 only delays the caller,
+/// who decides what a conflict means.
+pub async fn sign_send_json_once<T: DeserializeOwned + Send + 'static>(
+    builder: RequestBuilder,
+    config: &AwsSignConfig,
+) -> Result<T> {
+    builder.sign_aws_request(config)?.send_json::<T>().await
+}
+
 /// Sign, retry and deserialize an XML response into `T`.
 pub async fn sign_send_xml<T: DeserializeOwned + Send + 'static>(
     builder: RequestBuilder,

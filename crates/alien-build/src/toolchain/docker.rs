@@ -403,6 +403,10 @@ impl DockerToolchain {
             args.push(format!("id=enterprise_ca,src={}", path.display()));
         }
 
+        if context.pull_base_images {
+            args.push("--pull".to_string());
+        }
+
         // Add target if specified
         if let Some(target) = &self.target {
             args.push("--target".to_string());
@@ -1053,6 +1057,7 @@ CMD ["cat", "hello.txt"]
             build_target: BinaryTarget::linux_container_target(),
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
+            pull_base_images: false,
             workload: crate::toolchain::WorkloadKind::Container,
         };
 
@@ -1169,6 +1174,7 @@ CMD ["true"]
             build_target: BinaryTarget::linux_container_target(),
             runtime_platform_name: "local".to_string(),
             debug_mode: false,
+            pull_base_images: false,
             workload: crate::toolchain::WorkloadKind::Container,
         };
 
@@ -1386,6 +1392,7 @@ RUN echo "Version: $VERSION" > version.txt
             build_target: BinaryTarget::linux_container_target(),
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
+            pull_base_images: false,
             workload: crate::toolchain::WorkloadKind::Container,
         };
 
@@ -1425,6 +1432,7 @@ RUN echo "Version: $VERSION" > version.txt
             build_target: BinaryTarget::linux_container_target(),
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
+            pull_base_images: false,
             workload: crate::toolchain::WorkloadKind::Container,
         };
 
@@ -1474,6 +1482,7 @@ WORKDIR /app
             build_target: BinaryTarget::linux_container_target(),
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
+            pull_base_images: false,
             workload: crate::toolchain::WorkloadKind::Container,
         };
 
