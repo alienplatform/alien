@@ -7,11 +7,19 @@ import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  OperationsPermissionDiff,
+  OperationsPermissionDiff$inboundSchema,
+} from "./operationspermissiondiff.js";
 
 export type SetOperationsPluginEnabledResponse = {
   name: string;
   builtin: boolean;
   enabled: boolean;
+  /**
+   * Cloud permission delta versus the previously enabled set.
+   */
+  permissionDiff: OperationsPermissionDiff;
 };
 
 /** @internal */
@@ -22,6 +30,7 @@ export const SetOperationsPluginEnabledResponse$inboundSchema: z.ZodType<
   name: z.string(),
   builtin: z.boolean(),
   enabled: z.boolean(),
+  permissionDiff: OperationsPermissionDiff$inboundSchema,
 });
 
 export function setOperationsPluginEnabledResponseFromJSON(

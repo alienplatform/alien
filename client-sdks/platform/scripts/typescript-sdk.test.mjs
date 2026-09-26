@@ -9,6 +9,7 @@ import {
   kubernetesPermissionsToJSON,
   ruleToJSON,
 } from "../typescript/esm/models/publishoperationspluginrequest.js";
+import { PublishOperationsPluginResponse$inboundSchema } from "../typescript/esm/models/publishoperationspluginresponse.js";
 
 // Run after pnpm -C client-sdks/platform/typescript build. Exercise the shipped
 // JavaScript, including request serialization and response validation.
@@ -50,6 +51,22 @@ test("legacy publish-plugin deep imports preserve Kubernetes permission exports"
   assert.equal(ruleToJSON(rule), JSON.stringify(rule));
   assert.deepEqual(KubernetesPermissions$outboundSchema.parse(permissions), permissions);
   assert.equal(kubernetesPermissionsToJSON(permissions), JSON.stringify(permissions));
+});
+
+test("operations plugin responses retain the permission diff", () => {
+  const permissionDiff = {
+    aws: { added: [], removed: [] },
+    gcp: { added: [], removed: [] },
+    kubernetes: { added: [], removed: [] },
+  };
+  const response = PublishOperationsPluginResponse$inboundSchema.parse({
+    name: "registry",
+    version: "1",
+    tier: "mutating",
+    enabled: true,
+    permissionDiff,
+  });
+  assert.deepEqual(response.permissionDiff, permissionDiff);
 });
 
 test("configured server query parameters survive operation globals", async () => {

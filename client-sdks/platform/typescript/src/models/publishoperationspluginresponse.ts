@@ -8,6 +8,10 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  OperationsPermissionDiff,
+  OperationsPermissionDiff$inboundSchema,
+} from "./operationspermissiondiff.js";
 
 /**
  * How risky an operation is (declared by the plugin metadata).
@@ -32,6 +36,10 @@ export type PublishOperationsPluginResponse = {
    */
   tier: PublishOperationsPluginResponseTier;
   enabled: boolean;
+  /**
+   * Cloud permission delta versus the previously enabled set.
+   */
+  permissionDiff: OperationsPermissionDiff;
 };
 
 /** @internal */
@@ -48,6 +56,7 @@ export const PublishOperationsPluginResponse$inboundSchema: z.ZodType<
   version: z.string(),
   tier: PublishOperationsPluginResponseTier$inboundSchema,
   enabled: z.boolean(),
+  permissionDiff: OperationsPermissionDiff$inboundSchema,
 });
 
 export function publishOperationsPluginResponseFromJSON(
