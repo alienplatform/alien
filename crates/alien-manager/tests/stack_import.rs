@@ -311,6 +311,10 @@ fn stack_with_worker(resource_id: &str) -> Stack {
             PermissionProfile::new().global(["worker/execute"]),
         )
         .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
             Worker::new(resource_id.to_string())
                 .code(WorkerCode::Image {
                     image: "public.ecr.aws/lambda/provided:al2023".to_string(),
