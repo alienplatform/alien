@@ -348,8 +348,20 @@ fn emit_to_provider(
     record.set_severity_text(severity_text);
     record.set_severity_number(severity);
 
-    // Set the log body
-    record.set_body(AnyValue::String(body.to_string().into()));
+    // Captured stdout follows the same readable-body plus original-record
+    // contract as container log collectors. System output stays untouched.
+    let readable_body = (!is_system)
+        .then(|| alien_core::parse_application_log_message(body))
+        .flatten();
+    if readable_body.is_some() {
+        record.add_attribute(
+            "log.record.original",
+            AnyValue::String(body.to_string().into()),
+        );
+    }
+    record.set_body(AnyValue::String(
+        readable_body.unwrap_or_else(|| body.to_string()).into(),
+    ));
 
     // Add stream as attribute
     record.add_attribute("stream", AnyValue::String(stream.to_string().into()));
@@ -558,6 +570,50 @@ mod tests {
             captured_log_severity("stderr", r#"{"level":"LOUD"}"#, false),
             (Severity::Error, "ERROR")
         );
+    }
+
+    #[test]
+    #[cfg(feature = "otlp")]
+    fn captured_structured_stdout_has_readable_body_and_original_record() {
+        use opentelemetry::logs::AnyValue;
+        use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
+
+        let exporter = InMemoryLogExporter::default();
+        let provider = SdkLoggerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let original =
+            r#"{"time":"2026-09-26T12:12:02Z","level":"INFO","msg":"ready","uid":"cluster-1"}"#;
+
+        emit_to_provider(
+            &provider,
+            "stdout",
+            original,
+            1_780_000_000_000_000_000,
+            false,
+        );
+        emit_to_provider(
+            &provider,
+            "stdout",
+            original,
+            1_780_000_000_000_000_001,
+            true,
+        );
+
+        let logs = exporter.get_emitted_logs().unwrap();
+        assert_eq!(logs.len(), 2);
+        assert!(matches!(
+            logs[0].record.body(),
+            Some(AnyValue::String(body)) if body.as_str() == "ready"
+        ));
+        assert!(logs[0].record.attributes_iter().any(|(key, value)| {
+            key.as_str() == "log.record.original"
+                && matches!(value, AnyValue::String(body) if body.as_str() == original)
+        }));
+        assert!(matches!(
+            logs[1].record.body(),
+            Some(AnyValue::String(body)) if body.as_str() == original
+        ));
     }
 
     #[test]

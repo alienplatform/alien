@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use alien_core::{parse_application_log_level, ApplicationLogLevel};
+use alien_core::{parse_application_log_level, parse_application_log_message, ApplicationLogLevel};
 use alien_error::{AlienError, Context, IntoAlienError};
 use axum::http::HeaderMap;
 use chrono::{DateTime, Utc};
@@ -286,7 +286,7 @@ fn otlp_request(records: Vec<CollectorLogRecord>, deployment_id: &str) -> Export
                     }
 
                     let original_body = record.body.clone();
-                    let readable_body = structured_log_message(&original_body);
+                    let readable_body = parse_application_log_message(&original_body);
                     if readable_body.is_some() {
                         attributes.push(kv("log.record.original", &original_body));
                     }
@@ -346,24 +346,6 @@ fn collector_log_severity(record: &CollectorLogRecord) -> (&'static str, i32) {
     } else {
         ("INFO", SeverityNumber::Info as i32)
     }
-}
-
-// Common structured stdout records (for example Go slog and Pino) carry a
-// readable `msg` alongside a timestamp and level. Keep the full line as an
-// attribute so the dashboard can show the message without losing context.
-fn structured_log_message(body: &str) -> Option<String> {
-    let Value::Object(record) = serde_json::from_str::<Value>(body).ok()? else {
-        return None;
-    };
-    let has_timestamp = record.get("time").is_some_and(|value| match value {
-        Value::String(text) => DateTime::parse_from_rfc3339(text).is_ok(),
-        Value::Number(number) => number.as_f64().is_some_and(|value| value >= 0.0),
-        _ => false,
-    });
-    if !has_timestamp || parse_application_log_level(body).is_none() {
-        return None;
-    }
-    record.get("msg")?.as_str().map(ToOwned::to_owned)
 }
 
 fn kv(key: &str, value: &str) -> KeyValue {
@@ -577,7 +559,7 @@ mod tests {
     #[test]
     fn collector_leaves_unrecognized_json_body_untouched() {
         let application_log = r#"{"status":200,"msg":"ready"}"#;
-        assert_eq!(structured_log_message(application_log), None);
+        assert_eq!(parse_application_log_message(application_log), None);
     }
 
     #[test]
