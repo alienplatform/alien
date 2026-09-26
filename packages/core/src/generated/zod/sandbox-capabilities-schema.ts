@@ -10,7 +10,7 @@ import * as z from "zod";
  */
 export const SandboxCapabilitiesSchema = z.object({
     "domainEgressRules": z.boolean().describe("Egress can be restricted to a hostname allowlist"),
-"egressDeny": z.boolean().describe("Whether a declared `deny` is actually enforced, rather than accepted and dropped"),
+"egressDeny": z.boolean().describe("Whether a declared `deny` is actually enforced, rather than accepted and dropped.\nIt covers routed traffic; the `deny` mode says where DNS still resolves."),
 "enforcedLimits": z.boolean().describe("The platform enforces the declared cpu, memory and disk ceilings"),
 "files": z.boolean().describe("Files can be moved in and out of a sandbox"),
 "jobs": z.boolean().describe("A command can be started, polled and cancelled across separate calls, so it outlives the\none that started it. False where nothing inside the sandbox owns the process in between."),
