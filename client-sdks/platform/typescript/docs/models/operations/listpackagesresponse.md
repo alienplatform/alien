@@ -17,6 +17,7 @@ let value: ListPackagesResponse = {
       status: "failed",
       version: "<value>",
       sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      dependsOnPackageId: "pkg_jebo2o5jmm7raefl2m1pe3cz",
       setupFingerprints: {},
       packageBuildInputHash: "<value>",
       config: {

@@ -15,5 +15,5 @@ let value: CreateProjectFromTemplateKeys = {
 
 | Field                   | Type                    | Required                | Description             |
 | ----------------------- | ----------------------- | ----------------------- | ----------------------- |
-| `enabled`               | *boolean*               | :heavy_check_mark:      | N/A                     |
-| `applicationEncryption` | *boolean*               | :heavy_check_mark:      | N/A                     |
+| `enabled`               | *true*                  | :heavy_check_mark:      | N/A                     |
+| `applicationEncryption` | *true*                  | :heavy_check_mark:      | N/A                     |

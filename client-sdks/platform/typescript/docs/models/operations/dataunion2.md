@@ -14,7 +14,7 @@ const value: operations.DataAwsLambda = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "api-unavailable",
         severity: "warning",
         source: "<value>",
       },
@@ -38,20 +38,19 @@ const value: operations.DataGcpCloudRun = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "error",
+        reason: "forbidden",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "stopping",
-    partial: false,
-    stale: true,
+    health: "unhealthy",
+    lifecycle: "creating",
+    partial: true,
+    stale: false,
   },
-  trafficCount: 12255,
+  trafficCount: 9050,
   urls: [
     "<value 1>",
-    "<value 2>",
   ],
   backend: "gcpCloudRun",
 };
@@ -118,17 +117,17 @@ const value: operations.DataLocal2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "warning",
+        reason: "collection-failed",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "updating",
-    partial: true,
+    health: "unknown",
+    lifecycle: "deleting",
+    partial: false,
     stale: false,
   },
-  triggerCount: 963366,
+  triggerCount: 852008,
   backend: "local",
 };
 ```

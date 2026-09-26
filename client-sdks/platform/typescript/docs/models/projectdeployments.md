@@ -14,5 +14,5 @@ let value: ProjectDeployments = {
 
 | Field                                                | Type                                                 | Required                                             | Description                                          |
 | ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
-| `enabled`                                            | *boolean*                                            | :heavy_check_mark:                                   | N/A                                                  |
+| `enabled`                                            | *true*                                               | :heavy_check_mark:                                   | N/A                                                  |
 | `methods`                                            | [models.ProjectMethod](../models/projectmethod.md)[] | :heavy_minus_sign:                                   | N/A                                                  |

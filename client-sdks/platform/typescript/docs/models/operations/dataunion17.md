@@ -14,8 +14,8 @@ const value: operations.DataAwsKms = {
     keyState: "<value>",
     keyUsage: "<value>",
     status: {
-      health: "healthy",
-      lifecycle: "failed",
+      health: "unknown",
+      lifecycle: "unknown",
     },
   },
   provider: "aws-kms",
@@ -30,8 +30,8 @@ const value: operations.DataGcpCloudKms = {
     cryptoKeyName: "<value>",
     purpose: "<value>",
     status: {
-      health: "healthy",
-      lifecycle: "deleted",
+      health: "degraded",
+      lifecycle: "updating",
     },
   },
   provider: "gcp-cloud-kms",
@@ -47,8 +47,8 @@ const value: operations.DataAzureKeyVault2 = {
     keyOperations: [],
     keyType: "<value>",
     status: {
-      health: "unhealthy",
-      lifecycle: "deleting",
+      health: "unknown",
+      lifecycle: "running",
     },
   },
   provider: "azure-key-vault",

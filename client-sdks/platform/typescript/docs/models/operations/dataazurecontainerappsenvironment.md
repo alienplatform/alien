@@ -10,8 +10,8 @@ let value: DataAzureContainerAppsEnvironment = {
     name: "<value>",
     status: {
       collectionIssues: [],
-      health: "unknown",
-      lifecycle: "stopped",
+      health: "healthy",
+      lifecycle: "deleted",
       partial: true,
       stale: true,
     },
@@ -24,7 +24,7 @@ let value: DataAzureContainerAppsEnvironment = {
 
 ## Fields
 
-| Field                                                | Type                                                 | Required                                             | Description                                          |
-| ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
-| `data`                                               | [operations.Data4](../../models/operations/data4.md) | :heavy_check_mark:                                   | N/A                                                  |
-| `resourceType`                                       | *"azure_container_apps_environment"*                 | :heavy_check_mark:                                   | N/A                                                  |
+| Field                                                                                                      | Type                                                                                                       | Required                                                                                                   | Description                                                                                                |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `data`                                                                                                     | [operations.GetResourceDeploymentDetailData4](../../models/operations/getresourcedeploymentdetaildata4.md) | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
+| `resourceType`                                                                                             | *"azure_container_apps_environment"*                                                                       | :heavy_check_mark:                                                                                         | N/A                                                                                                        |

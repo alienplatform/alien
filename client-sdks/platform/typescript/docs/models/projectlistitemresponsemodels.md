@@ -6,8 +6,10 @@
 import { ProjectListItemResponseModels } from "@alienplatform/platform-api/models";
 
 let value: ProjectListItemResponseModels = {
-  enabled: false,
-  allowedProviders: [],
+  enabled: true,
+  allowedProviders: [
+    "aws-bedrock",
+  ],
   requirements: [
     {
       publicModelId: "<id>",
@@ -24,6 +26,6 @@ let value: ProjectListItemResponseModels = {
 
 | Field                                                                                                  | Type                                                                                                   | Required                                                                                               | Description                                                                                            |
 | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `enabled`                                                                                              | *boolean*                                                                                              | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
+| `enabled`                                                                                              | *true*                                                                                                 | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
 | `allowedProviders`                                                                                     | [models.ProjectListItemResponseAllowedProvider](../models/projectlistitemresponseallowedprovider.md)[] | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
 | `requirements`                                                                                         | [models.ProjectListItemResponseRequirement](../models/projectlistitemresponserequirement.md)[]         | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
