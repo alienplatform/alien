@@ -4729,13 +4729,26 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
 {{- define "deployment.managerServiceAccountName" -}}
-{{- $prefix := default (include "deployment.fullname" .) .Values.serviceAccountPrefix -}}
+{{- $prefix := include "deployment.serviceAccountPrefix" . -}}
 {{- $raw := printf "%s-manager-sa" $prefix | lower -}}
 {{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "deployment.serviceAccountPrefix" -}}
+{{- $source := default (include "deployment.fullname" .) .Values.serviceAccountPrefix -}}
+{{- $normalized := regexReplaceAll "-+" (regexReplaceAll "[^a-z0-9-]" (lower $source) "-") "-" | trimAll "-" -}}
+{{- if not (regexMatch "^[a-z]" $normalized) -}}
+{{- $normalized = printf "r-%s" $normalized -}}
+{{- end -}}
+{{- if or (ne $source $normalized) (gt (len $normalized) 40) -}}
+{{- printf "%s-%s" ($normalized | trunc 31 | trimSuffix "-") (sha256sum $source | trunc 8) -}}
+{{- else -}}
+{{- $normalized -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "deployment.serviceAccountName" -}}
-{{- $prefix := default (include "deployment.fullname" .root) .root.Values.serviceAccountPrefix -}}
+{{- $prefix := include "deployment.serviceAccountPrefix" .root -}}
 {{- $raw := printf "%s-%s-sa" $prefix .name | lower -}}
 {{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
@@ -4979,6 +4992,19 @@ stringData:
 
 fn configmap_tpl() -> String {
     r#"{{- $defaultStackSettings := dict "deploymentModel" "pull" "updates" .Values.management.updates "telemetry" .Values.management.telemetry "heartbeats" .Values.management.healthChecks -}}
+{{- $stackSettings := deepCopy (default $defaultStackSettings .Values.stackSettings) -}}
+{{- $kubernetes := deepCopy (default dict (get $stackSettings "kubernetes")) -}}
+{{- $cluster := deepCopy (default dict (get $kubernetes "cluster")) -}}
+{{- $requestedNamespace := default .Release.Namespace (get $cluster "namespace") -}}
+{{- if ne $requestedNamespace .Release.Namespace -}}
+  {{- fail "The Kubernetes workload namespace must match the Helm release namespace so the agent can use its chart-owned Secret and ServiceAccount." -}}
+{{- end -}}
+{{- $_ := set $cluster "namespace" .Release.Namespace -}}
+{{- if not (get $cluster "ownership") -}}
+  {{- $_ := set $cluster "ownership" "external" -}}
+{{- end -}}
+{{- $_ := set $kubernetes "cluster" $cluster -}}
+{{- $_ := set $stackSettings "kubernetes" $kubernetes -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -4988,7 +5014,7 @@ metadata:
 data:
   stack.json: |-
 {{ .Files.Get "files/stack.json" | indent 4 }}
-  stack-settings.json: {{ toJson (default $defaultStackSettings .Values.stackSettings) | quote }}
+  stack-settings.json: {{ toJson $stackSettings | quote }}
   services.json: {{ toJson .Values.services | quote }}
   public-endpoints.json: {{ toJson (default dict .Values.publicEndpoints) | quote }}
 "#
@@ -5721,6 +5747,8 @@ spec:
               value: {{ .Values.management.url | quote }}
             - name: OPERATOR_NAME
               value: {{ .Values.management.name | quote }}
+            - name: OPERATOR_RESOURCE_PREFIX
+              value: {{ include "deployment.serviceAccountPrefix" . | quote }}
             {{- if .Values.management.deploymentId }}
             - name: DEPLOYMENT_ID
               value: {{ .Values.management.deploymentId | quote }}
@@ -8374,6 +8402,13 @@ remoteOperator:
             .expect("runtime deployment label key");
         let label_value = operator_env_value(&runtime, "ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE")
             .expect("runtime deployment label value");
+        let resource_prefix = operator_env_value(&runtime, "OPERATOR_RESOURCE_PREFIX")
+            .expect("runtime resource prefix");
+        assert_eq!(resource_prefix, "customer-one");
+        assert!(docs_by_kind(&docs, "ServiceAccount").iter().any(|account| {
+            yaml_path(account, &["metadata", "name"]).and_then(YamlValue::as_str)
+                == Some("customer-one-agent-sa")
+        }));
         assert_eq!(
             (label_key, label_value),
             ("acme/deployment", "customer-one")

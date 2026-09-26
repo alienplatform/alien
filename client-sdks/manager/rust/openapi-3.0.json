@@ -8832,6 +8832,11 @@
               }
             ]
           },
+          "resourcePrefix": {
+            "type": "string",
+            "description": "Stable prefix for resources owned by this deployment.",
+            "nullable": true
+          },
           "scope": {
             "type": "string",
             "nullable": true

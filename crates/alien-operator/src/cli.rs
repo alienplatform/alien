@@ -91,6 +91,10 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_NAME")]
     pub operator_name: Option<String>,
 
+    /// Stable prefix for resources created by this deployment.
+    #[arg(long, env = "OPERATOR_RESOURCE_PREFIX")]
+    pub operator_resource_prefix: Option<String>,
+
     /// Label domain used for operator-owned resources and deployment discovery.
     #[arg(long, env = "OPERATOR_LABEL_DOMAIN")]
     pub operator_label_domain: Option<String>,
@@ -494,6 +498,7 @@ async fn run_operator_cli(
                             &sync_token,
                             args.platform,
                             args.operator_name.as_deref(),
+                            args.operator_resource_prefix.as_deref(),
                             operator_scope.as_deref(),
                             operator_permission.as_deref(),
                             operator_setup_method.as_deref(),
@@ -542,6 +547,7 @@ async fn run_operator_cli(
                         &sync_token,
                         args.platform,
                         args.operator_name.as_deref(),
+                        args.operator_resource_prefix.as_deref(),
                         operator_scope.as_deref(),
                         operator_permission.as_deref(),
                         operator_setup_method.as_deref(),
@@ -981,6 +987,7 @@ async fn initialize_with_manager(
     token: &str,
     platform: Platform,
     operator_name: Option<&str>,
+    resource_prefix: Option<&str>,
     operator_scope: Option<&str>,
     operator_permission: Option<&str>,
     operator_setup_method: Option<&str>,
@@ -1040,6 +1047,9 @@ async fn initialize_with_manager(
 
     if let Some(name) = default_name {
         builder = builder.body_map(|b| b.name(name));
+    }
+    if let Some(resource_prefix) = resource_prefix {
+        builder = builder.body_map(|b| b.resource_prefix(resource_prefix.to_string()));
     }
     if let Some(scope) = operator_scope {
         builder = builder.body_map(|b| b.scope(scope.to_string()));
