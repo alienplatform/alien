@@ -140,15 +140,17 @@ export class Container extends ResourceBuilder {
   /**
    * Sets the memory resources for the container.
    *
-   * Format: "<number>Mi" or "<number>Gi"
+   * Use a size string to set the same request and limit, or a ResourceSpec
+   * to set them separately on Kubernetes.
    *
-   * Example: "512Mi", "2Gi", "16Gi"
+   * Examples: `.memory("512Mi")`, `.memory({ min: "128Mi", desired: "512Mi" })`
    *
-   * @param size Memory size string.
+   * @param value Memory size string or ResourceSpec with min/desired.
    * @returns The Container builder instance.
    */
-  public memory(size: string): this {
-    this._config.memory = { min: size, desired: size }
+  public memory(value: string | ResourceSpec): this {
+    this._config.memory =
+      typeof value === "string" ? { min: value, desired: value } : value
     return this
   }
 
