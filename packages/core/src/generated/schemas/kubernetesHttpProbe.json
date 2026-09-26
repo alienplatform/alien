@@ -1,0 +1,1 @@
+{"type":"object","description":"HTTP probe used by Kubernetes for workload liveness or readiness.","required":["path","port"],"properties":{"path":{"type":"string","description":"Absolute HTTP path served by the container."},"port":{"type":"integer","format":"int32","description":"Container port to check.","minimum":0}},"x-readme-ref-name":"KubernetesHttpProbe"}

@@ -9,6 +9,9 @@ import { ContainerCodeSchema } from "./container-code-schema.js";
 import { ContainerGpuSpecSchema } from "./container-gpu-spec-schema.js";
 import { ContainerPortSchema } from "./container-port-schema.js";
 import { HealthCheckSchema } from "./health-check-schema.js";
+import { KubernetesHttpProbeSchema } from "./kubernetes-http-probe-schema.js";
+import { KubernetesRestrictedSecuritySchema } from "./kubernetes-restricted-security-schema.js";
+import { KubernetesSecretMountSchema } from "./kubernetes-secret-mount-schema.js";
 import { PersistentStorageSchema } from "./persistent-storage-schema.js";
 import { PublicEndpointSchema } from "./public-endpoint-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
@@ -41,6 +44,18 @@ get "healthCheck"(){
                 return z.union([HealthCheckSchema, z.null()]).optional()
               },
 "id": z.string().describe("Unique identifier for the container.\nMust be DNS-compatible: lowercase alphanumeric with hyphens."),
+get "kubernetesLivenessProbe"(){
+                return z.union([KubernetesHttpProbeSchema, z.null()]).optional()
+              },
+get "kubernetesReadinessProbe"(){
+                return z.union([KubernetesHttpProbeSchema, z.null()]).optional()
+              },
+get "kubernetesRestrictedSecurity"(){
+                return z.union([KubernetesRestrictedSecuritySchema, z.null()]).optional()
+              },
+get "kubernetesSecretMounts"(){
+                return z.array(KubernetesSecretMountSchema.describe("Mounts an existing, setup-owned Kubernetes Secret into a Container pod.\nThe Secret must exist in the deployment namespace before the workload starts.")).describe("Existing Kubernetes Secrets mounted as read-only directories.").optional()
+              },
 get "links"(){
                 return z.array(ResourceRefSchema.describe("Reference to a resource by its stable id and resource type.")).describe("Resource links (dependencies)")
               },

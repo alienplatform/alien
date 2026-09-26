@@ -23,6 +23,8 @@ management:
   telemetry: auto
   healthChecks: "on"
 
+inputValues: {}
+
 runtime:
   image:
     repository: registry.example.com/deployment/operator
@@ -135,6 +137,9 @@ logCollector:
     deploymentLabelKey: "alien.dev/deployment"
     legacyDeploymentLabelKey: ""
     deploymentLabelValue: ""
+    # For an observed workload that lacks the deployment label, set both fields.
+    podLabelKey: ""
+    podLabelValue: ""
 
 heartbeat:
   collection:
@@ -228,6 +233,17 @@ ephemeralStorage:
   "properties": {
     "nameOverride": { "type": "string" },
     "fullnameOverride": { "type": "string" },
+    "inputValues": {
+      "type": "object",
+      "additionalProperties": {
+        "anyOf": [
+          { "type": "string" },
+          { "type": "number" },
+          { "type": "boolean" },
+          { "type": "array", "items": { "type": "string" } }
+        ]
+      }
+    },
     "management": {
       "type": "object",
       "additionalProperties": false,
@@ -452,7 +468,17 @@ ephemeralStorage:
               "maxLength": 264,
               "pattern": "^$|^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*/deployment$"
             },
-            "deploymentLabelValue": { "type": "string" }
+            "deploymentLabelValue": { "type": "string" },
+            "podLabelKey": {
+              "type": "string",
+              "maxLength": 317,
+              "pattern": "^$|^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+            },
+            "podLabelValue": {
+              "type": "string",
+              "maxLength": 63,
+              "pattern": "^$|^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+            }
           }
         }
       }
@@ -714,8 +740,8 @@ ephemeralStorage:
       }
     },
     {
-      "title": "external-bindings initialize path",
-      "required": ["management", "infrastructure"],
+      "title": "initialize path",
+      "required": ["management"],
       "properties": {
         "management": {
           "properties": {
@@ -723,7 +749,7 @@ ephemeralStorage:
           }
         },
         "stackSettings": { "type": ["object", "null"] },
-        "infrastructure": { "type": "object" }
+        "infrastructure": { "type": ["object", "null"] }
       }
     }
   ]
@@ -961,7 +987,7 @@ roleRef:
 === templates/secret.yaml ===
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
-{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure .Values.logCollector.enabled }}
+{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure .Values.logCollector.enabled .Values.inputValues }}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -981,6 +1007,9 @@ stringData:
   {{- end }}
   {{- if .Values.logCollector.enabled }}
   collector-token: {{ required "logCollector.token is required when logCollector.enabled=true" .Values.logCollector.token | quote }}
+  {{- end }}
+  {{- if .Values.inputValues }}
+  input-values.json: {{ toJson .Values.inputValues | quote }}
   {{- end }}
 {{- end }}
 
@@ -1016,6 +1045,7 @@ spec:
     metadata:
       labels:
         {{- include "deployment.labels" . | nindent 8 }}
+        alien.dev/log-collector-exclude: "true"
         {{- with .Values.runtime.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -1121,6 +1151,10 @@ spec:
               value: /etc/deployment/secrets/encryption-key
             - name: STACK_SETTINGS_FILE
               value: /etc/deployment/config/stack-settings.json
+            {{- if .Values.inputValues }}
+            - name: STACK_INPUT_VALUES_FILE
+              value: /etc/deployment/input-values/input-values.json
+            {{- end }}
             - name: PUBLIC_ENDPOINTS_FILE
               value: /etc/deployment/config/public-endpoints.json
             {{- if .Values.infrastructure }}
@@ -1164,6 +1198,11 @@ spec:
             - name: config
               mountPath: /etc/deployment/config
               readOnly: true
+            {{- if .Values.inputValues }}
+            - name: input-values
+              mountPath: /etc/deployment/input-values
+              readOnly: true
+            {{- end }}
             - name: management-token
               mountPath: /etc/deployment/secrets/sync-token
               subPath: sync-token
@@ -1196,6 +1235,15 @@ spec:
         - name: config
           configMap:
             name: {{ include "deployment.fullname" . }}
+        {{- if .Values.inputValues }}
+        - name: input-values
+          secret:
+            secretName: {{ include "deployment.fullname" . }}
+            items:
+              - key: input-values.json
+                path: input-values.json
+            defaultMode: 384
+        {{- end }}
         - name: management-token
           secret:
             secretName: {{ include "deployment.managementSecretName" . }}
@@ -1305,8 +1353,8 @@ data:
 
     [INPUT]
         Name              tail
-        Path              /var/log/pods/{{ .Release.Namespace }}_*/*/*.log
-        Exclude_Path      /var/log/pods/{{ .Release.Namespace }}_{{ include "deployment.fullname" . }}-*/*/*.log
+        # The Kubernetes filter parses the /var/log/containers symlink filename.
+        Path              /var/log/containers/*_{{ .Release.Namespace }}_*.log
         Path_Key          filename
         multiline.parser  docker, cri
         Tag               kube.*
@@ -1325,12 +1373,22 @@ data:
         Labels              On
         Annotations         Off
 
-    {{- if and .Values.logCollector.scope.deploymentLabelKey .Values.logCollector.scope.deploymentLabelValue }}
     [FILTER]
         Name                grep
         Match               kube.*
-        Regex               $kubernetes['labels']['{{ .Values.logCollector.scope.deploymentLabelKey }}'] ^{{ .Values.logCollector.scope.deploymentLabelValue }}$
-    {{- end }}
+        Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$
+
+    {{- $podLabelKey := .Values.logCollector.scope.podLabelKey -}}
+    {{- $podLabelValue := .Values.logCollector.scope.podLabelValue -}}
+    {{- if ne (empty $podLabelKey) (empty $podLabelValue) -}}
+      {{- fail "logCollector.scope.podLabelKey and podLabelValue must be set together" -}}
+    {{- end -}}
+    {{- $logLabelKey := default .Values.logCollector.scope.deploymentLabelKey $podLabelKey -}}
+    {{- $logLabelValue := default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
+    [FILTER]
+        Name                grep
+        Match               kube.*
+        Regex               $kubernetes['labels']['{{ $logLabelKey }}'] ^{{ $logLabelValue | regexQuoteMeta }}$
 
     [OUTPUT]
         Name          http
@@ -1371,6 +1429,7 @@ spec:
       labels:
         {{- include "deployment.labels" . | nindent 8 }}
         app.kubernetes.io/component: whitelabeled-log-collector
+        alien.dev/log-collector-exclude: "true"
     spec:
       serviceAccountName: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
       tolerations:

@@ -78,6 +78,43 @@ pub struct PersistentStorage {
     pub mount_path: String,
 }
 
+/// Mounts an existing, setup-owned Kubernetes Secret into a Container pod.
+/// The Secret must exist in the deployment namespace before the workload starts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesSecretMount {
+    /// Name of the existing Secret in the deployment namespace.
+    pub secret_name: String,
+    /// Directory where Kubernetes mounts the Secret's keys as read-only files.
+    pub mount_path: String,
+}
+
+/// HTTP probe used by Kubernetes for workload liveness or readiness.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesHttpProbe {
+    /// Absolute HTTP path served by the container.
+    pub path: String,
+    /// Container port to check.
+    pub port: u16,
+}
+
+/// Runs a Kubernetes workload with a non-root identity, read-only filesystem,
+/// RuntimeDefault seccomp profile, no privilege escalation, and no Linux capabilities.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesRestrictedSecurity {
+    /// Numeric UID for the container process.
+    pub run_as_user: i64,
+    /// Numeric GID for the container process.
+    pub run_as_group: i64,
+    /// Supplemental filesystem GID for mounted volumes.
+    pub fs_group: i64,
+}
+
 /// Autoscaling configuration for stateless containers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -206,10 +243,27 @@ pub struct Container {
     #[builder(field)]
     pub ports: Vec<ContainerPort>,
 
+    /// Existing Kubernetes Secrets mounted as read-only directories.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kubernetes_secret_mounts: Vec<KubernetesSecretMount>,
+
     /// Public endpoints exposed by the container.
     #[builder(field)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub public_endpoints: Vec<PublicEndpoint>,
+
+    /// Kubernetes liveness probe. Restarts an unhealthy container.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kubernetes_liveness_probe: Option<KubernetesHttpProbe>,
+
+    /// Kubernetes readiness probe. Removes an unready pod from Service endpoints.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kubernetes_readiness_probe: Option<KubernetesHttpProbe>,
+
+    /// Restricted Kubernetes pod and container security settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kubernetes_restricted_security: Option<KubernetesRestrictedSecurity>,
 
     /// ComputeCluster resource ID that this container runs on.
     /// If None, will be auto-assigned by ComputeClusterMutation at deployment time.
@@ -380,6 +434,12 @@ impl<S: container_builder::State> ContainerBuilder<S> {
     /// Adds an internal-only port to the container.
     pub fn port(mut self, port: u16) -> Self {
         self.ports.push(ContainerPort { port });
+        self
+    }
+
+    /// Mounts an existing Kubernetes Secret without copying its value into the stack.
+    pub fn kubernetes_secret_mount(mut self, mount: KubernetesSecretMount) -> Self {
+        self.kubernetes_secret_mounts.push(mount);
         self
     }
 

@@ -5,6 +5,9 @@ import {
   type ContainerGpuSpec,
   ContainerSchema,
   type HealthCheck,
+  type KubernetesHttpProbe,
+  type KubernetesRestrictedSecurity,
+  type KubernetesSecretMount,
   type PersistentStorage,
   type PublicEndpoint,
   type ResourceSpec,
@@ -31,6 +34,9 @@ export type {
   ContainerStatus,
   ExposeProtocol,
   HealthCheck,
+  KubernetesHttpProbe,
+  KubernetesRestrictedSecurity,
+  KubernetesSecretMount,
   PersistentStorage,
   PublicEndpoint,
   ReplicaStatus,
@@ -66,6 +72,7 @@ export class Container extends ResourceBuilder {
     ports: [],
     publicEndpoints: [],
     environment: {},
+    kubernetesSecretMounts: [],
     stateful: false,
     // cluster is optional - if not set, ComputeClusterMutation will auto-assign
   }
@@ -317,6 +324,31 @@ export class Container extends ResourceBuilder {
 
     this._config.persistentStorage = persistentStorage
     this._config.stateful = true
+    return this
+  }
+
+  /** Mounts an existing Secret from the deployment's Kubernetes namespace. */
+  public kubernetesSecretMount(mount: KubernetesSecretMount): this {
+    this._config.kubernetesSecretMounts ??= []
+    this._config.kubernetesSecretMounts.push(mount)
+    return this
+  }
+
+  /** Restarts a pod when this Kubernetes HTTP liveness probe fails. */
+  public kubernetesLivenessProbe(probe: KubernetesHttpProbe): this {
+    this._config.kubernetesLivenessProbe = probe
+    return this
+  }
+
+  /** Excludes a pod from Service endpoints until this Kubernetes HTTP readiness probe passes. */
+  public kubernetesReadinessProbe(probe: KubernetesHttpProbe): this {
+    this._config.kubernetesReadinessProbe = probe
+    return this
+  }
+
+  /** Uses a non-root identity, read-only filesystem, RuntimeDefault seccomp, and no capabilities. */
+  public kubernetesRestrictedSecurity(settings: KubernetesRestrictedSecurity): this {
+    this._config.kubernetesRestrictedSecurity = settings
     return this
   }
 

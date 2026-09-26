@@ -196,6 +196,10 @@ pub struct ProductOperatorManifestOptions<'a> {
 pub struct OperatorLogCollectorOptions<'a> {
     pub image: &'a str,
     pub token: &'a str,
+    /// Existing Pod label key to collect. Set together with `pod_label_value`.
+    pub pod_label_key: Option<&'a str>,
+    /// Existing Pod label value to collect. Set together with `pod_label_key`.
+    pub pod_label_value: Option<&'a str>,
 }
 
 /// Generate a Helm chart for `stack`.
@@ -1900,10 +1904,36 @@ fn generate_operator_manifest_inner(
         operator_image_report.as_ref(),
     ));
     if let Some(log_collector) = options.log_collector.as_ref() {
+        // Product charts manage workloads under the chart's runtime scope, not
+        // under the separately named Remote Operator Deployment.
+        let default_collector_scope = if identity_initialized_config_map.is_some()
+            && options.format == OperatorOutputFormat::HelmTemplate
+        {
+            (
+                "{{ .Values.logCollector.scope.deploymentLabelKey }}".to_string(),
+                "{{ default (include \"deployment.fullname\" .) .Values.logCollector.scope.deploymentLabelValue | regexQuoteMeta }}".to_string(),
+            )
+        } else {
+            (
+                branded_tag_key(
+                    alien_core::access_request_crd::current_kubernetes_label_domain(
+                        options
+                            .label_domain
+                            .unwrap_or(alien_core::DEFAULT_ALIEN_LABEL_DOMAIN),
+                    ),
+                    ALIEN_STACK_TAG_KEY,
+                ),
+                operator_name.clone(),
+            )
+        };
         let mut collector_labels = labels.clone();
         collector_labels.insert(
             "app.kubernetes.io/component".to_string(),
             "whitelabeled-log-collector".to_string(),
+        );
+        collector_labels.insert(
+            "alien.dev/log-collector-exclude".to_string(),
+            "true".to_string(),
         );
         docs.push(operator_service_doc(namespace, &operator_name, &labels));
         docs.push(operator_log_collector_service_account_doc(
@@ -1927,6 +1957,9 @@ fn generate_operator_manifest_inner(
             &log_collector_name,
             namespace,
             &collector_labels,
+            log_collector,
+            (&default_collector_scope.0, &default_collector_scope.1),
+            options.format == OperatorOutputFormat::HelmTemplate,
         ));
         docs.push(operator_log_collector_daemonset_doc(
             namespace,
@@ -2127,6 +2160,19 @@ fn validate_operator_options(options: &OperatorManifestOptions<'_>) -> Result<()
         }
     }
 
+    if let Some(collector) = &options.log_collector {
+        match (collector.pod_label_key, collector.pod_label_value) {
+            (None, None) => {}
+            (Some(key), Some(value))
+                if valid_kubernetes_pod_label_key(key) && valid_kubernetes_label_name(value) => {}
+            _ => {
+                return invalid(
+                    "log collector Pod label key and value must be set together and be valid Kubernetes labels",
+                );
+            }
+        }
+    }
+
     // Raw manifests are applied to one concrete cluster, so the install namespace
     // and per-environment identity must be concrete. Helm defers both to install.
     if options.format == OperatorOutputFormat::RawManifest {
@@ -2147,6 +2193,32 @@ fn validate_operator_options(options: &OperatorManifestOptions<'_>) -> Result<()
     }
 
     Ok(())
+}
+
+fn valid_kubernetes_label_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+}
+
+fn valid_kubernetes_pod_label_key(value: &str) -> bool {
+    match value.split_once('/') {
+        Some((domain, name)) => {
+            alien_core::access_request_crd::is_valid_kubernetes_label_domain(domain)
+                && valid_kubernetes_label_name(name)
+        }
+        None => valid_kubernetes_label_name(value),
+    }
 }
 
 fn validate_product_operator_options(
@@ -2721,6 +2793,9 @@ fn operator_deployment_doc(
     yaml.push_str("    metadata:\n");
     yaml.push_str("      labels:\n");
     append_operator_labels(&mut yaml, labels, 8);
+    if options.log_collector.is_some() {
+        yaml.push_str("        alien.dev/log-collector-exclude: 'true'\n");
+    }
     if options.format == OperatorOutputFormat::HelmTemplate {
         yaml.push_str("        {{- with .Values.remoteOperator.podLabels }}\n");
         yaml.push_str("        {{- toYaml . | nindent 8 }}\n");
@@ -2905,6 +2980,8 @@ fn operator_service_doc(
     yaml.push_str("  type: ClusterIP\n");
     yaml.push_str("  selector:\n");
     append_operator_selector_labels(&mut yaml, labels, 4);
+    // The collector shares the release labels but cannot receive Operator logs.
+    yaml.push_str("    app.kubernetes.io/component: operator\n");
     yaml.push_str("  ports:\n");
     yaml.push_str("    - name: http\n");
     yaml.push_str("      port: 8080\n");
@@ -2970,6 +3047,9 @@ fn operator_log_collector_configmap_doc(
     collector_name: &str,
     observed_namespace: &str,
     labels: &BTreeMap<String, String>,
+    collector: &OperatorLogCollectorOptions<'_>,
+    default_scope: (&str, &str),
+    helm_template: bool,
 ) -> String {
     let mut yaml = operator_metadata_doc("v1", "ConfigMap", namespace, collector_name, labels);
     yaml.push_str("data:\n");
@@ -2983,13 +3063,11 @@ fn operator_log_collector_configmap_doc(
     yaml.push_str("        storage.backlog.mem_limit 64M\n\n");
     yaml.push_str("    [INPUT]\n");
     yaml.push_str("        Name              tail\n");
+    // The Kubernetes filter's default tag parser reads the symlink filename in
+    // /var/log/containers. Files under /var/log/pods cannot supply its metadata.
     yaml.push_str(&format!(
-        "        Path              /var/log/pods/{}_*/*/*.log\n",
+        "        Path              /var/log/containers/*_{}_*.log\n",
         observed_namespace
-    ));
-    yaml.push_str(&format!(
-        "        Exclude_Path      /var/log/pods/{}_{}-*/*/*.log\n",
-        observed_namespace, collector_name
     ));
     yaml.push_str("        Path_Key          filename\n");
     // Built-in multiline parsers auto-detect the runtime log format: `cri` for
@@ -3012,6 +3090,25 @@ fn operator_log_collector_configmap_doc(
     yaml.push_str("        Keep_Log            On\n");
     yaml.push_str("        Labels              On\n");
     yaml.push_str("        Annotations         Off\n\n");
+    yaml.push_str("    [FILTER]\n");
+    yaml.push_str("        Name                grep\n");
+    yaml.push_str("        Match               kube.*\n");
+    yaml.push_str(
+        "        Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$\n\n",
+    );
+    let label_key = collector.pod_label_key.unwrap_or(default_scope.0);
+    let label_value = collector.pod_label_value.unwrap_or(default_scope.1);
+    let label_pattern = if helm_template && collector.pod_label_value.is_none() {
+        label_value.to_string()
+    } else {
+        label_value.replace('.', "\\.")
+    };
+    yaml.push_str("    [FILTER]\n");
+    yaml.push_str("        Name                grep\n");
+    yaml.push_str("        Match               kube.*\n");
+    yaml.push_str(&format!(
+        "        Regex               $kubernetes['labels']['{label_key}'] ^{label_pattern}$\n\n"
+    ));
     yaml.push_str("    [OUTPUT]\n");
     yaml.push_str("        Name          http\n");
     // Without a Match the router never routes the tailed kube.* records to this
@@ -3410,6 +3507,8 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
   telemetry: auto
   healthChecks: "on"
 
+inputValues: {}
+
 runtime:
   image:
     repository: registry.example.com/deployment/operator
@@ -3522,6 +3621,9 @@ logCollector:
     deploymentLabelKey: "alien.dev/deployment"
     legacyDeploymentLabelKey: ""
     deploymentLabelValue: ""
+    # For an observed workload that lacks the deployment label, set both fields.
+    podLabelKey: ""
+    podLabelValue: ""
 
 heartbeat:
   collection:
@@ -4059,6 +4161,17 @@ fn values_schema_json() -> String {
   "properties": {
     "nameOverride": { "type": "string" },
     "fullnameOverride": { "type": "string" },
+    "inputValues": {
+      "type": "object",
+      "additionalProperties": {
+        "anyOf": [
+          { "type": "string" },
+          { "type": "number" },
+          { "type": "boolean" },
+          { "type": "array", "items": { "type": "string" } }
+        ]
+      }
+    },
     "management": {
       "type": "object",
       "additionalProperties": false,
@@ -4283,7 +4396,17 @@ fn values_schema_json() -> String {
               "maxLength": 264,
               "pattern": "^$|^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*/deployment$"
             },
-            "deploymentLabelValue": { "type": "string" }
+            "deploymentLabelValue": { "type": "string" },
+            "podLabelKey": {
+              "type": "string",
+              "maxLength": 317,
+              "pattern": "^$|^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+            },
+            "podLabelValue": {
+              "type": "string",
+              "maxLength": 63,
+              "pattern": "^$|^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+            }
           }
         }
       }
@@ -4545,8 +4668,8 @@ fn values_schema_json() -> String {
       }
     },
     {
-      "title": "external-bindings initialize path",
-      "required": ["management", "infrastructure"],
+      "title": "initialize path",
+      "required": ["management"],
       "properties": {
         "management": {
           "properties": {
@@ -4554,7 +4677,7 @@ fn values_schema_json() -> String {
           }
         },
         "stackSettings": { "type": ["object", "null"] },
-        "infrastructure": { "type": "object" }
+        "infrastructure": { "type": ["object", "null"] }
       }
     }
   ]
@@ -4813,7 +4936,7 @@ roleRef:
 fn secret_tpl() -> String {
     r#"{{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
-{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure .Values.logCollector.enabled }}
+{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure .Values.logCollector.enabled .Values.inputValues }}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -4833,6 +4956,9 @@ stringData:
   {{- end }}
   {{- if .Values.logCollector.enabled }}
   collector-token: {{ required "logCollector.token is required when logCollector.enabled=true" .Values.logCollector.token | quote }}
+  {{- end }}
+  {{- if .Values.inputValues }}
+  input-values.json: {{ toJson .Values.inputValues | quote }}
   {{- end }}
 {{- end }}
 "#
@@ -5501,6 +5627,7 @@ spec:
     metadata:
       labels:
         {{- include "deployment.labels" . | nindent 8 }}
+        alien.dev/log-collector-exclude: "true"
         {{- with .Values.runtime.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -5606,6 +5733,10 @@ spec:
               value: /etc/deployment/secrets/encryption-key
             - name: STACK_SETTINGS_FILE
               value: /etc/deployment/config/stack-settings.json
+            {{- if .Values.inputValues }}
+            - name: STACK_INPUT_VALUES_FILE
+              value: /etc/deployment/input-values/input-values.json
+            {{- end }}
             - name: PUBLIC_ENDPOINTS_FILE
               value: /etc/deployment/config/public-endpoints.json
             {{- if .Values.infrastructure }}
@@ -5649,6 +5780,11 @@ spec:
             - name: config
               mountPath: /etc/deployment/config
               readOnly: true
+            {{- if .Values.inputValues }}
+            - name: input-values
+              mountPath: /etc/deployment/input-values
+              readOnly: true
+            {{- end }}
             - name: management-token
               mountPath: /etc/deployment/secrets/sync-token
               subPath: sync-token
@@ -5681,6 +5817,15 @@ spec:
         - name: config
           configMap:
             name: {{ include "deployment.fullname" . }}
+        {{- if .Values.inputValues }}
+        - name: input-values
+          secret:
+            secretName: {{ include "deployment.fullname" . }}
+            items:
+              - key: input-values.json
+                path: input-values.json
+            defaultMode: 384
+        {{- end }}
         - name: management-token
           secret:
             secretName: {{ include "deployment.managementSecretName" . }}
@@ -5824,8 +5969,8 @@ data:
 
     [INPUT]
         Name              tail
-        Path              /var/log/pods/{{ .Release.Namespace }}_*/*/*.log
-        Exclude_Path      /var/log/pods/{{ .Release.Namespace }}_{{ include "deployment.fullname" . }}-*/*/*.log
+        # The Kubernetes filter parses the /var/log/containers symlink filename.
+        Path              /var/log/containers/*_{{ .Release.Namespace }}_*.log
         Path_Key          filename
         multiline.parser  docker, cri
         Tag               kube.*
@@ -5844,12 +5989,22 @@ data:
         Labels              On
         Annotations         Off
 
-    {{- if and .Values.logCollector.scope.deploymentLabelKey .Values.logCollector.scope.deploymentLabelValue }}
     [FILTER]
         Name                grep
         Match               kube.*
-        Regex               $kubernetes['labels']['{{ .Values.logCollector.scope.deploymentLabelKey }}'] ^{{ .Values.logCollector.scope.deploymentLabelValue }}$
-    {{- end }}
+        Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$
+
+    {{- $podLabelKey := .Values.logCollector.scope.podLabelKey -}}
+    {{- $podLabelValue := .Values.logCollector.scope.podLabelValue -}}
+    {{- if ne (empty $podLabelKey) (empty $podLabelValue) -}}
+      {{- fail "logCollector.scope.podLabelKey and podLabelValue must be set together" -}}
+    {{- end -}}
+    {{- $logLabelKey := default .Values.logCollector.scope.deploymentLabelKey $podLabelKey -}}
+    {{- $logLabelValue := default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
+    [FILTER]
+        Name                grep
+        Match               kube.*
+        Regex               $kubernetes['labels']['{{ $logLabelKey }}'] ^{{ $logLabelValue | regexQuoteMeta }}$
 
     [OUTPUT]
         Name          http
@@ -5893,6 +6048,7 @@ spec:
       labels:
         {{- include "deployment.labels" . | nindent 8 }}
         app.kubernetes.io/component: whitelabeled-log-collector
+        alien.dev/log-collector-exclude: "true"
     spec:
       serviceAccountName: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
       tolerations:
@@ -6567,6 +6723,8 @@ mod tests {
             log_collector: Some(OperatorLogCollectorOptions {
                 image: "fluent/fluent-bit:3.2",
                 token: "collector-secret",
+                pod_label_key: None,
+                pod_label_value: None,
             }),
             stack_settings: None,
             project_name: "my-saas",
@@ -7020,7 +7178,7 @@ mod tests {
         assert!(kinds.contains(&"RoleBinding"));
         assert!(kinds.contains(&"DaemonSet"));
         assert!(manifest.contains("whitelabeled-log-collector"));
-        assert!(manifest.contains("/var/log/pods/demo_"));
+        assert!(manifest.contains("/var/log/containers/*_demo_*.log"));
         assert!(manifest.contains("/internal/logs"));
         assert!(manifest.contains("COLLECTOR_TOKEN_FILE"));
         assert!(manifest.contains("collector-token"));
@@ -7419,6 +7577,8 @@ mod tests {
                     log_collector: include_collector.then_some(OperatorLogCollectorOptions {
                         image: "fluent/fluent-bit:3.2",
                         token: "",
+                        pod_label_key: None,
+                        pod_label_value: None,
                     }),
                     stack_settings: None,
                     project_name: "remote-sample-stack",
@@ -7462,6 +7622,77 @@ mod tests {
             .assert_ok("helm template registered setup");
         crate::test_utils::helm_template_and_validate(&files, Some(&files["examples/onprem.yaml"]))
             .assert_ok("helm template external-bindings initialize path");
+    }
+
+    #[test]
+    fn helm_setup_inputs_reach_operator_through_a_secret() {
+        let chart = sample_product_chart();
+        let values = r#"
+management:
+  token: ax_dg_example
+  name: prod
+  url: https://manager.example.test
+  deploymentId: null
+runtime:
+  encryption:
+    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+inputValues:
+  ingestUrl: https://ingest.example.test
+  enabled: true
+  namespaces:
+    - production
+"#;
+        let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
+        rendered.assert_ok("Helm setup inputs render");
+        let documents = serde_yaml::Deserializer::from_str(&rendered.stdout)
+            .map(|document| YamlValue::deserialize(document).expect("valid Kubernetes YAML"))
+            .collect::<Vec<_>>();
+        let secret = documents
+            .iter()
+            .find(|document| document["kind"] == "Secret")
+            .expect("setup Secret");
+        let input_values: serde_json::Value = serde_json::from_str(
+            secret["stringData"]["input-values.json"]
+                .as_str()
+                .expect("input values are in the Secret"),
+        )
+        .expect("JSON input values");
+        assert_eq!(
+            input_values,
+            serde_json::json!({
+                "ingestUrl": "https://ingest.example.test",
+                "enabled": true,
+                "namespaces": ["production"]
+            })
+        );
+        let configmap = documents
+            .iter()
+            .find(|document| document["kind"] == "ConfigMap")
+            .expect("runtime ConfigMap");
+        assert!(configmap["data"].as_mapping().is_some_and(|data| {
+            data.keys()
+                .all(|key| key.as_str() != Some("input-values.json"))
+        }));
+        let operator = documents
+            .iter()
+            .find(|document| document["kind"] == "Deployment")
+            .expect("Operator Deployment");
+        let container = &operator["spec"]["template"]["spec"]["containers"][0];
+        assert!(container["env"].as_sequence().is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                entry["name"] == "STACK_INPUT_VALUES_FILE"
+                    && entry["value"] == "/etc/deployment/input-values/input-values.json"
+            })
+        }));
+        assert!(container["volumeMounts"]
+            .as_sequence()
+            .is_some_and(|mounts| {
+                mounts.iter().any(|mount| {
+                    mount["name"] == "input-values"
+                        && mount["mountPath"] == "/etc/deployment/input-values"
+                        && mount["readOnly"].as_bool() == Some(true)
+                })
+            }));
     }
 
     #[test]
@@ -8086,6 +8317,54 @@ remoteOperator:
     }
 
     #[test]
+    fn product_collector_follows_branded_runtime_scope() {
+        let mut files =
+            sample_product_chart_with_collector_and_label_domain(true, Some("acme.dev")).files;
+        // Client-only rendering has no live Secret or Helm history for this guard to inspect.
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let values = r#"
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#;
+        let rendered =
+            crate::test_utils::helm_template_for_release(&files, Some(values), "customer-one");
+        rendered.assert_ok("branded product collector scope");
+        let docs = parse_manifest_docs(&rendered.stdout);
+        let runtime = docs_by_kind(&docs, "Deployment")
+            .into_iter()
+            .find(|deployment| {
+                yaml_path(deployment, &["metadata", "name"]).and_then(YamlValue::as_str)
+                    == Some("customer-one")
+            })
+            .expect("runtime Deployment");
+        let label_key = operator_env_value(&runtime, "ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY")
+            .expect("runtime deployment label key");
+        let label_value = operator_env_value(&runtime, "ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE")
+            .expect("runtime deployment label value");
+        assert_eq!(
+            (label_key, label_value),
+            ("acme/deployment", "customer-one")
+        );
+
+        let collector = docs_by_kind(&docs, "ConfigMap")
+            .into_iter()
+            .find(|config| yaml_path(config, &["data", "collector.conf"]).is_some())
+            .expect("Remote Operator collector ConfigMap");
+        let config = yaml_path(&collector, &["data", "collector.conf"])
+            .and_then(YamlValue::as_str)
+            .expect("Fluent Bit configuration");
+        assert!(config.contains(&format!(
+            "Regex               $kubernetes['labels']['{label_key}'] ^{label_value}$"
+        )));
+        assert!(!config.contains("$kubernetes['labels']['alien.dev/deployment']"));
+    }
+
+    #[test]
     fn product_chart_omits_cleanup_job_on_first_enabled_render_without_baseline_lifecycle_capability(
     ) {
         let mut files = sample_product_chart().files;
@@ -8604,7 +8883,9 @@ logCollector:
         assert!(rendered.stdout.contains("kind: DaemonSet"));
         assert!(rendered.stdout.contains("whitelabeled-log-collector"));
         assert!(rendered.stdout.contains("COLLECTOR_TOKEN_FILE"));
-        assert!(rendered.stdout.contains("/var/log/pods/default_"));
+        assert!(rendered
+            .stdout
+            .contains("/var/log/containers/*_default_*.log"));
         assert!(rendered.stdout.contains("fluent/fluent-bit:3.2"));
         assert!(rendered
             .stdout

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
 use tracing::{debug, info};
 
@@ -30,8 +30,9 @@ use alien_macros::controller;
 
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Container as K8sContainer, ContainerPort, LocalObjectReference, PersistentVolumeClaim,
-    PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, ResourceRequirements, Service,
+    Capabilities, Container as K8sContainer, ContainerPort, HTTPGetAction, LocalObjectReference,
+    PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSecurityContext, PodSpec, PodTemplateSpec,
+    Probe, ResourceRequirements, SeccompProfile, SecretVolumeSource, SecurityContext, Service,
     ServicePort, ServiceSpec, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
@@ -73,6 +74,51 @@ fn first_declared_container_port(config: &Container) -> Option<u16> {
     config.ports.first().map(|port| port.port)
 }
 
+fn deployment_rollout_complete(
+    deployment: &Deployment,
+    desired_replicas: i32,
+    expected_generation: Option<i64>,
+) -> bool {
+    let (Some(generation), Some(status)) = (deployment.metadata.generation, &deployment.status)
+    else {
+        return false;
+    };
+
+    // Ready replicas can still belong to the old ReplicaSet after an update.
+    Some(generation) == expected_generation
+        && status
+            .observed_generation
+            .is_some_and(|observed| observed >= generation)
+        && status.updated_replicas == Some(desired_replicas)
+        && status.replicas == Some(desired_replicas)
+        && status
+            .available_replicas
+            .is_some_and(|available| available >= desired_replicas)
+}
+
+fn statefulset_rollout_complete(
+    statefulset: &StatefulSet,
+    desired_replicas: i32,
+    expected_generation: Option<i64>,
+) -> bool {
+    let (Some(generation), Some(status)) = (statefulset.metadata.generation, &statefulset.status)
+    else {
+        return false;
+    };
+
+    Some(generation) == expected_generation
+        && status
+            .observed_generation
+            .is_some_and(|observed| observed >= generation)
+        && status.updated_replicas == Some(desired_replicas)
+        && status.replicas == desired_replicas
+        && status
+            .ready_replicas
+            .is_some_and(|ready| ready >= desired_replicas)
+        && status.current_revision.is_some()
+        && status.current_revision == status.update_revision
+}
+
 fn kubernetes_port_name(port: &alien_core::ContainerPort) -> String {
     if false {
         "http".to_string()
@@ -102,6 +148,10 @@ pub struct KubernetesContainerController {
     /// secretKeyRef, never into the resource config).
     #[serde(default)]
     pub(crate) env_secret: EnvSecretRotationTracker,
+    /// Generation returned by the Kubernetes update call. A subsequent read of
+    /// the previous generation must not complete this rollout.
+    #[serde(default)]
+    pub(crate) update_generation: Option<i64>,
 }
 
 #[controller]
@@ -978,13 +1028,19 @@ impl KubernetesContainerController {
                 .await?;
             new_statefulset.metadata.resource_version = resource_version;
 
-            deployment_client
+            let updated = deployment_client
                 .update_statefulset(namespace, workload_name, &new_statefulset)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to update statefulset '{}'.", workload_name),
                     resource_id: Some(config.id.clone()),
                 })?;
+            self.update_generation = Some(updated.metadata.generation.ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!("Updated statefulset '{}' has no generation", workload_name),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?);
         } else {
             let mut new_deployment = self
                 .build_deployment(
@@ -999,13 +1055,19 @@ impl KubernetesContainerController {
                 .await?;
             new_deployment.metadata.resource_version = resource_version;
 
-            deployment_client
+            let updated = deployment_client
                 .update_deployment(namespace, workload_name, &new_deployment)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to update deployment '{}'.", workload_name),
                     resource_id: Some(config.id.clone()),
                 })?;
+            self.update_generation = Some(updated.metadata.generation.ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!("Updated deployment '{}' has no generation", workload_name),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?);
         }
 
         info!(workload_name=%workload_name, workload_type=%workload_type, "Workload update submitted, waiting for rollout");
@@ -1047,17 +1109,27 @@ impl KubernetesContainerController {
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
 
-        let (ready_replicas, replicas) = if self.is_stateful {
+        let desired_replicas = config.replicas.unwrap_or(1) as i32;
+        let (ready_replicas, replicas, rollout_complete) = if self.is_stateful {
             match deployment_client
                 .get_statefulset(namespace, workload_name)
                 .await
             {
                 Ok(statefulset) => {
-                    if let Some(status) = &statefulset.status {
-                        (status.ready_replicas, Some(status.replicas))
-                    } else {
-                        (None, None)
-                    }
+                    let ready = statefulset
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.ready_replicas);
+                    let replicas = statefulset.status.as_ref().map(|status| status.replicas);
+                    (
+                        ready,
+                        replicas,
+                        statefulset_rollout_complete(
+                            &statefulset,
+                            desired_replicas,
+                            self.update_generation,
+                        ),
+                    )
                 }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
@@ -1075,11 +1147,23 @@ impl KubernetesContainerController {
                 .await
             {
                 Ok(deployment) => {
-                    if let Some(status) = &deployment.status {
-                        (status.ready_replicas, status.replicas)
-                    } else {
-                        (None, None)
-                    }
+                    let ready = deployment
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.ready_replicas);
+                    let replicas = deployment
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.replicas);
+                    (
+                        ready,
+                        replicas,
+                        deployment_rollout_complete(
+                            &deployment,
+                            desired_replicas,
+                            self.update_generation,
+                        ),
+                    )
                 }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
@@ -1093,23 +1177,20 @@ impl KubernetesContainerController {
             }
         };
 
-        if let (Some(ready_replicas), Some(replicas)) = (ready_replicas, replicas) {
-            let desired_replicas = config.replicas.unwrap_or(1) as i32;
-            if ready_replicas >= desired_replicas.min(replicas) && replicas > 0 {
-                let workload_type = if self.is_stateful {
-                    "StatefulSet"
-                } else {
-                    "Deployment"
-                };
-                info!(workload_name=%workload_name, workload_type=%workload_type, "Container workload rollout complete");
-                return Ok(HandlerAction::Continue {
-                    state: ReconcilePublicEndpointAfterUpdate,
-                    suggested_delay: None,
-                });
+        if rollout_complete {
+            let workload_type = if self.is_stateful {
+                "StatefulSet"
             } else {
-                debug!(workload_name=%workload_name, ready=%ready_replicas, total=%replicas, "Container workload rollout in progress");
-            }
+                "Deployment"
+            };
+            info!(workload_name=%workload_name, workload_type=%workload_type, "Container workload rollout complete");
+            return Ok(HandlerAction::Continue {
+                state: ReconcilePublicEndpointAfterUpdate,
+                suggested_delay: None,
+            });
         }
+
+        debug!(workload_name=%workload_name, ready=?ready_replicas, total=?replicas, desired=desired_replicas, expected_generation=?self.update_generation, "Container workload rollout in progress");
 
         Ok(HandlerAction::Stay {
             max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
@@ -1652,6 +1733,7 @@ mod output_tests {
             container_id: Some("container".to_string()),
             public_endpoint,
             env_secret: EnvSecretRotationTracker::default(),
+            update_generation: None,
             _internal_stay_count: None,
         };
 
@@ -1688,6 +1770,7 @@ mod output_tests {
             container_id: Some("container".to_string()),
             public_endpoint,
             env_secret: EnvSecretRotationTracker::default(),
+            update_generation: None,
             _internal_stay_count: None,
         };
 
@@ -1720,6 +1803,7 @@ impl KubernetesContainerController {
             container_id: Some("test-container".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
             env_secret: EnvSecretRotationTracker::default(),
+            update_generation: None,
             _internal_stay_count: None,
         }
     }
@@ -2146,11 +2230,73 @@ impl KubernetesContainerController {
             });
         }
 
+        let mut mount_paths = volume_mounts
+            .iter()
+            .map(|mount| mount.mount_path.clone())
+            .collect::<BTreeSet<_>>();
+        for (index, mount) in config.kubernetes_secret_mounts.iter().enumerate() {
+            if mount.secret_name.trim().is_empty()
+                || !mount.mount_path.starts_with('/')
+                || mount.mount_path == "/"
+                || !mount_paths.insert(mount.mount_path.clone())
+            {
+                return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message: format!(
+                        "Kubernetes Secret mount #{index} needs a nonempty Secret name and a unique absolute directory mount path"
+                    ),
+                }));
+            }
+            volume_mounts.push(VolumeMount {
+                name: format!("existing-secret-{index}"),
+                mount_path: mount.mount_path.clone(),
+                read_only: Some(true),
+                ..Default::default()
+            });
+        }
+
         // Parse CPU and memory from ResourceSpec
         let cpu_request = config.cpu.min.clone();
         let cpu_limit = config.cpu.desired.clone();
         let memory_request = config.memory.min.clone();
         let memory_limit = config.memory.desired.clone();
+
+        let http_probe = |probe: &alien_core::KubernetesHttpProbe| -> Result<Probe> {
+            if !probe.path.starts_with('/') || probe.port == 0 {
+                return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message: "Kubernetes HTTP probes need an absolute path and a nonzero port"
+                        .to_string(),
+                }));
+            }
+            Ok(Probe {
+                http_get: Some(HTTPGetAction {
+                    path: Some(probe.path.clone()),
+                    port: IntOrString::Int(i32::from(probe.port)),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        };
+        let liveness_probe = config
+            .kubernetes_liveness_probe
+            .as_ref()
+            .map(http_probe)
+            .transpose()?;
+        let readiness_probe = config
+            .kubernetes_readiness_probe
+            .as_ref()
+            .map(http_probe)
+            .transpose()?;
+        let security = config.kubernetes_restricted_security.as_ref();
+        if security.is_some_and(|settings| {
+            settings.run_as_user <= 0 || settings.run_as_group <= 0 || settings.fs_group < 0
+        }) {
+            return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "Restricted Kubernetes security needs positive user and group IDs and a nonnegative filesystem group ID".to_string(),
+            }));
+        }
 
         let container = K8sContainer {
             name: "container".to_string(),
@@ -2169,6 +2315,17 @@ impl KubernetesContainerController {
                     .collect(),
             ),
             env: Some(env_vars),
+            liveness_probe,
+            readiness_probe,
+            security_context: security.map(|_| SecurityContext {
+                allow_privilege_escalation: Some(false),
+                read_only_root_filesystem: Some(true),
+                capabilities: Some(Capabilities {
+                    drop: Some(vec!["ALL".to_string()]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
             volume_mounts: if volume_mounts.is_empty() {
                 None
             } else {
@@ -2209,9 +2366,31 @@ impl KubernetesContainerController {
                 ..Default::default()
             });
         }
+        for (index, mount) in config.kubernetes_secret_mounts.iter().enumerate() {
+            volumes.push(Volume {
+                name: format!("existing-secret-{index}"),
+                secret: Some(SecretVolumeSource {
+                    secret_name: Some(mount.secret_name.clone()),
+                    optional: Some(false),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
 
         let pod_spec = PodSpec {
             service_account_name: Some(service_account_name.to_string()),
+            security_context: security.map(|settings| PodSecurityContext {
+                run_as_non_root: Some(true),
+                run_as_user: Some(settings.run_as_user),
+                run_as_group: Some(settings.run_as_group),
+                fs_group: Some(settings.fs_group),
+                seccomp_profile: Some(SeccompProfile {
+                    type_: "RuntimeDefault".to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
             containers: vec![container],
             image_pull_secrets: image_pull_secret_name.map(|name| {
                 vec![LocalObjectReference {
@@ -2300,6 +2479,81 @@ impl KubernetesContainerController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use k8s_openapi::api::apps::v1::{DeploymentStatus, StatefulSetStatus};
+
+    #[test]
+    fn deployment_update_waits_for_the_new_revision_to_be_available() {
+        let mut deployment = Deployment {
+            metadata: ObjectMeta {
+                generation: Some(2),
+                ..Default::default()
+            },
+            status: Some(DeploymentStatus {
+                observed_generation: Some(1),
+                replicas: Some(1),
+                ready_replicas: Some(1),
+                available_replicas: Some(1),
+                updated_replicas: Some(0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert!(!deployment_rollout_complete(&deployment, 1, Some(2)));
+
+        let status = deployment.status.as_mut().unwrap();
+        status.observed_generation = Some(2);
+        assert!(!deployment_rollout_complete(&deployment, 1, Some(2)));
+
+        let status = deployment.status.as_mut().unwrap();
+        status.replicas = Some(2);
+        status.updated_replicas = Some(1);
+        assert!(!deployment_rollout_complete(&deployment, 1, Some(2)));
+
+        let status = deployment.status.as_mut().unwrap();
+        status.replicas = Some(1);
+        status.available_replicas = Some(0);
+        assert!(!deployment_rollout_complete(&deployment, 1, Some(2)));
+
+        deployment.status.as_mut().unwrap().available_replicas = Some(1);
+        assert!(deployment_rollout_complete(&deployment, 1, Some(2)));
+
+        deployment.metadata.generation = Some(1);
+        deployment.status.as_mut().unwrap().observed_generation = Some(1);
+        assert!(!deployment_rollout_complete(&deployment, 1, Some(2)));
+    }
+
+    #[test]
+    fn statefulset_update_waits_for_the_current_revision_to_advance() {
+        let mut statefulset = StatefulSet {
+            metadata: ObjectMeta {
+                generation: Some(2),
+                ..Default::default()
+            },
+            status: Some(StatefulSetStatus {
+                observed_generation: Some(2),
+                replicas: 1,
+                ready_replicas: Some(1),
+                updated_replicas: Some(0),
+                current_revision: Some("old".to_string()),
+                update_revision: Some("new".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert!(!statefulset_rollout_complete(&statefulset, 1, Some(2)));
+
+        statefulset.status.as_mut().unwrap().updated_replicas = Some(1);
+        assert!(!statefulset_rollout_complete(&statefulset, 1, Some(2)));
+
+        statefulset.status.as_mut().unwrap().current_revision = Some("new".to_string());
+        assert!(statefulset_rollout_complete(&statefulset, 1, Some(2)));
+
+        statefulset.metadata.generation = Some(1);
+        statefulset.status.as_mut().unwrap().observed_generation = Some(1);
+        assert!(!statefulset_rollout_complete(&statefulset, 1, Some(2)));
+    }
 
     #[test]
     fn test_kubernetes_container_name() {
@@ -2453,6 +2707,7 @@ mod tests {
             container_id: Some("api".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
             env_secret: EnvSecretRotationTracker::default(),
+            update_generation: None,
             _internal_stay_count: None,
         };
         let harness =
@@ -2496,9 +2751,10 @@ mod tests {
         OTEL_EXPORTER_OTLP_METRICS_HEADERS,
     };
     use alien_core::{
-        OtlpConfig, Resource, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_LAMBDA_MODE,
-        ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_RUNTIME_SEND_OTLP, ENV_ALIEN_SECRETS,
-        ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
+        KubernetesHttpProbe, KubernetesRestrictedSecurity, KubernetesSecretMount, OtlpConfig,
+        Resource, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_LAMBDA_MODE, ENV_ALIEN_RUNTIME_SECRETS,
+        ENV_ALIEN_RUNTIME_SEND_OTLP, ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT,
+        ENV_ALIEN_WORKER_GRPC_ADDRESS,
     };
     fn manifest_test_container(environment: &[(&str, &str)], stateful: bool) -> Container {
         let mut config = Container::new("web".to_string())
@@ -2532,6 +2788,105 @@ mod tests {
             container_id: Some("web".to_string()),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn deployment_mounts_existing_secret_as_read_only_files() {
+        let mut config = manifest_test_container(&[], false);
+        config.kubernetes_secret_mounts.push(KubernetesSecretMount {
+            secret_name: "enrollment-token".to_string(),
+            mount_path: "/var/run/enrollment".to_string(),
+        });
+        config.kubernetes_liveness_probe = Some(KubernetesHttpProbe {
+            path: "/healthz".to_string(),
+            port: 8080,
+        });
+        config.kubernetes_readiness_probe = Some(KubernetesHttpProbe {
+            path: "/readyz".to_string(),
+            port: 8080,
+        });
+        config.kubernetes_restricted_security = Some(KubernetesRestrictedSecurity {
+            run_as_user: 65532,
+            run_as_group: 65532,
+            fs_group: 65532,
+        });
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        let deployment = manifest_test_controller()
+            .build_deployment(
+                &config,
+                "web",
+                "test-ns",
+                "web-sa",
+                None,
+                None,
+                &harness.ctx(),
+            )
+            .await
+            .expect("deployment manifest");
+        let pod = deployment
+            .spec
+            .expect("deployment spec")
+            .template
+            .spec
+            .expect("pod spec");
+        let volume = pod
+            .volumes
+            .expect("volumes")
+            .into_iter()
+            .next()
+            .expect("Secret volume");
+        assert_eq!(volume.name, "existing-secret-0");
+        let source = volume.secret.expect("Secret source");
+        assert_eq!(source.secret_name.as_deref(), Some("enrollment-token"));
+        assert_eq!(source.optional, Some(false));
+        let mount = pod.containers[0]
+            .volume_mounts
+            .as_ref()
+            .expect("volume mounts")
+            .first()
+            .expect("Secret mount");
+        assert_eq!(mount.name, "existing-secret-0");
+        assert_eq!(mount.mount_path, "/var/run/enrollment");
+        assert_eq!(mount.read_only, Some(true));
+        let pod_security = pod.security_context.as_ref().expect("pod security");
+        assert_eq!(pod_security.run_as_non_root, Some(true));
+        assert_eq!(pod_security.run_as_user, Some(65532));
+        assert_eq!(pod_security.run_as_group, Some(65532));
+        assert_eq!(pod_security.fs_group, Some(65532));
+        assert_eq!(
+            pod_security
+                .seccomp_profile
+                .as_ref()
+                .map(|profile| profile.type_.as_str()),
+            Some("RuntimeDefault")
+        );
+        let container_security = pod.containers[0]
+            .security_context
+            .as_ref()
+            .expect("container security");
+        assert_eq!(container_security.allow_privilege_escalation, Some(false));
+        assert_eq!(container_security.read_only_root_filesystem, Some(true));
+        assert_eq!(
+            container_security
+                .capabilities
+                .as_ref()
+                .and_then(|caps| caps.drop.as_ref()),
+            Some(&vec!["ALL".to_string()])
+        );
+        let liveness = pod.containers[0]
+            .liveness_probe
+            .as_ref()
+            .and_then(|probe| probe.http_get.as_ref())
+            .expect("liveness HTTP probe");
+        assert_eq!(liveness.path.as_deref(), Some("/healthz"));
+        assert_eq!(liveness.port, IntOrString::Int(8080));
+        let readiness = pod.containers[0]
+            .readiness_probe
+            .as_ref()
+            .and_then(|probe| probe.http_get.as_ref())
+            .expect("readiness HTTP probe");
+        assert_eq!(readiness.path.as_deref(), Some("/readyz"));
+        assert_eq!(readiness.port, IntOrString::Int(8080));
     }
 
     #[tokio::test]
