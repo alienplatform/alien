@@ -338,6 +338,8 @@ mod tests {
             id: "stack_test".to_string(),
             resources: IndexMap::new(),
             inputs: vec![],
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             permissions: crate::PermissionsConfig::default(),
             supported_platforms: None,
         }
