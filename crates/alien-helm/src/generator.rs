@@ -256,7 +256,7 @@ fn generate_helm_chart_internal(
         "values.yaml".to_string(),
         values_yaml(&analysis, &options.stack_settings)?,
     );
-    files.insert("values.schema.json".to_string(), values_schema_json());
+    files.insert("values.schema.json".to_string(), values_schema_json(stack)?);
     files.insert("templates/_helpers.tpl".to_string(), helpers_tpl());
     files.insert(
         "templates/serviceaccount.yaml".to_string(),
@@ -4161,8 +4161,8 @@ fn append_services(yaml: &mut String, analysis: &ChartAnalysis) {
     }
 }
 
-fn values_schema_json() -> String {
-    r##"{
+fn values_schema_json(stack: &Stack) -> Result<String> {
+    let base = r##"{
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
@@ -4690,8 +4690,77 @@ fn values_schema_json() -> String {
     }
   ]
 }
-"##
-    .to_string()
+"##;
+
+    let deployer_inputs = stack
+        .inputs()
+        .iter()
+        .filter(|input| {
+            input
+                .provided_by
+                .contains(&alien_core::StackInputProvider::Deployer)
+                && input
+                    .platforms
+                    .as_ref()
+                    .is_none_or(|platforms| platforms.contains(&Platform::Kubernetes))
+        })
+        .collect::<Vec<_>>();
+    if deployer_inputs.is_empty() {
+        return Ok(base.to_string());
+    }
+
+    let mut schema: serde_json::Value = serde_json::from_str(base).into_alien_error().context(
+        ErrorData::JsonSerializationFailed {
+            reason: "failed to parse built-in Helm values schema".to_string(),
+        },
+    )?;
+    let input_schema = &mut schema["properties"]["inputValues"];
+    input_schema["additionalProperties"] = serde_json::Value::Bool(false);
+    let mut properties = serde_json::Map::new();
+    for input in deployer_inputs {
+        use alien_core::StackInputKind;
+        let kind = match input.kind {
+            StackInputKind::String | StackInputKind::Secret | StackInputKind::Enum => "string",
+            StackInputKind::Number => "number",
+            StackInputKind::Integer => "integer",
+            StackInputKind::Boolean => "boolean",
+            StackInputKind::StringList => "array",
+        };
+        let mut field = serde_json::json!({ "type": kind });
+        if matches!(input.kind, StackInputKind::StringList) {
+            field["items"] = serde_json::json!({ "type": "string" });
+        }
+        if let Some(validation) = &input.validation {
+            if let Some(min_length) = validation.min_length {
+                field["minLength"] = serde_json::json!(min_length);
+            }
+            if let Some(max_length) = validation.max_length {
+                field["maxLength"] = serde_json::json!(max_length);
+            }
+            if let Some(pattern) = &validation.pattern {
+                field["pattern"] = serde_json::json!(pattern);
+            }
+            if let Some(values) = &validation.values {
+                field["enum"] = serde_json::json!(values);
+            }
+            if let Some(min_items) = validation.min_items {
+                field["minItems"] = serde_json::json!(min_items);
+            }
+            if let Some(max_items) = validation.max_items {
+                field["maxItems"] = serde_json::json!(max_items);
+            }
+            if validation.format.as_deref() == Some("url") {
+                field["format"] = serde_json::json!("uri");
+            }
+        }
+        properties.insert(input.id.clone(), field);
+    }
+    input_schema["properties"] = serde_json::Value::Object(properties);
+    serde_json::to_string_pretty(&schema)
+        .into_alien_error()
+        .context(ErrorData::JsonSerializationFailed {
+            reason: "failed to serialize Helm input values schema".to_string(),
+        })
 }
 
 fn helpers_tpl() -> String {
@@ -7772,6 +7841,65 @@ inputValues:
                         && mount["readOnly"].as_bool() == Some(true)
                 })
             }));
+    }
+
+    #[test]
+    fn helm_rejects_unknown_or_wrongly_typed_deployer_inputs() {
+        let stack = Stack::new("input-stack".to_string())
+            .inputs(vec![alien_core::StackInputDefinition {
+                id: "ingestUrl".to_string(),
+                kind: alien_core::StackInputKind::String,
+                provided_by: vec![alien_core::StackInputProvider::Deployer],
+                required: true,
+                label: "Ingest URL".to_string(),
+                description: "Ingest endpoint".to_string(),
+                placeholder: None,
+                default: None,
+                platforms: Some(vec![Platform::Kubernetes]),
+                validation: Some(alien_core::StackInputValidation {
+                    min_length: None,
+                    max_length: None,
+                    pattern: None,
+                    format: Some("url".to_string()),
+                    min: None,
+                    max: None,
+                    values: None,
+                    min_items: None,
+                    max_items: None,
+                }),
+                env: Vec::new(),
+            }])
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "input-stack".to_string(),
+            },
+        )
+        .expect("chart");
+        crate::test_utils::helm_lint(&chart.files).assert_ok("lint chart defaults");
+        let values = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: null\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\ninputValues:\n  ingestUrl: https://ingest.example.test\n";
+        crate::test_utils::helm_template(&chart.files, Some(values))
+            .assert_ok("valid input values");
+        for invalid in [
+            values.replace("ingestUrl: https://ingest.example.test", "ingestUrl: 42"),
+            values.replace(
+                "ingestUrl: https://ingest.example.test",
+                "ingestUrl: not-a-url",
+            ),
+            values.replace("ingestUrl:", "ingestUrll:"),
+        ] {
+            let rendered = crate::test_utils::helm_template(&chart.files, Some(&invalid));
+            assert!(!rendered.is_ok(), "Helm accepted invalid input values");
+            assert!(
+                rendered.stderr.contains("inputValues"),
+                "{}",
+                rendered.stderr
+            );
+        }
     }
 
     #[test]
