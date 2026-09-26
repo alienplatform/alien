@@ -324,8 +324,8 @@ pub async fn sign_send_json<T: DeserializeOwned + Send + 'static>(
 
 /// Sign the request and deserialize a JSON response into `T`, in a single attempt.
 ///
-/// A create is not idempotent, so it is sent once and callers retry at their level: a retried
-/// create would answer "already exists" to its own first attempt.
+/// For a create whose "already exists" answer is final: retrying that 400 only delays the caller,
+/// who decides what a conflict means.
 pub async fn sign_send_json_once<T: DeserializeOwned + Send + 'static>(
     builder: RequestBuilder,
     config: &AwsSignConfig,

@@ -137,8 +137,8 @@ pub fn cross_account_repository_policy(aws_access: &AwsCrossAccountAccess) -> Va
 }
 
 /// Names to describe for `repo_id`, the routable (prefixed) name first: `create_repository`
-/// creates it there, so the common lookup costs one describe. The logical name stays as a
-/// fallback for a repository created outside this binding.
+/// creates it there, so the common lookup costs one describe. The logical name is a fallback for
+/// a repository named without the prefix, which only a pull role wider than the prefix can read.
 fn repository_lookup_names(repository_prefix: &str, repo_id: &str) -> Vec<String> {
     if repository_prefix.is_empty() || repo_id.starts_with(&format!("{repository_prefix}-")) {
         vec![repo_id.to_string()]
@@ -542,6 +542,9 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                 })?,
         );
 
+        // When every name misses, answer with the routable name's error: a pull role scoped to
+        // the prefix gets 403 on the logical name, which would hide the in-scope 404.
+        let mut routable_miss = None;
         let last_lookup_index = lookup_names.len().saturating_sub(1);
         for (index, full_repo_name) in lookup_names.iter().enumerate() {
             let request = DescribeRepositoriesRequest::builder()
@@ -560,13 +563,14 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                         Some(repo_id.to_string()),
                     );
 
-                    if index < last_lookup_index
-                        && matches!(error.http_status_code, Some(403 | 404))
-                    {
-                        continue;
+                    if !matches!(error.http_status_code, Some(403 | 404)) {
+                        return Err(error);
                     }
-
-                    return Err(error);
+                    if index == last_lookup_index {
+                        return Err(routable_miss.unwrap_or(error));
+                    }
+                    routable_miss.get_or_insert(error);
+                    continue;
                 }
             };
 
