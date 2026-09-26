@@ -136,6 +136,20 @@ pub fn cross_account_repository_policy(aws_access: &AwsCrossAccountAccess) -> Va
     })
 }
 
+/// Names to describe for `repo_id`, the routable (prefixed) name first: `create_repository`
+/// creates it there, so the common lookup costs one describe. The logical name stays as a
+/// fallback for a repository created outside this binding.
+fn repository_lookup_names(repository_prefix: &str, repo_id: &str) -> Vec<String> {
+    if repository_prefix.is_empty() || repo_id.starts_with(&format!("{repository_prefix}-")) {
+        vec![repo_id.to_string()]
+    } else {
+        vec![
+            format!("{repository_prefix}-{repo_id}"),
+            repo_id.to_string(),
+        ]
+    }
+}
+
 impl EcrArtifactRegistry {
     /// Creates a new AWS ECR artifact registry binding from binding parameters.
     pub async fn new(
@@ -218,17 +232,6 @@ impl EcrArtifactRegistry {
             format!("{}-{}", self.repository_prefix, repo_name)
         } else {
             repo_name.to_string()
-        }
-    }
-
-    fn repository_lookup_names(&self, repo_id: &str) -> Vec<String> {
-        let is_prefixed = !self.repository_prefix.is_empty()
-            && repo_id.starts_with(&format!("{}-", self.repository_prefix));
-
-        if is_prefixed || self.repository_prefix.is_empty() {
-            vec![repo_id.to_string()]
-        } else {
-            vec![repo_id.to_string(), self.make_full_repo_name(repo_id)]
         }
     }
 
@@ -494,9 +497,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
     }
 
     async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse> {
-        // Prefer the routable name returned by `create_repository`, but also
-        // accept the logical repository name used by older callers.
-        let lookup_names = self.repository_lookup_names(repo_id);
+        let lookup_names = repository_lookup_names(&self.repository_prefix, repo_id);
 
         info!(
             repo_id = %repo_id,
@@ -1128,5 +1129,33 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             "ECR repository deleted successfully"
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lookup_tries_the_routable_name_before_the_logical_one() {
+        assert_eq!(
+            repository_lookup_names("alien-artifacts-prj_1", "sandbox"),
+            vec![
+                "alien-artifacts-prj_1-sandbox".to_string(),
+                "sandbox".to_string()
+            ],
+        );
+    }
+
+    #[test]
+    fn lookup_of_an_already_routable_name_is_a_single_describe() {
+        assert_eq!(
+            repository_lookup_names("alien-artifacts-prj_1", "alien-artifacts-prj_1-sandbox"),
+            vec!["alien-artifacts-prj_1-sandbox".to_string()],
+        );
+        assert_eq!(
+            repository_lookup_names("", "sandbox"),
+            vec!["sandbox".to_string()]
+        );
     }
 }
