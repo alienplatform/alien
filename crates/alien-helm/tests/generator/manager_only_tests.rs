@@ -316,7 +316,10 @@ fn manager_chart_uses_explicit_secrets_and_restricted_defaults() {
     assert!(values.contains("nodes:"));
 
     let secret = chart.files.get("templates/secret.yaml").expect("secret");
-    assert!(!secret.contains("randAlphaNum"));
+    assert!(secret.contains("sync-token: {{ .Values.management.token | quote }}"));
+    assert!(secret
+        .contains("runtime.encryption.key or runtime.encryption.existingSecret.name is required"));
+    assert!(secret.contains("$collectorToken = randAlphaNum 48"));
     assert!(secret.contains(".Values.management.existingSecret.name"));
     assert!(secret.contains(".Values.runtime.encryption.existingSecret.name"));
 

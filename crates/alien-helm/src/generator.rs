@@ -3614,6 +3614,8 @@ runtime:
 
 logCollector:
   enabled: false
+  # Sends selected workload Pod logs. Requires read-only node-log hostPath mounts;
+  # namespaces enforcing Baseline or Restricted Pod Security reject those mounts.
   # Generated on first install and retained on upgrade when empty.
   token: ""
   image:
@@ -6771,7 +6773,7 @@ stackSettings:
 
 fn readme_md(chart_name: &str) -> String {
     format!(
-        "# {chart_name}\n\nFrom this chart directory, set the required values and install into the chosen namespace (`default` shown here):\n\n```bash\nhelm install {chart_name} . --namespace default --values values.yaml\n```\n\nFor a managed package, use its generated install command and values. See `examples/<target>.yaml` for EKS, GKE, AKS, and on-premises values.\n"
+        "# {chart_name}\n\nFrom this chart directory, set the required values and install into the chosen namespace (`default` shown here):\n\n```bash\nhelm install {chart_name} . --namespace default --values values.yaml\n```\n\nFor a managed package, use its generated install command and values. See `examples/<target>.yaml` for EKS, GKE, AKS, and on-premises values.\n\nTo collect selected workload Pod logs, set `logCollector.enabled: true` in values.yaml. The collector mounts node log directories read-only; namespaces enforcing Baseline or Restricted Pod Security reject those mounts. When `logCollector.token` is empty, Helm generates a per-installation token and retains it across upgrades.\n"
     )
 }
 
