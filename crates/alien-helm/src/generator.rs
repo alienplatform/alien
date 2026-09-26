@@ -5954,6 +5954,13 @@ subjects:
 
 fn whitelabeled_log_collector_configmap_tpl() -> String {
     r#"{{- if .Values.logCollector.enabled }}
+{{- $podLabelKey := .Values.logCollector.scope.podLabelKey -}}
+{{- $podLabelValue := .Values.logCollector.scope.podLabelValue -}}
+{{- if ne (empty $podLabelKey) (empty $podLabelValue) -}}
+  {{- fail "logCollector.scope.podLabelKey and podLabelValue must be set together" -}}
+{{- end -}}
+{{- $logLabelKey := default .Values.logCollector.scope.deploymentLabelKey $podLabelKey -}}
+{{- $logLabelValue := default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -5998,13 +6005,6 @@ data:
         Match               kube.*
         Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$
 
-    {{- $podLabelKey := .Values.logCollector.scope.podLabelKey -}}
-    {{- $podLabelValue := .Values.logCollector.scope.podLabelValue -}}
-    {{- if ne (empty $podLabelKey) (empty $podLabelValue) -}}
-      {{- fail "logCollector.scope.podLabelKey and podLabelValue must be set together" -}}
-    {{- end -}}
-    {{- $logLabelKey := default .Values.logCollector.scope.deploymentLabelKey $podLabelKey -}}
-    {{- $logLabelValue := default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
     [FILTER]
         Name                grep
         Match               kube.*
@@ -8888,6 +8888,26 @@ logCollector:
         assert!(rendered
             .stdout
             .contains("app.kubernetes.io/component: log-collector"));
+        let documents = parse_manifest_docs(&rendered.stdout);
+        let collector_config = docs_by_kind(&documents, "ConfigMap")
+            .into_iter()
+            .find(|document| {
+                document["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("-logs"))
+            })
+            .expect("collector ConfigMap");
+        let fluent_bit_config = collector_config["data"]["collector.conf"]
+            .as_str()
+            .expect("Fluent Bit configuration");
+        assert_eq!(
+            fluent_bit_config
+                .lines()
+                .filter(|line| line.trim() == "[FILTER]")
+                .count(),
+            3,
+            "collector filters must each start on their own line"
+        );
         assert!(rendered.stdout.contains("COLLECTOR_TOKEN_FILE"));
         assert!(rendered
             .stdout

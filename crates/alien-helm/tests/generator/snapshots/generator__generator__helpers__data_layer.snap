@@ -1332,6 +1332,13 @@ subjects:
 
 === templates/whitelabeled-log-collector-configmap.yaml ===
 {{- if .Values.logCollector.enabled }}
+{{- $podLabelKey := .Values.logCollector.scope.podLabelKey -}}
+{{- $podLabelValue := .Values.logCollector.scope.podLabelValue -}}
+{{- if ne (empty $podLabelKey) (empty $podLabelValue) -}}
+  {{- fail "logCollector.scope.podLabelKey and podLabelValue must be set together" -}}
+{{- end -}}
+{{- $logLabelKey := default .Values.logCollector.scope.deploymentLabelKey $podLabelKey -}}
+{{- $logLabelValue := default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -1376,13 +1383,6 @@ data:
         Match               kube.*
         Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$
 
-    {{- $podLabelKey := .Values.logCollector.scope.podLabelKey -}}
-    {{- $podLabelValue := .Values.logCollector.scope.podLabelValue -}}
-    {{- if ne (empty $podLabelKey) (empty $podLabelValue) -}}
-      {{- fail "logCollector.scope.podLabelKey and podLabelValue must be set together" -}}
-    {{- end -}}
-    {{- $logLabelKey := default .Values.logCollector.scope.deploymentLabelKey $podLabelKey -}}
-    {{- $logLabelValue := default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
     [FILTER]
         Name                grep
         Match               kube.*
