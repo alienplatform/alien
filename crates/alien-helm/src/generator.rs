@@ -4699,10 +4699,6 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             input
                 .provided_by
                 .contains(&alien_core::StackInputProvider::Deployer)
-                && input
-                    .platforms
-                    .as_ref()
-                    .is_none_or(|platforms| platforms.contains(&Platform::Kubernetes))
         })
         .collect::<Vec<_>>();
     if deployer_inputs.is_empty() {
@@ -4748,6 +4744,24 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             }
             if let Some(max_items) = validation.max_items {
                 field["maxItems"] = serde_json::json!(max_items);
+            }
+            if matches!(input.kind, StackInputKind::Number | StackInputKind::Integer) {
+                for (bound, key) in [
+                    (validation.min.as_deref(), "minimum"),
+                    (validation.max.as_deref(), "maximum"),
+                ] {
+                    if let Some(bound) = bound {
+                        field[key] =
+                            serde_json::Value::Number(bound.parse().into_alien_error().context(
+                                ErrorData::JsonSerializationFailed {
+                                    reason: format!(
+                                        "invalid numeric bound for input '{}'",
+                                        input.id
+                                    ),
+                                },
+                            )?);
+                    }
+                }
             }
             if validation.format.as_deref() == Some("url") {
                 field["format"] = serde_json::json!("uri");
