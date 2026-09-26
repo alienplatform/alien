@@ -1,5 +1,5 @@
 use crate::error::{ErrorData, Result};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::AlienError;
 use dockdash::PushOptions;
 use oci_client::client::{Client as OciClient, ClientConfig as OciClientConfig};
 use oci_client::errors::{OciDistributionError, OciErrorCode};
@@ -26,12 +26,7 @@ pub async fn manifest_digest(image: &str, options: &PushOptions) -> Result<Optio
     {
         Ok(digest) => Ok(Some(digest)),
         Err(error) if is_missing_manifest(&error) => Ok(None),
-        Err(error) => Err(error)
-            .into_alien_error()
-            .context(ErrorData::ImageLookupFailed {
-                image: image.to_string(),
-                reason: "The registry did not answer the manifest lookup".to_string(),
-            }),
+        Err(error) => Err(lookup_error(image, &error)),
     }
 }
 
@@ -45,11 +40,7 @@ pub async fn tag_manifest(source: &str, target: &str, options: &PushOptions) -> 
     let (manifest, digest) = client
         .pull_manifest_raw(&source_reference, &options.auth, &MANIFEST_MEDIA_TYPES)
         .await
-        .into_alien_error()
-        .context(ErrorData::ImageLookupFailed {
-            image: source.to_string(),
-            reason: "Failed to read the pushed manifest".to_string(),
-        })?;
+        .map_err(|error| lookup_error(source, &error))?;
     let media_type = crate::manifest_media_type(&manifest).unwrap_or_else(|| {
         if has_manifests_field(&manifest) {
             OCI_IMAGE_INDEX_MEDIA_TYPE.to_string()
@@ -57,14 +48,12 @@ pub async fn tag_manifest(source: &str, target: &str, options: &PushOptions) -> 
             OCI_IMAGE_MEDIA_TYPE.to_string()
         }
     });
-    let content_type =
-        media_type
-            .parse()
-            .into_alien_error()
-            .context(ErrorData::ImagePushFailed {
-                image: target.to_string(),
-                reason: format!("Manifest media type '{media_type}' is not a valid header"),
-            })?;
+    let content_type = media_type.parse().map_err(|_| {
+        AlienError::new(ErrorData::ImagePushRejected {
+            image: target.to_string(),
+            reason: format!("Manifest media type '{media_type}' is not a valid header"),
+        })
+    })?;
 
     client
         .store_auth_if_needed(target_reference.resolve_registry(), &options.auth)
@@ -72,12 +61,73 @@ pub async fn tag_manifest(source: &str, target: &str, options: &PushOptions) -> 
     client
         .push_manifest_raw(&target_reference, manifest, content_type)
         .await
-        .into_alien_error()
-        .context(ErrorData::ImagePushFailed {
-            image: target.to_string(),
-            reason: "Failed to tag the pushed manifest".to_string(),
+        .map_err(|error| match registry_failure(&error) {
+            RegistryFailure::Transient(reason) => AlienError::new(ErrorData::ImagePushFailed {
+                image: target.to_string(),
+                reason,
+            }),
+            RegistryFailure::Rejected(reason) => AlienError::new(ErrorData::ImagePushRejected {
+                image: target.to_string(),
+                reason,
+            }),
         })?;
     Ok(digest)
+}
+
+fn lookup_error(image: &str, error: &OciDistributionError) -> AlienError<ErrorData> {
+    match registry_failure(error) {
+        RegistryFailure::Transient(reason) => AlienError::new(ErrorData::ImageLookupFailed {
+            image: image.to_string(),
+            reason,
+        }),
+        RegistryFailure::Rejected(reason) => AlienError::new(ErrorData::ImageLookupRejected {
+            image: image.to_string(),
+            reason,
+        }),
+    }
+}
+
+enum RegistryFailure {
+    Transient(String),
+    Rejected(String),
+}
+
+/// Registry errors can carry signed URLs, so the source error is never attached or formatted:
+/// only its status and error codes reach the reason.
+fn registry_failure(error: &OciDistributionError) -> RegistryFailure {
+    match error {
+        OciDistributionError::RequestError(_) => {
+            RegistryFailure::Transient("The registry connection failed".to_string())
+        }
+        OciDistributionError::ServerError { code, .. } if *code >= 500 || *code == 429 => {
+            RegistryFailure::Transient(format!("Registry returned HTTP {code}"))
+        }
+        OciDistributionError::ServerError { code, .. } => {
+            RegistryFailure::Rejected(format!("Registry returned HTTP {code}"))
+        }
+        OciDistributionError::UnauthorizedError { .. }
+        | OciDistributionError::AuthenticationFailure(_) => {
+            RegistryFailure::Rejected("Registry authentication failed".to_string())
+        }
+        OciDistributionError::RegistryError { envelope, .. } => {
+            let codes = envelope
+                .errors
+                .iter()
+                .map(|error| format!("{:?}", error.code))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if envelope
+                .errors
+                .iter()
+                .any(|error| error.code == OciErrorCode::Toomanyrequests)
+            {
+                RegistryFailure::Transient(format!("Registry answered {codes}"))
+            } else {
+                RegistryFailure::Rejected(format!("Registry answered {codes}"))
+            }
+        }
+        _ => RegistryFailure::Rejected("The registry answer was not usable".to_string()),
+    }
 }
 
 fn client(options: &PushOptions) -> OciClient {
@@ -239,6 +289,27 @@ mod tests {
         )
         .await
         .expect_err("a refused credential must not read as a missing image");
+        assert_eq!(error.code, "IMAGE_LOOKUP_REJECTED");
+        assert!(!error.retryable);
+    }
+
+    #[tokio::test]
+    async fn an_unavailable_registry_is_a_retryable_lookup_failure() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.path("/v2/acme/sandbox/manifests/source-abc");
+                then.status(503).body("unavailable");
+            })
+            .await;
+
+        let error = manifest_digest(
+            &format!("{}/acme/sandbox:source-abc", server.address()),
+            &options(),
+        )
+        .await
+        .expect_err("an unavailable registry is not an answer");
         assert_eq!(error.code, "IMAGE_LOOKUP_FAILED");
+        assert!(error.retryable);
     }
 }
