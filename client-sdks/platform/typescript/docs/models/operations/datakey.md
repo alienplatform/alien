@@ -12,8 +12,8 @@ let value: DataKey = {
       keyOperations: [],
       keyType: "<value>",
       status: {
-        health: "unhealthy",
-        lifecycle: "deleting",
+        health: "unknown",
+        lifecycle: "running",
       },
     },
     provider: "azure-key-vault",

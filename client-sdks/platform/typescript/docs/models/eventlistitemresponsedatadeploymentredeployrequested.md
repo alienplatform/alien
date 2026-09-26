@@ -14,8 +14,9 @@ let value: EventListItemResponseDataDeploymentRedeployRequested = {
 
 ## Fields
 
-| Field                              | Type                               | Required                           | Description                        |
-| ---------------------------------- | ---------------------------------- | ---------------------------------- | ---------------------------------- |
-| `deploymentId`                     | *string*                           | :heavy_check_mark:                 | ID of the deployment               |
-| `releaseId`                        | *string*                           | :heavy_check_mark:                 | ID of the release being redeployed |
-| `type`                             | *"DeploymentRedeployRequested"*    | :heavy_check_mark:                 | N/A                                |
+| Field                                     | Type                                      | Required                                  | Description                               |
+| ----------------------------------------- | ----------------------------------------- | ----------------------------------------- | ----------------------------------------- |
+| `actor`                                   | *models.EventListItemResponseActorUnion4* | :heavy_minus_sign:                        | N/A                                       |
+| `deploymentId`                            | *string*                                  | :heavy_check_mark:                        | ID of the deployment                      |
+| `releaseId`                               | *string*                                  | :heavy_check_mark:                        | ID of the release being redeployed        |
+| `type`                                    | *"DeploymentRedeployRequested"*           | :heavy_check_mark:                        | N/A                                       |

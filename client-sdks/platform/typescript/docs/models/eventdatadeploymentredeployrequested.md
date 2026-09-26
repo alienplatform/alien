@@ -16,6 +16,7 @@ let value: EventDataDeploymentRedeployRequested = {
 
 | Field                              | Type                               | Required                           | Description                        |
 | ---------------------------------- | ---------------------------------- | ---------------------------------- | ---------------------------------- |
+| `actor`                            | *models.EventActorUnion4*          | :heavy_minus_sign:                 | N/A                                |
 | `deploymentId`                     | *string*                           | :heavy_check_mark:                 | ID of the deployment               |
 | `releaseId`                        | *string*                           | :heavy_check_mark:                 | ID of the release being redeployed |
 | `type`                             | *"DeploymentRedeployRequested"*    | :heavy_check_mark:                 | N/A                                |

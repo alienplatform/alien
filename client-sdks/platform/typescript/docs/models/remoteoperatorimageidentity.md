@@ -1,6 +1,6 @@
 # RemoteOperatorImageIdentity
 
-Exact immutable image identity reported by a running Remote Operator.
+Immutable installer receipt self-reported by a running Remote Operator. This is not independent runtime image inspection.
 
 ## Example Usage
 

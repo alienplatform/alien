@@ -11,8 +11,8 @@ let value: DataAzureKeyVault2 = {
     keyOperations: [],
     keyType: "<value>",
     status: {
-      health: "unhealthy",
-      lifecycle: "deleting",
+      health: "unknown",
+      lifecycle: "running",
     },
   },
   provider: "azure-key-vault",
@@ -21,7 +21,7 @@ let value: DataAzureKeyVault2 = {
 
 ## Fields
 
-| Field                                                | Type                                                 | Required                                             | Description                                          |
-| ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
-| `data`                                               | [operations.Data8](../../models/operations/data8.md) | :heavy_check_mark:                                   | N/A                                                  |
-| `provider`                                           | *"azure-key-vault"*                                  | :heavy_check_mark:                                   | N/A                                                  |
+| Field                                                                                                      | Type                                                                                                       | Required                                                                                                   | Description                                                                                                |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `data`                                                                                                     | [operations.GetResourceDeploymentDetailData8](../../models/operations/getresourcedeploymentdetaildata8.md) | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
+| `provider`                                                                                                 | *"azure-key-vault"*                                                                                        | :heavy_check_mark:                                                                                         | N/A                                                                                                        |

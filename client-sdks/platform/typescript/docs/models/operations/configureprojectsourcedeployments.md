@@ -6,7 +6,7 @@
 import { ConfigureProjectSourceDeployments } from "@alienplatform/platform-api/models/operations";
 
 let value: ConfigureProjectSourceDeployments = {
-  enabled: false,
+  enabled: true,
 };
 ```
 
@@ -14,5 +14,5 @@ let value: ConfigureProjectSourceDeployments = {
 
 | Field                                                                                                | Type                                                                                                 | Required                                                                                             | Description                                                                                          |
 | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `enabled`                                                                                            | *boolean*                                                                                            | :heavy_check_mark:                                                                                   | N/A                                                                                                  |
+| `enabled`                                                                                            | *true*                                                                                               | :heavy_check_mark:                                                                                   | N/A                                                                                                  |
 | `methods`                                                                                            | [operations.ConfigureProjectSourceMethod](../../models/operations/configureprojectsourcemethod.md)[] | :heavy_minus_sign:                                                                                   | N/A                                                                                                  |

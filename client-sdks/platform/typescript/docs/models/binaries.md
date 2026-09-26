@@ -18,3 +18,4 @@ const value: models.PublishOperationsPluginRequestBinaries2 = {
   arm64: "<value>",
 };
 ```
+

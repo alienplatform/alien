@@ -22,4 +22,4 @@ let value: PutExternalAIBindingRequestDatabricks = {
 | `workspaceUrl`                     | *string*                           | :heavy_check_mark:                 | N/A                                |
 | `clientId`                         | *string*                           | :heavy_check_mark:                 | N/A                                |
 | `clientSecret`                     | *string*                           | :heavy_check_mark:                 | N/A                                |
-| `acknowledgeAlienCredentialAccess` | *boolean*                          | :heavy_check_mark:                 | N/A                                |
+| `acknowledgeAlienCredentialAccess` | *true*                             | :heavy_check_mark:                 | N/A                                |

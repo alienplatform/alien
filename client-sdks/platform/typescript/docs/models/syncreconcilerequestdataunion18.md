@@ -1,8 +1,8 @@
 # SyncReconcileRequestDataUnion18
 
-Content-free telemetry about what a sandbox resource is running.
+Content-free telemetry about a sandbox's sessions.
 
-Never anything from inside a sandbox. A controller reaches only the cloud's management APIs,
+Never anything from inside a session. A controller reaches only the cloud's management APIs,
 and the whole point of the resource is that the control plane cannot see what runs in it.
 
 

@@ -18,3 +18,4 @@ const value: models.PublishOperationsPluginRequestPermission = {
   platforms: {},
 };
 ```
+

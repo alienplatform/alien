@@ -22,10 +22,10 @@ const value: models.ProjectGcpOAuthProviderAlienManaged = {
 const value: models.ProjectGcpOAuthProviderCustom = {
   mode: "custom",
   clientId: "1234567890-abc123.apps.googleusercontent.com",
-  hasClientSecret: false,
+  hasClientSecret: true,
   redirectUris: [
-    "https://rowdy-catalyst.biz/",
-    "https://inborn-gymnast.name/",
+    "https://idolized-populist.com",
+    "https://dependent-hammock.info/",
   ],
 };
 ```

@@ -13,5 +13,5 @@ let value: DeploymentRole = "deployment.telemetry-writer";
 ## Values
 
 ```typescript
-"deployment.viewer" | "deployment.manager" | "deployment.telemetry-writer"
+"deployment.viewer" | "deployment.manager" | "deployment.dynamic-container-manager" | "deployment.telemetry-writer"
 ```

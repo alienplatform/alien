@@ -23,3 +23,4 @@ const value: models.ComputePoolSelectionAutoscale = {
   mode: "autoscale",
 };
 ```
+
