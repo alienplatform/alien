@@ -285,12 +285,18 @@ fn otlp_request(records: Vec<CollectorLogRecord>, deployment_id: &str) -> Export
                         attributes.push(kv("log.file.path", filename));
                     }
 
+                    let original_body = record.body.clone();
+                    let readable_body = structured_log_message(&original_body);
+                    if readable_body.is_some() {
+                        attributes.push(kv("log.record.original", &original_body));
+                    }
+
                     LogRecord {
                         time_unix_nano: record.timestamp_unix_nanos,
                         observed_time_unix_nano: record.timestamp_unix_nanos,
                         severity_number,
                         severity_text: severity_text.to_string(),
-                        body: Some(string_value(record.body)),
+                        body: Some(string_value(readable_body.unwrap_or(original_body))),
                         attributes,
                         dropped_attributes_count: 0,
                         flags: 0,
@@ -340,6 +346,24 @@ fn collector_log_severity(record: &CollectorLogRecord) -> (&'static str, i32) {
     } else {
         ("INFO", SeverityNumber::Info as i32)
     }
+}
+
+// Common structured stdout records (for example Go slog and Pino) carry a
+// readable `msg` alongside a timestamp and level. Keep the full line as an
+// attribute so the dashboard can show the message without losing context.
+fn structured_log_message(body: &str) -> Option<String> {
+    let Value::Object(record) = serde_json::from_str::<Value>(body).ok()? else {
+        return None;
+    };
+    let has_timestamp = record.get("time").is_some_and(|value| match value {
+        Value::String(text) => DateTime::parse_from_rfc3339(text).is_ok(),
+        Value::Number(number) => number.as_f64().is_some_and(|value| value >= 0.0),
+        _ => false,
+    });
+    if !has_timestamp || parse_application_log_level(body).is_none() {
+        return None;
+    }
+    record.get("msg")?.as_str().map(ToOwned::to_owned)
 }
 
 fn kv(key: &str, value: &str) -> KeyValue {
@@ -515,6 +539,45 @@ mod tests {
             record.body.as_ref().and_then(|body| body.value.as_ref()),
             Some(&any_value::Value::StringValue(application_log.to_string()))
         );
+    }
+
+    #[test]
+    fn collector_preserves_structured_stdout_and_exposes_its_message() {
+        let application_log = r#"{"time":"2026-09-26T12:12:02Z","level":"INFO","msg":"discovered cluster","uid":"cluster-1"}"#;
+        let body = serde_json::to_vec(&serde_json::json!({
+            "filename": "/var/log/containers/agent-abc_demo_agent-123.log",
+            "stream": "stdout",
+            "log": application_log,
+        }))
+        .unwrap();
+
+        let (_, encoded) =
+            collector_records_to_otlp(&body, "demo", "dep_test").expect("body should convert");
+        let request =
+            ExportLogsServiceRequest::decode(encoded.as_slice()).expect("OTLP should decode");
+        let record = &request.resource_logs[0].scope_logs[0].log_records[0];
+
+        assert_eq!(record.severity_text, "INFO");
+        assert_eq!(
+            record.body.as_ref().and_then(|body| body.value.as_ref()),
+            Some(&any_value::Value::StringValue(
+                "discovered cluster".to_string()
+            ))
+        );
+        assert!(record.attributes.iter().any(|attribute| {
+            attribute.key == "log.record.original"
+                && attribute
+                    .value
+                    .as_ref()
+                    .and_then(|value| value.value.as_ref())
+                    == Some(&any_value::Value::StringValue(application_log.to_string()))
+        }));
+    }
+
+    #[test]
+    fn collector_leaves_unrecognized_json_body_untouched() {
+        let application_log = r#"{"status":200,"msg":"ready"}"#;
+        assert_eq!(structured_log_message(application_log), None);
     }
 
     #[test]
