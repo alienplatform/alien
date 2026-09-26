@@ -314,7 +314,11 @@ async fn enrich_config(
     // Installation-provided bindings take precedence over manager-provided ones.
     if let Some(ref stack_settings) = operator_config.stack_settings {
         if let Some(ref bindings) = stack_settings.external_bindings {
-            config.external_bindings = bindings.clone();
+            for (resource_id, binding) in &bindings.0 {
+                config
+                    .external_bindings
+                    .insert(resource_id.clone(), binding.clone());
+            }
         }
         config.stack_settings = stack_settings.clone();
     }
@@ -536,6 +540,49 @@ mod tests {
         .unwrap();
 
         assert_eq!(enriched.external_bindings, bindings);
+    }
+
+    #[tokio::test]
+    async fn enrich_config_preserves_manager_bindings_not_overridden_by_installation() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = OperatorDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
+            .await
+            .unwrap();
+        let mut manager_bindings = ExternalBindings::new();
+        manager_bindings.insert(
+            "manager-only",
+            ExternalBinding::Storage(StorageBinding::s3("manager-bucket")),
+        );
+        manager_bindings.insert(
+            "shared",
+            ExternalBinding::Storage(StorageBinding::s3("old-bucket")),
+        );
+        let mut installation_bindings = ExternalBindings::new();
+        installation_bindings.insert(
+            "shared",
+            ExternalBinding::Storage(StorageBinding::s3("new-bucket")),
+        );
+        let operator_config = OperatorConfig::builder()
+            .platform(Platform::Kubernetes)
+            .stack_settings(StackSettings {
+                external_bindings: Some(installation_bindings.clone()),
+                ..StackSettings::default()
+            })
+            .encryption_key(encryption_key)
+            .build();
+        let mut config = test_deployment_config();
+        config.external_bindings = manager_bindings;
+
+        let enriched = enrich_config(config, &operator_config, Platform::Kubernetes, &db, None)
+            .await
+            .unwrap();
+
+        assert!(enriched.external_bindings.has("manager-only"));
+        assert_eq!(
+            enriched.external_bindings.get("shared"),
+            installation_bindings.get("shared")
+        );
     }
 
     #[tokio::test]

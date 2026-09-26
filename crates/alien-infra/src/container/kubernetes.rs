@@ -47,6 +47,23 @@ use crate::core::applicable_secret_environment_variables;
 // workload heartbeats and events.
 const KUBERNETES_WORKLOAD_READY_MAX_POLLS: u32 = 360; // 360 * 5s = 30 minutes
 
+fn workload_ready(
+    desired_replicas: i32,
+    ready_replicas: Option<i32>,
+    replicas: Option<i32>,
+    observed_generation: Option<i64>,
+    generation: Option<i64>,
+) -> bool {
+    if desired_replicas == 0 {
+        // Kubernetes omits zero replica counters. Wait for the controller to
+        // observe this generation before accepting the scaled-down workload.
+        return observed_generation.is_some_and(|observed| observed >= generation.unwrap_or(1))
+            && ready_replicas.unwrap_or(0) == 0
+            && replicas.unwrap_or(0) == 0;
+    }
+    matches!((ready_replicas, replicas), (Some(ready), Some(total)) if total > 0 && ready >= desired_replicas.min(total))
+}
+
 async fn create_registry_pull_secret(
     secrets_client: &std::sync::Arc<dyn alien_k8s_clients::SecretsApi>,
     namespace: &str,
@@ -442,16 +459,21 @@ impl KubernetesContainerController {
             .await?;
 
         // Check workload status (different API for Deployment vs StatefulSet)
-        let (ready_replicas, replicas) = if self.is_stateful {
+        let (ready_replicas, replicas, observed_generation, generation) = if self.is_stateful {
             match deployment_client
                 .get_statefulset(namespace, workload_name)
                 .await
             {
                 Ok(statefulset) => {
                     if let Some(status) = &statefulset.status {
-                        (status.ready_replicas, Some(status.replicas))
+                        (
+                            status.ready_replicas,
+                            Some(status.replicas),
+                            status.observed_generation,
+                            statefulset.metadata.generation,
+                        )
                     } else {
-                        (None, None)
+                        (None, None, None, None)
                     }
                 }
                 Err(e)
@@ -461,7 +483,7 @@ impl KubernetesContainerController {
                     ) =>
                 {
                     debug!(workload_name=%workload_name, "StatefulSet not yet available, continuing to wait");
-                    (None, None)
+                    (None, None, None, None)
                 }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
@@ -477,9 +499,14 @@ impl KubernetesContainerController {
             {
                 Ok(deployment) => {
                     if let Some(status) = &deployment.status {
-                        (status.ready_replicas, status.replicas)
+                        (
+                            status.ready_replicas,
+                            status.replicas,
+                            status.observed_generation,
+                            deployment.metadata.generation,
+                        )
                     } else {
-                        (None, None)
+                        (None, None, None, None)
                     }
                 }
                 Err(e)
@@ -489,7 +516,7 @@ impl KubernetesContainerController {
                     ) =>
                 {
                     debug!(workload_name=%workload_name, "Deployment not yet available, continuing to wait");
-                    (None, None)
+                    (None, None, None, None)
                 }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
@@ -501,24 +528,26 @@ impl KubernetesContainerController {
         };
 
         // Check if ready
-        if let (Some(ready_replicas), Some(replicas)) = (ready_replicas, replicas) {
-            let desired_replicas = config.replicas.unwrap_or(1) as i32;
-            if ready_replicas >= desired_replicas.min(replicas) && replicas > 0 {
-                let workload_type = if self.is_stateful {
-                    "StatefulSet"
-                } else {
-                    "Deployment"
-                };
-                info!(workload_name=%workload_name, namespace=%namespace, workload_type=%workload_type, "Container workload is ready");
-
-                return Ok(HandlerAction::Continue {
-                    state: ReconcilePublicEndpoint,
-                    suggested_delay: None,
-                });
+        if workload_ready(
+            config.replicas.unwrap_or(1) as i32,
+            ready_replicas,
+            replicas,
+            observed_generation,
+            generation,
+        ) {
+            let workload_type = if self.is_stateful {
+                "StatefulSet"
             } else {
-                debug!(workload_name=%workload_name, ready=%ready_replicas, total=%replicas, "Container workload not yet ready");
-            }
+                "Deployment"
+            };
+            info!(workload_name=%workload_name, namespace=%namespace, workload_type=%workload_type, "Container workload is ready");
+
+            return Ok(HandlerAction::Continue {
+                state: ReconcilePublicEndpoint,
+                suggested_delay: None,
+            });
         }
+        debug!(workload_name=%workload_name, ready=?ready_replicas, total=?replicas, "Container workload not yet ready");
 
         Ok(HandlerAction::Stay {
             max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
@@ -1047,16 +1076,21 @@ impl KubernetesContainerController {
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
 
-        let (ready_replicas, replicas) = if self.is_stateful {
+        let (ready_replicas, replicas, observed_generation, generation) = if self.is_stateful {
             match deployment_client
                 .get_statefulset(namespace, workload_name)
                 .await
             {
                 Ok(statefulset) => {
                     if let Some(status) = &statefulset.status {
-                        (status.ready_replicas, Some(status.replicas))
+                        (
+                            status.ready_replicas,
+                            Some(status.replicas),
+                            status.observed_generation,
+                            statefulset.metadata.generation,
+                        )
                     } else {
-                        (None, None)
+                        (None, None, None, None)
                     }
                 }
                 Err(e) => {
@@ -1076,9 +1110,14 @@ impl KubernetesContainerController {
             {
                 Ok(deployment) => {
                     if let Some(status) = &deployment.status {
-                        (status.ready_replicas, status.replicas)
+                        (
+                            status.ready_replicas,
+                            status.replicas,
+                            status.observed_generation,
+                            deployment.metadata.generation,
+                        )
                     } else {
-                        (None, None)
+                        (None, None, None, None)
                     }
                 }
                 Err(e) => {
@@ -1093,23 +1132,25 @@ impl KubernetesContainerController {
             }
         };
 
-        if let (Some(ready_replicas), Some(replicas)) = (ready_replicas, replicas) {
-            let desired_replicas = config.replicas.unwrap_or(1) as i32;
-            if ready_replicas >= desired_replicas.min(replicas) && replicas > 0 {
-                let workload_type = if self.is_stateful {
-                    "StatefulSet"
-                } else {
-                    "Deployment"
-                };
-                info!(workload_name=%workload_name, workload_type=%workload_type, "Container workload rollout complete");
-                return Ok(HandlerAction::Continue {
-                    state: ReconcilePublicEndpointAfterUpdate,
-                    suggested_delay: None,
-                });
+        if workload_ready(
+            config.replicas.unwrap_or(1) as i32,
+            ready_replicas,
+            replicas,
+            observed_generation,
+            generation,
+        ) {
+            let workload_type = if self.is_stateful {
+                "StatefulSet"
             } else {
-                debug!(workload_name=%workload_name, ready=%ready_replicas, total=%replicas, "Container workload rollout in progress");
-            }
+                "Deployment"
+            };
+            info!(workload_name=%workload_name, workload_type=%workload_type, "Container workload rollout complete");
+            return Ok(HandlerAction::Continue {
+                state: ReconcilePublicEndpointAfterUpdate,
+                suggested_delay: None,
+            });
         }
+        debug!(workload_name=%workload_name, ready=?ready_replicas, total=?replicas, "Container workload rollout in progress");
 
         Ok(HandlerAction::Stay {
             max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
@@ -2300,6 +2341,15 @@ impl KubernetesContainerController {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_replica_workload_waits_for_the_controller_to_observe_its_generation() {
+        assert!(!workload_ready(0, None, None, None, Some(1)));
+        assert!(!workload_ready(0, None, None, Some(1), Some(2)));
+        assert!(!workload_ready(0, Some(1), Some(1), Some(2), Some(2)));
+        assert!(workload_ready(0, None, None, Some(2), Some(2)));
+        assert!(workload_ready(1, Some(1), Some(1), Some(2), Some(2)));
+    }
 
     #[test]
     fn test_kubernetes_container_name() {

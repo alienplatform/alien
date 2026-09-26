@@ -300,7 +300,6 @@ fn generate_helm_chart_internal(
         runtime_cleanup_history_prune_tpl(),
     );
     files.insert("templates/cleanup-job.yaml".to_string(), cleanup_job_tpl());
-    files.insert("templates/app-service.yaml".to_string(), app_service_tpl());
     files.insert(
         "templates/cluster-bootstrap.yaml".to_string(),
         cluster_bootstrap_tpl(),
@@ -5581,6 +5580,7 @@ spec:
   # The operator holds an exclusive lock on its persistent state directory.
   strategy:
     type: Recreate
+    rollingUpdate: null
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "deployment.name" . }}
@@ -6107,31 +6107,6 @@ spec:
   egress:
     - {}
   {{- end }}
-{{- end }}
-"#
-    .to_string()
-}
-
-fn app_service_tpl() -> String {
-    r#"{{- range $id, $service := .Values.services }}
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "deployment.resourceName" (dict "root" $ "name" $id) }}
-  labels:
-    {{- include "deployment.labels" $ | nindent 4 }}
-    resource-id: {{ $id | quote }}
-spec:
-  type: {{ if eq $service.type "loadBalancer" }}LoadBalancer{{ else }}ClusterIP{{ end }}
-  selector:
-    app: {{ include "deployment.resourceName" (dict "root" $ "name" $id) }}
-    managed-by: runtime
-    component: {{ $service.component | quote }}
-  ports:
-    - name: http
-      port: {{ default 80 $service.port }}
-      targetPort: {{ default 8080 $service.targetPort }}
----
 {{- end }}
 "#
     .to_string()
