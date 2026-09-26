@@ -101,7 +101,13 @@ fn desired_deployment(
                 .collect(),
         ),
         readiness_probe: probe.clone(),
-        liveness_probe: probe,
+        liveness_probe: probe.clone(),
+        // Images may prepare an app before opening its port. Kubernetes must
+        // wait for that first healthy response before liveness can restart it.
+        startup_probe: probe.map(|mut startup| {
+            startup.failure_threshold = Some(90);
+            startup
+        }),
         resources: Some(ResourceRequirements {
             requests: Some(BTreeMap::from([
                 ("cpu".to_string(), cpu.clone()),
@@ -260,6 +266,7 @@ fn deployment_matches(current: &Deployment, desired: &Deployment) -> bool {
         && current_app.security_context == desired_app.security_context
         && current_app.readiness_probe == desired_app.readiness_probe
         && current_app.liveness_probe == desired_app.liveness_probe
+        && current_app.startup_probe == desired_app.startup_probe
         && current_app.volume_mounts == desired_app.volume_mounts
         && current_pod.volumes == desired_pod.volumes
         && current_pod.automount_service_account_token == Some(false)
