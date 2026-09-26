@@ -306,6 +306,37 @@ async fn two_independent_containers_update_and_delete() {
             .unwrap()
             .ends_with("-registry")
     }));
+    // A rejected Service update must leave the old workload's pull credential
+    // intact. This models a failure before the Deployment can change image.
+    let mut rejected = rotated.clone();
+    rejected.image = "external.example/other:latest".to_string();
+    rejected.ports = vec![0];
+    let failed = reconcile(
+        &client,
+        &namespace,
+        deployment_id,
+        &[rejected, second.clone()],
+        Some(("docker.io", "synthetic-test-token")),
+    )
+    .await
+    .expect("report rejected Service update");
+    assert_eq!(failed[0].status, DynamicContainerStatus::Failing);
+    let secrets_after_failure = client
+        .list_secrets(
+            &namespace,
+            Some(format!("alien.dev/dynamic-deployment={deployment_id}")),
+            None,
+        )
+        .await
+        .expect("registry Secret after failed update");
+    assert!(secrets_after_failure.items.iter().any(|secret| {
+        secret
+            .metadata
+            .name
+            .as_deref()
+            .unwrap()
+            .ends_with("-registry")
+    }));
     until_running(&client, &namespace, deployment_id, &[rotated, second]).await;
     let registry_secrets = client
         .list_secrets(

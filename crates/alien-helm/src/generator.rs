@@ -6745,6 +6745,8 @@ mod tests {
                 "ServiceAccount",
                 "Role",
                 "RoleBinding",
+                "Role",
+                "RoleBinding",
                 "Secret",
                 "PersistentVolumeClaim",
                 "Deployment"
@@ -7237,12 +7239,12 @@ mod tests {
             None
         );
 
-        // Namespace scope grants a namespaced Role, no cluster-wide RBAC.
-        assert_eq!(docs_by_kind(&docs, "Role").len(), 1);
+        // Namespace scope grants inventory and dynamic-workload Roles.
+        assert_eq!(docs_by_kind(&docs, "Role").len(), 2);
         assert!(docs_by_kind(&docs, "ClusterRole").is_empty());
 
         // Label scope is cluster-wide: emits the selector env and ClusterRole/
-        // ClusterRoleBinding instead of a namespaced Role.
+        // ClusterRoleBinding. Dynamic workload writes remain namespace-scoped.
         let manifest = generate_operator_manifest(OperatorManifestOptions {
             custom_operation_permissions: &[],
             manager_url: "https://manager.example.com",
@@ -7272,10 +7274,15 @@ mod tests {
             Some("app.kubernetes.io/part-of=my-saas")
         );
 
-        assert!(
-            docs_by_kind(&docs, "Role").is_empty(),
-            "cluster-wide scope must not emit a namespaced Role"
+        let roles = docs_by_kind(&docs, "Role");
+        assert_eq!(
+            roles.len(),
+            1,
+            "only the dynamic workload Role is namespaced"
         );
+        assert!(yaml_path(&roles[0], &["metadata", "name"])
+            .and_then(YamlValue::as_str)
+            .is_some_and(|name| name.starts_with("alien-dc-")));
         let cluster_role = docs_by_kind(&docs, "ClusterRole")
             .into_iter()
             .next()

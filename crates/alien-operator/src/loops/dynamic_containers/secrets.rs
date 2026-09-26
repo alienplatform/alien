@@ -88,17 +88,8 @@ pub(super) async fn put_registry_secret(
     let authorized = registry_auth
         .filter(|(manager_host, _)| target.image.split('/').next() == Some(*manager_host));
     let Some((manager_host, token)) = authorized else {
-        if let Some(existing) = read_secret(client, namespace, &name).await? {
-            if !owned(&existing.metadata, deployment_id, &target.name) {
-                return Err(failed(format!(
-                    "Refusing to delete foreign Kubernetes Secret {name}"
-                )));
-            }
-            client
-                .delete_secret(namespace, &name)
-                .await
-                .map_err(|_| failed("Failed to remove unused registry Secret"))?;
-        }
+        // The old Deployment may still need this credential while Kubernetes
+        // rolls to the new image. Remove it only once that rollout is ready.
         return Ok(false);
     };
     let current = read_secret(client, namespace, &name).await?;
@@ -152,4 +143,25 @@ pub(super) async fn put_registry_secret(
     };
     result.map_err(|_| failed("Failed to apply dynamic container registry Secret"))?;
     Ok(true)
+}
+
+pub(super) async fn remove_unused_registry_secret(
+    client: &KubernetesClient,
+    namespace: &str,
+    deployment_id: &str,
+    name: &str,
+) -> Result<()> {
+    let secret_name = format!("{}-registry", backend_name(deployment_id, name));
+    let Some(existing) = read_secret(client, namespace, &secret_name).await? else {
+        return Ok(());
+    };
+    if !owned(&existing.metadata, deployment_id, name) {
+        return Err(failed(format!(
+            "Refusing to delete foreign Kubernetes Secret {secret_name}"
+        )));
+    }
+    client
+        .delete_secret(namespace, &secret_name)
+        .await
+        .map_err(|_| failed("Failed to remove unused registry Secret"))
 }

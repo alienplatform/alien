@@ -4,7 +4,7 @@ mod secrets;
 mod service;
 mod workload;
 
-use self::secrets::{put_registry_secret, put_secret, read_secret};
+use self::secrets::{put_registry_secret, put_secret, read_secret, remove_unused_registry_secret};
 use self::service::{put_service, read_service};
 use self::workload::{put_deployment, read_deployment};
 use crate::error::{ErrorData, Result};
@@ -194,6 +194,10 @@ pub async fn reconcile(
                         && status.observed_generation.unwrap_or(0)
                             >= deployment.metadata.generation.unwrap_or(0)
                 });
+                if ready && !pull_secret {
+                    remove_unused_registry_secret(client, namespace, deployment_id, &target.name)
+                        .await?;
+                }
                 if !ready && desired.replicas > 0 {
                     let selector =
                         format!("{OWNER_LABEL}={deployment_id},{NAME_LABEL}={}", target.name);
