@@ -49,8 +49,8 @@ pub async fn tag_manifest(source: &str, target: &str, options: &PushOptions) -> 
         }
     });
     let content_type = media_type.parse().map_err(|_| {
-        AlienError::new(ErrorData::ImagePushRejected {
-            image: target.to_string(),
+        AlienError::new(ErrorData::ImageLookupRejected {
+            image: source.to_string(),
             reason: format!("Manifest media type '{media_type}' is not a valid header"),
         })
     })?;
@@ -105,9 +105,12 @@ fn registry_failure(error: &OciDistributionError) -> RegistryFailure {
         OciDistributionError::ServerError { code, .. } => {
             RegistryFailure::Rejected(format!("Registry returned HTTP {code}"))
         }
-        OciDistributionError::UnauthorizedError { .. }
-        | OciDistributionError::AuthenticationFailure(_) => {
+        OciDistributionError::UnauthorizedError { .. } => {
             RegistryFailure::Rejected("Registry authentication failed".to_string())
+        }
+        // Any non-200 from the token endpoint, an outage included; the status is not kept.
+        OciDistributionError::AuthenticationFailure(_) => {
+            RegistryFailure::Rejected("The registry token request failed".to_string())
         }
         OciDistributionError::RegistryError { envelope, .. } => {
             let codes = envelope
