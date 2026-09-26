@@ -68,9 +68,12 @@ fn desired_deployment(
         http_get: Some(HTTPGetAction {
             path: Some(check.path.clone()),
             port: IntOrString::Int(i32::from(check.port)),
+            scheme: Some("HTTP".to_string()),
             ..Default::default()
         }),
+        failure_threshold: Some(3),
         period_seconds: Some(10),
+        success_threshold: Some(1),
         timeout_seconds: Some(3),
         ..Default::default()
     });
