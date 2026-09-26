@@ -1333,6 +1333,68 @@ impl OperatorDb {
 
         Ok(())
     }
+
+    /// Persist desired containers in the encrypted Operator database. `None`
+    /// means an older manager; an empty set is an authoritative deletion.
+    pub async fn get_target_dynamic_containers(
+        &self,
+    ) -> Result<Option<Vec<alien_core::sync::TargetDynamicContainer>>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT value FROM state WHERE key = 'target_dynamic_containers'",
+                (),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read dynamic container target".to_string(),
+            })?;
+        let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch dynamic container target".to_string(),
+            })?
+        else {
+            return Ok(None);
+        };
+        let value: String = row
+            .get(0)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to decode dynamic container target".to_string(),
+            })?;
+        let target =
+            serde_json::from_str(&value)
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to parse dynamic container target".to_string(),
+                })?;
+        Ok(Some(target))
+    }
+
+    pub async fn set_target_dynamic_containers(
+        &self,
+        target: &[alien_core::sync::TargetDynamicContainer],
+    ) -> Result<()> {
+        let value =
+            serde_json::to_string(target)
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to serialize dynamic container target".to_string(),
+                })?;
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('target_dynamic_containers', ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (value,),
+        ).await.into_alien_error().context(ErrorData::DatabaseError {
+            message: "Failed to persist dynamic container target".to_string(),
+        })?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

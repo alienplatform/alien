@@ -576,8 +576,15 @@ impl ResourceRegistry {
             >::new()),
         );
 
-        // Note: Kubernetes platform does NOT have a ServiceAccount controller
-        // ServiceAccounts are created by Helm chart with cloud identity annotations
+        // Helm owns Kubernetes ServiceAccounts; the runtime only observes them.
+        #[cfg(feature = "kubernetes")]
+        registry.register_controller_factory(
+            ServiceAccount::RESOURCE_TYPE,
+            Platform::Kubernetes,
+            Box::new(DefaultControllerFactory::<
+                crate::service_account::KubernetesServiceAccountController,
+            >::new()),
+        );
 
         // Register Local ServiceAccount controller
         #[cfg(feature = "local")]

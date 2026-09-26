@@ -1096,6 +1096,10 @@ fn deserialize_controller_by_tag(
         "LocalServiceAccountController" => {
             deser!(crate::service_account::LocalServiceAccountController)
         }
+        #[cfg(feature = "kubernetes")]
+        "KubernetesServiceAccountController" => {
+            deser!(crate::service_account::KubernetesServiceAccountController)
+        }
         #[cfg(feature = "test")]
         "TestServiceAccountController" => {
             deser!(crate::service_account::TestServiceAccountController)

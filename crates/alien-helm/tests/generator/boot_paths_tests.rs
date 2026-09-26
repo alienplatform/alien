@@ -68,3 +68,31 @@ fn schema_accepts_external_bindings_initialize_onprem_values() {
     assert!(bindings.has("secrets"));
     assert!(bindings.has("registry"));
 }
+
+#[test]
+fn registered_setup_mounts_external_bindings() {
+    let stack = Stack::new("registered-bindings".to_string())
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let files = render(&stack, StackSettings::default()).files;
+    let onprem: serde_yaml::Value =
+        serde_yaml::from_str(&files["examples/onprem.yaml"]).expect("onprem values should parse");
+    let bindings = serde_yaml::to_string(&onprem["infrastructure"])
+        .expect("external bindings should serialize");
+    let bindings = bindings
+        .lines()
+        .map(|line| format!("  {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let registered = files["values.yaml"].replacen(
+        "infrastructure: null",
+        &format!("infrastructure:\n{bindings}"),
+        1,
+    );
+
+    test_utils::helm_template_and_validate(&files, Some(&registered))
+        .assert_ok("registered setup with external bindings");
+}

@@ -635,8 +635,10 @@ fn gate_resolves_true(
     }
 }
 
-fn should_collect_environment_info(platform: Platform) -> bool {
+fn should_collect_environment_info(platform: Platform, base_platform: Option<Platform>) -> bool {
+    // Only cloud-backed Kubernetes has a cloud environment to collect.
     !matches!(platform, Platform::Machines)
+        && !(platform == Platform::Kubernetes && base_platform.is_none())
 }
 
 async fn collect_deployment_environment_info(
@@ -644,7 +646,7 @@ async fn collect_deployment_environment_info(
     base_platform: Option<Platform>,
     client_config: &ClientConfig,
 ) -> Result<Option<EnvironmentInfo>> {
-    if !should_collect_environment_info(platform) {
+    if !should_collect_environment_info(platform, base_platform) {
         return Ok(None);
     }
 
@@ -1599,8 +1601,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn kubernetes_base_platform_collects_base_environment() {
+    #[tokio::test]
+    async fn kubernetes_base_platform_collects_base_environment() {
         let client_config = ClientConfig::KubernetesCloud {
             kubernetes: Box::new(KubernetesClientConfig::InCluster {
                 namespace: Some("alien-test".to_string()),
@@ -1618,6 +1620,15 @@ mod tests {
 
         assert_eq!(platform, Platform::Test);
         assert!(matches!(config, ClientConfig::Test));
+
+        let environment_info = collect_deployment_environment_info(
+            Platform::Kubernetes,
+            Some(Platform::Test),
+            &client_config,
+        )
+        .await
+        .expect("cloud-backed Kubernetes should collect its base environment");
+        assert!(matches!(environment_info, Some(EnvironmentInfo::Test(_))));
     }
 
     #[tokio::test]
@@ -1626,6 +1637,20 @@ mod tests {
             collect_deployment_environment_info(Platform::Machines, None, &ClientConfig::Test)
                 .await
                 .expect("machines should not require a cloud client config");
+
+        assert!(environment_info.is_none());
+    }
+
+    #[tokio::test]
+    async fn external_kubernetes_skips_cloud_environment_collection() {
+        let client_config = ClientConfig::Kubernetes(Box::new(KubernetesClientConfig::InCluster {
+            namespace: Some("alien-test".to_string()),
+            additional_headers: None,
+        }));
+        let environment_info =
+            collect_deployment_environment_info(Platform::Kubernetes, None, &client_config)
+                .await
+                .expect("external Kubernetes has no backing cloud environment");
 
         assert!(environment_info.is_none());
     }

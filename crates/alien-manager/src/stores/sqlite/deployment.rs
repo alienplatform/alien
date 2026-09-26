@@ -1378,6 +1378,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         Ok(ReconcileOutcome {
             record,
             target_operations_bundle_set: None,
+            target_dynamic_containers: None,
         })
     }
 
