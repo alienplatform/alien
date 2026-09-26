@@ -648,6 +648,9 @@ async fn build_and_push_sandbox_base_image(
     };
     let digest = match existing {
         Some(digest) => {
+            // The lookup ran on the hash taken before it, so a tree edited since would
+            // configure an image of the older tree.
+            ensure_source_unchanged(&src, &toolchain, &settings, &input_hash).await?;
             if !json {
                 println!("{} {}", dim_label("Unchanged"), source_image);
             }
@@ -663,15 +666,7 @@ async fn build_and_push_sandbox_base_image(
                     .context(ErrorData::BuildFailed)?;
             // The tag is shared by every machine with this tree, so it must not name an image
             // built from a tree that was edited mid-build.
-            if source_input_hash(&src, &toolchain, &settings).await? != input_hash {
-                return Err(AlienError::new(ErrorData::ValidationError {
-                    field: "src".to_string(),
-                    message: format!(
-                        "'{}' changed while it was building. Run the command again.",
-                        src.display()
-                    ),
-                }));
-            }
+            ensure_source_unchanged(&src, &toolchain, &settings, &input_hash).await?;
             if !json {
                 println!("{} {}", dim_label("Pushing"), push_settings.repository);
             }
@@ -706,6 +701,24 @@ async fn source_input_hash(
         .await
         .context(ErrorData::BuildFailed)?;
     Ok(SourceInputHash(hash))
+}
+
+async fn ensure_source_unchanged(
+    src: &Path,
+    toolchain: &ToolchainConfig,
+    settings: &alien_build::settings::BuildSettings,
+    input_hash: &SourceInputHash,
+) -> Result<()> {
+    if source_input_hash(src, toolchain, settings).await? != *input_hash {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "src".to_string(),
+            message: format!(
+                "'{}' changed while the command ran. Run the command again.",
+                src.display()
+            ),
+        }));
+    }
+    Ok(())
 }
 
 fn source_directory(src: &Path) -> Result<PathBuf> {
