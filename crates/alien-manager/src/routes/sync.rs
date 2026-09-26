@@ -991,6 +991,7 @@ mod tests {
 
         assert!(should_return_current_state_for_agent_sync(
             false,
+            false,
             &deployment
         ));
     }
@@ -1001,6 +1002,7 @@ mod tests {
             deployment_record_with_state("running", Some(StackState::new(Platform::Local)));
 
         assert!(should_return_current_state_for_agent_sync(
+            true,
             true,
             &deployment
         ));
@@ -1013,7 +1015,30 @@ mod tests {
 
         assert!(should_return_current_state_for_agent_sync(
             false,
+            false,
             &deployment
+        ));
+    }
+
+    #[test]
+    fn returns_imported_state_before_an_unclaimed_initial_target() {
+        let deployment = deployment_record_with_state(
+            "pending",
+            Some(StackState::with_resource_prefix(
+                Platform::Kubernetes,
+                "helm-release".to_string(),
+            )),
+        );
+
+        assert!(should_return_current_state_for_agent_sync(
+            false,
+            true,
+            &deployment,
+        ));
+        assert!(!should_return_current_state_for_agent_sync(
+            false,
+            false,
+            &deployment,
         ));
     }
 
@@ -1745,8 +1770,14 @@ async fn agent_sync(
         None
     };
 
-    let should_return_current_state =
-        should_return_current_state_for_agent_sync(ignored_agent_state_report, &deployment);
+    let should_return_current_state = should_return_current_state_for_agent_sync(
+        ignored_agent_state_report,
+        req.current_state
+            .as_ref()
+            .and_then(|value| serde_json::from_value::<DeploymentState>(value.clone()).ok())
+            .is_some_and(|state| agent_state_is_uninitialized(&state)),
+        &deployment,
+    );
     let current_state = if should_return_current_state {
         let release_stack_platform = release_stack_platform(deployment.platform);
         let current_release = if let Some(ref release_id) = deployment.current_release_id {
@@ -2000,9 +2031,13 @@ fn deployment_has_authoritative_state(deployment: &DeploymentRecord) -> bool {
 
 fn should_return_current_state_for_agent_sync(
     ignored_agent_state_report: bool,
+    agent_state_uninitialized: bool,
     deployment: &DeploymentRecord,
 ) -> bool {
-    ignored_agent_state_report || deployment.retry_requested || deployment_is_deleting(deployment)
+    ignored_agent_state_report
+        || (agent_state_uninitialized && deployment_has_authoritative_state(deployment))
+        || deployment.retry_requested
+        || deployment_is_deleting(deployment)
 }
 
 fn deployment_is_deleting(deployment: &DeploymentRecord) -> bool {

@@ -710,7 +710,7 @@ ephemeralStorage:
             "deploymentId": { "type": "string", "minLength": 1 }
           }
         },
-        "infrastructure": { "type": "null" }
+        "infrastructure": { "type": ["object", "null"] }
       }
     },
     {
@@ -1008,6 +1008,9 @@ metadata:
     {{- include "deployment.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.runtime.replicas }}
+  # The operator holds an exclusive lock on its persistent state directory.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "deployment.name" . }}

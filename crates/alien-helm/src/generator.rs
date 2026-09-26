@@ -3731,12 +3731,14 @@ fn append_registered_service_accounts(
 
     for name in &analysis.service_accounts {
         yaml.push_str(&format!("  {}:\n", yaml_key(name)));
-        match service_account_identity_for_profile(stack_state, name) {
-            Some(identity) => {
+        match base_platform.and_then(|base| {
+            service_account_identity_for_profile(stack_state, name).map(|identity| (base, identity))
+        }) {
+            Some((base_platform, identity)) => {
                 yaml.push_str("    annotations:\n");
                 yaml.push_str(&format!(
                     "      {}: {}\n",
-                    yaml_key(identity_annotation_key(base_platform)),
+                    yaml_key(identity_annotation_key(Some(base_platform))),
                     yaml_string(identity)
                 ));
             }
@@ -4624,7 +4626,7 @@ fn values_schema_json() -> String {
             "deploymentId": { "type": "string", "minLength": 1 }
           }
         },
-        "infrastructure": { "type": "null" }
+        "infrastructure": { "type": ["object", "null"] }
       }
     },
     {
@@ -5576,6 +5578,9 @@ metadata:
     {{- include "deployment.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.runtime.replicas }}
+  # The operator holds an exclusive lock on its persistent state directory.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "deployment.name" . }}

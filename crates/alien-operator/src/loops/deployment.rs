@@ -298,7 +298,7 @@ async fn run_deployment_continuously(state: &OperatorState) -> Result<usize> {
 ///
 /// Applies public_endpoints and stack_settings from operator config,
 /// and injects command delivery env vars for K8s/Local platforms.
-/// External bindings are part of stack_settings and flow through naturally.
+/// External bindings also populate DeploymentConfig for executor preflights.
 async fn enrich_config(
     mut config: DeploymentConfig,
     operator_config: &OperatorConfig,
@@ -311,8 +311,11 @@ async fn enrich_config(
         config.public_endpoints = operator_config.public_endpoints.clone();
     }
 
-    // Pass through stack settings from operator config (includes external_bindings)
+    // Installation-provided bindings take precedence over manager-provided ones.
     if let Some(ref stack_settings) = operator_config.stack_settings {
+        if let Some(ref bindings) = stack_settings.external_bindings {
+            config.external_bindings = bindings.clone();
+        }
         config.stack_settings = stack_settings.clone();
     }
     if config.base_platform.is_none() {
@@ -469,7 +472,8 @@ mod tests {
     use crate::config::{OperatorConfig, SyncConfig};
     use crate::db::OperatorDb;
     use alien_core::{
-        DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, StackSettings,
+        DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBinding, ExternalBindings,
+        StackSettings, StorageBinding,
     };
     use std::collections::HashMap;
 
@@ -498,6 +502,40 @@ mod tests {
             deployment_token: None,
             native_image_host: None,
         }
+    }
+
+    #[tokio::test]
+    async fn enrich_config_passes_operator_bindings_to_executor() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = OperatorDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
+            .await
+            .unwrap();
+        let mut bindings = ExternalBindings::new();
+        bindings.insert(
+            "data",
+            ExternalBinding::Storage(StorageBinding::s3("existing-bucket")),
+        );
+        let operator_config = OperatorConfig::builder()
+            .platform(Platform::Kubernetes)
+            .stack_settings(StackSettings {
+                external_bindings: Some(bindings.clone()),
+                ..StackSettings::default()
+            })
+            .encryption_key(encryption_key)
+            .build();
+
+        let enriched = enrich_config(
+            test_deployment_config(),
+            &operator_config,
+            Platform::Kubernetes,
+            &db,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(enriched.external_bindings, bindings);
     }
 
     #[tokio::test]
