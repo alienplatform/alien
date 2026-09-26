@@ -631,8 +631,19 @@ async fn build_and_push_sandbox_base_image(
                     .await
                     .context(ErrorData::BuildFailed)?;
             // The tag is shared by every machine with this tree, so it must not name an image
-            // built from a tree that was edited mid-build.
+            // built from a tree that was edited mid-build. The build is dropped from the local
+            // cache too: it is keyed on the pre-edit tree, which a revert would bring back.
             if source_input_hash(&src, &toolchain, &settings).await? != input_hash {
+                let artifact = sandbox_image(&built)?;
+                tokio::fs::remove_dir_all(&artifact)
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::FileOperationFailed {
+                        operation: "remove directory".to_string(),
+                        file_path: artifact.clone(),
+                        reason: "Failed to drop a build of a source that changed mid-build"
+                            .to_string(),
+                    })?;
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "src".to_string(),
                     message: format!(
@@ -650,7 +661,7 @@ async fn build_and_push_sandbox_base_image(
                 .await
                 .context(push_failed())?;
             alien_build::registry::tag_manifest(
-                &pushed_sandbox_image(&pushed)?,
+                &sandbox_image(&pushed)?,
                 &source_image,
                 &push_settings.options,
             )
@@ -704,7 +715,7 @@ fn sandbox_source_stack(src: &Path, toolchain: ToolchainConfig) -> Stack {
         .build()
 }
 
-fn pushed_sandbox_image(stack: &Stack) -> Result<String> {
+fn sandbox_image(stack: &Stack) -> Result<String> {
     stack
         .resources()
         .find_map(
@@ -715,7 +726,7 @@ fn pushed_sandbox_image(stack: &Stack) -> Result<String> {
         )
         .ok_or_else(|| {
             AlienError::new(ErrorData::GenericError {
-                message: "The push did not produce a sandbox base image reference".to_string(),
+                message: "The stack has no sandbox base image reference".to_string(),
             })
         })
 }
