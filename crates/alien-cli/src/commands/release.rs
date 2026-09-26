@@ -20,6 +20,7 @@ use clap::Parser;
 use dockdash::{ClientProtocol, RegistryAuth};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Instant;
@@ -1772,16 +1773,21 @@ fn save_push_cache(
             reason: "Failed to serialize push cache".to_string(),
         })?;
     // Written through a temp file: a truncated cache reads back as empty, which re-pushes
-    // every artifact under a new tag.
-    let tmp_path = cache_path.with_extension("json.tmp");
-    fs::write(&tmp_path, content)
+    // every artifact under a new tag. Each write gets its own temp file, so two releases in
+    // one directory never rename each other's half-written cache.
+    let write_failed = || ErrorData::FileOperationFailed {
+        operation: "write".to_string(),
+        file_path: cache_path.display().to_string(),
+        reason: "Failed to write push cache".to_string(),
+    };
+    let mut tmp = tempfile::NamedTempFile::new_in(cache_path.parent().unwrap_or(Path::new(".")))
         .into_alien_error()
-        .context(ErrorData::FileOperationFailed {
-            operation: "write".to_string(),
-            file_path: tmp_path.display().to_string(),
-            reason: "Failed to write push cache".to_string(),
-        })?;
-    fs::rename(&tmp_path, &cache_path)
+        .context(write_failed())?;
+    tmp.write_all(content.as_bytes())
+        .into_alien_error()
+        .context(write_failed())?;
+    tmp.persist(&cache_path)
+        .map_err(|error| error.error)
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
             operation: "rename".to_string(),
@@ -1980,6 +1986,36 @@ fn collect_push_cache_entries(
 mod tests {
     use super::*;
     use alien_core::ResourceLifecycle;
+
+    #[test]
+    fn concurrent_push_cache_writes_each_land_whole() {
+        let output = tempfile::tempdir().unwrap();
+        let output_dir = output.path().to_path_buf();
+        std::fs::create_dir_all(output_dir.join("build/aws")).unwrap();
+
+        let writers = (0..8)
+            .map(|writer| {
+                let output_dir = output_dir.clone();
+                std::thread::spawn(move || {
+                    let cache = HashMap::from([(format!("worker-{writer}"), writer.to_string())]);
+                    for _ in 0..25 {
+                        save_push_cache(&output_dir, "aws", &cache)
+                            .expect("a concurrent write should not fail");
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+
+        assert_eq!(load_push_cache(&output_dir, "aws").len(), 1);
+        let files = std::fs::read_dir(output_dir.join("build/aws"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(files, [PUSH_CACHE_FILE]);
+    }
 
     #[tokio::test]
     async fn prebuilt_release_does_not_load_source_configuration() {
