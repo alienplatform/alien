@@ -607,7 +607,10 @@ async fn build_and_push_sandbox_base_image(
     };
     let mut settings =
         auto_build_settings_for_platform(Platform::Aws.as_str(), &output_dir, None, None, None)?;
-    settings.rebuild = source.rebuild;
+    // The registry tag is this command's cache. The local artifact cache's key skips what the
+    // input hash covers (node_modules, the executable bit, symlinks), so a hit there after a
+    // registry miss would push the older image under the new tag.
+    settings.rebuild = true;
     let input_hash = source_input_hash(&src, &toolchain, &settings).await?;
 
     let manager = ctx
@@ -722,7 +725,7 @@ async fn ensure_source_unchanged(
 }
 
 fn source_directory(src: &Path) -> Result<PathBuf> {
-    // The build cache is keyed on the source path, so `./sandbox` and `sandbox` must agree.
+    // Resolved before any network call, so a missing --src fails as a usage error.
     std::fs::canonicalize(src)
         .into_alien_error()
         .context(ErrorData::ValidationError {
