@@ -8,7 +8,7 @@ use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 use tokio::fs;
 
-const FORMAT_VERSION: &[u8] = b"alien-docker-source-input-v2";
+const FORMAT_VERSION: &[u8] = b"alien-docker-source-input-v3";
 
 /// Hex SHA-256 of everything a Docker source build reads: the build context Docker sends from
 /// `src`, the Dockerfile, the build args, the build stage, and the target platforms.
@@ -64,7 +64,7 @@ pub async fn docker_source_input_hash(
         output: output_inside(src, Path::new(&settings.output_directory))?,
     };
     let mut entries = Vec::new();
-    context.collect(Path::new(""), &mut entries)?;
+    context.collect(Path::new(""), &[], false, &mut entries)?;
     entries.sort_by(|(a, _), (b, _)| a.cmp(b));
     for (portable, entry) in entries {
         match entry {
@@ -84,7 +84,7 @@ pub async fn docker_source_input_hash(
             Entry::Symlink(target) => {
                 field(&mut hasher, b"symlink");
                 field(&mut hasher, portable.as_bytes());
-                field(&mut hasher, target.to_string_lossy().as_bytes());
+                field(&mut hasher, target.as_os_str().as_encoded_bytes());
             }
         }
     }
@@ -108,30 +108,48 @@ struct BuildContext<'a> {
 }
 
 impl BuildContext<'_> {
-    fn collect(&self, relative_dir: &Path, entries: &mut Vec<(String, Entry)>) -> Result<()> {
+    /// `parent_matches` is `relative_dir`'s per-pattern ignore results, which its entries inherit.
+    /// Like Docker's walk, a permission error on an excluded entry skips it instead of failing.
+    fn collect(
+        &self,
+        relative_dir: &Path,
+        parent_matches: &[bool],
+        dir_excluded: bool,
+        entries: &mut Vec<(String, Entry)>,
+    ) -> Result<()> {
         let dir = self.src.join(relative_dir);
         let read_failed = |path: &Path| ErrorData::FileOperationFailed {
             operation: "read".to_string(),
             file_path: path.display().to_string(),
             reason: "Failed to read the build context for the source input hash".to_string(),
         };
-        let listing = std::fs::read_dir(&dir)
-            .into_alien_error()
-            .context(read_failed(&dir))?;
+        let skippable = |excluded: bool, error: &std::io::Error| {
+            excluded && error.kind() == ErrorKind::PermissionDenied
+        };
+        let listing = match std::fs::read_dir(&dir) {
+            Ok(listing) => listing,
+            Err(error) if skippable(dir_excluded, &error) => return Ok(()),
+            Err(error) => return Err(error).into_alien_error().context(read_failed(&dir)),
+        };
         for dir_entry in listing {
-            let dir_entry = dir_entry.into_alien_error().context(read_failed(&dir))?;
+            let dir_entry = match dir_entry {
+                Ok(dir_entry) => dir_entry,
+                Err(error) if skippable(dir_excluded, &error) => return Ok(()),
+                Err(error) => return Err(error).into_alien_error().context(read_failed(&dir)),
+            };
             let relative = relative_dir.join(dir_entry.file_name());
             if self.output.as_deref() == Some(relative.as_path()) {
                 continue;
             }
             let path = dir_entry.path();
-            // Does not follow symlinks: Docker sends a symlink as the link itself.
-            let metadata = dir_entry
-                .metadata()
-                .into_alien_error()
-                .context(read_failed(&path))?;
             let portable = portable_path(&relative);
-            let excluded = self.ignore.excludes(&portable);
+            let (excluded, matches) = self.ignore.excludes(&portable, parent_matches);
+            // Does not follow symlinks: Docker sends a symlink as the link itself.
+            let metadata = match dir_entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(error) if skippable(excluded, &error) => continue,
+                Err(error) => return Err(error).into_alien_error().context(read_failed(&path)),
+            };
             let holds_output = self
                 .output
                 .as_ref()
@@ -142,7 +160,7 @@ impl BuildContext<'_> {
                     continue;
                 }
                 let sent_before = entries.len();
-                self.collect(&relative, entries)?;
+                self.collect(&relative, &matches, excluded, entries)?;
                 // Docker sends an excluded directory when it holds a re-included entry.
                 if (!excluded && !holds_output) || entries.len() > sent_before {
                     entries.push((portable, Entry::Directory));
@@ -448,6 +466,54 @@ mod tests {
 
         std::fs::write(dir.path().join("node_modules/dep/index.js"), "two").unwrap();
         assert_ne!(hash(dir.path(), &docker(None)).await, before);
+    }
+
+    #[tokio::test]
+    async fn a_pattern_skipped_at_a_reincluded_directory_does_not_drop_its_files() {
+        let dir = sandbox_tree();
+        std::fs::write(
+            dir.path().join(".dockerignore"),
+            "node_modules\n!node_modules/dep\n**/node_modules\n",
+        )
+        .unwrap();
+        let before = hash(dir.path(), &docker(None)).await;
+
+        std::fs::write(dir.path().join("node_modules/dep/index.js"), "two").unwrap();
+        assert_ne!(hash(dir.path(), &docker(None)).await, before);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_unreadable_directory_fails_the_hash_only_when_docker_would_send_it() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = sandbox_tree();
+        std::fs::write(dir.path().join(".dockerignore"), "pgdata\n!pgdata/keep\n").unwrap();
+        let pgdata = dir.path().join("pgdata");
+        std::fs::create_dir(&pgdata).unwrap();
+        std::fs::set_permissions(&pgdata, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root reads through mode 000, so there is no unreadable directory to test.
+        if std::fs::read_dir(&pgdata).is_ok() {
+            return;
+        }
+        let excluded = docker_source_input_hash(
+            dir.path(),
+            &docker(None),
+            &settings(&[BinaryTarget::LinuxArm64], &dir.path().join(".alien")),
+        )
+        .await;
+
+        std::fs::write(dir.path().join(".dockerignore"), "").unwrap();
+        let sent = docker_source_input_hash(
+            dir.path(),
+            &docker(None),
+            &settings(&[BinaryTarget::LinuxArm64], &dir.path().join(".alien")),
+        )
+        .await;
+        std::fs::set_permissions(&pgdata, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        excluded.expect("Docker skips an excluded directory it cannot read");
+        sent.expect_err("Docker fails on a directory it sends but cannot read");
     }
 
     #[cfg(unix)]

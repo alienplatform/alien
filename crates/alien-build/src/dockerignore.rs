@@ -82,26 +82,30 @@ impl DockerIgnore {
         self.has_exclusions
     }
 
-    /// Whether Docker leaves `path` (relative, `/`-separated) out of the build context.
-    pub(crate) fn excludes(&self, path: &str) -> bool {
-        let parents = path
-            .rsplit_once('/')
-            .map(|(parent, _)| parent.split('/').collect::<Vec<_>>())
-            .unwrap_or_default();
-
+    /// Whether Docker leaves `path` out, plus the per-pattern results its entries inherit. Like
+    /// buildx's walk (`MatchesUsingParentResults`), a pattern `parent` skipped is never retried on
+    /// an ancestor, so `a`, `!a/b`, `a` sends `a/b`. `parent` is empty at the root.
+    pub(crate) fn excludes(&self, path: &str, parent: &[bool]) -> (bool, Vec<bool>) {
         let mut excluded = false;
-        for pattern in &self.patterns {
-            if pattern.exclusion != excluded {
-                continue;
+        let mut matches = vec![false; self.patterns.len()];
+        for (index, pattern) in self.patterns.iter().enumerate() {
+            let mut matched = parent.get(index).copied().unwrap_or(false);
+            if !matched {
+                if pattern.exclusion != excluded {
+                    continue;
+                }
+                matched = pattern.matcher.matches(path)
+                    || (parent.is_empty()
+                        && path
+                            .match_indices('/')
+                            .any(|(end, _)| pattern.matcher.matches(&path[..end])));
             }
-            let matched = pattern.matcher.matches(path)
-                || (1..=parents.len())
-                    .any(|depth| pattern.matcher.matches(&parents[..depth].join("/")));
+            matches[index] = matched;
             if matched {
                 excluded = !pattern.exclusion;
             }
         }
-        excluded
+        (excluded, matches)
     }
 }
 
@@ -134,8 +138,14 @@ fn compile(pattern: &str) -> std::result::Result<Matcher, regex::Error> {
     let mut kind = Kind::Exact;
     let mut chars = pattern.chars().peekable();
     let mut first = true;
+    let mut in_class = false;
     while let Some(ch) = chars.next() {
         match ch {
+            // Literal in a Go class, but a nested class or set operator in a Rust one.
+            '[' | '&' | '~' if in_class => {
+                regex.push('\\');
+                regex.push(ch);
+            }
             '*' if chars.peek() == Some(&'*') => {
                 chars.next();
                 if chars.peek() == Some(&'/') {
@@ -156,12 +166,13 @@ fn compile(pattern: &str) -> std::result::Result<Matcher, regex::Error> {
                     kind = Kind::Suffix;
                 }
             }
-            '*' => {
-                regex.push_str("[^/]*");
-                kind = Kind::Regex;
-            }
-            '?' => {
-                regex.push_str("[^/]");
+            // Inside a class Go reads the inserted `[` as a literal and its `]` as the close.
+            '*' | '?' => {
+                if in_class {
+                    regex.push('\\');
+                    in_class = false;
+                }
+                regex.push_str(if ch == '*' { "[^/]*" } else { "[^/]" });
                 kind = Kind::Regex;
             }
             '.' | '+' | '(' | ')' | '|' | '{' | '}' | '$' => {
@@ -178,6 +189,7 @@ fn compile(pattern: &str) -> std::result::Result<Matcher, regex::Error> {
             },
             '[' | ']' => {
                 regex.push(ch);
+                in_class = ch == '[';
                 kind = Kind::Regex;
             }
             _ => regex.push(ch),
@@ -229,6 +241,19 @@ mod tests {
         DockerIgnore::parse(contents, Path::new(".dockerignore")).expect("valid ignore file")
     }
 
+    impl DockerIgnore {
+        /// Whether `path` is left out when reached the way the context walk reaches it, one
+        /// directory at a time from the root.
+        fn walk_excludes(&self, path: &str) -> bool {
+            let mut parent = Vec::new();
+            let mut excluded = false;
+            for (end, _) in path.match_indices('/').chain([(path.len(), "")]) {
+                (excluded, parent) = self.excludes(&path[..end], &parent);
+            }
+            excluded
+        }
+    }
+
     #[test]
     fn matches_like_docker() {
         let cases: &[(&str, &str, bool)] = &[
@@ -248,10 +273,15 @@ mod tests {
             ("[ab].txt", "b.txt", true),
             ("[ab].txt", "c.txt", false),
             ("**", "anything/at/all", true),
+            ("[[]", "[", true),
+            ("[a&&b]", "&", true),
+            ("[?]", "a", false),
+            ("[?]", "[]", true),
+            ("[*]", "]", true),
         ];
         for (pattern, path, excluded) in cases {
             assert_eq!(
-                ignore(pattern).excludes(path),
+                ignore(pattern).walk_excludes(path),
                 *excluded,
                 "pattern {pattern:?} on {path:?}"
             );
@@ -261,19 +291,32 @@ mod tests {
     #[test]
     fn the_last_matching_line_wins() {
         let rules = ignore("# comment\n*.md\n!README.md\nREADME.md.bak\n");
-        assert!(rules.excludes("CHANGES.md"));
-        assert!(!rules.excludes("README.md"));
+        assert!(rules.walk_excludes("CHANGES.md"));
+        assert!(!rules.walk_excludes("README.md"));
         assert!(rules.has_exclusions());
 
         let rules = ignore("!keep\nkeep");
-        assert!(rules.excludes("keep"));
+        assert!(rules.walk_excludes("keep"));
     }
 
     #[test]
     fn a_reincluded_file_under_an_excluded_directory_is_sent() {
         let rules = ignore("vendor\n!vendor/keep.txt\n");
-        assert!(rules.excludes("vendor/drop.txt"));
-        assert!(!rules.excludes("vendor/keep.txt"));
+        assert!(rules.walk_excludes("vendor/drop.txt"));
+        assert!(!rules.walk_excludes("vendor/keep.txt"));
+    }
+
+    #[test]
+    fn a_pattern_skipped_at_a_directory_is_not_retried_on_it_below() {
+        let rules = ignore("node_modules\n!node_modules/.prisma\n**/node_modules\n");
+        assert!(rules.walk_excludes("node_modules/dep/index.js"));
+        assert!(!rules.walk_excludes("node_modules/.prisma/client/index.js"));
+
+        let rules = ignore("a\n!a/b\na\n");
+        assert!(!rules.walk_excludes("a/b/c"));
+
+        let rules = ignore("**/*.log\n!logs\n");
+        assert!(rules.walk_excludes("logs/app.log"));
     }
 
     #[test]
