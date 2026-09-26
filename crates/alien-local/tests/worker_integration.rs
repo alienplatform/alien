@@ -74,6 +74,7 @@ async fn build_test_app_with_alien_build(output_dir: &std::path::Path) -> PathBu
         cache_url: None,
         override_base_image: None,
         debug_mode: false,
+        rebuild: false,
     };
 
     // Build the stack

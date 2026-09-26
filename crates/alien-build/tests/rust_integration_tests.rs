@@ -150,6 +150,7 @@ async fn test_rust_workspace_build(
         cache_url: None,
         override_base_image: None,
         debug_mode: false,
+        rebuild: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -235,6 +236,7 @@ async fn test_rust_toolchain_invalid_project() {
         cache_url: None,
         override_base_image: None,
         debug_mode: false,
+        rebuild: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -312,6 +314,7 @@ async fn test_real_cargo_init_project() {
         cache_url: None,
         override_base_image: None,
         debug_mode: false,
+        rebuild: false,
     };
 
     let result = build_stack(stack, &settings).await;

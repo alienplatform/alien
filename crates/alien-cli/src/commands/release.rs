@@ -1075,6 +1075,7 @@ pub(crate) fn auto_build_settings_for_platform(
         cache_url: None,
         override_base_image,
         debug_mode: false,
+        rebuild: false,
     })
 }
 
@@ -2380,6 +2381,7 @@ mod tests {
                 cache_url: None,
                 override_base_image: None,
                 debug_mode: false,
+                rebuild: false,
             },
         }
     }

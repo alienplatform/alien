@@ -2063,13 +2063,17 @@ async fn build_resource(
 
     let platform_name = settings.platform.runtime_platform().as_str();
     let lookup_started = Instant::now();
-    let cached_dir = find_cached_artifact_dir(
-        build_output_dir,
-        resource_name,
-        &targets,
-        &artifact_cache_key,
-    )
-    .await?;
+    let cached_dir = if settings.rebuild {
+        None
+    } else {
+        find_cached_artifact_dir(
+            build_output_dir,
+            resource_name,
+            &targets,
+            &artifact_cache_key,
+        )
+        .await?
+    };
     let lookup_secs = lookup_started.elapsed().as_secs_f64();
 
     if let Some(cached_dir) = cached_dir {
@@ -2927,6 +2931,7 @@ async fn build_target_to_file(
         build_target: *target,
         runtime_platform_name: settings.platform.runtime_platform().as_str().to_string(),
         debug_mode: settings.debug_mode,
+        pull_base_images: settings.rebuild,
         workload,
     };
 
@@ -3900,6 +3905,7 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
         };
 
         let error = build_stack(stack, &settings)
@@ -3933,6 +3939,7 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
         };
 
         let error = build_stack(stack, &settings)
@@ -4362,6 +4369,7 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
         };
 
         // Pull alpine:latest (small, always available)
@@ -4429,6 +4437,7 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
         };
 
         // Try to pull non-existent image
@@ -4469,6 +4478,7 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
         };
 
         // Pull alpine image
@@ -4528,6 +4538,7 @@ mod tests {
             cache_url: None,
             override_base_image: Some("registry.example.com/base:tag".to_string()),
             debug_mode: false,
+            rebuild: false,
         };
         let azure = BuildSettings {
             platform: PlatformBuildSettings::Azure {},
@@ -4698,6 +4709,7 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
         };
 
         let first = compute_source_artifact_cache_key(
@@ -4760,6 +4772,7 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
         };
 
         let first = compute_source_artifact_cache_key(
@@ -4825,6 +4838,7 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
         };
 
         let first_key = compute_source_artifact_cache_key(
@@ -4889,6 +4903,7 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
         };
 
         let key = |dir: &Path| {
@@ -4972,6 +4987,7 @@ mod tests {
                     cache_url: None,
                     override_base_image: None,
                     debug_mode: false,
+                    rebuild: false,
                 };
                 compute_source_artifact_cache_key(
                     &dir,
@@ -5020,6 +5036,7 @@ mod tests {
                 cache_url: None,
                 override_base_image: None,
                 debug_mode: false,
+                rebuild: false,
             };
         let x64 = vec![BinaryTarget::LinuxX64];
         let arm64 = vec![BinaryTarget::LinuxArm64];
@@ -5222,6 +5239,7 @@ mod tests {
                 build_target: target,
                 runtime_platform_name: "aws".to_string(),
                 debug_mode: false,
+                pull_base_images: false,
                 workload: crate::toolchain::WorkloadKind::Container,
             };
             toolchain
@@ -5358,6 +5376,7 @@ mod tests {
             build_target: BinaryTarget::LinuxArm64,
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
+            pull_base_images: false,
             workload: crate::toolchain::WorkloadKind::Container,
         };
         toolchain
@@ -5492,6 +5511,7 @@ mod tests {
                 build_target: target,
                 runtime_platform_name: "aws".to_string(),
                 debug_mode: false,
+                pull_base_images: false,
                 workload: crate::toolchain::WorkloadKind::Container,
             };
             toolchain
@@ -5627,6 +5647,7 @@ mod sandbox_build_tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
         }
     }
 

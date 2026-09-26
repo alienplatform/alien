@@ -346,6 +346,7 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
                 cache_url: args.cache_url.clone(),
                 override_base_image: args.override_base_image.clone(),
                 debug_mode: false,
+                rebuild: false,
             },
         });
     }
@@ -752,6 +753,7 @@ mod tests {
                 cache_url: None,
                 override_base_image: None,
                 debug_mode: false,
+                rebuild: false,
             },
         }
     }
