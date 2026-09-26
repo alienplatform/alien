@@ -22,6 +22,20 @@ import {
   DataServiceActivation$inboundSchema,
 } from "./collectionissue43.js";
 import {
+  CollectionIssue5,
+  CollectionIssue5$inboundSchema,
+  DataAzureContainerApps1,
+  DataAzureContainerApps1$inboundSchema,
+  DataContainer,
+  DataContainer$inboundSchema,
+  DataGcpCloudRun,
+  DataGcpCloudRun$inboundSchema,
+  DataKubernetes1,
+  DataKubernetes1$inboundSchema,
+  DataLocal2,
+  DataLocal2$inboundSchema,
+} from "./collectionissue5.js";
+import {
   BackendEnum,
   BackendEnum$inboundSchema,
   ControllerPlatform,
@@ -48,21 +62,7 @@ import {
   DataComputeCluster$inboundSchema,
   DataDaemon,
   DataDaemon$inboundSchema,
-} from "./eventseverity2.js";
-import {
-  DataAzureContainerApps1,
-  DataAzureContainerApps1$inboundSchema,
-  DataContainer,
-  DataContainer$inboundSchema,
-  DataGcpCloudRun,
-  DataGcpCloudRun$inboundSchema,
-  DataKubernetes1,
-  DataKubernetes1$inboundSchema,
-  DataLocal2,
-  DataLocal2$inboundSchema,
-  GetResourceDeploymentDetailDataStatus5,
-  GetResourceDeploymentDetailDataStatus5$inboundSchema,
-} from "./getresourcedeploymentdetaildatastatus5.js";
+} from "./cpuunion5.js";
 import {
   DataKv,
   DataKv$inboundSchema,
@@ -79,6 +79,37 @@ import {
   DataKubernetesCluster,
   DataKubernetesCluster$inboundSchema,
 } from "./providerfleet1.js";
+
+export const Health5 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health5 = ClosedEnum<typeof Health5>;
+
+export const Lifecycle5 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle5 = ClosedEnum<typeof Lifecycle5>;
+
+export type GetResourceDeploymentDetailDataStatus5 = {
+  collectionIssues: Array<CollectionIssue5>;
+  health: Health5;
+  lifecycle: Lifecycle5;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
 
 export type DataAwsLambda = {
   codeSha256?: string | null | undefined;
@@ -562,6 +593,38 @@ export type GetResourceDeploymentDetailResponse = {
 };
 
 /** @internal */
+export const Health5$inboundSchema: z.ZodEnum<typeof Health5> = z.enum(Health5);
+
+/** @internal */
+export const Lifecycle5$inboundSchema: z.ZodEnum<typeof Lifecycle5> = z.enum(
+  Lifecycle5,
+);
+
+/** @internal */
+export const GetResourceDeploymentDetailDataStatus5$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailDataStatus5,
+  unknown
+> = z.object({
+  collectionIssues: z.array(CollectionIssue5$inboundSchema),
+  health: Health5$inboundSchema,
+  lifecycle: Lifecycle5$inboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
+
+export function getResourceDeploymentDetailDataStatus5FromJSON(
+  jsonString: string,
+): SafeParseResult<GetResourceDeploymentDetailDataStatus5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      GetResourceDeploymentDetailDataStatus5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailDataStatus5' from JSON`,
+  );
+}
+
+/** @internal */
 export const DataAwsLambda$inboundSchema: z.ZodType<DataAwsLambda, unknown> = z
   .object({
     codeSha256: z.nullable(z.string()).optional(),
@@ -580,7 +643,7 @@ export const DataAwsLambda$inboundSchema: z.ZodType<DataAwsLambda, unknown> = z
     state: z.nullable(z.string()).optional(),
     stateReason: z.nullable(z.string()).optional(),
     stateReasonCode: z.nullable(z.string()).optional(),
-    status: GetResourceDeploymentDetailDataStatus5$inboundSchema,
+    status: z.lazy(() => GetResourceDeploymentDetailDataStatus5$inboundSchema),
     timeoutSeconds: z.nullable(z.int()).optional(),
     triggerCount: z.int(),
     version: z.nullable(z.string()).optional(),

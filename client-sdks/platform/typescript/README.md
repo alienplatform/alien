@@ -302,6 +302,7 @@ run();
 * [put](docs/sdks/dynamiccontainers/README.md#put) - Create or replace a dynamic container in an existing deployment.
 * [delete](docs/sdks/dynamiccontainers/README.md#delete) - Remove a dynamic container from this deployment.
 * [list](docs/sdks/dynamiccontainers/README.md#list) - List containers created after this deployment was installed.
+* [logs](docs/sdks/dynamiccontainers/README.md#logs) - Read recent logs for one dynamic container.
 
 ### [Events](docs/sdks/events/README.md)
 
@@ -605,6 +606,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`dynamicContainersDelete`](docs/sdks/dynamiccontainers/README.md#delete) - Remove a dynamic container from this deployment.
 - [`dynamicContainersGet`](docs/sdks/dynamiccontainers/README.md#get) - Get one dynamic container's desired generation, status, and internal address.
 - [`dynamicContainersList`](docs/sdks/dynamiccontainers/README.md#list) - List containers created after this deployment was installed.
+- [`dynamicContainersLogs`](docs/sdks/dynamiccontainers/README.md#logs) - Read recent logs for one dynamic container.
 - [`dynamicContainersPut`](docs/sdks/dynamiccontainers/README.md#put) - Create or replace a dynamic container in an existing deployment.
 - [`eventsGet`](docs/sdks/events/README.md#get) - Retrieve an event by ID.
 - [`eventsList`](docs/sdks/events/README.md#list) - Retrieve all events.

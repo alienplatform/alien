@@ -271,6 +271,20 @@ export type DeploymentStatePreparedStackSupportedPlatform = ClosedEnum<
  */
 export type DeploymentStatePreparedStack = {
   /**
+   * Released Container resources whose image repositories are approved for
+   *
+   * @remarks
+   * containers created after installation.
+   */
+  dynamicContainerImageResources?: Array<string> | undefined;
+  /**
+   * Exact image repositories approved for containers created after installation.
+   *
+   * @remarks
+   * The runtime API also requires an immutable SHA-256 digest.
+   */
+  dynamicContainerRepositories?: Array<string> | undefined;
+  /**
    * Unique identifier for the stack
    */
   id: string;
@@ -2312,6 +2326,20 @@ export type TargetReleaseSupportedPlatform = ClosedEnum<
  */
 export type TargetReleaseStack = {
   /**
+   * Released Container resources whose image repositories are approved for
+   *
+   * @remarks
+   * containers created after installation.
+   */
+  dynamicContainerImageResources?: Array<string> | undefined;
+  /**
+   * Exact image repositories approved for containers created after installation.
+   *
+   * @remarks
+   * The runtime API also requires an immutable SHA-256 digest.
+   */
+  dynamicContainerRepositories?: Array<string> | undefined;
+  /**
    * Unique identifier for the stack
    */
   id: string;
@@ -2950,6 +2978,8 @@ export const DeploymentStatePreparedStack$inboundSchema: z.ZodType<
   DeploymentStatePreparedStack,
   unknown
 > = z.object({
+  dynamicContainerImageResources: z.array(z.string()).optional(),
+  dynamicContainerRepositories: z.array(z.string()).optional(),
   id: z.string(),
   inputs: z.array(DeploymentStatePreparedStackInput$inboundSchema).optional(),
   permissions: z.lazy(() =>
@@ -2965,6 +2995,8 @@ export const DeploymentStatePreparedStack$inboundSchema: z.ZodType<
 });
 /** @internal */
 export type DeploymentStatePreparedStack$Outbound = {
+  dynamicContainerImageResources?: Array<string> | undefined;
+  dynamicContainerRepositories?: Array<string> | undefined;
   id: string;
   inputs?: Array<DeploymentStatePreparedStackInput$Outbound> | undefined;
   permissions?: DeploymentStatePreparedStackPermissions$Outbound | undefined;
@@ -2977,6 +3009,8 @@ export const DeploymentStatePreparedStack$outboundSchema: z.ZodType<
   DeploymentStatePreparedStack$Outbound,
   DeploymentStatePreparedStack
 > = z.object({
+  dynamicContainerImageResources: z.array(z.string()).optional(),
+  dynamicContainerRepositories: z.array(z.string()).optional(),
   id: z.string(),
   inputs: z.array(DeploymentStatePreparedStackInput$outboundSchema).optional(),
   permissions: z.lazy(() =>
@@ -8239,6 +8273,8 @@ export const TargetReleaseStack$inboundSchema: z.ZodType<
   TargetReleaseStack,
   unknown
 > = z.object({
+  dynamicContainerImageResources: z.array(z.string()).optional(),
+  dynamicContainerRepositories: z.array(z.string()).optional(),
   id: z.string(),
   inputs: z.array(z.lazy(() => TargetReleaseInput$inboundSchema)).optional(),
   permissions: z.lazy(() => TargetReleasePermissions$inboundSchema).optional(),
@@ -8252,6 +8288,8 @@ export const TargetReleaseStack$inboundSchema: z.ZodType<
 });
 /** @internal */
 export type TargetReleaseStack$Outbound = {
+  dynamicContainerImageResources?: Array<string> | undefined;
+  dynamicContainerRepositories?: Array<string> | undefined;
   id: string;
   inputs?: Array<TargetReleaseInput$Outbound> | undefined;
   permissions?: TargetReleasePermissions$Outbound | undefined;
@@ -8264,6 +8302,8 @@ export const TargetReleaseStack$outboundSchema: z.ZodType<
   TargetReleaseStack$Outbound,
   TargetReleaseStack
 > = z.object({
+  dynamicContainerImageResources: z.array(z.string()).optional(),
+  dynamicContainerRepositories: z.array(z.string()).optional(),
   id: z.string(),
   inputs: z.array(z.lazy(() => TargetReleaseInput$outboundSchema)).optional(),
   permissions: z.lazy(() => TargetReleasePermissions$outboundSchema).optional(),

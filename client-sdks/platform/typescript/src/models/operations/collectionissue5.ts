@@ -12,9 +12,14 @@ import {
   ContainerUnitUnion$inboundSchema,
   CpuUnion5,
   CpuUnion5$inboundSchema,
-  EventSeverity2,
-  EventSeverity2$inboundSchema,
-} from "./eventseverity2.js";
+} from "./cpuunion5.js";
+
+export const EventSeverity2 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type EventSeverity2 = ClosedEnum<typeof EventSeverity2>;
 
 export type Subject2 = {
   id?: string | null | undefined;
@@ -192,6 +197,27 @@ export type Memory4 = {
 
 export type MemoryUnion4 = Memory4 | any;
 
+/**
+ * Image a running container reports.
+ */
+export type Container2 = {
+  /**
+   * Registry manifest digest in `sha256:<hex>` form, when the runtime
+   *
+   * @remarks
+   * reports one.
+   */
+  digest?: string | null | undefined;
+  /**
+   * Image reference reported by the container runtime.
+   */
+  image: string;
+  /**
+   * Container name.
+   */
+  name: string;
+};
+
 export const CpuPodUnit2 = {
   Count: "count",
   Percent: "percent",
@@ -234,6 +260,7 @@ export type OwnerReference2 = {
 };
 
 export type Pod2 = {
+  containers?: Array<Container2> | undefined;
   cpu?: CpuPod2 | any | null | undefined;
   memory?: MemoryPod2 | any | null | undefined;
   name: string;
@@ -830,6 +857,27 @@ export type Memory1 = {
 
 export type MemoryUnion1 = Memory1 | any;
 
+/**
+ * Image a running container reports.
+ */
+export type Container1 = {
+  /**
+   * Registry manifest digest in `sha256:<hex>` form, when the runtime
+   *
+   * @remarks
+   * reports one.
+   */
+  digest?: string | null | undefined;
+  /**
+   * Image reference reported by the container runtime.
+   */
+  image: string;
+  /**
+   * Container name.
+   */
+  name: string;
+};
+
 export const CpuPodUnit1 = {
   Count: "count",
   Percent: "percent",
@@ -872,6 +920,7 @@ export type OwnerReference1 = {
 };
 
 export type Pod1 = {
+  containers?: Array<Container1> | undefined;
   cpu?: CpuPod1 | any | null | undefined;
   memory?: MemoryPod1 | any | null | undefined;
   name: string;
@@ -1176,36 +1225,9 @@ export type CollectionIssue5 = {
   source: string;
 };
 
-export const Health5 = {
-  Unknown: "unknown",
-  Healthy: "healthy",
-  Degraded: "degraded",
-  Unhealthy: "unhealthy",
-} as const;
-export type Health5 = ClosedEnum<typeof Health5>;
-
-export const Lifecycle5 = {
-  Unknown: "unknown",
-  Creating: "creating",
-  Updating: "updating",
-  Running: "running",
-  Scaling: "scaling",
-  Stopping: "stopping",
-  Stopped: "stopped",
-  Deleting: "deleting",
-  Deleted: "deleted",
-  Failed: "failed",
-} as const;
-export type Lifecycle5 = ClosedEnum<typeof Lifecycle5>;
-
-export type GetResourceDeploymentDetailDataStatus5 = {
-  collectionIssues: Array<CollectionIssue5>;
-  health: Health5;
-  lifecycle: Lifecycle5;
-  message?: string | null | undefined;
-  partial: boolean;
-  stale: boolean;
-};
+/** @internal */
+export const EventSeverity2$inboundSchema: z.ZodEnum<typeof EventSeverity2> = z
+  .enum(EventSeverity2);
 
 /** @internal */
 export const Subject2$inboundSchema: z.ZodType<Subject2, unknown> = z.object({
@@ -1573,6 +1595,24 @@ export function memoryUnion4FromJSON(
 }
 
 /** @internal */
+export const Container2$inboundSchema: z.ZodType<Container2, unknown> = z
+  .object({
+    digest: z.nullable(z.string()).optional(),
+    image: z.string(),
+    name: z.string(),
+  });
+
+export function container2FromJSON(
+  jsonString: string,
+): SafeParseResult<Container2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Container2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Container2' from JSON`,
+  );
+}
+
+/** @internal */
 export const CpuPodUnit2$inboundSchema: z.ZodEnum<typeof CpuPodUnit2> = z.enum(
   CpuPodUnit2,
 );
@@ -1667,6 +1707,7 @@ export function ownerReference2FromJSON(
 
 /** @internal */
 export const Pod2$inboundSchema: z.ZodType<Pod2, unknown> = z.object({
+  containers: z.array(z.lazy(() => Container2$inboundSchema)).optional(),
   cpu: z.nullable(z.union([z.lazy(() => CpuPod2$inboundSchema), z.any()]))
     .optional(),
   memory: z.nullable(z.union([z.lazy(() => MemoryPod2$inboundSchema), z.any()]))
@@ -2857,6 +2898,24 @@ export function memoryUnion1FromJSON(
 }
 
 /** @internal */
+export const Container1$inboundSchema: z.ZodType<Container1, unknown> = z
+  .object({
+    digest: z.nullable(z.string()).optional(),
+    image: z.string(),
+    name: z.string(),
+  });
+
+export function container1FromJSON(
+  jsonString: string,
+): SafeParseResult<Container1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Container1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Container1' from JSON`,
+  );
+}
+
+/** @internal */
 export const CpuPodUnit1$inboundSchema: z.ZodEnum<typeof CpuPodUnit1> = z.enum(
   CpuPodUnit1,
 );
@@ -2951,6 +3010,7 @@ export function ownerReference1FromJSON(
 
 /** @internal */
 export const Pod1$inboundSchema: z.ZodType<Pod1, unknown> = z.object({
+  containers: z.array(z.lazy(() => Container1$inboundSchema)).optional(),
   cpu: z.nullable(z.union([z.lazy(() => CpuPod1$inboundSchema), z.any()]))
     .optional(),
   memory: z.nullable(z.union([z.lazy(() => MemoryPod1$inboundSchema), z.any()]))
@@ -3374,37 +3434,5 @@ export function collectionIssue5FromJSON(
     jsonString,
     (x) => CollectionIssue5$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'CollectionIssue5' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health5$inboundSchema: z.ZodEnum<typeof Health5> = z.enum(Health5);
-
-/** @internal */
-export const Lifecycle5$inboundSchema: z.ZodEnum<typeof Lifecycle5> = z.enum(
-  Lifecycle5,
-);
-
-/** @internal */
-export const GetResourceDeploymentDetailDataStatus5$inboundSchema: z.ZodType<
-  GetResourceDeploymentDetailDataStatus5,
-  unknown
-> = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue5$inboundSchema)),
-  health: Health5$inboundSchema,
-  lifecycle: Lifecycle5$inboundSchema,
-  message: z.nullable(z.string()).optional(),
-  partial: z.boolean(),
-  stale: z.boolean(),
-});
-
-export function getResourceDeploymentDetailDataStatus5FromJSON(
-  jsonString: string,
-): SafeParseResult<GetResourceDeploymentDetailDataStatus5, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      GetResourceDeploymentDetailDataStatus5$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetResourceDeploymentDetailDataStatus5' from JSON`,
   );
 }

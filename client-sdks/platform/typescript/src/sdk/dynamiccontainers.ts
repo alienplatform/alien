@@ -5,6 +5,7 @@
 import { dynamicContainersDelete } from "../funcs/dynamicContainersDelete.js";
 import { dynamicContainersGet } from "../funcs/dynamicContainersGet.js";
 import { dynamicContainersList } from "../funcs/dynamicContainersList.js";
+import { dynamicContainersLogs } from "../funcs/dynamicContainersLogs.js";
 import { dynamicContainersPut } from "../funcs/dynamicContainersPut.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
@@ -62,6 +63,20 @@ export class DynamicContainers extends ClientSDK {
     options?: RequestOptions,
   ): Promise<Array<models.DynamicContainerResponse>> {
     return unwrapAsync(dynamicContainersList(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Read recent logs for one dynamic container.
+   */
+  async logs(
+    request: operations.GetDynamicContainerLogsRequest,
+    options?: RequestOptions,
+  ): Promise<operations.GetDynamicContainerLogsResponse> {
+    return unwrapAsync(dynamicContainersLogs(
       this,
       request,
       options,

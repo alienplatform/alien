@@ -330,6 +330,27 @@ export type Memory6 = {
 
 export type MemoryUnion6 = Memory6 | any;
 
+/**
+ * Image a running container reports.
+ */
+export type Container3 = {
+  /**
+   * Registry manifest digest in `sha256:<hex>` form, when the runtime
+   *
+   * @remarks
+   * reports one.
+   */
+  digest?: string | null | undefined;
+  /**
+   * Image reference reported by the container runtime.
+   */
+  image: string;
+  /**
+   * Container name.
+   */
+  name: string;
+};
+
 export const CpuPodUnit3 = {
   Count: "count",
   Percent: "percent",
@@ -372,6 +393,7 @@ export type OwnerReference3 = {
 };
 
 export type Pod3 = {
+  containers?: Array<Container3> | undefined;
   cpu?: CpuPod3 | any | null | undefined;
   memory?: MemoryPod3 | any | null | undefined;
   name: string;
@@ -1254,13 +1276,6 @@ export type Cpu5 = {
 
 export type CpuUnion5 = Cpu5 | any;
 
-export const EventSeverity2 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity2 = ClosedEnum<typeof EventSeverity2>;
-
 /** @internal */
 export const GetResourceDeploymentDetailReason19$inboundSchema: z.ZodEnum<
   typeof GetResourceDeploymentDetailReason19
@@ -1864,6 +1879,24 @@ export function memoryUnion6FromJSON(
 }
 
 /** @internal */
+export const Container3$inboundSchema: z.ZodType<Container3, unknown> = z
+  .object({
+    digest: z.nullable(z.string()).optional(),
+    image: z.string(),
+    name: z.string(),
+  });
+
+export function container3FromJSON(
+  jsonString: string,
+): SafeParseResult<Container3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Container3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Container3' from JSON`,
+  );
+}
+
+/** @internal */
 export const CpuPodUnit3$inboundSchema: z.ZodEnum<typeof CpuPodUnit3> = z.enum(
   CpuPodUnit3,
 );
@@ -1958,6 +1991,7 @@ export function ownerReference3FromJSON(
 
 /** @internal */
 export const Pod3$inboundSchema: z.ZodType<Pod3, unknown> = z.object({
+  containers: z.array(z.lazy(() => Container3$inboundSchema)).optional(),
   cpu: z.nullable(z.union([z.lazy(() => CpuPod3$inboundSchema), z.any()]))
     .optional(),
   memory: z.nullable(z.union([z.lazy(() => MemoryPod3$inboundSchema), z.any()]))
@@ -3684,7 +3718,3 @@ export function cpuUnion5FromJSON(
     `Failed to parse 'CpuUnion5' from JSON`,
   );
 }
-
-/** @internal */
-export const EventSeverity2$inboundSchema: z.ZodEnum<typeof EventSeverity2> = z
-  .enum(EventSeverity2);

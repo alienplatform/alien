@@ -54,6 +54,14 @@ import {
   DeploymentState$outboundSchema,
 } from "./deploymentstate.js";
 import {
+  DataComputeCluster,
+  DataComputeCluster$Outbound,
+  DataComputeCluster$outboundSchema,
+  DataDaemon,
+  DataDaemon$Outbound,
+  DataDaemon$outboundSchema,
+} from "./memoryunit5.js";
+import {
   ObservedInventoryBatch,
   ObservedInventoryBatch$Outbound,
   ObservedInventoryBatch$outboundSchema,
@@ -77,27 +85,15 @@ import {
   DataContainer,
   DataContainer$Outbound,
   DataContainer$outboundSchema,
-  DataWorker,
-  DataWorker$Outbound,
-  DataWorker$outboundSchema,
-  StatusSeverity4,
-  StatusSeverity4$outboundSchema,
-  SyncReconcileRequestReason4,
-  SyncReconcileRequestReason4$outboundSchema,
-} from "./statusseverity4.js";
+  SyncReconcileRequestDataUnion2,
+  SyncReconcileRequestDataUnion2$Outbound,
+  SyncReconcileRequestDataUnion2$outboundSchema,
+} from "./syncreconcilerequestdataunion2.js";
 import {
   DataKubernetesCluster,
   DataKubernetesCluster$Outbound,
   DataKubernetesCluster$outboundSchema,
 } from "./syncreconcilerequestlifecycle19.js";
-import {
-  DataComputeCluster,
-  DataComputeCluster$Outbound,
-  DataComputeCluster$outboundSchema,
-  DataDaemon,
-  DataDaemon$Outbound,
-  DataDaemon$outboundSchema,
-} from "./syncreconcilerequestmemory5.js";
 import {
   DataArtifactRegistry,
   DataArtifactRegistry$Outbound,
@@ -115,6 +111,29 @@ import {
   DataServiceActivation$Outbound,
   DataServiceActivation$outboundSchema,
 } from "./syncreconcilerequestreason42.js";
+
+export type DataWorker = {
+  data: SyncReconcileRequestDataUnion2;
+  resourceType: "worker";
+};
+
+export const SyncReconcileRequestReason4 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type SyncReconcileRequestReason4 = ClosedEnum<
+  typeof SyncReconcileRequestReason4
+>;
+
+export const StatusSeverity4 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type StatusSeverity4 = ClosedEnum<typeof StatusSeverity4>;
 
 export type SyncReconcileRequestCollectionIssue4 = {
   message: string;
@@ -578,6 +597,34 @@ export type SyncReconcileRequest = {
    */
   operationsReport?: OperationsReport | undefined;
 };
+
+/** @internal */
+export type DataWorker$Outbound = {
+  data: SyncReconcileRequestDataUnion2$Outbound;
+  resourceType: "worker";
+};
+
+/** @internal */
+export const DataWorker$outboundSchema: z.ZodType<
+  DataWorker$Outbound,
+  DataWorker
+> = z.object({
+  data: SyncReconcileRequestDataUnion2$outboundSchema,
+  resourceType: z.literal("worker"),
+});
+
+export function dataWorkerToJSON(dataWorker: DataWorker): string {
+  return JSON.stringify(DataWorker$outboundSchema.parse(dataWorker));
+}
+
+/** @internal */
+export const SyncReconcileRequestReason4$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestReason4
+> = z.enum(SyncReconcileRequestReason4);
+
+/** @internal */
+export const StatusSeverity4$outboundSchema: z.ZodEnum<typeof StatusSeverity4> =
+  z.enum(StatusSeverity4);
 
 /** @internal */
 export type SyncReconcileRequestCollectionIssue4$Outbound = {
@@ -1204,7 +1251,7 @@ export const SyncReconcileRequestDataUnion19$outboundSchema: z.ZodType<
   SyncReconcileRequestDataUnion19
 > = z.union([
   z.lazy(() => DataStorage$outboundSchema),
-  DataWorker$outboundSchema,
+  z.lazy(() => DataWorker$outboundSchema),
   DataContainer$outboundSchema,
   DataDaemon$outboundSchema,
   DataComputeCluster$outboundSchema,
@@ -1316,7 +1363,7 @@ export const ResourceHeartbeat$outboundSchema: z.ZodType<
   controllerPlatform: SyncReconcileRequestControllerPlatform$outboundSchema,
   data: z.union([
     z.lazy(() => DataStorage$outboundSchema),
-    DataWorker$outboundSchema,
+    z.lazy(() => DataWorker$outboundSchema),
     DataContainer$outboundSchema,
     DataDaemon$outboundSchema,
     DataComputeCluster$outboundSchema,

@@ -23,6 +23,11 @@ test("generated dynamic container client sends a scoped write and parses status"
     httpClient: new HTTPClient({ fetcher: async request => {
       requests.push(request)
       if (request.method === "DELETE") return Response.json({ name: "agent", deleted: true }, { status: 202 })
+      if (new URL(request.url).pathname.endsWith("/logs"))
+        return Response.json({
+          logs: [{ timestamp: "2026-09-26T00:00:00.000Z", level: "info", message: "ready", replicaId: "replica-1" }],
+          numHits: 1, nextCursor: null, partial: false, errorCount: 0,
+        })
       if (request.method === "GET" && new URL(request.url).pathname.endsWith("/dynamic-containers"))
         return Response.json([container])
       return Response.json(container, { status: request.method === "PUT" ? 202 : 200 })
@@ -54,9 +59,13 @@ test("generated dynamic container client sends a scoped write and parses status"
   const listed = await sdk.dynamicContainers.list({ id: "dep_example" })
   assert.equal(listed.length, 1)
   assert.equal(listed[0].name, "agent")
+  const logs = await sdk.dynamicContainers.logs({ id: "dep_example", name: "agent", limit: 10 })
+  assert.equal(logs.logs[0]?.message, "ready")
+  assert.equal(new URL(requests.at(-1).url).pathname, "/v1/deployments/dep_example/dynamic-containers/agent/logs")
+  assert.equal(new URL(requests.at(-1).url).searchParams.get("limit"), "10")
   const deleted = await sdk.dynamicContainers.delete({ id: "dep_example", name: "agent" })
   assert.deepEqual(deleted, { name: "agent", deleted: true })
-  assert.deepEqual(requests.map(request => request.method), ["PUT", "GET", "GET", "DELETE"])
+  assert.deepEqual(requests.map(request => request.method), ["PUT", "GET", "GET", "GET", "DELETE"])
   for (const request of requests) {
     assert.equal(new URL(request.url).searchParams.get("workspace"), "example")
   }

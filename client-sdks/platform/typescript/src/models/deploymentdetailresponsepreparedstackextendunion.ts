@@ -1457,6 +1457,20 @@ export type DeploymentDetailResponsePendingPreparedStackSupportedPlatform =
  */
 export type DeploymentDetailResponsePendingPreparedStack = {
   /**
+   * Released Container resources whose image repositories are approved for
+   *
+   * @remarks
+   * containers created after installation.
+   */
+  dynamicContainerImageResources?: Array<string> | undefined;
+  /**
+   * Exact image repositories approved for containers created after installation.
+   *
+   * @remarks
+   * The runtime API also requires an immutable SHA-256 digest.
+   */
+  dynamicContainerRepositories?: Array<string> | undefined;
+  /**
    * Unique identifier for the stack
    */
   id: string;
@@ -4757,6 +4771,8 @@ export const DeploymentDetailResponsePendingPreparedStackSupportedPlatform$inbou
 /** @internal */
 export const DeploymentDetailResponsePendingPreparedStack$inboundSchema:
   z.ZodType<DeploymentDetailResponsePendingPreparedStack, unknown> = z.object({
+    dynamicContainerImageResources: z.array(z.string()).optional(),
+    dynamicContainerRepositories: z.array(z.string()).optional(),
     id: z.string(),
     inputs: z.array(
       z.lazy(() =>

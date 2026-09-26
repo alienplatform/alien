@@ -1477,6 +1477,20 @@ export type CurrentReleaseSupportedPlatform = ClosedEnum<
  */
 export type CurrentReleaseStack = {
   /**
+   * Released Container resources whose image repositories are approved for
+   *
+   * @remarks
+   * containers created after installation.
+   */
+  dynamicContainerImageResources?: Array<string> | undefined;
+  /**
+   * Exact image repositories approved for containers created after installation.
+   *
+   * @remarks
+   * The runtime API also requires an immutable SHA-256 digest.
+   */
+  dynamicContainerRepositories?: Array<string> | undefined;
+  /**
    * Unique identifier for the stack
    */
   id: string;
@@ -6317,6 +6331,8 @@ export const CurrentReleaseStack$inboundSchema: z.ZodType<
   CurrentReleaseStack,
   unknown
 > = z.object({
+  dynamicContainerImageResources: z.array(z.string()).optional(),
+  dynamicContainerRepositories: z.array(z.string()).optional(),
   id: z.string(),
   inputs: z.array(z.lazy(() => CurrentReleaseInput$inboundSchema)).optional(),
   permissions: z.lazy(() => CurrentReleasePermissions$inboundSchema).optional(),
@@ -6330,6 +6346,8 @@ export const CurrentReleaseStack$inboundSchema: z.ZodType<
 });
 /** @internal */
 export type CurrentReleaseStack$Outbound = {
+  dynamicContainerImageResources?: Array<string> | undefined;
+  dynamicContainerRepositories?: Array<string> | undefined;
   id: string;
   inputs?: Array<CurrentReleaseInput$Outbound> | undefined;
   permissions?: CurrentReleasePermissions$Outbound | undefined;
@@ -6342,6 +6360,8 @@ export const CurrentReleaseStack$outboundSchema: z.ZodType<
   CurrentReleaseStack$Outbound,
   CurrentReleaseStack
 > = z.object({
+  dynamicContainerImageResources: z.array(z.string()).optional(),
+  dynamicContainerRepositories: z.array(z.string()).optional(),
   id: z.string(),
   inputs: z.array(z.lazy(() => CurrentReleaseInput$outboundSchema)).optional(),
   permissions: z.lazy(() => CurrentReleasePermissions$outboundSchema)
