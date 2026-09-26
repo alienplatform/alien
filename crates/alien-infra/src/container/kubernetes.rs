@@ -2299,7 +2299,7 @@ impl KubernetesContainerController {
         }
 
         let container = K8sContainer {
-            name: "container".to_string(),
+            name: kubernetes_resource_name("", &config.id),
             image: Some(image),
             command: config.command.clone(),
             ports: Some(
@@ -2830,6 +2830,7 @@ mod tests {
             .template
             .spec
             .expect("pod spec");
+        assert_eq!(pod.containers[0].name, "web");
         let volume = pod
             .volumes
             .expect("volumes")
