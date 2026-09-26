@@ -149,8 +149,7 @@ export class Container extends ResourceBuilder {
    * @returns The Container builder instance.
    */
   public memory(value: string | ResourceSpec): this {
-    this._config.memory =
-      typeof value === "string" ? { min: value, desired: value } : value
+    this._config.memory = typeof value === "string" ? { min: value, desired: value } : value
     return this
   }
 
