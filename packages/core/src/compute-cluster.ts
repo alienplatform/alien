@@ -97,7 +97,6 @@ export class ComputeCluster {
       if (this._config.dynamicContainerPool !== undefined) {
         throw new Error("Only one compute pool may accept dynamic containers")
       }
-      this._config.dynamicContainerPool = groupId
     }
     if (
       config.failureDomainSpread !== undefined &&
@@ -119,6 +118,9 @@ export class ComputeCluster {
     if (config.failureDomainSpread !== undefined) {
       this._config.failureDomainSpread ??= {}
       this._config.failureDomainSpread[groupId] = config.failureDomainSpread
+    }
+    if (config.dynamicContainers) {
+      this._config.dynamicContainerPool = groupId
     }
     return this
   }

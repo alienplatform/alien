@@ -10,6 +10,19 @@ import {
 import { getStackInputDefinitions, type StackInputCollection } from "./input.js"
 import type { Resource } from "./resource.js"
 
+function isRepositoryName(repository: string): boolean {
+  const [authority, ...path] = repository.split("/")
+  if (path.length === 0 || path.some(part => !/^[a-z0-9]+(?:[._-]+[a-z0-9]+)*$/.test(part))) {
+    return false
+  }
+  const [host, port, ...extra] = authority.split(":")
+  return (
+    extra.length === 0 &&
+    (port === undefined || /^[0-9]+$/.test(port)) &&
+    host.split(".").every(label => /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label))
+  )
+}
+
 /**
  * Options for adding a resource to a stack.
  */
@@ -123,9 +136,7 @@ export class Stack {
       repositories.length === 0 ||
       repositories.length > 16 ||
       new Set(repositories).size !== repositories.length ||
-      repositories.some(
-        repository => !/^[a-z0-9.-]+(?::[0-9]+)?(?:\/[a-z0-9._-]+)+$/.test(repository),
-      )
+      repositories.some(repository => !isRepositoryName(repository))
     ) {
       throw new Error(
         "Dynamic container repositories must be 1–16 distinct, fully qualified OCI repositories",

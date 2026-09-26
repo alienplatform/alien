@@ -71,6 +71,14 @@ describe("Stack builder validation", () => {
         .pool("apps", { ...pool, dynamicContainers: true })
         .pool("other", { ...pool, dynamicContainers: true }),
     ).toThrow(/Only one compute pool/)
+
+    const retry = new alien.ComputeCluster("runtime")
+    expect(() =>
+      retry.pool("invalid", { ...pool, dynamicContainers: true, failureDomainSpread: 0 }),
+    ).toThrow(/failureDomainSpread/)
+    expect(
+      retry.pool("apps", { ...pool, dynamicContainers: true }).build().config.dynamicContainerPool,
+    ).toBe("apps")
   })
 
   it("records exact repositories approved for dynamic container images", () => {
@@ -83,6 +91,14 @@ describe("Stack builder validation", () => {
         "registry.example.com/team/runner:latest",
       ]),
     ).toThrow(/fully qualified OCI repositories/)
+    for (const repository of [
+      "registry..example.com/team/runner",
+      "registry.example.com/../runner",
+    ]) {
+      expect(() => new alien.Stack("app").dynamicContainerRepositories([repository])).toThrow(
+        /fully qualified OCI repositories/,
+      )
+    }
   })
 
   it("approves released Container images by resource ID", () => {
