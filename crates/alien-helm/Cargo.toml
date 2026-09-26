@@ -18,10 +18,10 @@ indexmap = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+sha2 = { workspace = true }
 tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 alien-terraform = { workspace = true }
 insta = { workspace = true }
-sha2 = { workspace = true }
 tempfile = { workspace = true }

@@ -1785,6 +1785,14 @@
                   }
                 ]
               },
+              "dynamicContainers": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DynamicContainerReport"
+                },
+                "description": "Absent for older Operators. This report has no secret values.",
+                "nullable": true
+              },
               "operatorImage": {
                 "nullable": true,
                 "description": "Exact immutable Operator image identity reported by the running process.",
@@ -1819,6 +1827,14 @@
             ]
           },
           "target": {},
+          "targetDynamicContainers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TargetDynamicContainer"
+            },
+            "description": "Complete release-independent target set. Older embedders omit it.",
+            "nullable": true
+          },
           "targetOperationsBundleSet": {
             "nullable": true,
             "description": "Bundles the Operator should download to catch up to the target\nenabled-plugin-set hash. Opaque passthrough from the embedder's\n`DeploymentStore::reconcile`; `None` in OSS.",
@@ -7066,6 +7082,58 @@
             ]
           }
         }
+      },
+      "DynamicContainerHealthCheck": {
+        "type": "object",
+        "required": [
+          "path",
+          "port"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "DynamicContainerReport": {
+        "type": "object",
+        "description": "What the Operator observed after applying one target generation.",
+        "required": [
+          "name",
+          "generation",
+          "status"
+        ],
+        "properties": {
+          "generation": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DynamicContainerStatus"
+          }
+        }
+      },
+      "DynamicContainerStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "failing",
+          "stopped"
+        ]
       },
       "Envelope": {
         "type": "object",
@@ -15665,6 +15733,80 @@
           }
         ],
         "description": "Request to submit a command response (from deployment)"
+      },
+      "TargetDynamicContainer": {
+        "type": "object",
+        "description": "One release-independent container the Operator should run in its namespace.\nThe manager sends the complete set on every sync. An empty set removes\ncontainers previously owned by this deployment.",
+        "required": [
+          "name",
+          "generation",
+          "image",
+          "cpu",
+          "memory",
+          "replicas",
+          "ports",
+          "deleted"
+        ],
+        "properties": {
+          "cpu": {
+            "type": "string"
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "healthCheck": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DynamicContainerHealthCheck"
+              }
+            ]
+          },
+          "image": {
+            "type": "string"
+          },
+          "memory": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "ports": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          "replicas": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "secretEnv": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "suspendedReason": {
+            "type": "string",
+            "description": "Stop an installed workload when its release no longer admits the image.",
+            "nullable": true
+          }
+        }
       },
       "TargetOperationsBundleSet": {
         "type": "object",

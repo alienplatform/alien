@@ -24,6 +24,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use alien_operations_sdk::KubernetesOperationPermissions;
 use indexmap::IndexMap;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Generated Helm chart files.
@@ -1865,6 +1866,18 @@ fn generate_operator_manifest_inner(
         ));
         docs.push(operator_rolebinding_doc(namespace, &operator_name, &labels));
     }
+    // Dynamic workloads need write access in this deployment namespace only.
+    // Keep it in a Role even when inventory observation uses a ClusterRole.
+    docs.push(dynamic_container_role_doc(
+        namespace,
+        &operator_name,
+        &labels,
+    ));
+    docs.push(dynamic_container_rolebinding_doc(
+        namespace,
+        &operator_name,
+        &labels,
+    ));
     if creates_credentials_secret {
         docs.push(operator_secret_doc(
             namespace,
@@ -2267,6 +2280,76 @@ roleRef:
         yaml_string(operator_name)
     ));
     yaml
+}
+
+fn dynamic_container_role_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let role_name = dynamic_container_role_name(operator_name);
+    let mut yaml = operator_metadata_doc(
+        "rbac.authorization.k8s.io/v1",
+        "Role",
+        namespace,
+        &role_name,
+        labels,
+    );
+    yaml.push_str(
+        r#"rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "secrets"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+"#,
+    );
+    yaml
+}
+
+fn dynamic_container_rolebinding_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let role_name = dynamic_container_role_name(operator_name);
+    let mut yaml = operator_metadata_doc(
+        "rbac.authorization.k8s.io/v1",
+        "RoleBinding",
+        namespace,
+        &role_name,
+        labels,
+    );
+    yaml.push_str(&format!(
+        r#"subjects:
+  - kind: ServiceAccount
+    name: {}
+    namespace: {}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {}
+"#,
+        yaml_string(operator_name),
+        yaml_string(namespace),
+        yaml_string(&role_name),
+    ));
+    yaml
+}
+
+fn dynamic_container_role_name(operator_name: &str) -> String {
+    if operator_name.contains("{{") {
+        // Product charts resolve the Operator name at Helm render time. Hash
+        // the rendered release identity, not the literal template expression.
+        return "{{ printf \"alien-dc-%s\" (include \"deployment.fullname\" . | sha256sum | trunc 24) }}".to_string();
+    }
+    let digest = Sha256::digest(operator_name.as_bytes());
+    let hex = format!("{digest:x}");
+    format!("alien-dc-{}", &hex[..24])
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -8269,6 +8352,36 @@ remoteOperator:
         assert_eq!(cleanup_name.len(), 55);
         assert!(cleanup_name.contains("-cleanup-"));
         assert_ne!(cleanup_name, operator_name);
+    }
+
+    #[test]
+    fn product_dynamic_role_name_follows_the_helm_release() {
+        let mut files = sample_product_chart().files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let values = r#"
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#;
+        let mut names = Vec::new();
+        for release in ["first-release", "second-release"] {
+            let rendered =
+                crate::test_utils::helm_template_for_release(&files, Some(values), release);
+            rendered.assert_ok("dynamic Role in a product chart");
+            let documents = parse_manifest_docs(&rendered.stdout);
+            let name = docs_by_kind(&documents, "Role")
+                .iter()
+                .filter_map(|doc| yaml_path(doc, &["metadata", "name"]).and_then(YamlValue::as_str))
+                .find(|name| name.starts_with("alien-dc-"))
+                .expect("dynamic Role")
+                .to_string();
+            names.push(name);
+        }
+        assert_ne!(names[0], names[1]);
     }
 
     #[test]
