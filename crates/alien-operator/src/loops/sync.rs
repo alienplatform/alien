@@ -225,6 +225,17 @@ async fn sync_with_manager(
         ),
         None => None,
     };
+    let dynamic_reports = if state.config.platform == Platform::Kubernetes {
+        match super::dynamic_containers::reconcile_saved(state, &deployment_id).await {
+            Ok(reports) => reports,
+            Err(error) => {
+                error!(error = %error, "Dynamic container reconciliation failed");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     let sync_request = SyncRequest {
         deployment_id: deployment_id.clone(),
@@ -244,6 +255,9 @@ async fn sync_with_manager(
     }
     if let Some(application) = application {
         sync_input = sync_input.application(application);
+    }
+    if let Some(reports) = dynamic_reports {
+        sync_input = sync_input.dynamic_containers(reports);
     }
     let sync_input = sync_input.build();
 
@@ -339,6 +353,9 @@ async fn sync_with_manager(
         {
             error!(error = %e, "Failed to persist target_operations_bundle_set");
         }
+    }
+    if let Some(ref targets) = sync_response.target_dynamic_containers {
+        state.db.set_target_dynamic_containers(targets).await?;
     }
 
     let mut state_hydrated = false;
@@ -494,6 +511,17 @@ fn report_operator_capabilities(
             .namespace
             .as_ref()
             .map(|namespace| format!("namespace {namespace}")),
+    });
+
+    capabilities.push(OperatorCapabilityReport {
+        key: "dynamic-containers-v1".to_string(),
+        state: if state.config.platform == Platform::Kubernetes && state.config.namespace.is_some()
+        {
+            OperatorCapabilityState::Granted
+        } else {
+            OperatorCapabilityState::Unavailable
+        },
+        detail: None,
     });
 
     capabilities.push(OperatorCapabilityReport {

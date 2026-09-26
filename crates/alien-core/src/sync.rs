@@ -5,6 +5,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::{
     DeploymentConfig, DeploymentState, ObservedInventoryBatch, ReleaseInfo, ResourceHeartbeat,
@@ -179,6 +180,74 @@ pub struct TargetOperationsBundleSet {
     pub bundles: Vec<OperationsBundleDownload>,
 }
 
+/// One release-independent container the Operator should run in its namespace.
+/// The manager sends the complete set on every sync. An empty set removes
+/// containers previously owned by this deployment.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct TargetDynamicContainer {
+    pub name: String,
+    pub generation: u64,
+    pub image: String,
+    pub cpu: String,
+    pub memory: String,
+    pub replicas: u32,
+    pub ports: Vec<u16>,
+    pub deleted: bool,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub secret_env: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_check: Option<DynamicContainerHealthCheck>,
+    /// Stop an installed workload when its release no longer admits the image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suspended_reason: Option<String>,
+}
+
+// Never include secret values in sync diagnostics.
+impl std::fmt::Debug for TargetDynamicContainer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TargetDynamicContainer")
+            .field("name", &self.name)
+            .field("generation", &self.generation)
+            .field("image", &self.image)
+            .field("replicas", &self.replicas)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicContainerHealthCheck {
+    pub path: String,
+    pub port: u16,
+}
+
+/// What the Operator observed after applying one target generation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicContainerReport {
+    pub name: String,
+    pub generation: u64,
+    pub status: DynamicContainerStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum DynamicContainerStatus {
+    Pending,
+    Running,
+    Failing,
+    Stopped,
+}
+
 /// Request sent by the agent to the manager during periodic sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -293,6 +362,9 @@ pub struct SyncInput {
     /// Operator observed none or predates this report.
     #[serde(skip_serializing_if = "Option::is_none")]
     application: Option<ObservedApplicationReport>,
+    /// Absent for older Operators. An empty report means no containers remain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dynamic_containers: Option<Vec<DynamicContainerReport>>,
 }
 
 impl SyncInput {
@@ -303,6 +375,7 @@ impl SyncInput {
             request,
             operator_image: None,
             application: None,
+            dynamic_containers: None,
         }
     }
 }
@@ -313,6 +386,7 @@ pub struct SyncInputBuilder {
     request: SyncRequest,
     operator_image: Option<OperatorImageReport>,
     application: Option<ObservedApplicationReport>,
+    dynamic_containers: Option<Vec<DynamicContainerReport>>,
 }
 
 impl SyncInputBuilder {
@@ -328,12 +402,18 @@ impl SyncInputBuilder {
         self
     }
 
+    pub fn dynamic_containers(mut self, reports: Vec<DynamicContainerReport>) -> Self {
+        self.dynamic_containers = Some(reports);
+        self
+    }
+
     /// Finish the serializable sync payload.
     pub fn build(self) -> SyncInput {
         SyncInput {
             request: self.request,
             operator_image: self.operator_image,
             application: self.application,
+            dynamic_containers: self.dynamic_containers,
         }
     }
 }
@@ -369,6 +449,10 @@ pub struct SyncResponse {
     /// loaded hash to decide whether to download anything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_operations_bundle_set: Option<TargetOperationsBundleSet>,
+    /// Complete release-independent target set. None means the manager does
+    /// not support this protocol; Some(empty) means remove owned containers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_dynamic_containers: Option<Vec<TargetDynamicContainer>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -442,6 +526,7 @@ mod tests {
             target: None,
             commands_url: None,
             target_operations_bundle_set: None,
+            target_dynamic_containers: None,
         };
         let json = serde_json::to_value(&resp).unwrap();
         // target is None → should be omitted
@@ -458,6 +543,7 @@ mod tests {
             target: None,
             commands_url: None,
             target_operations_bundle_set: None,
+            target_dynamic_containers: None,
         };
         let serialized = serde_json::to_string(&resp).unwrap();
         let deserialized: SyncResponse = serde_json::from_str(&serialized).unwrap();
@@ -551,6 +637,7 @@ mod tests {
             target: None,
             commands_url: None,
             target_operations_bundle_set: None,
+            target_dynamic_containers: None,
         };
 
         let serialized = serde_json::to_string(&resp).unwrap();
@@ -766,6 +853,7 @@ mod tests {
                     url: "https://storage.example.com/bundle.zip?sig=abc".to_string(),
                 }],
             }),
+            target_dynamic_containers: None,
         };
 
         let json = serde_json::to_value(&resp).unwrap();
@@ -790,5 +878,41 @@ mod tests {
         let json = serde_json::json!({});
         let resp: SyncResponse = serde_json::from_value(json).unwrap();
         assert!(resp.target_operations_bundle_set.is_none());
+    }
+
+    #[test]
+    fn dynamic_container_sync_preserves_empty_target_and_hides_secrets_in_debug() {
+        let old_manager_response: SyncResponse = serde_json::from_str("{}").unwrap();
+        assert!(old_manager_response.target_dynamic_containers.is_none());
+
+        let empty_target = SyncResponse {
+            execution_claim: None,
+            current_state: None,
+            target: None,
+            commands_url: None,
+            target_operations_bundle_set: None,
+            target_dynamic_containers: Some(vec![]),
+        };
+        let json = serde_json::to_value(&empty_target).unwrap();
+        assert_eq!(json["targetDynamicContainers"], serde_json::json!([]));
+
+        let target = TargetDynamicContainer {
+            name: "api".to_string(),
+            generation: 2,
+            image: "example.com/api@sha256:abc".to_string(),
+            cpu: "0.5".to_string(),
+            memory: "512Mi".to_string(),
+            replicas: 1,
+            ports: vec![8080],
+            deleted: false,
+            env: BTreeMap::new(),
+            secret_env: BTreeMap::from([("TOKEN".to_string(), "private-value".to_string())]),
+            health_check: None,
+            suspended_reason: None,
+        };
+        assert!(!format!("{target:?}").contains("private-value"));
+        let roundtrip: TargetDynamicContainer =
+            serde_json::from_value(serde_json::to_value(&target).unwrap()).unwrap();
+        assert_eq!(roundtrip, target);
     }
 }

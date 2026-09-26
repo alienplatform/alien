@@ -1,7 +1,8 @@
 use alien_core::sync::{
+    DynamicContainerHealthCheck, DynamicContainerReport, DynamicContainerStatus,
     ObservedApplicationImage, ObservedApplicationReport, ObservedApplicationSource,
     OperationsBundleDownload, OperationsReport, OperatorImageReport, OperatorImageSource,
-    ReportedOperation, TargetOperationsBundleSet,
+    ReportedOperation, TargetDynamicContainer, TargetOperationsBundleSet,
 };
 use alien_core::*;
 use clap::Parser;
@@ -252,6 +253,10 @@ use utoipa::OpenApi;
     ObservedApplicationSource,
     OperationsBundleDownload,
     TargetOperationsBundleSet,
+    TargetDynamicContainer,
+    DynamicContainerHealthCheck,
+    DynamicContainerReport,
+    DynamicContainerStatus,
 )))]
 struct ApiDoc;
 

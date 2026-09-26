@@ -119,6 +119,10 @@ impl Modify for BearerSecurity {
         alien_core::sync::ObservedApplicationSource,
         alien_core::sync::OperationsBundleDownload,
         alien_core::sync::TargetOperationsBundleSet,
+        alien_core::sync::TargetDynamicContainer,
+        alien_core::sync::DynamicContainerHealthCheck,
+        alien_core::sync::DynamicContainerReport,
+        alien_core::sync::DynamicContainerStatus,
         // Credentials types
         crate::routes::credentials::MintCredentialsRequest,
         crate::routes::credentials::MintCredentialsResponse,
