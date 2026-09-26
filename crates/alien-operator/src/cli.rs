@@ -91,6 +91,10 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_NAME")]
     pub operator_name: Option<String>,
 
+    /// Stable prefix for resources created by this deployment.
+    #[arg(long, env = "OPERATOR_RESOURCE_PREFIX")]
+    pub operator_resource_prefix: Option<String>,
+
     /// Label domain used for operator-owned resources and deployment discovery.
     #[arg(long, env = "OPERATOR_LABEL_DOMAIN")]
     pub operator_label_domain: Option<String>,
@@ -153,6 +157,10 @@ pub struct Args {
 
     #[arg(long, env = "STACK_SETTINGS_FILE")]
     pub stack_settings_file: Option<PathBuf>,
+
+    /// JSON map of setup-time stack inputs. Keep this file on a Secret volume.
+    #[arg(long, env = "STACK_INPUT_VALUES_FILE")]
+    pub stack_input_values_file: Option<PathBuf>,
 
     #[arg(long, env = "ALIEN_ENABLE_LOCAL_DEBUG", default_value_t = false)]
     pub enable_local_debug: bool,
@@ -432,6 +440,18 @@ async fn run_operator_cli(
     let operator_scope = args.operator_scope.or_else(|| args.namespace.clone());
     let operator_permission = args.operator_permission;
     let operator_setup_method = args.operator_setup_method;
+    let stack_input_values_json = load_config_value(
+        None,
+        args.stack_input_values_file.as_deref(),
+        "stack input values",
+        false,
+    )
+    .await?;
+    let stack_input_values = parse_json_opt::<serde_json::Map<String, serde_json::Value>>(
+        stack_input_values_json,
+        "stack input values",
+    )?
+    .unwrap_or_default();
     let pinned_legacy_label_domain = env_string("ALIEN_RUNTIME_LEGACY_DEPLOYMENT_LABEL_KEY")
         .map(|key| {
             key.strip_suffix("/deployment")
@@ -478,10 +498,12 @@ async fn run_operator_cli(
                             &sync_token,
                             args.platform,
                             args.operator_name.as_deref(),
+                            args.operator_resource_prefix.as_deref(),
                             operator_scope.as_deref(),
                             operator_permission.as_deref(),
                             operator_setup_method.as_deref(),
                             InitialDesiredReleaseArg::None,
+                            &stack_input_values,
                         )
                         .await?;
                         if verified_id != stored_deployment_id || replacement.is_some() {
@@ -525,10 +547,12 @@ async fn run_operator_cli(
                         &sync_token,
                         args.platform,
                         args.operator_name.as_deref(),
+                        args.operator_resource_prefix.as_deref(),
                         operator_scope.as_deref(),
                         operator_permission.as_deref(),
                         operator_setup_method.as_deref(),
                         args.initial_desired_release,
+                        &stack_input_values,
                     )
                     .await?;
 
@@ -963,10 +987,12 @@ async fn initialize_with_manager(
     token: &str,
     platform: Platform,
     operator_name: Option<&str>,
+    resource_prefix: Option<&str>,
     operator_scope: Option<&str>,
     operator_permission: Option<&str>,
     operator_setup_method: Option<&str>,
     initial_desired_release: InitialDesiredReleaseArg,
+    input_values: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(String, Option<String>)> {
     use alien_manager_api::types::Platform as SdkPlatform;
     use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
@@ -1016,10 +1042,14 @@ async fn initialize_with_manager(
     let mut builder = client.initialize().body_map(|b| {
         b.platform(sdk_platform)
             .initial_desired_release(sdk_initial_desired_release)
+            .input_values(input_values.clone())
     });
 
     if let Some(name) = default_name {
         builder = builder.body_map(|b| b.name(name));
+    }
+    if let Some(resource_prefix) = resource_prefix {
+        builder = builder.body_map(|b| b.resource_prefix(resource_prefix.to_string()));
     }
     if let Some(scope) = operator_scope {
         builder = builder.body_map(|b| b.scope(scope.to_string()));

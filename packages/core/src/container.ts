@@ -4,7 +4,10 @@ import {
   type Container as ContainerConfig,
   type ContainerGpuSpec,
   ContainerSchema,
+  type ContainerSecurity,
   type HealthCheck,
+  type KubernetesHttpProbe,
+  type KubernetesSecretMount,
   type PersistentStorage,
   type PublicEndpoint,
   type ResourceSpec,
@@ -28,9 +31,13 @@ export type {
   ContainerGpuSpec,
   ContainerOutputs,
   ContainerPort,
+  ContainerSecurity,
+  ContainerSecurityProfile,
   ContainerStatus,
   ExposeProtocol,
   HealthCheck,
+  KubernetesHttpProbe,
+  KubernetesSecretMount,
   PersistentStorage,
   PublicEndpoint,
   ReplicaStatus,
@@ -66,6 +73,7 @@ export class Container extends ResourceBuilder {
     ports: [],
     publicEndpoints: [],
     environment: {},
+    kubernetesSecretMounts: [],
     stateful: false,
     // cluster is optional - if not set, ComputeClusterMutation will auto-assign
   }
@@ -132,15 +140,16 @@ export class Container extends ResourceBuilder {
   /**
    * Sets the memory resources for the container.
    *
-   * Format: "<number>Mi" or "<number>Gi"
+   * Use a size string to set the same request and limit, or a ResourceSpec
+   * to set them separately on Kubernetes.
    *
-   * Example: "512Mi", "2Gi", "16Gi"
+   * Examples: `.memory("512Mi")`, `.memory({ min: "128Mi", desired: "512Mi" })`
    *
-   * @param size Memory size string.
+   * @param value Memory size string or ResourceSpec with min/desired.
    * @returns The Container builder instance.
    */
-  public memory(size: string): this {
-    this._config.memory = { min: size, desired: size }
+  public memory(value: string | ResourceSpec): this {
+    this._config.memory = typeof value === "string" ? { min: value, desired: value } : value
     return this
   }
 
@@ -317,6 +326,31 @@ export class Container extends ResourceBuilder {
 
     this._config.persistentStorage = persistentStorage
     this._config.stateful = true
+    return this
+  }
+
+  /** Mounts an existing Secret from the deployment's Kubernetes namespace. */
+  public kubernetesSecretMount(mount: KubernetesSecretMount): this {
+    this._config.kubernetesSecretMounts ??= []
+    this._config.kubernetesSecretMounts.push(mount)
+    return this
+  }
+
+  /** Restarts a pod when this Kubernetes HTTP liveness probe fails. */
+  public kubernetesLivenessProbe(probe: KubernetesHttpProbe): this {
+    this._config.kubernetesLivenessProbe = probe
+    return this
+  }
+
+  /** Excludes a pod from Service endpoints until this Kubernetes HTTP readiness probe passes. */
+  public kubernetesReadinessProbe(probe: KubernetesHttpProbe): this {
+    this._config.kubernetesReadinessProbe = probe
+    return this
+  }
+
+  /** Sets a portable container security profile and process identity. */
+  public security(settings: ContainerSecurity): this {
+    this._config.security = settings
     return this
   }
 

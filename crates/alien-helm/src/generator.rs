@@ -196,6 +196,10 @@ pub struct ProductOperatorManifestOptions<'a> {
 pub struct OperatorLogCollectorOptions<'a> {
     pub image: &'a str,
     pub token: &'a str,
+    /// Existing Pod label key to collect. Set together with `pod_label_value`.
+    pub pod_label_key: Option<&'a str>,
+    /// Existing Pod label value to collect. Set together with `pod_label_key`.
+    pub pod_label_value: Option<&'a str>,
 }
 
 /// Generate a Helm chart for `stack`.
@@ -252,7 +256,7 @@ fn generate_helm_chart_internal(
         "values.yaml".to_string(),
         values_yaml(&analysis, &options.stack_settings)?,
     );
-    files.insert("values.schema.json".to_string(), values_schema_json());
+    files.insert("values.schema.json".to_string(), values_schema_json(stack)?);
     files.insert("templates/_helpers.tpl".to_string(), helpers_tpl());
     files.insert(
         "templates/serviceaccount.yaml".to_string(),
@@ -339,7 +343,7 @@ fn generate_helm_chart_internal(
         "examples/onprem.yaml".to_string(),
         onprem_values_example(&analysis),
     );
-    let mut readme = readme_md(&chart_name, stack);
+    let mut readme = readme_md(&chart_name);
     if has_remote_operator {
         readme.push_str(
             "\n## Runtime cleanup and Helm history\n\nRuntime cleanup uses the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set `runtime.cleanup.onUninstall.helmHistoryBackend=configmap`. The SQL and memory backends are unsupported because the chart cannot verify and prune unsafe rollback history.\n\n## Remote Operator\n\nThe Remote Operator is disabled by default and adds no cluster-scoped resources until enabled. Install or upgrade the chart once with it disabled, then enable it in a second upgrade with `remoteOperator.bootstrapIdentity=true`; this proves that Helm uses a supported Kubernetes history backend before any durable identity is created. Enabling it may create the shared access-request CustomResourceDefinition and therefore requires cluster-administrator approval. The chart retains that CRD on rollback and uninstall, reuses an existing matching definition without adopting it, and refuses a conflicting definition instead of changing it. Protected upgrades use the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set both `runtime.cleanup.onUninstall.helmHistoryBackend=configmap` and `remoteOperator.helmHistoryBackend=configmap`. Before identity creation, a credential-free one-shot Job mounts the exact pending Helm record from that backend and verifies a render-specific proof, so stale records cannot authorize an upgrade. The SQL and memory storage backends are rejected because the chart cannot verify or prune their rollback history. Uninstall permanently retires this release by deleting its exact retained identity records and identity PVC.\n",
@@ -1900,10 +1904,36 @@ fn generate_operator_manifest_inner(
         operator_image_report.as_ref(),
     ));
     if let Some(log_collector) = options.log_collector.as_ref() {
+        // Product charts manage workloads under the chart's runtime scope, not
+        // under the separately named Remote Operator Deployment.
+        let default_collector_scope = if identity_initialized_config_map.is_some()
+            && options.format == OperatorOutputFormat::HelmTemplate
+        {
+            (
+                "{{ .Values.logCollector.scope.deploymentLabelKey }}".to_string(),
+                "{{ default (include \"deployment.fullname\" .) .Values.logCollector.scope.deploymentLabelValue | regexQuoteMeta }}".to_string(),
+            )
+        } else {
+            (
+                branded_tag_key(
+                    alien_core::access_request_crd::current_kubernetes_label_domain(
+                        options
+                            .label_domain
+                            .unwrap_or(alien_core::DEFAULT_ALIEN_LABEL_DOMAIN),
+                    ),
+                    ALIEN_STACK_TAG_KEY,
+                ),
+                operator_name.clone(),
+            )
+        };
         let mut collector_labels = labels.clone();
         collector_labels.insert(
             "app.kubernetes.io/component".to_string(),
             "whitelabeled-log-collector".to_string(),
+        );
+        collector_labels.insert(
+            "alien.dev/log-collector-exclude".to_string(),
+            "true".to_string(),
         );
         docs.push(operator_service_doc(namespace, &operator_name, &labels));
         docs.push(operator_log_collector_service_account_doc(
@@ -1927,6 +1957,9 @@ fn generate_operator_manifest_inner(
             &log_collector_name,
             namespace,
             &collector_labels,
+            log_collector,
+            (&default_collector_scope.0, &default_collector_scope.1),
+            options.format == OperatorOutputFormat::HelmTemplate,
         ));
         docs.push(operator_log_collector_daemonset_doc(
             namespace,
@@ -2127,6 +2160,19 @@ fn validate_operator_options(options: &OperatorManifestOptions<'_>) -> Result<()
         }
     }
 
+    if let Some(collector) = &options.log_collector {
+        match (collector.pod_label_key, collector.pod_label_value) {
+            (None, None) => {}
+            (Some(key), Some(value))
+                if valid_kubernetes_pod_label_key(key) && valid_kubernetes_label_name(value) => {}
+            _ => {
+                return invalid(
+                    "log collector Pod label key and value must be set together and be valid Kubernetes labels",
+                );
+            }
+        }
+    }
+
     // Raw manifests are applied to one concrete cluster, so the install namespace
     // and per-environment identity must be concrete. Helm defers both to install.
     if options.format == OperatorOutputFormat::RawManifest {
@@ -2147,6 +2193,32 @@ fn validate_operator_options(options: &OperatorManifestOptions<'_>) -> Result<()
     }
 
     Ok(())
+}
+
+fn valid_kubernetes_label_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+}
+
+fn valid_kubernetes_pod_label_key(value: &str) -> bool {
+    match value.split_once('/') {
+        Some((domain, name)) => {
+            alien_core::access_request_crd::is_valid_kubernetes_label_domain(domain)
+                && valid_kubernetes_label_name(name)
+        }
+        None => valid_kubernetes_label_name(value),
+    }
 }
 
 fn validate_product_operator_options(
@@ -2721,6 +2793,9 @@ fn operator_deployment_doc(
     yaml.push_str("    metadata:\n");
     yaml.push_str("      labels:\n");
     append_operator_labels(&mut yaml, labels, 8);
+    if options.log_collector.is_some() {
+        yaml.push_str("        alien.dev/log-collector-exclude: 'true'\n");
+    }
     if options.format == OperatorOutputFormat::HelmTemplate {
         yaml.push_str("        {{- with .Values.remoteOperator.podLabels }}\n");
         yaml.push_str("        {{- toYaml . | nindent 8 }}\n");
@@ -2905,6 +2980,8 @@ fn operator_service_doc(
     yaml.push_str("  type: ClusterIP\n");
     yaml.push_str("  selector:\n");
     append_operator_selector_labels(&mut yaml, labels, 4);
+    // The collector shares the release labels but cannot receive Operator logs.
+    yaml.push_str("    app.kubernetes.io/component: operator\n");
     yaml.push_str("  ports:\n");
     yaml.push_str("    - name: http\n");
     yaml.push_str("      port: 8080\n");
@@ -2970,6 +3047,9 @@ fn operator_log_collector_configmap_doc(
     collector_name: &str,
     observed_namespace: &str,
     labels: &BTreeMap<String, String>,
+    collector: &OperatorLogCollectorOptions<'_>,
+    default_scope: (&str, &str),
+    helm_template: bool,
 ) -> String {
     let mut yaml = operator_metadata_doc("v1", "ConfigMap", namespace, collector_name, labels);
     yaml.push_str("data:\n");
@@ -2983,13 +3063,11 @@ fn operator_log_collector_configmap_doc(
     yaml.push_str("        storage.backlog.mem_limit 64M\n\n");
     yaml.push_str("    [INPUT]\n");
     yaml.push_str("        Name              tail\n");
+    // The Kubernetes filter's default tag parser reads the symlink filename in
+    // /var/log/containers. Files under /var/log/pods cannot supply its metadata.
     yaml.push_str(&format!(
-        "        Path              /var/log/pods/{}_*/*/*.log\n",
+        "        Path              /var/log/containers/*_{}_*.log\n",
         observed_namespace
-    ));
-    yaml.push_str(&format!(
-        "        Exclude_Path      /var/log/pods/{}_{}-*/*/*.log\n",
-        observed_namespace, collector_name
     ));
     yaml.push_str("        Path_Key          filename\n");
     // Built-in multiline parsers auto-detect the runtime log format: `cri` for
@@ -3012,6 +3090,25 @@ fn operator_log_collector_configmap_doc(
     yaml.push_str("        Keep_Log            On\n");
     yaml.push_str("        Labels              On\n");
     yaml.push_str("        Annotations         Off\n\n");
+    yaml.push_str("    [FILTER]\n");
+    yaml.push_str("        Name                grep\n");
+    yaml.push_str("        Match               kube.*\n");
+    yaml.push_str(
+        "        Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$\n\n",
+    );
+    let label_key = collector.pod_label_key.unwrap_or(default_scope.0);
+    let label_value = collector.pod_label_value.unwrap_or(default_scope.1);
+    let label_pattern = if helm_template && collector.pod_label_value.is_none() {
+        label_value.to_string()
+    } else {
+        label_value.replace('.', "\\.")
+    };
+    yaml.push_str("    [FILTER]\n");
+    yaml.push_str("        Name                grep\n");
+    yaml.push_str("        Match               kube.*\n");
+    yaml.push_str(&format!(
+        "        Regex               $kubernetes['labels']['{label_key}'] ^{label_pattern}$\n\n"
+    ));
     yaml.push_str("    [OUTPUT]\n");
     yaml.push_str("        Name          http\n");
     // Without a Match the router never routes the tailed kube.* records to this
@@ -3061,10 +3158,18 @@ fn operator_log_collector_daemonset_doc(
     ));
     yaml.push_str("      tolerations:\n");
     yaml.push_str("        - operator: Exists\n");
+    yaml.push_str("      securityContext:\n");
+    yaml.push_str("        seccompProfile:\n");
+    yaml.push_str("          type: RuntimeDefault\n");
     yaml.push_str("      containers:\n");
     yaml.push_str("        - name: collector\n");
     yaml.push_str(&format!("          image: {}\n", yaml_string(image)));
     yaml.push_str("          imagePullPolicy: IfNotPresent\n");
+    yaml.push_str("          securityContext:\n");
+    yaml.push_str("            allowPrivilegeEscalation: false\n");
+    yaml.push_str("            readOnlyRootFilesystem: true\n");
+    yaml.push_str("            capabilities:\n");
+    yaml.push_str("              drop: [ALL]\n");
     yaml.push_str("          args: [\"-c\", \"/collector/etc/collector.conf\"]\n");
     yaml.push_str("          env:\n");
     yaml.push_str("            - name: COLLECTOR_TOKEN\n");
@@ -3410,6 +3515,8 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
   telemetry: auto
   healthChecks: "on"
 
+inputValues: {}
+
 runtime:
   image:
     repository: registry.example.com/deployment/operator
@@ -3507,7 +3614,10 @@ runtime:
 
 logCollector:
   enabled: false
-  token: "replace-me-with-a-stable-in-cluster-collector-token"
+  # Sends selected workload Pod logs. Requires read-only node-log hostPath mounts;
+  # namespaces enforcing Baseline or Restricted Pod Security reject those mounts.
+  # Generated on first install and retained on upgrade when empty.
+  token: ""
   image:
     repository: fluent/fluent-bit
     tag: "3.2"
@@ -3522,6 +3632,9 @@ logCollector:
     deploymentLabelKey: "alien.dev/deployment"
     legacyDeploymentLabelKey: ""
     deploymentLabelValue: ""
+    # For an observed workload that lacks the deployment label, set both fields.
+    podLabelKey: ""
+    podLabelValue: ""
 
 heartbeat:
   collection:
@@ -4051,14 +4164,25 @@ fn append_services(yaml: &mut String, analysis: &ChartAnalysis) {
     }
 }
 
-fn values_schema_json() -> String {
-    r##"{
+fn values_schema_json(stack: &Stack) -> Result<String> {
+    let base = r##"{
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "nameOverride": { "type": "string" },
     "fullnameOverride": { "type": "string" },
+    "inputValues": {
+      "type": "object",
+      "additionalProperties": {
+        "anyOf": [
+          { "type": "string" },
+          { "type": "number" },
+          { "type": "boolean" },
+          { "type": "array", "items": { "type": "string" } }
+        ]
+      }
+    },
     "management": {
       "type": "object",
       "additionalProperties": false,
@@ -4283,7 +4407,17 @@ fn values_schema_json() -> String {
               "maxLength": 264,
               "pattern": "^$|^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*/deployment$"
             },
-            "deploymentLabelValue": { "type": "string" }
+            "deploymentLabelValue": { "type": "string" },
+            "podLabelKey": {
+              "type": "string",
+              "maxLength": 317,
+              "pattern": "^$|^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+            },
+            "podLabelValue": {
+              "type": "string",
+              "maxLength": 63,
+              "pattern": "^$|^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+            }
           }
         }
       }
@@ -4545,8 +4679,8 @@ fn values_schema_json() -> String {
       }
     },
     {
-      "title": "external-bindings initialize path",
-      "required": ["management", "infrastructure"],
+      "title": "initialize path",
+      "required": ["management"],
       "properties": {
         "management": {
           "properties": {
@@ -4554,13 +4688,96 @@ fn values_schema_json() -> String {
           }
         },
         "stackSettings": { "type": ["object", "null"] },
-        "infrastructure": { "type": "object" }
+        "infrastructure": { "type": ["object", "null"] }
       }
     }
   ]
 }
-"##
-    .to_string()
+"##;
+
+    let deployer_inputs = stack
+        .inputs()
+        .iter()
+        .filter(|input| {
+            input
+                .provided_by
+                .contains(&alien_core::StackInputProvider::Deployer)
+        })
+        .collect::<Vec<_>>();
+    if deployer_inputs.is_empty() {
+        return Ok(base.to_string());
+    }
+
+    let mut schema: serde_json::Value = serde_json::from_str(base).into_alien_error().context(
+        ErrorData::JsonSerializationFailed {
+            reason: "failed to parse built-in Helm values schema".to_string(),
+        },
+    )?;
+    let input_schema = &mut schema["properties"]["inputValues"];
+    input_schema["additionalProperties"] = serde_json::Value::Bool(false);
+    let mut properties = serde_json::Map::new();
+    for input in deployer_inputs {
+        use alien_core::StackInputKind;
+        let kind = match input.kind {
+            StackInputKind::String | StackInputKind::Secret | StackInputKind::Enum => "string",
+            StackInputKind::Number => "number",
+            StackInputKind::Integer => "integer",
+            StackInputKind::Boolean => "boolean",
+            StackInputKind::StringList => "array",
+        };
+        let mut field = serde_json::json!({ "type": kind });
+        if matches!(input.kind, StackInputKind::StringList) {
+            field["items"] = serde_json::json!({ "type": "string" });
+        }
+        if let Some(validation) = &input.validation {
+            if let Some(min_length) = validation.min_length {
+                field["minLength"] = serde_json::json!(min_length);
+            }
+            if let Some(max_length) = validation.max_length {
+                field["maxLength"] = serde_json::json!(max_length);
+            }
+            if let Some(pattern) = &validation.pattern {
+                field["pattern"] = serde_json::json!(pattern);
+            }
+            if let Some(values) = &validation.values {
+                field["enum"] = serde_json::json!(values);
+            }
+            if let Some(min_items) = validation.min_items {
+                field["minItems"] = serde_json::json!(min_items);
+            }
+            if let Some(max_items) = validation.max_items {
+                field["maxItems"] = serde_json::json!(max_items);
+            }
+            if matches!(input.kind, StackInputKind::Number | StackInputKind::Integer) {
+                for (bound, key) in [
+                    (validation.min.as_deref(), "minimum"),
+                    (validation.max.as_deref(), "maximum"),
+                ] {
+                    if let Some(bound) = bound {
+                        field[key] =
+                            serde_json::Value::Number(bound.parse().into_alien_error().context(
+                                ErrorData::JsonSerializationFailed {
+                                    reason: format!(
+                                        "invalid numeric bound for input '{}'",
+                                        input.id
+                                    ),
+                                },
+                            )?);
+                    }
+                }
+            }
+            if validation.format.as_deref() == Some("url") {
+                field["format"] = serde_json::json!("uri");
+            }
+        }
+        properties.insert(input.id.clone(), field);
+    }
+    input_schema["properties"] = serde_json::Value::Object(properties);
+    serde_json::to_string_pretty(&schema)
+        .into_alien_error()
+        .context(ErrorData::JsonSerializationFailed {
+            reason: "failed to serialize Helm input values schema".to_string(),
+        })
 }
 
 fn helpers_tpl() -> String {
@@ -4586,6 +4803,10 @@ fn helpers_tpl() -> String {
 {{- printf "%s-%s%s" $base $hash $suffix -}}
 {{- end -}}
 
+{{- define "deployment.logCollectorName" -}}
+{{- printf "%s-logs" ((include "deployment.fullname" .) | trunc 58 | trimSuffix "-") -}}
+{{- end -}}
+
 {{- define "deployment.labels" -}}
 app.kubernetes.io/name: {{ include "deployment.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
@@ -4594,13 +4815,26 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
 {{- define "deployment.managerServiceAccountName" -}}
-{{- $prefix := default (include "deployment.fullname" .) .Values.serviceAccountPrefix -}}
+{{- $prefix := include "deployment.serviceAccountPrefix" . -}}
 {{- $raw := printf "%s-manager-sa" $prefix | lower -}}
 {{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "deployment.serviceAccountPrefix" -}}
+{{- $source := default (include "deployment.fullname" .) .Values.serviceAccountPrefix -}}
+{{- $normalized := regexReplaceAll "-+" (regexReplaceAll "[^a-z0-9-]" (lower $source) "-") "-" | trimAll "-" -}}
+{{- if not (regexMatch "^[a-z]" $normalized) -}}
+{{- $normalized = printf "r-%s" $normalized -}}
+{{- end -}}
+{{- if or (ne $source $normalized) (gt (len $normalized) 40) -}}
+{{- printf "%s-%s" ($normalized | trunc 31 | trimSuffix "-") (sha256sum $source | trunc 8) -}}
+{{- else -}}
+{{- $normalized -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "deployment.serviceAccountName" -}}
-{{- $prefix := default (include "deployment.fullname" .root) .root.Values.serviceAccountPrefix -}}
+{{- $prefix := include "deployment.serviceAccountPrefix" .root -}}
 {{- $raw := printf "%s-%s-sa" $prefix .name | lower -}}
 {{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
@@ -4813,7 +5047,17 @@ roleRef:
 fn secret_tpl() -> String {
     r#"{{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
-{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure .Values.logCollector.enabled }}
+{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure .Values.logCollector.enabled .Values.inputValues }}
+{{- $collectorToken := .Values.logCollector.token -}}
+{{- if and .Values.logCollector.enabled (empty $collectorToken) -}}
+  {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
+  {{- if and $existing (hasKey (default dict $existing.data) "collector-token") -}}
+    {{- $collectorToken = index $existing.data "collector-token" | b64dec -}}
+    {{- if empty $collectorToken -}}{{ fail "Existing release Secret has an empty collector-token" }}{{- end -}}
+  {{- else -}}
+    {{- $collectorToken = randAlphaNum 48 -}}
+  {{- end -}}
+{{- end -}}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -4832,7 +5076,10 @@ stringData:
   external-bindings.json: {{ toJson .Values.infrastructure | quote }}
   {{- end }}
   {{- if .Values.logCollector.enabled }}
-  collector-token: {{ required "logCollector.token is required when logCollector.enabled=true" .Values.logCollector.token | quote }}
+  collector-token: {{ $collectorToken | quote }}
+  {{- end }}
+  {{- if .Values.inputValues }}
+  input-values.json: {{ toJson .Values.inputValues | quote }}
   {{- end }}
 {{- end }}
 "#
@@ -4841,6 +5088,19 @@ stringData:
 
 fn configmap_tpl() -> String {
     r#"{{- $defaultStackSettings := dict "deploymentModel" "pull" "updates" .Values.management.updates "telemetry" .Values.management.telemetry "heartbeats" .Values.management.healthChecks -}}
+{{- $stackSettings := deepCopy (default $defaultStackSettings .Values.stackSettings) -}}
+{{- $kubernetes := deepCopy (default dict (get $stackSettings "kubernetes")) -}}
+{{- $cluster := deepCopy (default dict (get $kubernetes "cluster")) -}}
+{{- $requestedNamespace := default .Release.Namespace (get $cluster "namespace") -}}
+{{- if ne $requestedNamespace .Release.Namespace -}}
+  {{- fail "The Kubernetes workload namespace must match the Helm release namespace so the agent can use its chart-owned Secret and ServiceAccount." -}}
+{{- end -}}
+{{- $_ := set $cluster "namespace" .Release.Namespace -}}
+{{- if not (get $cluster "ownership") -}}
+  {{- $_ := set $cluster "ownership" "external" -}}
+{{- end -}}
+{{- $_ := set $kubernetes "cluster" $cluster -}}
+{{- $_ := set $stackSettings "kubernetes" $kubernetes -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -4850,7 +5110,7 @@ metadata:
 data:
   stack.json: |-
 {{ .Files.Get "files/stack.json" | indent 4 }}
-  stack-settings.json: {{ toJson (default $defaultStackSettings .Values.stackSettings) | quote }}
+  stack-settings.json: {{ toJson $stackSettings | quote }}
   services.json: {{ toJson .Values.services | quote }}
   public-endpoints.json: {{ toJson (default dict .Values.publicEndpoints) | quote }}
 "#
@@ -5501,13 +5761,17 @@ spec:
     metadata:
       labels:
         {{- include "deployment.labels" . | nindent 8 }}
+        alien.dev/log-collector-exclude: "true"
         {{- with .Values.runtime.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.runtime.podAnnotations }}
       annotations:
+        checksum/input-values: {{ toJson .Values.inputValues | sha256sum | quote }}
+        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret) | sha256sum | quote }}
+        checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
+        {{- with .Values.runtime.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       automountServiceAccountToken: {{ .Values.runtime.automountServiceAccountToken }}
@@ -5582,6 +5846,8 @@ spec:
               value: {{ .Values.management.url | quote }}
             - name: OPERATOR_NAME
               value: {{ .Values.management.name | quote }}
+            - name: OPERATOR_RESOURCE_PREFIX
+              value: {{ include "deployment.serviceAccountPrefix" . | quote }}
             {{- if .Values.management.deploymentId }}
             - name: DEPLOYMENT_ID
               value: {{ .Values.management.deploymentId | quote }}
@@ -5606,6 +5872,10 @@ spec:
               value: /etc/deployment/secrets/encryption-key
             - name: STACK_SETTINGS_FILE
               value: /etc/deployment/config/stack-settings.json
+            {{- if .Values.inputValues }}
+            - name: STACK_INPUT_VALUES_FILE
+              value: /etc/deployment/input-values/input-values.json
+            {{- end }}
             - name: PUBLIC_ENDPOINTS_FILE
               value: /etc/deployment/config/public-endpoints.json
             {{- if .Values.infrastructure }}
@@ -5649,6 +5919,11 @@ spec:
             - name: config
               mountPath: /etc/deployment/config
               readOnly: true
+            {{- if .Values.inputValues }}
+            - name: input-values
+              mountPath: /etc/deployment/input-values
+              readOnly: true
+            {{- end }}
             - name: management-token
               mountPath: /etc/deployment/secrets/sync-token
               subPath: sync-token
@@ -5681,6 +5956,15 @@ spec:
         - name: config
           configMap:
             name: {{ include "deployment.fullname" . }}
+        {{- if .Values.inputValues }}
+        - name: input-values
+          secret:
+            secretName: {{ include "deployment.fullname" . }}
+            items:
+              - key: input-values.json
+                path: input-values.json
+            defaultMode: 384
+        {{- end }}
         - name: management-token
           secret:
             secretName: {{ include "deployment.managementSecretName" . }}
@@ -5753,10 +6037,10 @@ fn whitelabeled_log_collector_serviceaccount_tpl() -> String {
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 automountServiceAccountToken: true
 {{- end }}
 "#
@@ -5768,10 +6052,10 @@ fn whitelabeled_log_collector_role_tpl() -> String {
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -5786,17 +6070,17 @@ fn whitelabeled_log_collector_rolebinding_tpl() -> String {
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+    name: {{ include "deployment.logCollectorName" . }}
     namespace: {{ .Release.Namespace }}
 {{- end }}
 "#
@@ -5805,13 +6089,20 @@ subjects:
 
 fn whitelabeled_log_collector_configmap_tpl() -> String {
     r#"{{- if .Values.logCollector.enabled }}
+{{- $podLabelKey := .Values.logCollector.scope.podLabelKey -}}
+{{- $podLabelValue := .Values.logCollector.scope.podLabelValue -}}
+{{- if ne (empty $podLabelKey) (empty $podLabelValue) -}}
+  {{- fail "logCollector.scope.podLabelKey and podLabelValue must be set together" -}}
+{{- end -}}
+{{- $logLabelKey := default .Values.logCollector.scope.deploymentLabelKey $podLabelKey -}}
+{{- $logLabelValue := default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 data:
   collector.conf: |
     [SERVICE]
@@ -5824,12 +6115,12 @@ data:
 
     [INPUT]
         Name              tail
-        Path              /var/log/pods/{{ .Release.Namespace }}_*/*/*.log
-        Exclude_Path      /var/log/pods/{{ .Release.Namespace }}_{{ include "deployment.fullname" . }}-*/*/*.log
+        # The Kubernetes filter parses the /var/log/containers symlink filename.
+        Path              /var/log/containers/*_{{ .Release.Namespace }}_*.log
         Path_Key          filename
         multiline.parser  docker, cri
         Tag               kube.*
-        DB                /buffers/{{ include "deployment.fullname" . }}-whitelabeled-log-collector.db
+        DB                /buffers/{{ include "deployment.logCollectorName" . }}.db
         Mem_Buf_Limit     64MB
         Skip_Long_Lines   On
         Read_from_Head    On
@@ -5844,12 +6135,15 @@ data:
         Labels              On
         Annotations         Off
 
-    {{- if and .Values.logCollector.scope.deploymentLabelKey .Values.logCollector.scope.deploymentLabelValue }}
     [FILTER]
         Name                grep
         Match               kube.*
-        Regex               $kubernetes['labels']['{{ .Values.logCollector.scope.deploymentLabelKey }}'] ^{{ .Values.logCollector.scope.deploymentLabelValue }}$
-    {{- end }}
+        Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$
+
+    [FILTER]
+        Name                grep
+        Match               kube.*
+        Regex               $kubernetes['labels']['{{ $logLabelKey }}'] ^{{ $logLabelValue | regexQuoteMeta }}$
 
     [OUTPUT]
         Name          http
@@ -5878,29 +6172,40 @@ fn whitelabeled_log_collector_daemonset_tpl() -> String {
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "deployment.name" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
-      app.kubernetes.io/component: whitelabeled-log-collector
+      app.kubernetes.io/component: log-collector
   template:
     metadata:
       labels:
         {{- include "deployment.labels" . | nindent 8 }}
-        app.kubernetes.io/component: whitelabeled-log-collector
+        app.kubernetes.io/component: log-collector
+        alien.dev/log-collector-exclude: "true"
+      annotations:
+        checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
     spec:
-      serviceAccountName: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+      serviceAccountName: {{ include "deployment.logCollectorName" . }}
       tolerations:
         - operator: Exists
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: collector
           image: "{{ .Values.logCollector.image.repository }}:{{ .Values.logCollector.image.tag }}"
           imagePullPolicy: {{ .Values.logCollector.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
           args:
             - -c
             - /collector/etc/collector.conf
@@ -5927,7 +6232,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+            name: {{ include "deployment.logCollectorName" . }}
         - name: varlog
           hostPath:
             path: /var/log
@@ -6466,10 +6771,9 @@ stackSettings:
     .to_string()
 }
 
-fn readme_md(chart_name: &str, stack: &Stack) -> String {
+fn readme_md(chart_name: &str) -> String {
     format!(
-        "# {chart_name}\n\nInstall this chart into an existing Kubernetes cluster:\n\n```bash\nhelm install {chart_name} ./{} --namespace production --create-namespace --values values.yaml\n```\n\nThe generated `values.yaml` contains placeholders for management, service-account identity annotations, operator-local infrastructure bindings, and the Kubernetes exposure profile. The chart no longer renders per-app public `Ingress` objects from `services.*.host` or hostless ingress values; public endpoints are runtime-owned through `stackSettings.kubernetes.exposure`.\n\nSee `examples/<target>.yaml` for ready-to-use values matching EKS / GKE / AKS / on-prem.\n",
-        stack.id()
+        "# {chart_name}\n\nFrom this chart directory, set the required values and install into the chosen namespace (`default` shown here):\n\n```bash\nhelm install {chart_name} . --namespace default --values values.yaml\n```\n\nFor a managed package, use its generated install command and values. See `examples/<target>.yaml` for EKS, GKE, AKS, and on-premises values.\n\nTo collect selected workload Pod logs, set `logCollector.enabled: true` in values.yaml. The collector mounts node log directories read-only; namespaces enforcing Baseline or Restricted Pod Security reject those mounts. When `logCollector.token` is empty, Helm generates a per-installation token and retains it across upgrades.\n"
     )
 }
 
@@ -6567,6 +6871,8 @@ mod tests {
             log_collector: Some(OperatorLogCollectorOptions {
                 image: "fluent/fluent-bit:3.2",
                 token: "collector-secret",
+                pod_label_key: None,
+                pod_label_value: None,
             }),
             stack_settings: None,
             project_name: "my-saas",
@@ -7020,7 +7326,7 @@ mod tests {
         assert!(kinds.contains(&"RoleBinding"));
         assert!(kinds.contains(&"DaemonSet"));
         assert!(manifest.contains("whitelabeled-log-collector"));
-        assert!(manifest.contains("/var/log/pods/demo_"));
+        assert!(manifest.contains("/var/log/containers/*_demo_*.log"));
         assert!(manifest.contains("/internal/logs"));
         assert!(manifest.contains("COLLECTOR_TOKEN_FILE"));
         assert!(manifest.contains("collector-token"));
@@ -7061,6 +7367,15 @@ mod tests {
             .into_iter()
             .next()
             .expect("operator manifest should include collector DaemonSet");
+        let pod_spec = &daemonset["spec"]["template"]["spec"];
+        assert_eq!(
+            pod_spec["securityContext"]["seccompProfile"]["type"],
+            "RuntimeDefault"
+        );
+        let container_security = &pod_spec["containers"][0]["securityContext"];
+        assert_eq!(container_security["allowPrivilegeEscalation"], false);
+        assert_eq!(container_security["readOnlyRootFilesystem"], true);
+        assert_eq!(container_security["capabilities"]["drop"][0], "ALL");
         let env = daemonset
             .get("spec")
             .and_then(|spec| spec.get("template"))
@@ -7419,6 +7734,8 @@ mod tests {
                     log_collector: include_collector.then_some(OperatorLogCollectorOptions {
                         image: "fluent/fluent-bit:3.2",
                         token: "",
+                        pod_label_key: None,
+                        pod_label_value: None,
                     }),
                     stack_settings: None,
                     project_name: "remote-sample-stack",
@@ -7462,6 +7779,184 @@ mod tests {
             .assert_ok("helm template registered setup");
         crate::test_utils::helm_template_and_validate(&files, Some(&files["examples/onprem.yaml"]))
             .assert_ok("helm template external-bindings initialize path");
+    }
+
+    #[test]
+    fn helm_setup_inputs_reach_operator_through_a_secret() {
+        let chart = sample_product_chart();
+        let values = r#"
+management:
+  token: ax_dg_example
+  name: prod
+  url: https://manager.example.test
+  deploymentId: null
+runtime:
+  encryption:
+    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+inputValues:
+  ingestUrl: https://ingest.example.test
+  enabled: true
+  namespaces:
+    - production
+"#;
+        let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
+        rendered.assert_ok("Helm setup inputs render");
+        let documents = serde_yaml::Deserializer::from_str(&rendered.stdout)
+            .map(|document| YamlValue::deserialize(document).expect("valid Kubernetes YAML"))
+            .collect::<Vec<_>>();
+        let secret = documents
+            .iter()
+            .find(|document| document["kind"] == "Secret")
+            .expect("setup Secret");
+        let input_values: serde_json::Value = serde_json::from_str(
+            secret["stringData"]["input-values.json"]
+                .as_str()
+                .expect("input values are in the Secret"),
+        )
+        .expect("JSON input values");
+        assert_eq!(
+            input_values,
+            serde_json::json!({
+                "ingestUrl": "https://ingest.example.test",
+                "enabled": true,
+                "namespaces": ["production"]
+            })
+        );
+        let configmap = documents
+            .iter()
+            .find(|document| document["kind"] == "ConfigMap")
+            .expect("runtime ConfigMap");
+        assert!(configmap["data"].as_mapping().is_some_and(|data| {
+            data.keys()
+                .all(|key| key.as_str() != Some("input-values.json"))
+        }));
+        let operator = documents
+            .iter()
+            .find(|document| document["kind"] == "Deployment")
+            .expect("Operator Deployment");
+        let checksum = operator["spec"]["template"]["metadata"]["annotations"]
+            ["checksum/input-values"]
+            .as_str()
+            .expect("input values checksum");
+        let credential_checksum = operator["spec"]["template"]["metadata"]["annotations"]
+            ["checksum/management-credential"]
+            .as_str()
+            .expect("management credential checksum");
+        let changed_values = values.replace(
+            "https://ingest.example.test",
+            "https://ingest-updated.example.test",
+        );
+        let changed = crate::test_utils::helm_template(&chart.files, Some(&changed_values));
+        changed.assert_ok("Helm input change renders");
+        let changed_operator = serde_yaml::Deserializer::from_str(&changed.stdout)
+            .map(|document| YamlValue::deserialize(document).expect("valid Kubernetes YAML"))
+            .find(|document| document["kind"] == "Deployment")
+            .expect("updated Operator Deployment");
+        assert_ne!(
+            checksum,
+            changed_operator["spec"]["template"]["metadata"]["annotations"]
+                ["checksum/input-values"]
+                .as_str()
+                .expect("updated input values checksum"),
+            "changing Helm input values must roll the Operator"
+        );
+        let rotated_values = values.replace("ax_dg_example", "ax_dg_rotated");
+        let rotated = crate::test_utils::helm_template(&chart.files, Some(&rotated_values));
+        rotated.assert_ok("Helm credential rotation renders");
+        let rotated_operator = serde_yaml::Deserializer::from_str(&rotated.stdout)
+            .map(|document| YamlValue::deserialize(document).expect("valid Kubernetes YAML"))
+            .find(|document| document["kind"] == "Deployment")
+            .expect("rotated Operator Deployment");
+        assert_ne!(
+            credential_checksum,
+            rotated_operator["spec"]["template"]["metadata"]["annotations"]
+                ["checksum/management-credential"]
+                .as_str()
+                .expect("rotated management credential checksum"),
+            "changing the Helm management credential must roll the Operator"
+        );
+        assert_eq!(
+            checksum,
+            rotated_operator["spec"]["template"]["metadata"]["annotations"]
+                ["checksum/input-values"]
+                .as_str()
+                .expect("unchanged input values checksum")
+        );
+        let container = &operator["spec"]["template"]["spec"]["containers"][0];
+        assert!(container["env"].as_sequence().is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                entry["name"] == "STACK_INPUT_VALUES_FILE"
+                    && entry["value"] == "/etc/deployment/input-values/input-values.json"
+            })
+        }));
+        assert!(container["volumeMounts"]
+            .as_sequence()
+            .is_some_and(|mounts| {
+                mounts.iter().any(|mount| {
+                    mount["name"] == "input-values"
+                        && mount["mountPath"] == "/etc/deployment/input-values"
+                        && mount["readOnly"].as_bool() == Some(true)
+                })
+            }));
+    }
+
+    #[test]
+    fn helm_rejects_unknown_or_wrongly_typed_deployer_inputs() {
+        let stack = Stack::new("input-stack".to_string())
+            .inputs(vec![alien_core::StackInputDefinition {
+                id: "ingestUrl".to_string(),
+                kind: alien_core::StackInputKind::String,
+                provided_by: vec![alien_core::StackInputProvider::Deployer],
+                required: true,
+                label: "Ingest URL".to_string(),
+                description: "Ingest endpoint".to_string(),
+                placeholder: None,
+                default: None,
+                platforms: Some(vec![Platform::Kubernetes]),
+                validation: Some(alien_core::StackInputValidation {
+                    min_length: None,
+                    max_length: None,
+                    pattern: None,
+                    format: Some("url".to_string()),
+                    min: None,
+                    max: None,
+                    values: None,
+                    min_items: None,
+                    max_items: None,
+                }),
+                env: Vec::new(),
+            }])
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "input-stack".to_string(),
+            },
+        )
+        .expect("chart");
+        crate::test_utils::helm_lint(&chart.files).assert_ok("lint chart defaults");
+        let values = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: null\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\ninputValues:\n  ingestUrl: https://ingest.example.test\n";
+        crate::test_utils::helm_template(&chart.files, Some(values))
+            .assert_ok("valid input values");
+        for invalid in [
+            values.replace("ingestUrl: https://ingest.example.test", "ingestUrl: 42"),
+            values.replace(
+                "ingestUrl: https://ingest.example.test",
+                "ingestUrl: not-a-url",
+            ),
+            values.replace("ingestUrl:", "ingestUrll:"),
+        ] {
+            let rendered = crate::test_utils::helm_template(&chart.files, Some(&invalid));
+            assert!(!rendered.is_ok(), "Helm accepted invalid input values");
+            assert!(
+                rendered.stderr.contains("inputValues"),
+                "{}",
+                rendered.stderr
+            );
+        }
     }
 
     #[test]
@@ -8086,6 +8581,57 @@ remoteOperator:
     }
 
     #[test]
+    fn product_collector_follows_branded_runtime_scope() {
+        let mut files =
+            sample_product_chart_with_collector_and_label_domain(true, Some("acme.dev")).files;
+        // Client-only rendering has no live Secret or Helm history for this guard to inspect.
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let values = r#"
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#;
+        let rendered =
+            crate::test_utils::helm_template_for_release(&files, Some(values), "customer-one");
+        rendered.assert_ok("branded product collector scope");
+        let docs = parse_manifest_docs(&rendered.stdout);
+        let runtime = docs_by_kind(&docs, "Deployment")
+            .into_iter()
+            .find(|deployment| {
+                yaml_path(deployment, &["metadata", "name"]).and_then(YamlValue::as_str)
+                    == Some("customer-one")
+            })
+            .expect("runtime Deployment");
+        let label_key = operator_env_value(&runtime, "ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY")
+            .expect("runtime deployment label key");
+        let label_value = operator_env_value(&runtime, "ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE")
+            .expect("runtime deployment label value");
+        let resource_prefix = operator_env_value(&runtime, "OPERATOR_RESOURCE_PREFIX")
+            .expect("runtime resource prefix");
+        assert_eq!(resource_prefix, "customer-one");
+        assert_eq!(
+            (label_key, label_value),
+            ("acme/deployment", "customer-one")
+        );
+
+        let collector = docs_by_kind(&docs, "ConfigMap")
+            .into_iter()
+            .find(|config| yaml_path(config, &["data", "collector.conf"]).is_some())
+            .expect("Remote Operator collector ConfigMap");
+        let config = yaml_path(&collector, &["data", "collector.conf"])
+            .and_then(YamlValue::as_str)
+            .expect("Fluent Bit configuration");
+        assert!(config.contains(&format!(
+            "Regex               $kubernetes['labels']['{label_key}'] ^{label_value}$"
+        )));
+        assert!(!config.contains("$kubernetes['labels']['alien.dev/deployment']"));
+    }
+
+    #[test]
     fn product_chart_omits_cleanup_job_on_first_enabled_render_without_baseline_lifecycle_capability(
     ) {
         let mut files = sample_product_chart().files;
@@ -8602,9 +9148,80 @@ logCollector:
         let rendered = crate::test_utils::helm_template(&files, Some(values));
         rendered.assert_ok("helm render log collector");
         assert!(rendered.stdout.contains("kind: DaemonSet"));
-        assert!(rendered.stdout.contains("whitelabeled-log-collector"));
+        assert!(rendered
+            .stdout
+            .contains("app.kubernetes.io/component: log-collector"));
+        let documents = parse_manifest_docs(&rendered.stdout);
+        let generated_values = values.replace("  token: test-collector-token\n", "");
+        let generated = crate::test_utils::helm_template(&files, Some(&generated_values));
+        generated.assert_ok("Helm generates a collector credential on first install");
+        let generated_documents = parse_manifest_docs(&generated.stdout);
+        let generated_token = docs_by_kind(&generated_documents, "Secret")
+            .into_iter()
+            .find_map(|secret| {
+                secret["stringData"]["collector-token"]
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .expect("generated collector credential");
+        assert_eq!(generated_token.len(), 48);
+        assert!(generated_token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric()));
+        let credential_checksum = |docs: &[YamlValue], kind: &str| {
+            docs_by_kind(docs, kind)
+                .into_iter()
+                .find_map(|document| {
+                    document["spec"]["template"]["metadata"]["annotations"]
+                        ["checksum/collector-credential"]
+                        .as_str()
+                        .map(str::to_owned)
+                })
+                .expect("collector credential Pod checksum")
+        };
+        for kind in ["Deployment", "DaemonSet"] {
+            assert_ne!(
+                credential_checksum(&documents, kind),
+                credential_checksum(&generated_documents, kind),
+                "an explicit collector credential must roll the {kind}"
+            );
+        }
+        let collector_daemonset = docs_by_kind(&documents, "DaemonSet")
+            .into_iter()
+            .next()
+            .expect("collector DaemonSet");
+        let pod_spec = &collector_daemonset["spec"]["template"]["spec"];
+        assert_eq!(
+            pod_spec["securityContext"]["seccompProfile"]["type"],
+            "RuntimeDefault"
+        );
+        let container_security = &pod_spec["containers"][0]["securityContext"];
+        assert_eq!(container_security["allowPrivilegeEscalation"], false);
+        assert_eq!(container_security["readOnlyRootFilesystem"], true);
+        assert_eq!(container_security["capabilities"]["drop"][0], "ALL");
+        let collector_config = docs_by_kind(&documents, "ConfigMap")
+            .into_iter()
+            .find(|document| {
+                document["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("-logs"))
+            })
+            .expect("collector ConfigMap");
+        let fluent_bit_config = collector_config["data"]["collector.conf"]
+            .as_str()
+            .expect("Fluent Bit configuration");
+        assert_eq!(
+            fluent_bit_config
+                .lines()
+                .filter(|line| line.trim() == "[FILTER]")
+                .count(),
+            3,
+            "collector filters must each start on their own line"
+        );
         assert!(rendered.stdout.contains("COLLECTOR_TOKEN_FILE"));
-        assert!(rendered.stdout.contains("/var/log/pods/default_"));
+        assert!(rendered
+            .stdout
+            .contains("/var/log/containers/*_default_*.log"));
         assert!(rendered.stdout.contains("fluent/fluent-bit:3.2"));
         assert!(rendered
             .stdout
@@ -8621,6 +9238,37 @@ logCollector:
             .stdout
             .contains("\"pods\", \"pods/log\", \"persistentvolumeclaims\""));
         assert!(!rendered.stdout.contains("void"));
+
+        let long_release = format!("sample-{}", "a".repeat(46));
+        let long_rendered =
+            crate::test_utils::helm_template_for_release(&files, Some(values), &long_release);
+        long_rendered.assert_ok("helm render log collector with long release name");
+        let long_docs = parse_manifest_docs(&long_rendered.stdout);
+        let collector_names = long_docs
+            .iter()
+            .filter(|document| {
+                [
+                    "ServiceAccount",
+                    "Role",
+                    "RoleBinding",
+                    "ConfigMap",
+                    "DaemonSet",
+                ]
+                .contains(&yaml_str(document, "kind").unwrap_or_default())
+                    && document["metadata"]["labels"]["app.kubernetes.io/component"]
+                        == "log-collector"
+            })
+            .map(|document| {
+                document["metadata"]["name"]
+                    .as_str()
+                    .expect("collector resource name")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(collector_names.len(), 5);
+        assert!(collector_names.iter().all(|name| name.len() <= 63));
+        assert!(collector_names
+            .iter()
+            .all(|name| *name == collector_names[0]));
     }
 
     #[test]

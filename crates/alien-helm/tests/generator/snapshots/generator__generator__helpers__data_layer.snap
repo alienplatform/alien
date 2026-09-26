@@ -23,6 +23,8 @@ management:
   telemetry: auto
   healthChecks: "on"
 
+inputValues: {}
+
 runtime:
   image:
     repository: registry.example.com/deployment/operator
@@ -120,7 +122,10 @@ runtime:
 
 logCollector:
   enabled: false
-  token: "replace-me-with-a-stable-in-cluster-collector-token"
+  # Sends selected workload Pod logs. Requires read-only node-log hostPath mounts;
+  # namespaces enforcing Baseline or Restricted Pod Security reject those mounts.
+  # Generated on first install and retained on upgrade when empty.
+  token: ""
   image:
     repository: fluent/fluent-bit
     tag: "3.2"
@@ -135,6 +140,9 @@ logCollector:
     deploymentLabelKey: "alien.dev/deployment"
     legacyDeploymentLabelKey: ""
     deploymentLabelValue: ""
+    # For an observed workload that lacks the deployment label, set both fields.
+    podLabelKey: ""
+    podLabelValue: ""
 
 heartbeat:
   collection:
@@ -222,6 +230,17 @@ ephemeralStorage:
   "properties": {
     "nameOverride": { "type": "string" },
     "fullnameOverride": { "type": "string" },
+    "inputValues": {
+      "type": "object",
+      "additionalProperties": {
+        "anyOf": [
+          { "type": "string" },
+          { "type": "number" },
+          { "type": "boolean" },
+          { "type": "array", "items": { "type": "string" } }
+        ]
+      }
+    },
     "management": {
       "type": "object",
       "additionalProperties": false,
@@ -446,7 +465,17 @@ ephemeralStorage:
               "maxLength": 264,
               "pattern": "^$|^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*/deployment$"
             },
-            "deploymentLabelValue": { "type": "string" }
+            "deploymentLabelValue": { "type": "string" },
+            "podLabelKey": {
+              "type": "string",
+              "maxLength": 317,
+              "pattern": "^$|^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+            },
+            "podLabelValue": {
+              "type": "string",
+              "maxLength": 63,
+              "pattern": "^$|^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+            }
           }
         }
       }
@@ -708,8 +737,8 @@ ephemeralStorage:
       }
     },
     {
-      "title": "external-bindings initialize path",
-      "required": ["management", "infrastructure"],
+      "title": "initialize path",
+      "required": ["management"],
       "properties": {
         "management": {
           "properties": {
@@ -717,7 +746,7 @@ ephemeralStorage:
           }
         },
         "stackSettings": { "type": ["object", "null"] },
-        "infrastructure": { "type": "object" }
+        "infrastructure": { "type": ["object", "null"] }
       }
     }
   ]
@@ -746,6 +775,10 @@ ephemeralStorage:
 {{- printf "%s-%s%s" $base $hash $suffix -}}
 {{- end -}}
 
+{{- define "deployment.logCollectorName" -}}
+{{- printf "%s-logs" ((include "deployment.fullname" .) | trunc 58 | trimSuffix "-") -}}
+{{- end -}}
+
 {{- define "deployment.labels" -}}
 app.kubernetes.io/name: {{ include "deployment.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
@@ -754,13 +787,26 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
 {{- define "deployment.managerServiceAccountName" -}}
-{{- $prefix := default (include "deployment.fullname" .) .Values.serviceAccountPrefix -}}
+{{- $prefix := include "deployment.serviceAccountPrefix" . -}}
 {{- $raw := printf "%s-manager-sa" $prefix | lower -}}
 {{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "deployment.serviceAccountPrefix" -}}
+{{- $source := default (include "deployment.fullname" .) .Values.serviceAccountPrefix -}}
+{{- $normalized := regexReplaceAll "-+" (regexReplaceAll "[^a-z0-9-]" (lower $source) "-") "-" | trimAll "-" -}}
+{{- if not (regexMatch "^[a-z]" $normalized) -}}
+{{- $normalized = printf "r-%s" $normalized -}}
+{{- end -}}
+{{- if or (ne $source $normalized) (gt (len $normalized) 40) -}}
+{{- printf "%s-%s" ($normalized | trunc 31 | trimSuffix "-") (sha256sum $source | trunc 8) -}}
+{{- else -}}
+{{- $normalized -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "deployment.serviceAccountName" -}}
-{{- $prefix := default (include "deployment.fullname" .root) .root.Values.serviceAccountPrefix -}}
+{{- $prefix := include "deployment.serviceAccountPrefix" .root -}}
 {{- $raw := printf "%s-%s-sa" $prefix .name | lower -}}
 {{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
@@ -955,7 +1001,17 @@ roleRef:
 === templates/secret.yaml ===
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
-{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure .Values.logCollector.enabled }}
+{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure .Values.logCollector.enabled .Values.inputValues }}
+{{- $collectorToken := .Values.logCollector.token -}}
+{{- if and .Values.logCollector.enabled (empty $collectorToken) -}}
+  {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
+  {{- if and $existing (hasKey (default dict $existing.data) "collector-token") -}}
+    {{- $collectorToken = index $existing.data "collector-token" | b64dec -}}
+    {{- if empty $collectorToken -}}{{ fail "Existing release Secret has an empty collector-token" }}{{- end -}}
+  {{- else -}}
+    {{- $collectorToken = randAlphaNum 48 -}}
+  {{- end -}}
+{{- end -}}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -974,12 +1030,28 @@ stringData:
   external-bindings.json: {{ toJson .Values.infrastructure | quote }}
   {{- end }}
   {{- if .Values.logCollector.enabled }}
-  collector-token: {{ required "logCollector.token is required when logCollector.enabled=true" .Values.logCollector.token | quote }}
+  collector-token: {{ $collectorToken | quote }}
+  {{- end }}
+  {{- if .Values.inputValues }}
+  input-values.json: {{ toJson .Values.inputValues | quote }}
   {{- end }}
 {{- end }}
 
 === templates/configmap.yaml ===
 {{- $defaultStackSettings := dict "deploymentModel" "pull" "updates" .Values.management.updates "telemetry" .Values.management.telemetry "heartbeats" .Values.management.healthChecks -}}
+{{- $stackSettings := deepCopy (default $defaultStackSettings .Values.stackSettings) -}}
+{{- $kubernetes := deepCopy (default dict (get $stackSettings "kubernetes")) -}}
+{{- $cluster := deepCopy (default dict (get $kubernetes "cluster")) -}}
+{{- $requestedNamespace := default .Release.Namespace (get $cluster "namespace") -}}
+{{- if ne $requestedNamespace .Release.Namespace -}}
+  {{- fail "The Kubernetes workload namespace must match the Helm release namespace so the agent can use its chart-owned Secret and ServiceAccount." -}}
+{{- end -}}
+{{- $_ := set $cluster "namespace" .Release.Namespace -}}
+{{- if not (get $cluster "ownership") -}}
+  {{- $_ := set $cluster "ownership" "external" -}}
+{{- end -}}
+{{- $_ := set $kubernetes "cluster" $cluster -}}
+{{- $_ := set $stackSettings "kubernetes" $kubernetes -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -989,7 +1061,7 @@ metadata:
 data:
   stack.json: |-
 {{ .Files.Get "files/stack.json" | indent 4 }}
-  stack-settings.json: {{ toJson (default $defaultStackSettings .Values.stackSettings) | quote }}
+  stack-settings.json: {{ toJson $stackSettings | quote }}
   services.json: {{ toJson .Values.services | quote }}
   public-endpoints.json: {{ toJson (default dict .Values.publicEndpoints) | quote }}
 
@@ -1010,13 +1082,17 @@ spec:
     metadata:
       labels:
         {{- include "deployment.labels" . | nindent 8 }}
+        alien.dev/log-collector-exclude: "true"
         {{- with .Values.runtime.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.runtime.podAnnotations }}
       annotations:
+        checksum/input-values: {{ toJson .Values.inputValues | sha256sum | quote }}
+        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret) | sha256sum | quote }}
+        checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
+        {{- with .Values.runtime.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       automountServiceAccountToken: {{ .Values.runtime.automountServiceAccountToken }}
@@ -1091,6 +1167,8 @@ spec:
               value: {{ .Values.management.url | quote }}
             - name: OPERATOR_NAME
               value: {{ .Values.management.name | quote }}
+            - name: OPERATOR_RESOURCE_PREFIX
+              value: {{ include "deployment.serviceAccountPrefix" . | quote }}
             {{- if .Values.management.deploymentId }}
             - name: DEPLOYMENT_ID
               value: {{ .Values.management.deploymentId | quote }}
@@ -1115,6 +1193,10 @@ spec:
               value: /etc/deployment/secrets/encryption-key
             - name: STACK_SETTINGS_FILE
               value: /etc/deployment/config/stack-settings.json
+            {{- if .Values.inputValues }}
+            - name: STACK_INPUT_VALUES_FILE
+              value: /etc/deployment/input-values/input-values.json
+            {{- end }}
             - name: PUBLIC_ENDPOINTS_FILE
               value: /etc/deployment/config/public-endpoints.json
             {{- if .Values.infrastructure }}
@@ -1158,6 +1240,11 @@ spec:
             - name: config
               mountPath: /etc/deployment/config
               readOnly: true
+            {{- if .Values.inputValues }}
+            - name: input-values
+              mountPath: /etc/deployment/input-values
+              readOnly: true
+            {{- end }}
             - name: management-token
               mountPath: /etc/deployment/secrets/sync-token
               subPath: sync-token
@@ -1190,6 +1277,15 @@ spec:
         - name: config
           configMap:
             name: {{ include "deployment.fullname" . }}
+        {{- if .Values.inputValues }}
+        - name: input-values
+          secret:
+            secretName: {{ include "deployment.fullname" . }}
+            items:
+              - key: input-values.json
+                path: input-values.json
+            defaultMode: 384
+        {{- end }}
         - name: management-token
           secret:
             secretName: {{ include "deployment.managementSecretName" . }}
@@ -1237,10 +1333,10 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 automountServiceAccountToken: true
 {{- end }}
 
@@ -1249,10 +1345,10 @@ automountServiceAccountToken: true
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -1264,29 +1360,36 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+    name: {{ include "deployment.logCollectorName" . }}
     namespace: {{ .Release.Namespace }}
 {{- end }}
 
 === templates/whitelabeled-log-collector-configmap.yaml ===
 {{- if .Values.logCollector.enabled }}
+{{- $podLabelKey := .Values.logCollector.scope.podLabelKey -}}
+{{- $podLabelValue := .Values.logCollector.scope.podLabelValue -}}
+{{- if ne (empty $podLabelKey) (empty $podLabelValue) -}}
+  {{- fail "logCollector.scope.podLabelKey and podLabelValue must be set together" -}}
+{{- end -}}
+{{- $logLabelKey := default .Values.logCollector.scope.deploymentLabelKey $podLabelKey -}}
+{{- $logLabelValue := default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 data:
   collector.conf: |
     [SERVICE]
@@ -1299,12 +1402,12 @@ data:
 
     [INPUT]
         Name              tail
-        Path              /var/log/pods/{{ .Release.Namespace }}_*/*/*.log
-        Exclude_Path      /var/log/pods/{{ .Release.Namespace }}_{{ include "deployment.fullname" . }}-*/*/*.log
+        # The Kubernetes filter parses the /var/log/containers symlink filename.
+        Path              /var/log/containers/*_{{ .Release.Namespace }}_*.log
         Path_Key          filename
         multiline.parser  docker, cri
         Tag               kube.*
-        DB                /buffers/{{ include "deployment.fullname" . }}-whitelabeled-log-collector.db
+        DB                /buffers/{{ include "deployment.logCollectorName" . }}.db
         Mem_Buf_Limit     64MB
         Skip_Long_Lines   On
         Read_from_Head    On
@@ -1319,12 +1422,15 @@ data:
         Labels              On
         Annotations         Off
 
-    {{- if and .Values.logCollector.scope.deploymentLabelKey .Values.logCollector.scope.deploymentLabelValue }}
     [FILTER]
         Name                grep
         Match               kube.*
-        Regex               $kubernetes['labels']['{{ .Values.logCollector.scope.deploymentLabelKey }}'] ^{{ .Values.logCollector.scope.deploymentLabelValue }}$
-    {{- end }}
+        Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$
+
+    [FILTER]
+        Name                grep
+        Match               kube.*
+        Regex               $kubernetes['labels']['{{ $logLabelKey }}'] ^{{ $logLabelValue | regexQuoteMeta }}$
 
     [OUTPUT]
         Name          http
@@ -1350,29 +1456,40 @@ data:
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    app.kubernetes.io/component: log-collector
 spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "deployment.name" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
-      app.kubernetes.io/component: whitelabeled-log-collector
+      app.kubernetes.io/component: log-collector
   template:
     metadata:
       labels:
         {{- include "deployment.labels" . | nindent 8 }}
-        app.kubernetes.io/component: whitelabeled-log-collector
+        app.kubernetes.io/component: log-collector
+        alien.dev/log-collector-exclude: "true"
+      annotations:
+        checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
     spec:
-      serviceAccountName: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+      serviceAccountName: {{ include "deployment.logCollectorName" . }}
       tolerations:
         - operator: Exists
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: collector
           image: "{{ .Values.logCollector.image.repository }}:{{ .Values.logCollector.image.tag }}"
           imagePullPolicy: {{ .Values.logCollector.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
           args:
             - -c
             - /collector/etc/collector.conf
@@ -1399,7 +1516,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+            name: {{ include "deployment.logCollectorName" . }}
         - name: varlog
           hostPath:
             path: /var/log
@@ -2557,15 +2674,15 @@ services:
 === README.md ===
 # data-chart
 
-Install this chart into an existing Kubernetes cluster:
+From this chart directory, set the required values and install into the chosen namespace (`default` shown here):
 
 ```bash
-helm install data-chart ./data-chart --namespace production --create-namespace --values values.yaml
+helm install data-chart . --namespace default --values values.yaml
 ```
 
-The generated `values.yaml` contains placeholders for management, service-account identity annotations, operator-local infrastructure bindings, and the Kubernetes exposure profile. The chart no longer renders per-app public `Ingress` objects from `services.*.host` or hostless ingress values; public endpoints are runtime-owned through `stackSettings.kubernetes.exposure`.
+For a managed package, use its generated install command and values. See `examples/<target>.yaml` for EKS, GKE, AKS, and on-premises values.
 
-See `examples/<target>.yaml` for ready-to-use values matching EKS / GKE / AKS / on-prem.
+To collect selected workload Pod logs, set `logCollector.enabled: true` in values.yaml. The collector mounts node log directories read-only; namespaces enforcing Baseline or Restricted Pod Security reject those mounts. When `logCollector.token` is empty, Helm generates a per-installation token and retains it across upgrades.
 
 === files/stack.json ===
 {
