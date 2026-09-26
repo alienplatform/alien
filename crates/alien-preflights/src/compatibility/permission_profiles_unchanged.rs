@@ -846,6 +846,8 @@ mod tests {
         new_profiles.insert("application".to_string(), new_profile);
 
         let old_stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "s".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -856,6 +858,8 @@ mod tests {
             inputs: vec![],
         };
         let new_stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "s".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -896,6 +900,8 @@ mod tests {
         };
 
         let old_stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: permissions_config.clone(),
@@ -904,6 +910,8 @@ mod tests {
         };
 
         let new_stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: permissions_config,
@@ -938,6 +946,8 @@ mod tests {
         new_profiles.insert("test-profile".to_string(), new_profile);
 
         let old_stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -949,6 +959,8 @@ mod tests {
         };
 
         let new_stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -979,6 +991,8 @@ mod tests {
         new_profiles.insert("new-profile".to_string(), new_profile);
 
         let old_stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -990,6 +1004,8 @@ mod tests {
         };
 
         let new_stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {

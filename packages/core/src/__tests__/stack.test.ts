@@ -56,6 +56,68 @@ describe("Stack builder validation", () => {
     ).toThrow(/failureDomainSpread must be an integer from 1 to 255/)
   })
 
+  it("selects one declared pool for dynamic containers", () => {
+    const pool = {
+      requirements: { cpu: 2, memory: "4Gi" },
+      scale: { type: "fixed" as const, machines: 2 },
+    }
+    const compute = new alien.ComputeCluster("runtime")
+      .pool("general", pool)
+      .pool("apps", { ...pool, dynamicContainers: true })
+      .build()
+    expect(compute.config.dynamicContainerPool).toBe("apps")
+    expect(() =>
+      new alien.ComputeCluster("runtime")
+        .pool("apps", { ...pool, dynamicContainers: true })
+        .pool("other", { ...pool, dynamicContainers: true }),
+    ).toThrow(/Only one compute pool/)
+
+    const retry = new alien.ComputeCluster("runtime")
+    expect(() =>
+      retry.pool("invalid", { ...pool, dynamicContainers: true, failureDomainSpread: 0 }),
+    ).toThrow(/failureDomainSpread/)
+    expect(
+      retry.pool("apps", { ...pool, dynamicContainers: true }).build().config.dynamicContainerPool,
+    ).toBe("apps")
+  })
+
+  it("records exact repositories approved for dynamic container images", () => {
+    const stack = new alien.Stack("app")
+      .dynamicContainerRepositories(["registry.example.com/team/runner"])
+      .build()
+    expect(stack.dynamicContainerRepositories).toEqual(["registry.example.com/team/runner"])
+    expect(() =>
+      new alien.Stack("app").dynamicContainerRepositories([
+        "registry.example.com/team/runner:latest",
+      ]),
+    ).toThrow(/fully qualified OCI repositories/)
+    for (const repository of [
+      "registry..example.com/team/runner",
+      "registry.example.com/../runner",
+    ]) {
+      expect(() => new alien.Stack("app").dynamicContainerRepositories([repository])).toThrow(
+        /fully qualified OCI repositories/,
+      )
+    }
+  })
+
+  it("approves released Container images by resource ID", () => {
+    const runner = new alien.Container("runner")
+      .code({ type: "image", image: "registry.example.com/runner:build" })
+      .cpu(0.5)
+      .memory("512Mi")
+      .permissions("runner")
+      .build()
+    const stack = new alien.Stack("app")
+      .add(runner, "live")
+      .dynamicContainerImageResources(["runner"])
+      .build()
+    expect(stack.dynamicContainerImageResources).toEqual(["runner"])
+    expect(() =>
+      new alien.Stack("app").dynamicContainerImageResources(["missing"]).build(),
+    ).toThrow(/must be a declared Container/)
+  })
+
   it("builds stack input definitions for deployment forms", () => {
     const stackInputs = alien.inputs({
       apiBaseUrl: alien.string({

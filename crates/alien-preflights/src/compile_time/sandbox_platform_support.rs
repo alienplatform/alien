@@ -69,6 +69,8 @@ mod tests {
             },
         );
         Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -183,6 +185,8 @@ mod tests {
     #[tokio::test]
     async fn a_stack_with_no_sandbox_is_not_checked() {
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: alien_core::permissions::PermissionsConfig::default(),

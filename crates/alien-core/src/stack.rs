@@ -84,6 +84,16 @@ pub struct Stack {
     #[builder(field)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<StackInputDefinition>,
+    /// Exact image repositories approved for containers created after installation.
+    /// The runtime API also requires an immutable SHA-256 digest.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dynamic_container_repositories: Vec<String>,
+    /// Released Container resources whose image repositories are approved for
+    /// containers created after installation.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dynamic_container_image_resources: Vec<String>,
 }
 
 impl Stack {

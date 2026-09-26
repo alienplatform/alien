@@ -135,6 +135,8 @@ mod tests {
 
     fn create_test_stack() -> Stack {
         Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: alien_core::permissions::PermissionsConfig::default(),
