@@ -343,7 +343,7 @@ fn generate_helm_chart_internal(
         "examples/onprem.yaml".to_string(),
         onprem_values_example(&analysis),
     );
-    let mut readme = readme_md(&chart_name, stack);
+    let mut readme = readme_md(&chart_name);
     if has_remote_operator {
         readme.push_str(
             "\n## Runtime cleanup and Helm history\n\nRuntime cleanup uses the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set `runtime.cleanup.onUninstall.helmHistoryBackend=configmap`. The SQL and memory backends are unsupported because the chart cannot verify and prune unsafe rollback history.\n\n## Remote Operator\n\nThe Remote Operator is disabled by default and adds no cluster-scoped resources until enabled. Install or upgrade the chart once with it disabled, then enable it in a second upgrade with `remoteOperator.bootstrapIdentity=true`; this proves that Helm uses a supported Kubernetes history backend before any durable identity is created. Enabling it may create the shared access-request CustomResourceDefinition and therefore requires cluster-administrator approval. The chart retains that CRD on rollback and uninstall, reuses an existing matching definition without adopting it, and refuses a conflicting definition instead of changing it. Protected upgrades use the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set both `runtime.cleanup.onUninstall.helmHistoryBackend=configmap` and `remoteOperator.helmHistoryBackend=configmap`. Before identity creation, a credential-free one-shot Job mounts the exact pending Helm record from that backend and verifies a render-specific proof, so stale records cannot authorize an upgrade. The SQL and memory storage backends are rejected because the chart cannot verify or prune their rollback history. Uninstall permanently retires this release by deleting its exact retained identity records and identity PVC.\n",
@@ -6642,10 +6642,9 @@ stackSettings:
     .to_string()
 }
 
-fn readme_md(chart_name: &str, stack: &Stack) -> String {
+fn readme_md(chart_name: &str) -> String {
     format!(
-        "# {chart_name}\n\nInstall this chart into an existing Kubernetes cluster:\n\n```bash\nhelm install {chart_name} ./{} --namespace production --create-namespace --values values.yaml\n```\n\nThe generated `values.yaml` contains placeholders for management, service-account identity annotations, operator-local infrastructure bindings, and the Kubernetes exposure profile. The chart no longer renders per-app public `Ingress` objects from `services.*.host` or hostless ingress values; public endpoints are runtime-owned through `stackSettings.kubernetes.exposure`.\n\nSee `examples/<target>.yaml` for ready-to-use values matching EKS / GKE / AKS / on-prem.\n",
-        stack.id()
+        "# {chart_name}\n\nInstall this unpacked chart into the chosen namespace (`default` shown here):\n\n```bash\nhelm install {chart_name} ./{chart_name} --namespace default --values values.yaml\n```\n\nFor a managed package, use its generated install command and values. See `examples/<target>.yaml` for EKS, GKE, AKS, and on-premises values.\n"
     )
 }
 
