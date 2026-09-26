@@ -3614,7 +3614,8 @@ runtime:
 
 logCollector:
   enabled: false
-  token: "replace-me-with-a-stable-in-cluster-collector-token"
+  # Generated on first install and retained on upgrade when empty.
+  token: ""
   image:
     repository: fluent/fluent-bit
     tag: "3.2"
@@ -5045,6 +5046,16 @@ fn secret_tpl() -> String {
     r#"{{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
 {{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure .Values.logCollector.enabled .Values.inputValues }}
+{{- $collectorToken := .Values.logCollector.token -}}
+{{- if and .Values.logCollector.enabled (empty $collectorToken) -}}
+  {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
+  {{- if and $existing (hasKey (default dict $existing.data) "collector-token") -}}
+    {{- $collectorToken = index $existing.data "collector-token" | b64dec -}}
+    {{- if empty $collectorToken -}}{{ fail "Existing release Secret has an empty collector-token" }}{{- end -}}
+  {{- else -}}
+    {{- $collectorToken = randAlphaNum 48 -}}
+  {{- end -}}
+{{- end -}}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -5063,7 +5074,7 @@ stringData:
   external-bindings.json: {{ toJson .Values.infrastructure | quote }}
   {{- end }}
   {{- if .Values.logCollector.enabled }}
-  collector-token: {{ required "logCollector.token is required when logCollector.enabled=true" .Values.logCollector.token | quote }}
+  collector-token: {{ $collectorToken | quote }}
   {{- end }}
   {{- if .Values.inputValues }}
   input-values.json: {{ toJson .Values.inputValues | quote }}
@@ -5755,6 +5766,7 @@ spec:
       annotations:
         checksum/input-values: {{ toJson .Values.inputValues | sha256sum | quote }}
         checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret) | sha256sum | quote }}
+        checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
         {{- with .Values.runtime.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -6174,6 +6186,8 @@ spec:
         {{- include "deployment.labels" . | nindent 8 }}
         app.kubernetes.io/component: log-collector
         alien.dev/log-collector-exclude: "true"
+      annotations:
+        checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
     spec:
       serviceAccountName: {{ include "deployment.logCollectorName" . }}
       tolerations:
@@ -9136,6 +9150,40 @@ logCollector:
             .stdout
             .contains("app.kubernetes.io/component: log-collector"));
         let documents = parse_manifest_docs(&rendered.stdout);
+        let generated_values = values.replace("  token: test-collector-token\n", "");
+        let generated = crate::test_utils::helm_template(&files, Some(&generated_values));
+        generated.assert_ok("Helm generates a collector credential on first install");
+        let generated_documents = parse_manifest_docs(&generated.stdout);
+        let generated_token = docs_by_kind(&generated_documents, "Secret")
+            .into_iter()
+            .find_map(|secret| {
+                secret["stringData"]["collector-token"]
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .expect("generated collector credential");
+        assert_eq!(generated_token.len(), 48);
+        assert!(generated_token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric()));
+        let credential_checksum = |docs: &[YamlValue], kind: &str| {
+            docs_by_kind(docs, kind)
+                .into_iter()
+                .find_map(|document| {
+                    document["spec"]["template"]["metadata"]["annotations"]
+                        ["checksum/collector-credential"]
+                        .as_str()
+                        .map(str::to_owned)
+                })
+                .expect("collector credential Pod checksum")
+        };
+        for kind in ["Deployment", "DaemonSet"] {
+            assert_ne!(
+                credential_checksum(&documents, kind),
+                credential_checksum(&generated_documents, kind),
+                "an explicit collector credential must roll the {kind}"
+            );
+        }
         let collector_daemonset = docs_by_kind(&documents, "DaemonSet")
             .into_iter()
             .next()
