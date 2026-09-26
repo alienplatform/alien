@@ -2200,7 +2200,7 @@ async fn build_resource(
     let finalized_dir = finalize_artifact_dir(&resource_dir, &final_output_dir, "build").await?;
     // The key was taken before the build read the tree. If the tree changed since, the artifact
     // is not the build of either version, so it stays out of the cache.
-    // A file removed since the build fails the re-key; that is a change too, not a build error.
+    // A re-key that fails (a file removed since the build) leaves the artifact uncached too.
     match compute_source_artifact_cache_key(src, toolchain_config, settings, &targets, workload)
         .await
     {
@@ -2208,9 +2208,14 @@ async fn build_resource(
             write_artifact_cache_metadata(&PathBuf::from(&finalized_dir), &artifact_cache_key)
                 .await?;
         }
-        _ => warn!(
+        Ok(_) => warn!(
             resource = resource_name,
             "Source changed during the build; the artifact is not cached"
+        ),
+        Err(error) => warn!(
+            resource = resource_name,
+            error = %error,
+            "Could not re-key the source after the build; the artifact is not cached"
         ),
     }
 
