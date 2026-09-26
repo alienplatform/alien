@@ -646,7 +646,7 @@ mod tests {
             release_id: Some("rel_existing".to_string()),
             version: Some("1.0.0".to_string()),
             description: None,
-            stack: Stack::new("test").build(),
+            stack: Stack::new("test".to_string()).build(),
         };
         let mut state = DeploymentState {
             platform: Platform::Kubernetes,
