@@ -405,6 +405,7 @@ dependencies = [
  "fs2",
  "futures",
  "glob",
+ "httpmock",
  "object_store",
  "oci-client",
  "rand 0.9.5",

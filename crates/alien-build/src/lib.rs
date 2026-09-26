@@ -3,9 +3,13 @@ pub mod dependencies;
 pub mod error;
 pub mod merge;
 pub mod plan;
+pub mod registry;
 pub mod sandbox_bundle;
 pub mod settings;
+mod source_input;
 pub mod toolchain;
+
+pub use source_input::docker_source_input_hash;
 
 use alien_core::{
     alien_event, AlienEvent, BinaryTarget, Container, ContainerCode, Daemon, DaemonCode, Platform,

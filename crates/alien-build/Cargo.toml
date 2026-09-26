@@ -39,6 +39,7 @@ which = "6.0"
 
 
 [dev-dependencies]
+httpmock = { workspace = true }
 dockdash = { workspace = true, features = ["test-utils"] }
 alien-build = { path = ".", features = ["test-utils"] }
 workspace_root = { workspace = true }
