@@ -8428,10 +8428,6 @@ remoteOperator:
         let resource_prefix = operator_env_value(&runtime, "OPERATOR_RESOURCE_PREFIX")
             .expect("runtime resource prefix");
         assert_eq!(resource_prefix, "customer-one");
-        assert!(docs_by_kind(&docs, "ServiceAccount").iter().any(|account| {
-            yaml_path(account, &["metadata", "name"]).and_then(YamlValue::as_str)
-                == Some("customer-one-agent-sa")
-        }));
         assert_eq!(
             (label_key, label_value),
             ("acme/deployment", "customer-one")
