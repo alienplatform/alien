@@ -23,7 +23,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Instant;
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Parser, Debug, Clone)]
 // The root command sets `version` + `propagate_version`, which pushes an
@@ -1707,7 +1707,7 @@ const PUSH_CACHE_FILE: &str = "push-cache.json";
 /// Pushes the built stack's local images, reusing the pushed reference of any artifact already
 /// pushed to the same repository. `push_stack` tags every push afresh, so this cache is what
 /// keeps an unchanged artifact's reference stable across runs.
-pub(crate) async fn push_stack_with_cache(
+async fn push_stack_with_cache(
     mut built_stack: Stack,
     platform: Platform,
     output_dir: &PathBuf,
@@ -1737,7 +1737,7 @@ pub(crate) async fn push_stack_with_cache(
 
     collect_push_cache_entries(&pushed, &pre_push_stack, &mut push_cache);
     if let Err(e) = save_push_cache(output_dir, platform_str, &push_cache) {
-        info!("Warning: Failed to save push cache: {}", e);
+        warn!(error = %e, "Failed to save push cache");
     }
 
     Ok(pushed)

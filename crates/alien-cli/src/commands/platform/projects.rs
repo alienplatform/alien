@@ -1,6 +1,4 @@
-use crate::commands::release::{
-    auto_build_settings_for_platform, manager_proxy_push_settings, push_stack_with_cache,
-};
+use crate::commands::release::{auto_build_settings_for_platform, manager_proxy_push_settings};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::get_current_dir;
@@ -114,8 +112,8 @@ pub enum CapabilityCommand {
         /// Dockerfile path relative to --src (default: Dockerfile).
         #[arg(long, requires = "src", conflicts_with = "image")]
         dockerfile: Option<String>,
-        /// Build and push even when --src is unchanged, for example to pick up a newer image in
-        /// FROM.
+        /// Build and push even when --src looks unchanged. The check skips .git, node_modules
+        /// and target, and reads the images in FROM by name only.
         #[arg(long, requires = "src", conflicts_with = "image")]
         rebuild: bool,
         /// Ceiling on a single sandbox session, in seconds.
@@ -508,6 +506,7 @@ struct SandboxSource {
 
 /// Hash of everything a source build reads. Equal hashes mean equal build inputs, so the tag it
 /// names lets any machine reuse an image another one already pushed.
+#[derive(PartialEq)]
 struct SourceInputHash(String);
 
 impl SourceInputHash {
@@ -578,11 +577,7 @@ async fn build_and_push_sandbox_base_image(
     let mut settings =
         auto_build_settings_for_platform(Platform::Aws.as_str(), &output_dir, None, None, None)?;
     settings.rebuild = source.rebuild;
-    let input_hash = SourceInputHash(
-        alien_build::docker_source_input_hash(&src, &toolchain, &settings.get_targets())
-            .await
-            .context(ErrorData::BuildFailed)?,
-    );
+    let input_hash = source_input_hash(&src, &toolchain, &settings).await?;
 
     let manager = ctx
         .resolve_manager_metadata_only(project, Platform::Aws.as_str())
@@ -631,13 +626,27 @@ async fn build_and_push_sandbox_base_image(
             if !json {
                 println!("{} {}", dim_label("Building"), src.display());
             }
-            let built = alien_build::build_stack(sandbox_source_stack(&src, toolchain), &settings)
-                .await
-                .context(ErrorData::BuildFailed)?;
+            let built =
+                alien_build::build_stack(sandbox_source_stack(&src, toolchain.clone()), &settings)
+                    .await
+                    .context(ErrorData::BuildFailed)?;
+            // The tag is shared by every machine with this tree, so it must not name an image
+            // built from a tree that was edited mid-build.
+            if source_input_hash(&src, &toolchain, &settings).await? != input_hash {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "src".to_string(),
+                    message: format!(
+                        "'{}' changed while it was building. Run the command again.",
+                        src.display()
+                    ),
+                }));
+            }
             if !json {
                 println!("{} {}", dim_label("Pushing"), push_settings.repository);
             }
-            let pushed = push_stack_with_cache(built, Platform::Aws, &output_dir, &push_settings)
+            // No push cache: the source tag already skips unchanged sources, and a cached
+            // reference the registry has since dropped would leave nothing to tag.
+            let pushed = alien_build::push_stack(built, Platform::Aws, &push_settings)
                 .await
                 .context(push_failed())?;
             alien_build::registry::tag_manifest(
@@ -655,6 +664,17 @@ async fn build_and_push_sandbox_base_image(
         &push_settings.repository,
         &destination,
     )
+}
+
+async fn source_input_hash(
+    src: &Path,
+    toolchain: &ToolchainConfig,
+    settings: &alien_build::settings::BuildSettings,
+) -> Result<SourceInputHash> {
+    let hash = alien_build::docker_source_input_hash(src, toolchain, &settings.get_targets())
+        .await
+        .context(ErrorData::BuildFailed)?;
+    Ok(SourceInputHash(hash))
 }
 
 fn source_directory(src: &Path) -> Result<PathBuf> {
