@@ -5669,10 +5669,11 @@ spec:
         {{- with .Values.runtime.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.runtime.podAnnotations }}
       annotations:
+        checksum/input-values: {{ toJson .Values.inputValues | sha256sum | quote }}
+        {{- with .Values.runtime.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       automountServiceAccountToken: {{ .Values.runtime.automountServiceAccountToken }}
@@ -7733,6 +7734,28 @@ inputValues:
             .iter()
             .find(|document| document["kind"] == "Deployment")
             .expect("Operator Deployment");
+        let checksum = operator["spec"]["template"]["metadata"]["annotations"]
+            ["checksum/input-values"]
+            .as_str()
+            .expect("input values checksum");
+        let changed_values = values.replace(
+            "https://ingest.example.test",
+            "https://ingest-updated.example.test",
+        );
+        let changed = crate::test_utils::helm_template(&chart.files, Some(&changed_values));
+        changed.assert_ok("Helm input change renders");
+        let changed_operator = serde_yaml::Deserializer::from_str(&changed.stdout)
+            .map(|document| YamlValue::deserialize(document).expect("valid Kubernetes YAML"))
+            .find(|document| document["kind"] == "Deployment")
+            .expect("updated Operator Deployment");
+        assert_ne!(
+            checksum,
+            changed_operator["spec"]["template"]["metadata"]["annotations"]
+                ["checksum/input-values"]
+                .as_str()
+                .expect("updated input values checksum"),
+            "changing Helm input values must roll the Operator"
+        );
         let container = &operator["spec"]["template"]["spec"]["containers"][0];
         assert!(container["env"].as_sequence().is_some_and(|entries| {
             entries.iter().any(|entry| {
