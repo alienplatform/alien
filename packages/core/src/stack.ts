@@ -11,11 +11,11 @@ import { getStackInputDefinitions, type StackInputCollection } from "./input.js"
 import type { Resource } from "./resource.js"
 
 function isRepositoryName(repository: string): boolean {
-  const [authority, ...path] = repository.split("/")
+  const [authority = "", ...path] = repository.split("/")
   if (path.length === 0 || path.some(part => !/^[a-z0-9]+(?:[._-]+[a-z0-9]+)*$/.test(part))) {
     return false
   }
-  const [host, port, ...extra] = authority.split(":")
+  const [host = "", port, ...extra] = authority.split(":")
   return (
     extra.length === 0 &&
     (port === undefined || /^[0-9]+$/.test(port)) &&
