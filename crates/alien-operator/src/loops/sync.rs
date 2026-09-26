@@ -389,17 +389,10 @@ async fn sync_with_manager(
                 });
 
             // Update target_release in state
-            let target_release_id = target_deployment.release_info.release_id.clone();
-            let current_release_id = deployment_state
-                .current_release
-                .as_ref()
-                .and_then(|release| release.release_id.clone());
-            deployment_state.target_release = Some(target_deployment.release_info.clone());
-            if deployment_state.status == alien_core::DeploymentStatus::Running
-                && current_release_id != target_release_id
-            {
-                deployment_state.status = alien_core::DeploymentStatus::UpdatePending;
-            }
+            accept_target_release(
+                &mut deployment_state,
+                target_deployment.release_info.clone(),
+            );
 
             // Save state and config
             state.db.set_deployment_state(&deployment_state).await?;
@@ -432,6 +425,18 @@ async fn sync_with_manager(
     }
 
     Ok(has_update || state_hydrated)
+}
+
+fn accept_target_release(
+    deployment_state: &mut alien_core::DeploymentState,
+    release: alien_core::ReleaseInfo,
+) {
+    deployment_state.target_release = Some(release);
+    // A target can change runtime configuration while retaining the same
+    // release. Reconcile every accepted target before reporting success.
+    if deployment_state.status == alien_core::DeploymentStatus::Running {
+        deployment_state.status = alien_core::DeploymentStatus::UpdatePending;
+    }
 }
 
 async fn observe_running_deployment(
@@ -612,7 +617,7 @@ mod tests {
     use alien_core::{
         sync::OperatorCapabilityState, ContainerImageIdentity, DeploymentState, DeploymentStatus,
         HeartbeatBackend, ObservedHealth, ObservedInventoryBatch, ObservedResourceSample, Platform,
-        ProviderLifecycleState, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        ProviderLifecycleState, ReleaseInfo, Stack, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
     use alien_infra::MockPlatformServiceProvider;
     use alien_k8s_clients::{
@@ -627,13 +632,40 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{
-        apply_manager_control_state, create_authenticated_client,
+        accept_target_release, apply_manager_control_state, create_authenticated_client,
         is_uninitialized_deployment_state, operation_command_address_capability, sync_with_manager,
     };
     use crate::{db::OperatorDb, OperatorConfig, OperatorState, SyncConfig};
 
     const TEST_ENCRYPTION_KEY: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn same_release_target_reconciles_runtime_configuration() {
+        let release = ReleaseInfo {
+            release_id: Some("rel_existing".to_string()),
+            version: Some("1.0.0".to_string()),
+            description: None,
+            stack: Stack::new("test").build(),
+        };
+        let mut state = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::Running,
+            current_release: Some(release.clone()),
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+
+        accept_target_release(&mut state, release.clone());
+
+        assert_eq!(state.status, DeploymentStatus::UpdatePending);
+        assert_eq!(state.target_release, Some(release));
+    }
 
     struct SyncFixture {
         config: OperatorConfig,
