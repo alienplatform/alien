@@ -4710,7 +4710,7 @@ fn helpers_tpl() -> String {
 {{- end -}}
 
 {{- define "deployment.logCollectorName" -}}
-{{- include "deployment.releaseScopedName" (dict "root" . "suffix" "-logs") -}}
+{{- printf "%s-logs" ((include "deployment.fullname" .) | trunc 58 | trimSuffix "-") -}}
 {{- end -}}
 
 {{- define "deployment.labels" -}}
