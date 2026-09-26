@@ -117,6 +117,33 @@ export class Stack {
     return this
   }
 
+  /** Approve exact OCI image repositories for containers created after installation. */
+  public dynamicContainerRepositories(repositories: string[]): this {
+    if (
+      repositories.length === 0 ||
+      repositories.length > 16 ||
+      new Set(repositories).size !== repositories.length ||
+      repositories.some(
+        repository => !/^[a-z0-9.-]+(?::[0-9]+)?(?:\/[a-z0-9._-]+)+$/.test(repository),
+      )
+    ) {
+      throw new Error(
+        "Dynamic container repositories must be 1–16 distinct, fully qualified OCI repositories",
+      )
+    }
+    this._config.dynamicContainerRepositories = repositories
+    return this
+  }
+
+  /** Approve the repositories of Container images shipped in this release. */
+  public dynamicContainerImageResources(resourceIds: string[]): this {
+    if (resourceIds.length === 0 || new Set(resourceIds).size !== resourceIds.length) {
+      throw new Error("Dynamic container image resource IDs must be distinct and non-empty")
+    }
+    this._config.dynamicContainerImageResources = resourceIds
+    return this
+  }
+
   /**
    * Gets the stack ID without building/validating the stack.
    * @returns The stack ID.
@@ -131,6 +158,13 @@ export class Stack {
    * @throws Error if the stack configuration is invalid.
    */
   public build(): StackConfig {
+    for (const resourceId of this._config.dynamicContainerImageResources ?? []) {
+      if (this._config.resources?.[resourceId]?.config.type !== "container") {
+        throw new Error(
+          `Dynamic container image resource '${resourceId}' must be a declared Container`,
+        )
+      }
+    }
     return StackSchema.parse(this._config)
   }
 }

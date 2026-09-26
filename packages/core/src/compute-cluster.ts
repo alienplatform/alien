@@ -58,6 +58,8 @@ export type ComputePoolScale =
 export type ComputePoolInput = {
   requirements: ComputePoolRequirements
   scale: ComputePoolScale
+  /** Allow containers created after installation to use this pool. Only one pool may opt in. */
+  dynamicContainers?: boolean
   /** Number of provider failure domains across which the pool must be spread. */
   failureDomainSpread?: number
 }
@@ -91,6 +93,12 @@ export class ComputeCluster {
   }
 
   public pool(groupId: string, config: ComputePoolInput): this {
+    if (config.dynamicContainers) {
+      if (this._config.dynamicContainerPool !== undefined) {
+        throw new Error("Only one compute pool may accept dynamic containers")
+      }
+      this._config.dynamicContainerPool = groupId
+    }
     if (
       config.failureDomainSpread !== undefined &&
       (!Number.isInteger(config.failureDomainSpread) ||
@@ -129,6 +137,14 @@ export class ComputeCluster {
    * Builds and validates the cluster configuration.
    */
   public build(): Resource {
+    if (
+      this._config.dynamicContainerPool !== undefined &&
+      !this._config.capacityGroups?.some(
+        group => group.groupId === this._config.dynamicContainerPool,
+      )
+    ) {
+      throw new Error("Dynamic container pool must be declared in the compute cluster")
+    }
     const config = ComputeClusterSchema.parse(this._config)
     return new Resource({
       type: "compute-cluster",
