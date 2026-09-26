@@ -417,6 +417,103 @@ impl OperatorDb {
         Ok(())
     }
 
+    /// Merge passive workload readings only while the deployment state used to
+    /// collect them is still current. The connection lock also protects the
+    /// read/merge/write against deployment-step heartbeat writes.
+    pub async fn merge_pending_heartbeats_if_state_matches(
+        &self,
+        expected_state: &DeploymentState,
+        heartbeats: &[ResourceHeartbeat],
+    ) -> Result<bool> {
+        let conn = self.conn.lock().await;
+        let expected_json = serde_json::to_string(expected_state)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to serialize expected deployment_state".to_string(),
+            })?;
+        let mut state_rows = conn
+            .query("SELECT value FROM state WHERE key = 'deployment_state'", ())
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query deployment_state for heartbeat merge".to_string(),
+            })?;
+        let current_json: Option<String> =
+            match state_rows
+                .next()
+                .await
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to fetch deployment_state for heartbeat merge".to_string(),
+                })? {
+                Some(row) => Some(row.get(0).into_alien_error().context(
+                    ErrorData::DatabaseError {
+                        message: "Failed to read deployment_state for heartbeat merge".to_string(),
+                    },
+                )?),
+                None => None,
+            };
+        drop(state_rows);
+        if current_json.as_deref() != Some(expected_json.as_str()) {
+            return Ok(false);
+        }
+
+        let mut pending_rows = conn
+            .query(
+                "SELECT value FROM state WHERE key = 'pending_heartbeats'",
+                (),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query pending_heartbeats for merge".to_string(),
+            })?;
+        let mut merged: Vec<ResourceHeartbeat> =
+            match pending_rows.next().await.into_alien_error().context(
+                ErrorData::DatabaseError {
+                    message: "Failed to fetch pending_heartbeats for merge".to_string(),
+                },
+            )? {
+                Some(row) => {
+                    let json: String =
+                        row.get(0)
+                            .into_alien_error()
+                            .context(ErrorData::DatabaseError {
+                                message: "Failed to read pending_heartbeats for merge".to_string(),
+                            })?;
+                    serde_json::from_str(&json).into_alien_error().context(
+                        ErrorData::DatabaseError {
+                            message: "Failed to parse pending_heartbeats for merge".to_string(),
+                        },
+                    )?
+                }
+                None => Vec::new(),
+            };
+        drop(pending_rows);
+        merged.retain(|old| {
+            !heartbeats.iter().any(|new| {
+                old.resource_id == new.resource_id && old.resource_type == new.resource_type
+            })
+        });
+        merged.extend_from_slice(heartbeats);
+        let json = serde_json::to_string(&merged).into_alien_error().context(
+            ErrorData::DatabaseError {
+                message: "Failed to serialize merged pending_heartbeats".to_string(),
+            },
+        )?;
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('pending_heartbeats', ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (json,),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to save merged pending_heartbeats".to_string(),
+        })?;
+        Ok(true)
+    }
+
     /// Get the latest observed inventory snapshots emitted by deployment steps.
     pub async fn get_pending_observed_inventory_batches(
         &self,
