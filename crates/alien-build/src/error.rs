@@ -135,10 +135,10 @@ pub enum ErrorData {
         reason: String,
     },
 
-    /// Container registry refused an image manifest lookup for a deterministic reason.
+    /// An image manifest cannot be read from its registry, for a reason a retry does not change.
     #[error(
         code = "IMAGE_LOOKUP_REJECTED",
-        message = "Container registry refused the lookup of image '{image}': {reason}",
+        message = "Container image '{image}' could not be read from its registry: {reason}",
         retryable = "false",
         internal = "false"
     )]

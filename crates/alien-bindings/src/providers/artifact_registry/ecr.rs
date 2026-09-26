@@ -142,6 +142,8 @@ pub fn cross_account_repository_policy(aws_access: &AwsCrossAccountAccess) -> Va
 fn repository_lookup_names(repository_prefix: &str, repo_id: &str) -> Vec<String> {
     if repository_prefix.is_empty() || repo_id.starts_with(&format!("{repository_prefix}-")) {
         vec![repo_id.to_string()]
+    } else if repo_id.is_empty() {
+        vec![repository_prefix.to_string()]
     } else {
         vec![
             format!("{repository_prefix}-{repo_id}"),
@@ -1160,6 +1162,11 @@ mod tests {
         assert_eq!(
             repository_lookup_names("", "sandbox"),
             vec!["sandbox".to_string()]
+        );
+        assert_eq!(
+            repository_lookup_names("alien-artifacts-prj_1", ""),
+            vec!["alien-artifacts-prj_1".to_string()],
+            "an empty id names the shared repository, as create does"
         );
     }
 }

@@ -603,7 +603,7 @@ async fn build_and_push_sandbox_base_image(
         &destination.repository,
         &manager,
     )?;
-    let push_failed = || ErrorData::SandboxImagePushFailed {
+    let publish_failed = || ErrorData::SandboxImagePublishFailed {
         repository: push_settings.repository.clone(),
     };
 
@@ -613,7 +613,7 @@ async fn build_and_push_sandbox_base_image(
     } else {
         alien_build::registry::manifest_digest(&source_image, &push_settings.options)
             .await
-            .context(push_failed())?
+            .context(publish_failed())?
     };
     let digest = match existing {
         Some(digest) => {
@@ -648,14 +648,14 @@ async fn build_and_push_sandbox_base_image(
             // reference the registry has since dropped would leave nothing to tag.
             let pushed = alien_build::push_stack(built, Platform::Aws, &push_settings)
                 .await
-                .context(push_failed())?;
+                .context(publish_failed())?;
             alien_build::registry::tag_manifest(
                 &sandbox_image(&pushed)?,
                 &source_image,
                 &push_settings.options,
             )
             .await
-            .context(push_failed())?
+            .context(publish_failed())?
         }
     };
 
