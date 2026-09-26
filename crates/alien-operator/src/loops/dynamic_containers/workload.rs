@@ -246,7 +246,13 @@ fn deployment_matches(current: &Deployment, desired: &Deployment) -> bool {
     ) else {
         return false;
     };
-    current_spec.replicas == desired_spec.replicas
+    current_pod.containers.len() == 1
+        && current_app.name == "app"
+        && current_pod
+            .init_containers
+            .as_ref()
+            .is_none_or(Vec::is_empty)
+        && current_spec.replicas == desired_spec.replicas
         && current_app.image == desired_app.image
         && current_app.env == desired_app.env
         && current_app.ports == desired_app.ports

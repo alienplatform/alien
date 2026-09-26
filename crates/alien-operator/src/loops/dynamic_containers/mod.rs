@@ -189,6 +189,8 @@ pub async fn reconcile(
                 }
                 let ready = deployment.status.as_ref().is_some_and(|status| {
                     status.available_replicas.unwrap_or(0) >= desired.replicas as i32
+                        && status.updated_replicas.unwrap_or(0) >= desired.replicas as i32
+                        && status.replicas.unwrap_or(0) == desired.replicas as i32
                         && status.observed_generation.unwrap_or(0)
                             >= deployment.metadata.generation.unwrap_or(0)
                 });

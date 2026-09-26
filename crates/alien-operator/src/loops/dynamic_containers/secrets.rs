@@ -84,13 +84,23 @@ pub(super) async fn put_registry_secret(
     target: &TargetDynamicContainer,
     registry_auth: Option<(&str, &str)>,
 ) -> Result<bool> {
-    let Some((manager_host, token)) = registry_auth else {
+    let name = format!("{}-registry", backend_name(deployment_id, &target.name));
+    let authorized = registry_auth
+        .filter(|(manager_host, _)| target.image.split('/').next() == Some(*manager_host));
+    let Some((manager_host, token)) = authorized else {
+        if let Some(existing) = read_secret(client, namespace, &name).await? {
+            if !owned(&existing.metadata, deployment_id, &target.name) {
+                return Err(failed(format!(
+                    "Refusing to delete foreign Kubernetes Secret {name}"
+                )));
+            }
+            client
+                .delete_secret(namespace, &name)
+                .await
+                .map_err(|_| failed("Failed to remove unused registry Secret"))?;
+        }
         return Ok(false);
     };
-    if target.image.split('/').next() != Some(manager_host) {
-        return Ok(false);
-    }
-    let name = format!("{}-registry", backend_name(deployment_id, &target.name));
     let current = read_secret(client, namespace, &name).await?;
     if let Some(existing) = &current {
         if !owned(&existing.metadata, deployment_id, &target.name) {

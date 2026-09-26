@@ -43,6 +43,7 @@ fn desired_service(
                     .ports
                     .iter()
                     .map(|port| ServicePort {
+                        name: Some(format!("tcp-{port}")),
                         port: i32::from(*port),
                         target_port: Some(IntOrString::Int(i32::from(*port))),
                         protocol: Some("TCP".to_string()),
@@ -92,7 +93,10 @@ pub(super) async fn put_service(
                 && spec.ports.as_ref().is_some_and(|ports| {
                     ports.len() == target.ports.len()
                         && ports.iter().zip(&target.ports).all(|(existing, desired)| {
+                            let name = format!("tcp-{desired}");
                             existing.port == i32::from(*desired)
+                                && existing.name.as_deref() == Some(name.as_str())
+                                && existing.protocol.as_deref() == Some("TCP")
                                 && existing.target_port
                                     == Some(IntOrString::Int(i32::from(*desired)))
                         })

@@ -2345,7 +2345,7 @@ fn dynamic_container_role_name(operator_name: &str) -> String {
     if operator_name.contains("{{") {
         // Product charts resolve the Operator name at Helm render time. Hash
         // the rendered release identity, not the literal template expression.
-        return "{{ printf \"alien-dc-%s\" (include \"deployment.fullname\" . | sha256sum | trunc 24) }}".to_string();
+        return "{{ printf \"alien-dc-%s\" (include \"deployment.remoteOperatorResourceName\" . | sha256sum | trunc 24) }}".to_string();
     }
     let digest = Sha256::digest(operator_name.as_bytes());
     let hex = format!("{digest:x}");

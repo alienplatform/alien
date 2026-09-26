@@ -88,7 +88,8 @@ async fn two_independent_containers_update_and_delete() {
     .await
     .expect("Kubernetes client");
 
-    let first = target("first", 1, 1);
+    let mut first = target("first", 1, 1);
+    first.ports = vec![11211, 11212];
     let second = target("second", 1, 1);
     until_running(
         &client,
@@ -107,6 +108,35 @@ async fn two_independent_containers_update_and_delete() {
         .await
         .expect("owned Deployments");
     assert_eq!(owned.items.len(), 2);
+    let services = client
+        .list_services(
+            &namespace,
+            Some(format!("alien.dev/dynamic-deployment={deployment_id}")),
+            None,
+        )
+        .await
+        .expect("owned Services");
+    let multiport = services
+        .items
+        .iter()
+        .find(|service| {
+            service
+                .spec
+                .as_ref()
+                .is_some_and(|spec| spec.ports.as_ref().is_some_and(|ports| ports.len() == 2))
+        })
+        .expect("multiport Service");
+    let port_names: Vec<_> = multiport
+        .spec
+        .as_ref()
+        .unwrap()
+        .ports
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|port| port.name.as_deref())
+        .collect();
+    assert_eq!(port_names, [Some("tcp-11211"), Some("tcp-11212")]);
     let versions: BTreeMap<_, _> = owned
         .items
         .iter()
@@ -181,7 +211,13 @@ async fn two_independent_containers_update_and_delete() {
     let mut updated = first.clone();
     updated.generation = 2;
     updated.replicas = 2;
-    until_running(&client, &namespace, deployment_id, &[updated, second]).await;
+    until_running(
+        &client,
+        &namespace,
+        deployment_id,
+        &[updated.clone(), second.clone()],
+    )
+    .await;
     let owned = client
         .list_deployments(
             &namespace,
@@ -196,6 +232,97 @@ async fn two_independent_containers_update_and_delete() {
         .map(|item| item.spec.as_ref().unwrap().replicas.unwrap())
         .collect();
     assert!(replicas.contains(&1) && replicas.contains(&2));
+
+    // Changing a secret advances the Pod template generation, so both replicas
+    // consume the new value instead of keeping the old environment in memory.
+    let mut rotated = updated.clone();
+    rotated.generation = 3;
+    rotated
+        .secret_env
+        .insert("API_KEY".to_string(), "rotated-test-value".to_string());
+    until_running(
+        &client,
+        &namespace,
+        deployment_id,
+        &[rotated.clone(), second.clone()],
+    )
+    .await;
+    let rotated_deployment = client
+        .list_deployments(
+            &namespace,
+            Some(format!(
+                "alien.dev/dynamic-deployment={deployment_id},alien.dev/dynamic-container=first"
+            )),
+            None,
+        )
+        .await
+        .expect("rotated Deployment")
+        .items
+        .into_iter()
+        .next()
+        .expect("first Deployment");
+    let pod = rotated_deployment.spec.unwrap().template.spec.unwrap();
+    assert!(pod.containers[0].env.as_ref().unwrap().iter().any(|entry| {
+        entry.name == "ALIEN_DYNAMIC_GENERATION" && entry.value.as_deref() == Some("3")
+    }));
+    let secret = client
+        .list_secrets(
+            &namespace,
+            Some(format!(
+                "alien.dev/dynamic-deployment={deployment_id},alien.dev/dynamic-container=first"
+            )),
+            None,
+        )
+        .await
+        .expect("rotated Secret")
+        .items
+        .into_iter()
+        .find(|secret| secret.metadata.name.as_deref().unwrap().ends_with("-env"))
+        .expect("environment Secret");
+    assert_eq!(secret.data.unwrap()["API_KEY"].0, b"rotated-test-value");
+
+    reconcile(
+        &client,
+        &namespace,
+        deployment_id,
+        &[rotated.clone(), second.clone()],
+        Some(("docker.io", "synthetic-test-token")),
+    )
+    .await
+    .expect("add manager registry credential");
+    let registry_secrets = client
+        .list_secrets(
+            &namespace,
+            Some(format!("alien.dev/dynamic-deployment={deployment_id}")),
+            None,
+        )
+        .await
+        .expect("registry Secrets");
+    assert!(registry_secrets.items.iter().any(|secret| {
+        secret
+            .metadata
+            .name
+            .as_deref()
+            .unwrap()
+            .ends_with("-registry")
+    }));
+    until_running(&client, &namespace, deployment_id, &[rotated, second]).await;
+    let registry_secrets = client
+        .list_secrets(
+            &namespace,
+            Some(format!("alien.dev/dynamic-deployment={deployment_id}")),
+            None,
+        )
+        .await
+        .expect("unused registry Secrets");
+    assert!(registry_secrets.items.iter().all(|secret| {
+        !secret
+            .metadata
+            .name
+            .as_deref()
+            .unwrap()
+            .ends_with("-registry")
+    }));
 
     for _ in 0..30 {
         reconcile(&client, &namespace, deployment_id, &[], None)
