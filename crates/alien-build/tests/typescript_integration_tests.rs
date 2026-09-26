@@ -289,6 +289,7 @@ async fn test_typescript_workspace_build(
         override_base_image: None,
         debug_mode: false,
         rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -396,6 +397,7 @@ async fn test_build_stack_with_source_code() {
         override_base_image: None, // No override needed - uses alien-base images
         debug_mode: false,
         rebuild: false,
+        pull_base_images: false,
     };
 
     let result_stack = build_stack(stack, &build_settings).await;
@@ -532,6 +534,7 @@ async fn test_typescript_toolchain_invalid_project() {
         override_base_image: None,
         debug_mode: false,
         rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -638,6 +641,7 @@ async fn test_real_npm_init_project() {
         override_base_image: None,
         debug_mode: false,
         rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -781,6 +785,7 @@ async fn test_real_pnpm_init_project() {
         override_base_image: None,
         debug_mode: false,
         rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -937,6 +942,7 @@ async fn test_real_bun_init_project() {
         override_base_image: None,
         debug_mode: false,
         rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;

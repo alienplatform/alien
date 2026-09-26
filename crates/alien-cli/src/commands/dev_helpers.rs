@@ -415,6 +415,7 @@ pub async fn build_and_post_release_simple(
             override_base_image: None,
             debug_mode: true,
             rebuild: false,
+            pull_base_images: false,
         };
 
         alien_build::build_stack(stack, &settings)

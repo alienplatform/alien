@@ -311,6 +311,7 @@ mod tests {
             override_base_image: None,
             debug_mode: false,
             rebuild: false,
+            pull_base_images: false,
         }
     }
 

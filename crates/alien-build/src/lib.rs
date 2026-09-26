@@ -2977,7 +2977,7 @@ async fn build_target_to_file(
         build_target: *target,
         runtime_platform_name: settings.platform.runtime_platform().as_str().to_string(),
         debug_mode: settings.debug_mode,
-        pull_base_images: settings.rebuild,
+        pull_base_images: settings.pull_base_images,
         workload,
     };
 
@@ -3952,6 +3952,7 @@ mod tests {
             override_base_image: None,
             debug_mode: false,
             rebuild: false,
+            pull_base_images: false,
         };
 
         let error = build_stack(stack, &settings)
@@ -3986,6 +3987,7 @@ mod tests {
             override_base_image: None,
             debug_mode: false,
             rebuild: false,
+            pull_base_images: false,
         };
 
         let error = build_stack(stack, &settings)
@@ -4446,6 +4448,7 @@ mod tests {
             override_base_image: None,
             debug_mode: false,
             rebuild: false,
+            pull_base_images: false,
         };
 
         // Pull alpine:latest (small, always available)
@@ -4514,6 +4517,7 @@ mod tests {
             override_base_image: None,
             debug_mode: false,
             rebuild: false,
+            pull_base_images: false,
         };
 
         // Try to pull non-existent image
@@ -4555,6 +4559,7 @@ mod tests {
             override_base_image: None,
             debug_mode: false,
             rebuild: false,
+            pull_base_images: false,
         };
 
         // Pull alpine image
@@ -4615,6 +4620,7 @@ mod tests {
             override_base_image: Some("registry.example.com/base:tag".to_string()),
             debug_mode: false,
             rebuild: false,
+            pull_base_images: false,
         };
         let azure = BuildSettings {
             platform: PlatformBuildSettings::Azure {},
@@ -4786,6 +4792,7 @@ mod tests {
             override_base_image: None,
             debug_mode: false,
             rebuild: false,
+            pull_base_images: false,
         };
 
         let first = compute_source_artifact_cache_key(
@@ -4849,6 +4856,7 @@ mod tests {
             override_base_image: None,
             debug_mode: false,
             rebuild: false,
+            pull_base_images: false,
         };
 
         let first = compute_source_artifact_cache_key(
@@ -4915,6 +4923,7 @@ mod tests {
             override_base_image: None,
             debug_mode: false,
             rebuild: false,
+            pull_base_images: false,
         };
 
         let first_key = compute_source_artifact_cache_key(
@@ -4980,6 +4989,7 @@ mod tests {
             override_base_image: None,
             debug_mode: false,
             rebuild: false,
+            pull_base_images: false,
         };
 
         let key = |dir: &Path| {
@@ -5064,6 +5074,7 @@ mod tests {
                     override_base_image: None,
                     debug_mode: false,
                     rebuild: false,
+                    pull_base_images: false,
                 };
                 compute_source_artifact_cache_key(
                     &dir,
@@ -5113,6 +5124,7 @@ mod tests {
                 override_base_image: None,
                 debug_mode: false,
                 rebuild: false,
+                pull_base_images: false,
             };
         let x64 = vec![BinaryTarget::LinuxX64];
         let arm64 = vec![BinaryTarget::LinuxArm64];
@@ -5724,6 +5736,7 @@ mod sandbox_build_tests {
             override_base_image: None,
             debug_mode: false,
             rebuild: false,
+            pull_base_images: false,
         }
     }
 

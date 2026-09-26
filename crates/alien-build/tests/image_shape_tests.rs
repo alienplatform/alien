@@ -258,6 +258,7 @@ async fn typescript_source_image_shapes_per_compute_type() {
         override_base_image: worker_base_image,
         debug_mode: false,
         rebuild: false,
+        pull_base_images: false,
     };
 
     build_stack(stack, &settings)

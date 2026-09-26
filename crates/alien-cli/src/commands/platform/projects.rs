@@ -562,6 +562,15 @@ async fn saved_remote_sandbox_settings(
         .project_capabilities
         .and_then(|capabilities| capabilities.capabilities.remote_sandbox)
         .and_then(|sandbox| sandbox.azure);
+    // The read and write schemas are generated as separate types; both are the same JSON object.
+    let azure = azure
+        .map(|azure| serde_json::to_value(azure).and_then(serde_json::from_value))
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "The saved Azure sandbox configuration could not be carried over".to_string(),
+            url: None,
+        })?;
     Ok(ConfigureRemoteSandboxRequest {
         azure,
         ..Default::default()
@@ -611,6 +620,7 @@ async fn build_and_push_sandbox_base_image(
     // input hash covers (node_modules, the executable bit, symlinks), so a hit there after a
     // registry miss would push the older image under the new tag.
     settings.rebuild = true;
+    settings.pull_base_images = source.rebuild;
     let input_hash = source_input_hash(&src, &toolchain, &settings).await?;
 
     let manager = ctx

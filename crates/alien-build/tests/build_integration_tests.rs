@@ -142,6 +142,7 @@ async fn test_build_stack_with_missing_file_should_error() {
         override_base_image: None,
         debug_mode: false,
         rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -204,6 +205,7 @@ async fn test_build_stack_with_glob_matching_no_files_should_succeed() {
         override_base_image: None,
         debug_mode: false,
         rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -258,6 +260,7 @@ async fn test_build_stack_with_direct_file_path() {
         override_base_image: None,
         debug_mode: false,
         rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -312,6 +315,7 @@ async fn test_build_stack_with_direct_directory_path() {
         override_base_image: None,
         debug_mode: false,
         rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -374,6 +378,7 @@ async fn test_build_stack_with_glob_patterns_matching_files() {
         override_base_image: None,
         debug_mode: false,
         rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -443,6 +448,7 @@ async fn test_build_stack_with_glob_patterns_matching_directories() {
         override_base_image: None,
         debug_mode: false,
         rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -485,6 +491,7 @@ async fn test_build_stack_with_missing_directory_should_error() {
         override_base_image: None,
         debug_mode: false,
         rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
