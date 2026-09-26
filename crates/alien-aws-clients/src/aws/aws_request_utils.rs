@@ -59,7 +59,7 @@ impl AwsRequestSigner for reqwest::RequestBuilder {
         // First build the request.
         let (client, req_result) = self.build_split();
 
-        let reqwest_request =
+        let mut reqwest_request =
             req_result
                 .into_alien_error()
                 .context(ErrorData::RequestSignError {
@@ -68,6 +68,31 @@ impl AwsRequestSigner for reqwest::RequestBuilder {
                         config.service_name
                     ),
                 })?;
+
+        // Endpoint overrides change the destination, but several service clients
+        // still supply their default AWS Host header. SigV4 signs that header,
+        // while HTTP routing and TLS use the URL authority. Keep all three on
+        // the same authority, including a non-default port for local endpoints.
+        let url = reqwest_request.url();
+        let host = url
+            .host_str()
+            .ok_or_else(|| std::io::Error::other("request URL has no host"))
+            .into_alien_error()
+            .context(ErrorData::RequestSignError {
+                message: format!("Missing URL host for {} service", config.service_name),
+            })?;
+        let authority = match url.port() {
+            Some(port) => format!("{host}:{port}"),
+            None => host.to_string(),
+        };
+        let host_header = http::HeaderValue::from_str(&authority)
+            .into_alien_error()
+            .context(ErrorData::RequestSignError {
+                message: format!("Invalid URL authority for {} service", config.service_name),
+            })?;
+        reqwest_request
+            .headers_mut()
+            .insert(http::header::HOST, host_header);
 
         // Extract body bytes (if available).
         let body_bytes = reqwest_request
@@ -316,4 +341,82 @@ pub async fn sign_send_no_response(builder: RequestBuilder, config: &AwsSignConf
         .with_retry()
         .send_no_response()
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AwsRequestBuilderExt, AwsRequestSigner, AwsSignConfig};
+    use aws_credential_types::Credentials;
+    use http::header::HOST;
+    use httpmock::{Method::POST, MockServer};
+    use reqwest::Client;
+
+    fn sign(url: &str, explicit_host: &str) -> reqwest::Request {
+        let config = AwsSignConfig {
+            service_name: "ec2".to_string(),
+            region: "us-east-1".to_string(),
+            credentials: Credentials::new("test-key", "test-secret", None, None, "test"),
+            signing_region: None,
+        };
+        Client::new()
+            .post(url)
+            .host(explicit_host)
+            .body("Action=DescribeInstances&Version=2016-11-15")
+            .sign_aws_request(&config)
+            .expect("request should sign")
+            .build()
+            .expect("signed request should build")
+    }
+
+    #[test]
+    fn endpoint_override_host_matches_signed_destination() {
+        let request = sign(
+            "https://worlds.staging.alien.dev/v1/simulators/example/aws/ec2",
+            "ec2.us-east-1.amazonaws.com",
+        );
+        assert_eq!(request.headers()[HOST], "worlds.staging.alien.dev");
+        assert!(request.headers()["authorization"]
+            .to_str()
+            .expect("authorization should be text")
+            .contains("SignedHeaders=host"));
+    }
+
+    #[test]
+    fn endpoint_override_host_includes_nondefault_port() {
+        let request = sign("http://127.0.0.1:4566/ec2", "ec2.us-east-1.amazonaws.com");
+        assert_eq!(request.headers()[HOST], "127.0.0.1:4566");
+    }
+
+    #[test]
+    fn standard_aws_host_is_unchanged() {
+        let request = sign(
+            "https://ec2.us-east-1.amazonaws.com",
+            "ec2.us-east-1.amazonaws.com",
+        );
+        assert_eq!(request.headers()[HOST], "ec2.us-east-1.amazonaws.com");
+    }
+
+    #[tokio::test]
+    async fn endpoint_override_reaches_the_url_authority() {
+        let server = MockServer::start_async().await;
+        let expected_host = server.address().to_string();
+        let capture = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/ec2")
+                    .header("host", &expected_host)
+                    .header_exists("authorization");
+                then.status(200);
+            })
+            .await;
+
+        let request = sign(&server.url("/ec2"), "ec2.us-east-1.amazonaws.com");
+        let response = Client::new()
+            .execute(request)
+            .await
+            .expect("override endpoint should receive the request");
+
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        capture.assert_async().await;
+    }
 }
