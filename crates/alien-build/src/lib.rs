@@ -1,5 +1,6 @@
 pub(crate) mod command_output;
 pub mod dependencies;
+mod dockerignore;
 pub mod error;
 pub mod merge;
 pub mod plan;

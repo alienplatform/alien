@@ -112,8 +112,8 @@ pub enum CapabilityCommand {
         /// Dockerfile path relative to --src (default: Dockerfile).
         #[arg(long, requires = "src", conflicts_with = "image")]
         dockerfile: Option<String>,
-        /// Build and push even when --src looks unchanged. The check skips .git, node_modules
-        /// and target, and reads the images in FROM by name only.
+        /// Build and push even when --src looks unchanged. The check reads the files Docker
+        /// sends as the build context, and the images in FROM by name only.
         #[arg(long, requires = "src", conflicts_with = "image")]
         rebuild: bool,
         /// Ceiling on a single sandbox session, in seconds.
@@ -702,7 +702,7 @@ async fn source_input_hash(
     toolchain: &ToolchainConfig,
     settings: &alien_build::settings::BuildSettings,
 ) -> Result<SourceInputHash> {
-    let hash = alien_build::docker_source_input_hash(src, toolchain, &settings.get_targets())
+    let hash = alien_build::docker_source_input_hash(src, toolchain, settings)
         .await
         .context(ErrorData::BuildFailed)?;
     Ok(SourceInputHash(hash))

@@ -1,22 +1,26 @@
+use crate::dockerignore::DockerIgnore;
 use crate::error::{ErrorData, Result};
-use alien_core::{BinaryTarget, ToolchainConfig};
+use crate::settings::BuildSettings;
+use alien_core::ToolchainConfig;
 use alien_error::{AlienError, Context, IntoAlienError};
 use sha2::{Digest, Sha256};
-use std::path::{Component, Path};
+use std::io::ErrorKind;
+use std::path::{Component, Path, PathBuf};
 use tokio::fs;
 
-const FORMAT_VERSION: &[u8] = b"alien-docker-source-input-v1";
+const FORMAT_VERSION: &[u8] = b"alien-docker-source-input-v2";
 
-/// Hex SHA-256 of everything a Docker source build reads: the files under `src` by their
-/// relative paths, the Dockerfile, the build args, the build stage, and the target platforms.
+/// Hex SHA-256 of everything a Docker source build reads: the build context Docker sends from
+/// `src`, the Dockerfile, the build args, the build stage, and the target platforms.
 ///
-/// The absolute location of `src` is not an input, so two machines with the same tree agree.
-/// Files the build cache ignores (`.git`, `node_modules`, `target`, ...) and symlinks are not
-/// hashed. Base images named in `FROM` are hashed by name only, never by their registry digest.
+/// The context is every entry under `src` that the build's `.dockerignore` keeps, by relative
+/// path: file contents and executable bit, symlink targets as written, and directories. The
+/// absolute location of `src` is not an input, so two machines with the same tree agree. Base
+/// images named in `FROM` are hashed by name only, never by their registry digest.
 pub async fn docker_source_input_hash(
     src: &Path,
     toolchain: &ToolchainConfig,
-    targets: &[BinaryTarget],
+    settings: &BuildSettings,
 ) -> Result<String> {
     let ToolchainConfig::Docker {
         dockerfile,
@@ -49,25 +53,191 @@ pub async fn docker_source_input_hash(
         field(&mut hasher, b"target");
         field(&mut hasher, target.as_bytes());
     }
-    for platform in targets {
+    for platform in settings.get_targets() {
         field(&mut hasher, b"platform");
         field(&mut hasher, platform.runtime_platform_id().as_bytes());
     }
 
-    let mut files = Vec::new();
-    crate::collect_source_files(src, src, &mut files)?;
-    let mut files = files
-        .into_iter()
-        .map(|relative| (portable_path(&relative), relative))
-        .collect::<Vec<_>>();
-    files.sort();
-    for (portable, relative) in files {
-        field(&mut hasher, b"file");
-        field(&mut hasher, portable.as_bytes());
-        field(&mut hasher, &read(&src.join(relative)).await?);
+    let context = BuildContext {
+        src,
+        ignore: dockerignore(src, dockerfile).await?,
+        output: output_inside(src, Path::new(&settings.output_directory))?,
+    };
+    let mut entries = Vec::new();
+    context.collect(Path::new(""), &mut entries)?;
+    entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+    for (portable, entry) in entries {
+        match entry {
+            Entry::Directory => {
+                field(&mut hasher, b"dir");
+                field(&mut hasher, portable.as_bytes());
+            }
+            Entry::File {
+                relative,
+                executable,
+            } => {
+                field(&mut hasher, b"file");
+                field(&mut hasher, portable.as_bytes());
+                field(&mut hasher, &[u8::from(executable)]);
+                field(&mut hasher, &read(&src.join(relative)).await?);
+            }
+            Entry::Symlink(target) => {
+                field(&mut hasher, b"symlink");
+                field(&mut hasher, portable.as_bytes());
+                field(&mut hasher, target.to_string_lossy().as_bytes());
+            }
+        }
     }
 
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+enum Entry {
+    Directory,
+    File { relative: PathBuf, executable: bool },
+    Symlink(PathBuf),
+}
+
+struct BuildContext<'a> {
+    src: &'a Path,
+    ignore: DockerIgnore,
+    /// The build writes its output here between the hash before a build and the one after it,
+    /// so hashing it, or a directory that exists only to hold it, would report every build as
+    /// edited mid-build. Docker still sends it.
+    output: Option<PathBuf>,
+}
+
+impl BuildContext<'_> {
+    fn collect(&self, relative_dir: &Path, entries: &mut Vec<(String, Entry)>) -> Result<()> {
+        let dir = self.src.join(relative_dir);
+        let read_failed = |path: &Path| ErrorData::FileOperationFailed {
+            operation: "read".to_string(),
+            file_path: path.display().to_string(),
+            reason: "Failed to read the build context for the source input hash".to_string(),
+        };
+        let listing = std::fs::read_dir(&dir)
+            .into_alien_error()
+            .context(read_failed(&dir))?;
+        for dir_entry in listing {
+            let dir_entry = dir_entry.into_alien_error().context(read_failed(&dir))?;
+            let relative = relative_dir.join(dir_entry.file_name());
+            if self.output.as_deref() == Some(relative.as_path()) {
+                continue;
+            }
+            let path = dir_entry.path();
+            // Does not follow symlinks: Docker sends a symlink as the link itself.
+            let metadata = dir_entry
+                .metadata()
+                .into_alien_error()
+                .context(read_failed(&path))?;
+            let portable = portable_path(&relative);
+            let excluded = self.ignore.excludes(&portable);
+            let holds_output = self
+                .output
+                .as_ref()
+                .is_some_and(|output| output.starts_with(&relative));
+
+            if metadata.is_dir() {
+                if excluded && !self.ignore.has_exclusions() {
+                    continue;
+                }
+                let sent_before = entries.len();
+                self.collect(&relative, entries)?;
+                // Docker sends an excluded directory when it holds a re-included entry.
+                if (!excluded && !holds_output) || entries.len() > sent_before {
+                    entries.push((portable, Entry::Directory));
+                }
+            } else if excluded {
+                continue;
+            } else if metadata.is_symlink() {
+                let target = std::fs::read_link(&path)
+                    .into_alien_error()
+                    .context(read_failed(&path))?;
+                entries.push((portable, Entry::Symlink(target)));
+            } else if metadata.is_file() {
+                entries.push((
+                    portable,
+                    Entry::File {
+                        relative,
+                        executable: is_executable(&metadata),
+                    },
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Docker reads `<dockerfile>.dockerignore` beside the Dockerfile when it exists, and the
+/// context root's `.dockerignore` otherwise.
+async fn dockerignore(src: &Path, dockerfile: &str) -> Result<DockerIgnore> {
+    for path in [
+        src.join(format!("{dockerfile}.dockerignore")),
+        src.join(".dockerignore"),
+    ] {
+        match fs::read_to_string(&path).await {
+            Ok(contents) => return DockerIgnore::parse(&contents, &path),
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error)
+                    .into_alien_error()
+                    .context(ErrorData::FileOperationFailed {
+                        operation: "read file".to_string(),
+                        file_path: path.display().to_string(),
+                        reason: "Failed to read the build's ignore file".to_string(),
+                    })
+            }
+        }
+    }
+    Ok(DockerIgnore::empty())
+}
+
+/// `output` relative to `src`, when the build writes its output inside the context.
+fn output_inside(src: &Path, output: &Path) -> Result<Option<PathBuf>> {
+    let canonical = |path: &Path| {
+        std::fs::canonicalize(path)
+            .into_alien_error()
+            .context(ErrorData::FileOperationFailed {
+                operation: "resolve path".to_string(),
+                file_path: path.display().to_string(),
+                reason: "Failed to resolve a path for the source input hash".to_string(),
+            })
+    };
+    // Before the first build the output does not exist yet, so resolve its deepest existing
+    // ancestor and append the rest.
+    let mut existing = output;
+    let mut missing = Vec::new();
+    while !existing.exists() {
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name);
+                existing = parent;
+            }
+            _ => return Ok(None),
+        }
+        if existing.as_os_str().is_empty() {
+            existing = Path::new(".");
+        }
+    }
+    let mut output = canonical(existing)?;
+    output.extend(missing.iter().rev());
+    let src = canonical(src)?;
+    Ok(output
+        .strip_prefix(&src)
+        .ok()
+        .filter(|relative| !relative.as_os_str().is_empty())
+        .map(Path::to_path_buf))
+}
+
+#[cfg(unix)]
+fn is_executable(metadata: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    metadata.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable(_metadata: &std::fs::Metadata) -> bool {
+    false
 }
 
 /// Length-prefixed, so no two different input sequences hash the same bytes.
@@ -101,6 +271,8 @@ async fn read(path: &Path) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::PlatformBuildSettings;
+    use alien_core::BinaryTarget;
     use std::collections::HashMap;
     use tempfile::TempDir;
 
@@ -109,6 +281,18 @@ mod tests {
             dockerfile: dockerfile.map(str::to_string),
             build_args: None,
             target: None,
+        }
+    }
+
+    fn settings(targets: &[BinaryTarget], output_directory: &Path) -> BuildSettings {
+        BuildSettings {
+            platform: PlatformBuildSettings::Machines {},
+            output_directory: output_directory.display().to_string(),
+            targets: Some(targets.to_vec()),
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+            rebuild: false,
         }
     }
 
@@ -128,9 +312,13 @@ mod tests {
     }
 
     async fn hash(dir: &Path, toolchain: &ToolchainConfig) -> String {
-        docker_source_input_hash(dir, toolchain, &[BinaryTarget::LinuxArm64])
-            .await
-            .expect("the tree should hash")
+        docker_source_input_hash(
+            dir,
+            toolchain,
+            &settings(&[BinaryTarget::LinuxArm64], &dir.join(".alien")),
+        )
+        .await
+        .expect("the tree should hash")
     }
 
     #[tokio::test]
@@ -190,20 +378,125 @@ mod tests {
         };
         assert_ne!(hash(dir.path(), &with_stage).await, default);
         assert_ne!(
-            docker_source_input_hash(dir.path(), &docker(None), &[BinaryTarget::LinuxX64])
-                .await
-                .unwrap(),
+            docker_source_input_hash(
+                dir.path(),
+                &docker(None),
+                &settings(&[BinaryTarget::LinuxX64], &dir.path().join(".alien")),
+            )
+            .await
+            .unwrap(),
             default
         );
     }
 
     #[tokio::test]
-    async fn ignored_directories_are_not_inputs() {
+    async fn every_directory_docker_sends_is_an_input() {
         let dir = sandbox_tree();
         let before = hash(dir.path(), &docker(None)).await;
 
         std::fs::write(dir.path().join("node_modules/dep/index.js"), "two").unwrap();
+        let after_node_modules = hash(dir.path(), &docker(None)).await;
+        assert_ne!(after_node_modules, before);
+
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+        std::fs::write(dir.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        assert_ne!(hash(dir.path(), &docker(None)).await, after_node_modules);
+    }
+
+    #[tokio::test]
+    async fn dockerignored_paths_are_not_inputs() {
+        let dir = sandbox_tree();
+        std::fs::write(dir.path().join(".dockerignore"), "node_modules\n**/*.log\n").unwrap();
+        std::fs::write(dir.path().join("app/debug.log"), "one").unwrap();
+        let before = hash(dir.path(), &docker(None)).await;
+
+        std::fs::write(dir.path().join("node_modules/dep/index.js"), "two").unwrap();
+        std::fs::write(dir.path().join("app/debug.log"), "two").unwrap();
         assert_eq!(hash(dir.path(), &docker(None)).await, before);
+
+        std::fs::write(dir.path().join(".dockerignore"), "**/*.log\n").unwrap();
+        assert_ne!(hash(dir.path(), &docker(None)).await, before);
+    }
+
+    #[tokio::test]
+    async fn a_dockerfile_specific_ignore_file_replaces_the_root_one() {
+        let dir = sandbox_tree();
+        std::fs::write(dir.path().join(".dockerignore"), "app\n").unwrap();
+        std::fs::write(
+            dir.path().join("Sandbox.dockerfile.dockerignore"),
+            "node_modules\n",
+        )
+        .unwrap();
+        let toolchain = docker(Some("Sandbox.dockerfile"));
+        let before = hash(dir.path(), &toolchain).await;
+
+        std::fs::write(dir.path().join("node_modules/dep/index.js"), "two").unwrap();
+        assert_eq!(hash(dir.path(), &toolchain).await, before);
+        std::fs::write(dir.path().join("app/bin/run.sh"), "#!/bin/sh\necho bye\n").unwrap();
+        assert_ne!(hash(dir.path(), &toolchain).await, before);
+    }
+
+    #[tokio::test]
+    async fn a_file_reincluded_under_an_ignored_directory_is_an_input() {
+        let dir = sandbox_tree();
+        std::fs::write(
+            dir.path().join(".dockerignore"),
+            "node_modules\n!node_modules/dep/index.js\n",
+        )
+        .unwrap();
+        let before = hash(dir.path(), &docker(None)).await;
+
+        std::fs::write(dir.path().join("node_modules/dep/index.js"), "two").unwrap();
+        assert_ne!(hash(dir.path(), &docker(None)).await, before);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_retargeted_symlink_changes_the_hash() {
+        let dir = sandbox_tree();
+        let link = dir.path().join("app/current");
+        std::os::unix::fs::symlink("bin", &link).unwrap();
+        let before = hash(dir.path(), &docker(None)).await;
+
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink("../node_modules", &link).unwrap();
+        assert_ne!(hash(dir.path(), &docker(None)).await, before);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn making_a_file_executable_changes_the_hash() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = sandbox_tree();
+        let script = dir.path().join("app/bin/run.sh");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let before = hash(dir.path(), &docker(None)).await;
+
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_ne!(hash(dir.path(), &docker(None)).await, before);
+    }
+
+    #[tokio::test]
+    async fn the_build_output_inside_the_source_is_not_an_input() {
+        for existing_before_the_build in [None, Some(".alien"), Some(".alien/remote-sandbox")] {
+            let dir = sandbox_tree();
+            if let Some(existing) = existing_before_the_build {
+                std::fs::create_dir_all(dir.path().join(existing)).unwrap();
+            }
+            let output = dir.path().join(".alien/remote-sandbox");
+            let settings = settings(&[BinaryTarget::LinuxArm64], &output);
+            let before = docker_source_input_hash(dir.path(), &docker(None), &settings)
+                .await
+                .unwrap();
+
+            std::fs::create_dir_all(output.join("build/aws")).unwrap();
+            std::fs::write(output.join("build/aws/stack.json"), "{}").unwrap();
+            let after = docker_source_input_hash(dir.path(), &docker(None), &settings)
+                .await
+                .unwrap();
+            assert_eq!(after, before, "{existing_before_the_build:?} existed first");
+        }
     }
 
     #[tokio::test]
@@ -212,7 +505,7 @@ mod tests {
         docker_source_input_hash(
             dir.path(),
             &docker(Some("Missing.dockerfile")),
-            &[BinaryTarget::LinuxArm64],
+            &settings(&[BinaryTarget::LinuxArm64], &dir.path().join(".alien")),
         )
         .await
         .expect_err("a build without its Dockerfile has no inputs to hash");
