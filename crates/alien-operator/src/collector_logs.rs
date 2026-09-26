@@ -525,7 +525,7 @@ mod tests {
 
     #[test]
     fn collector_preserves_structured_stdout_and_exposes_its_message() {
-        let application_log = r#"{"time":"2026-09-26T12:12:02Z","level":"INFO","msg":"discovered cluster","uid":"cluster-1"}"#;
+        let application_log = r#"{"time":"2026-09-26T12:12:02Z","level":"INFO","msg":"service ready","requestId":"request-1"}"#;
         let body = serde_json::to_vec(&serde_json::json!({
             "filename": "/var/log/containers/agent-abc_demo_agent-123.log",
             "stream": "stdout",
@@ -542,9 +542,7 @@ mod tests {
         assert_eq!(record.severity_text, "INFO");
         assert_eq!(
             record.body.as_ref().and_then(|body| body.value.as_ref()),
-            Some(&any_value::Value::StringValue(
-                "discovered cluster".to_string()
-            ))
+            Some(&any_value::Value::StringValue("service ready".to_string()))
         );
         assert!(record.attributes.iter().any(|attribute| {
             attribute.key == "log.record.original"

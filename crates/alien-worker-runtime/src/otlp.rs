@@ -582,8 +582,7 @@ mod tests {
         let provider = SdkLoggerProvider::builder()
             .with_simple_exporter(exporter.clone())
             .build();
-        let original =
-            r#"{"time":"2026-09-26T12:12:02Z","level":"INFO","msg":"ready","uid":"cluster-1"}"#;
+        let original = r#"{"time":"2026-09-26T12:12:02Z","level":"INFO","msg":"ready","requestId":"request-1"}"#;
 
         emit_to_provider(
             &provider,

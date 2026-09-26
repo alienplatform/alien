@@ -229,9 +229,9 @@ mod tests {
     fn extracts_recognized_structured_messages_only() {
         assert_eq!(
             parse_application_log_message(
-                r#"{"time":"2026-09-26T12:12:02Z","level":"INFO","msg":"discovered cluster"}"#
+                r#"{"time":"2026-09-26T12:12:02Z","level":"INFO","msg":"service ready"}"#
             ),
-            Some("discovered cluster".to_string())
+            Some("service ready".to_string())
         );
         assert_eq!(
             parse_application_log_message(
