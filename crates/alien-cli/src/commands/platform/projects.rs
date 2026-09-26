@@ -631,19 +631,8 @@ async fn build_and_push_sandbox_base_image(
                     .await
                     .context(ErrorData::BuildFailed)?;
             // The tag is shared by every machine with this tree, so it must not name an image
-            // built from a tree that was edited mid-build. The build is dropped from the local
-            // cache too: it is keyed on the pre-edit tree, which a revert would bring back.
+            // built from a tree that was edited mid-build.
             if source_input_hash(&src, &toolchain, &settings).await? != input_hash {
-                let artifact = sandbox_image(&built)?;
-                tokio::fs::remove_dir_all(&artifact)
-                    .await
-                    .into_alien_error()
-                    .context(ErrorData::FileOperationFailed {
-                        operation: "remove directory".to_string(),
-                        file_path: artifact.clone(),
-                        reason: "Failed to drop a build of a source that changed mid-build"
-                            .to_string(),
-                    })?;
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "src".to_string(),
                     message: format!(

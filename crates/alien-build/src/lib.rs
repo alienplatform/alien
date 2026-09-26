@@ -2198,7 +2198,19 @@ async fn build_resource(
     let final_output_dir = build_output_dir.join(&hashed_dir_name);
 
     let finalized_dir = finalize_artifact_dir(&resource_dir, &final_output_dir, "build").await?;
-    write_artifact_cache_metadata(&PathBuf::from(&finalized_dir), &artifact_cache_key).await?;
+    // The key was taken before the build read the tree. If the tree changed since, the artifact
+    // is not the build of either version, so it stays out of the cache.
+    let key_after_build =
+        compute_source_artifact_cache_key(src, toolchain_config, settings, &targets, workload)
+            .await?;
+    if key_after_build == artifact_cache_key {
+        write_artifact_cache_metadata(&PathBuf::from(&finalized_dir), &artifact_cache_key).await?;
+    } else {
+        warn!(
+            resource = resource_name,
+            "Source changed during the build; the artifact is not cached"
+        );
+    }
 
     // Return the directory path containing all OCI tarballs (with content hash)
     info!(
