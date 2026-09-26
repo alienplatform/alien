@@ -433,9 +433,17 @@ fn accept_target_release(
 ) {
     deployment_state.target_release = Some(release);
     // A target can change runtime configuration while retaining the same
-    // release. Reconcile every accepted target before reporting success.
-    if deployment_state.status == alien_core::DeploymentStatus::Running {
+    // release. A corrective target must also restart a failed update from
+    // preflights, rather than reusing the failed target's prepared stack.
+    if matches!(
+        deployment_state.status,
+        alien_core::DeploymentStatus::Running | alien_core::DeploymentStatus::UpdateFailed
+    ) {
         deployment_state.status = alien_core::DeploymentStatus::UpdatePending;
+        if let Some(metadata) = deployment_state.runtime_metadata.as_mut() {
+            metadata.pending_prepared_stack = None;
+        }
+        deployment_state.retry_requested = false;
     }
 }
 
@@ -665,6 +673,40 @@ mod tests {
 
         assert_eq!(state.status, DeploymentStatus::UpdatePending);
         assert_eq!(state.target_release, Some(release));
+    }
+
+    #[test]
+    fn corrective_target_restarts_failed_update_from_preflights() {
+        let release = ReleaseInfo {
+            release_id: Some("rel_corrected".to_string()),
+            version: None,
+            description: None,
+            stack: Stack::new("corrected".to_string()).build(),
+        };
+        let mut metadata = alien_core::RuntimeMetadata::default();
+        metadata.pending_prepared_stack = Some(Stack::new("failed-target".to_string()).build());
+        let mut state = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::UpdateFailed,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(metadata),
+            retry_requested: true,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+
+        accept_target_release(&mut state, release.clone());
+
+        assert_eq!(state.status, DeploymentStatus::UpdatePending);
+        assert_eq!(state.target_release, Some(release));
+        assert!(!state.retry_requested);
+        assert!(state
+            .runtime_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.pending_prepared_stack.is_none()));
     }
 
     struct SyncFixture {
