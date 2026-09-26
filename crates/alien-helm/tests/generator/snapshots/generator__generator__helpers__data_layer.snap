@@ -1075,6 +1075,7 @@ spec:
         {{- end }}
       annotations:
         checksum/input-values: {{ toJson .Values.inputValues | sha256sum | quote }}
+        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret) | sha256sum | quote }}
         {{- with .Values.runtime.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

@@ -5754,6 +5754,7 @@ spec:
         {{- end }}
       annotations:
         checksum/input-values: {{ toJson .Values.inputValues | sha256sum | quote }}
+        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret) | sha256sum | quote }}
         {{- with .Values.runtime.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -7821,6 +7822,10 @@ inputValues:
             ["checksum/input-values"]
             .as_str()
             .expect("input values checksum");
+        let credential_checksum = operator["spec"]["template"]["metadata"]["annotations"]
+            ["checksum/management-credential"]
+            .as_str()
+            .expect("management credential checksum");
         let changed_values = values.replace(
             "https://ingest.example.test",
             "https://ingest-updated.example.test",
@@ -7838,6 +7843,28 @@ inputValues:
                 .as_str()
                 .expect("updated input values checksum"),
             "changing Helm input values must roll the Operator"
+        );
+        let rotated_values = values.replace("ax_dg_example", "ax_dg_rotated");
+        let rotated = crate::test_utils::helm_template(&chart.files, Some(&rotated_values));
+        rotated.assert_ok("Helm credential rotation renders");
+        let rotated_operator = serde_yaml::Deserializer::from_str(&rotated.stdout)
+            .map(|document| YamlValue::deserialize(document).expect("valid Kubernetes YAML"))
+            .find(|document| document["kind"] == "Deployment")
+            .expect("rotated Operator Deployment");
+        assert_ne!(
+            credential_checksum,
+            rotated_operator["spec"]["template"]["metadata"]["annotations"]
+                ["checksum/management-credential"]
+                .as_str()
+                .expect("rotated management credential checksum"),
+            "changing the Helm management credential must roll the Operator"
+        );
+        assert_eq!(
+            checksum,
+            rotated_operator["spec"]["template"]["metadata"]["annotations"]
+                ["checksum/input-values"]
+                .as_str()
+                .expect("unchanged input values checksum")
         );
         let container = &operator["spec"]["template"]["spec"]["containers"][0];
         assert!(container["env"].as_sequence().is_some_and(|entries| {
