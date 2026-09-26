@@ -3158,10 +3158,18 @@ fn operator_log_collector_daemonset_doc(
     ));
     yaml.push_str("      tolerations:\n");
     yaml.push_str("        - operator: Exists\n");
+    yaml.push_str("      securityContext:\n");
+    yaml.push_str("        seccompProfile:\n");
+    yaml.push_str("          type: RuntimeDefault\n");
     yaml.push_str("      containers:\n");
     yaml.push_str("        - name: collector\n");
     yaml.push_str(&format!("          image: {}\n", yaml_string(image)));
     yaml.push_str("          imagePullPolicy: IfNotPresent\n");
+    yaml.push_str("          securityContext:\n");
+    yaml.push_str("            allowPrivilegeEscalation: false\n");
+    yaml.push_str("            readOnlyRootFilesystem: true\n");
+    yaml.push_str("            capabilities:\n");
+    yaml.push_str("              drop: [ALL]\n");
     yaml.push_str("          args: [\"-c\", \"/collector/etc/collector.conf\"]\n");
     yaml.push_str("          env:\n");
     yaml.push_str("            - name: COLLECTOR_TOKEN\n");
@@ -6057,10 +6065,18 @@ spec:
       serviceAccountName: {{ include "deployment.logCollectorName" . }}
       tolerations:
         - operator: Exists
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: collector
           image: "{{ .Values.logCollector.image.repository }}:{{ .Values.logCollector.image.tag }}"
           imagePullPolicy: {{ .Values.logCollector.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
           args:
             - -c
             - /collector/etc/collector.conf
@@ -7223,6 +7239,15 @@ mod tests {
             .into_iter()
             .next()
             .expect("operator manifest should include collector DaemonSet");
+        let pod_spec = &daemonset["spec"]["template"]["spec"];
+        assert_eq!(
+            pod_spec["securityContext"]["seccompProfile"]["type"],
+            "RuntimeDefault"
+        );
+        let container_security = &pod_spec["containers"][0]["securityContext"];
+        assert_eq!(container_security["allowPrivilegeEscalation"], false);
+        assert_eq!(container_security["readOnlyRootFilesystem"], true);
+        assert_eq!(container_security["capabilities"]["drop"][0], "ALL");
         let env = daemonset
             .get("spec")
             .and_then(|spec| spec.get("template"))
@@ -8889,6 +8914,19 @@ logCollector:
             .stdout
             .contains("app.kubernetes.io/component: log-collector"));
         let documents = parse_manifest_docs(&rendered.stdout);
+        let collector_daemonset = docs_by_kind(&documents, "DaemonSet")
+            .into_iter()
+            .next()
+            .expect("collector DaemonSet");
+        let pod_spec = &collector_daemonset["spec"]["template"]["spec"];
+        assert_eq!(
+            pod_spec["securityContext"]["seccompProfile"]["type"],
+            "RuntimeDefault"
+        );
+        let container_security = &pod_spec["containers"][0]["securityContext"];
+        assert_eq!(container_security["allowPrivilegeEscalation"], false);
+        assert_eq!(container_security["readOnlyRootFilesystem"], true);
+        assert_eq!(container_security["capabilities"]["drop"][0], "ALL");
         let collector_config = docs_by_kind(&documents, "ConfigMap")
             .into_iter()
             .find(|document| {
