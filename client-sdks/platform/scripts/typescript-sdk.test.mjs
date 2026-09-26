@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { HTTPClient } from "../typescript/esm/lib/http.js";
 import { Alien } from "../typescript/esm/sdk/sdk.js";
+import { OperationsPermissionDiff$inboundSchema } from "../typescript/esm/models/index.js";
 import {
   KubernetesPermissions$outboundSchema,
   Rule$outboundSchema,
@@ -67,6 +68,7 @@ test("operations plugin responses retain the permission diff", () => {
     permissionDiff,
   });
   assert.deepEqual(response.permissionDiff, permissionDiff);
+  assert.deepEqual(OperationsPermissionDiff$inboundSchema.parse(permissionDiff), permissionDiff);
 });
 
 test("configured server query parameters survive operation globals", async () => {
