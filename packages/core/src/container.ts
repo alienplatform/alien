@@ -3,10 +3,10 @@ import {
   type ContainerCode,
   type Container as ContainerConfig,
   type ContainerGpuSpec,
+  type ContainerSecurity,
   ContainerSchema,
   type HealthCheck,
   type KubernetesHttpProbe,
-  type KubernetesRestrictedSecurity,
   type KubernetesSecretMount,
   type PersistentStorage,
   type PublicEndpoint,
@@ -29,13 +29,14 @@ export type {
   ContainerAutoscaling,
   ContainerCode,
   ContainerGpuSpec,
+  ContainerSecurity,
+  ContainerSecurityProfile,
   ContainerOutputs,
   ContainerPort,
   ContainerStatus,
   ExposeProtocol,
   HealthCheck,
   KubernetesHttpProbe,
-  KubernetesRestrictedSecurity,
   KubernetesSecretMount,
   PersistentStorage,
   PublicEndpoint,
@@ -346,9 +347,9 @@ export class Container extends ResourceBuilder {
     return this
   }
 
-  /** Uses a non-root identity, read-only filesystem, RuntimeDefault seccomp, and no capabilities. */
-  public kubernetesRestrictedSecurity(settings: KubernetesRestrictedSecurity): this {
-    this._config.kubernetesRestrictedSecurity = settings
+  /** Sets a portable container security profile and process identity. */
+  public security(settings: ContainerSecurity): this {
+    this._config.security = settings
     return this
   }
 

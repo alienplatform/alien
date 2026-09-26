@@ -101,18 +101,27 @@ pub struct KubernetesHttpProbe {
     pub port: u16,
 }
 
-/// Runs a Kubernetes workload with a non-root identity, read-only filesystem,
-/// RuntimeDefault seccomp profile, no privilege escalation, and no Linux capabilities.
+/// Security profile shared by container runtimes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum ContainerSecurityProfile {
+    Restricted,
+}
+
+/// Container process identity and filesystem security.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct KubernetesRestrictedSecurity {
+pub struct ContainerSecurity {
+    /// Runtime security profile.
+    pub profile: ContainerSecurityProfile,
     /// Numeric UID for the container process.
     pub run_as_user: i64,
     /// Numeric GID for the container process.
     pub run_as_group: i64,
-    /// Supplemental filesystem GID for mounted volumes.
-    pub fs_group: i64,
+    /// Mount the root filesystem read-only.
+    pub read_only_root_filesystem: bool,
 }
 
 /// Autoscaling configuration for stateless containers.
@@ -261,9 +270,9 @@ pub struct Container {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kubernetes_readiness_probe: Option<KubernetesHttpProbe>,
 
-    /// Restricted Kubernetes pod and container security settings.
+    /// Security settings shared by supported container runtimes.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub kubernetes_restricted_security: Option<KubernetesRestrictedSecurity>,
+    pub security: Option<ContainerSecurity>,
 
     /// ComputeCluster resource ID that this container runs on.
     /// If None, will be auto-assigned by ComputeClusterMutation at deployment time.

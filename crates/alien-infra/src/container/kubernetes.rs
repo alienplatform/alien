@@ -2288,13 +2288,13 @@ impl KubernetesContainerController {
             .as_ref()
             .map(http_probe)
             .transpose()?;
-        let security = config.kubernetes_restricted_security.as_ref();
-        if security.is_some_and(|settings| {
-            settings.run_as_user <= 0 || settings.run_as_group <= 0 || settings.fs_group < 0
-        }) {
+        let security = config.security.as_ref();
+        if security.is_some_and(|settings| settings.run_as_user <= 0 || settings.run_as_group <= 0)
+        {
             return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: config.id.clone(),
-                message: "Restricted Kubernetes security needs positive user and group IDs and a nonnegative filesystem group ID".to_string(),
+                message: "Restricted container security needs positive user and group IDs"
+                    .to_string(),
             }));
         }
 
@@ -2317,9 +2317,9 @@ impl KubernetesContainerController {
             env: Some(env_vars),
             liveness_probe,
             readiness_probe,
-            security_context: security.map(|_| SecurityContext {
+            security_context: security.map(|settings| SecurityContext {
                 allow_privilege_escalation: Some(false),
-                read_only_root_filesystem: Some(true),
+                read_only_root_filesystem: Some(settings.read_only_root_filesystem),
                 capabilities: Some(Capabilities {
                     drop: Some(vec!["ALL".to_string()]),
                     ..Default::default()
@@ -2384,7 +2384,7 @@ impl KubernetesContainerController {
                 run_as_non_root: Some(true),
                 run_as_user: Some(settings.run_as_user),
                 run_as_group: Some(settings.run_as_group),
-                fs_group: Some(settings.fs_group),
+                fs_group: Some(settings.run_as_group),
                 seccomp_profile: Some(SeccompProfile {
                     type_: "RuntimeDefault".to_string(),
                     ..Default::default()
@@ -2751,10 +2751,10 @@ mod tests {
         OTEL_EXPORTER_OTLP_METRICS_HEADERS,
     };
     use alien_core::{
-        KubernetesHttpProbe, KubernetesRestrictedSecurity, KubernetesSecretMount, OtlpConfig,
-        Resource, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_LAMBDA_MODE, ENV_ALIEN_RUNTIME_SECRETS,
-        ENV_ALIEN_RUNTIME_SEND_OTLP, ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT,
-        ENV_ALIEN_WORKER_GRPC_ADDRESS,
+        ContainerSecurity, ContainerSecurityProfile, KubernetesHttpProbe, KubernetesSecretMount,
+        OtlpConfig, Resource, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_LAMBDA_MODE,
+        ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_RUNTIME_SEND_OTLP, ENV_ALIEN_SECRETS,
+        ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
     };
     fn manifest_test_container(environment: &[(&str, &str)], stateful: bool) -> Container {
         let mut config = Container::new("web".to_string())
@@ -2805,10 +2805,11 @@ mod tests {
             path: "/readyz".to_string(),
             port: 8080,
         });
-        config.kubernetes_restricted_security = Some(KubernetesRestrictedSecurity {
+        config.security = Some(ContainerSecurity {
+            profile: ContainerSecurityProfile::Restricted,
             run_as_user: 65532,
             run_as_group: 65532,
-            fs_group: 65532,
+            read_only_root_filesystem: true,
         });
         let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
         let deployment = manifest_test_controller()

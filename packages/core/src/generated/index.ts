@@ -154,6 +154,8 @@ export type { ContainerImageIdentity } from "./zod/container-image-identity-sche
 export type { ContainerOutputs } from "./zod/container-outputs-schema.js";
 export type { ContainerPort } from "./zod/container-port-schema.js";
 export type { Container } from "./zod/container-schema.js";
+export type { ContainerSecurityProfile } from "./zod/container-security-profile-schema.js";
+export type { ContainerSecurity } from "./zod/container-security-schema.js";
 export type { ContainerStatus } from "./zod/container-status-schema.js";
 export type { CreateCommandRequest } from "./zod/create-command-request-schema.js";
 export type { CreateCommandResponse } from "./zod/create-command-response-schema.js";
@@ -260,7 +262,6 @@ export type { KubernetesNodeResources } from "./zod/kubernetes-node-resources-sc
 export type { KubernetesNodeUsage } from "./zod/kubernetes-node-usage-schema.js";
 export type { KubernetesOwnerReference } from "./zod/kubernetes-owner-reference-schema.js";
 export type { KubernetesPodRuntimeUnitStatus } from "./zod/kubernetes-pod-runtime-unit-status-schema.js";
-export type { KubernetesRestrictedSecurity } from "./zod/kubernetes-restricted-security-schema.js";
 export type { KubernetesRouteProfile } from "./zod/kubernetes-route-profile-schema.js";
 export type { KubernetesRouteProviderOptions } from "./zod/kubernetes-route-provider-options-schema.js";
 export type { KubernetesSandboxHeartbeatData } from "./zod/kubernetes-sandbox-heartbeat-data-schema.js";
@@ -592,6 +593,8 @@ export { ContainerImageIdentitySchema } from "./zod/container-image-identity-sch
 export { ContainerOutputsSchema } from "./zod/container-outputs-schema.js";
 export { ContainerPortSchema } from "./zod/container-port-schema.js";
 export { ContainerSchema } from "./zod/container-schema.js";
+export { ContainerSecurityProfileSchema } from "./zod/container-security-profile-schema.js";
+export { ContainerSecuritySchema } from "./zod/container-security-schema.js";
 export { ContainerStatusSchema } from "./zod/container-status-schema.js";
 export { CreateCommandRequestSchema } from "./zod/create-command-request-schema.js";
 export { CreateCommandResponseSchema } from "./zod/create-command-response-schema.js";
@@ -698,7 +701,6 @@ export { KubernetesNodeResourcesSchema } from "./zod/kubernetes-node-resources-s
 export { KubernetesNodeUsageSchema } from "./zod/kubernetes-node-usage-schema.js";
 export { KubernetesOwnerReferenceSchema } from "./zod/kubernetes-owner-reference-schema.js";
 export { KubernetesPodRuntimeUnitStatusSchema } from "./zod/kubernetes-pod-runtime-unit-status-schema.js";
-export { KubernetesRestrictedSecuritySchema } from "./zod/kubernetes-restricted-security-schema.js";
 export { KubernetesRouteProfileSchema } from "./zod/kubernetes-route-profile-schema.js";
 export { KubernetesRouteProviderOptionsSchema } from "./zod/kubernetes-route-provider-options-schema.js";
 export { KubernetesSandboxHeartbeatDataSchema } from "./zod/kubernetes-sandbox-heartbeat-data-schema.js";

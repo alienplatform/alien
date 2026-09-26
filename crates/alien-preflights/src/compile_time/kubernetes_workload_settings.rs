@@ -21,7 +21,6 @@ impl CompileTimeCheck for KubernetesWorkloadSettingsCheck {
                         !container.kubernetes_secret_mounts.is_empty()
                             || container.kubernetes_liveness_probe.is_some()
                             || container.kubernetes_readiness_probe.is_some()
-                            || container.kubernetes_restricted_security.is_some()
                     })
             })
     }
@@ -36,8 +35,7 @@ impl CompileTimeCheck for KubernetesWorkloadSettingsCheck {
                     .filter(|container| {
                         !container.kubernetes_secret_mounts.is_empty()
                             || container.kubernetes_liveness_probe.is_some()
-                            || container.kubernetes_readiness_probe.is_some()
-                            || container.kubernetes_restricted_security.is_some()
+                        || container.kubernetes_readiness_probe.is_some()
                     })
                     .map(|_| {
                         format!(

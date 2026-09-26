@@ -154,6 +154,8 @@ export type { ContainerImageIdentity } from "./container-image-identity-schema.j
 export type { ContainerOutputs } from "./container-outputs-schema.js";
 export type { ContainerPort } from "./container-port-schema.js";
 export type { Container } from "./container-schema.js";
+export type { ContainerSecurityProfile } from "./container-security-profile-schema.js";
+export type { ContainerSecurity } from "./container-security-schema.js";
 export type { ContainerStatus } from "./container-status-schema.js";
 export type { CreateCommandRequest } from "./create-command-request-schema.js";
 export type { CreateCommandResponse } from "./create-command-response-schema.js";
@@ -260,7 +262,6 @@ export type { KubernetesNodeResources } from "./kubernetes-node-resources-schema
 export type { KubernetesNodeUsage } from "./kubernetes-node-usage-schema.js";
 export type { KubernetesOwnerReference } from "./kubernetes-owner-reference-schema.js";
 export type { KubernetesPodRuntimeUnitStatus } from "./kubernetes-pod-runtime-unit-status-schema.js";
-export type { KubernetesRestrictedSecurity } from "./kubernetes-restricted-security-schema.js";
 export type { KubernetesRouteProfile } from "./kubernetes-route-profile-schema.js";
 export type { KubernetesRouteProviderOptions } from "./kubernetes-route-provider-options-schema.js";
 export type { KubernetesSandboxHeartbeatData } from "./kubernetes-sandbox-heartbeat-data-schema.js";
@@ -592,6 +593,8 @@ export { ContainerImageIdentitySchema } from "./container-image-identity-schema.
 export { ContainerOutputsSchema } from "./container-outputs-schema.js";
 export { ContainerPortSchema } from "./container-port-schema.js";
 export { ContainerSchema } from "./container-schema.js";
+export { ContainerSecurityProfileSchema } from "./container-security-profile-schema.js";
+export { ContainerSecuritySchema } from "./container-security-schema.js";
 export { ContainerStatusSchema } from "./container-status-schema.js";
 export { CreateCommandRequestSchema } from "./create-command-request-schema.js";
 export { CreateCommandResponseSchema } from "./create-command-response-schema.js";
@@ -698,7 +701,6 @@ export { KubernetesNodeResourcesSchema } from "./kubernetes-node-resources-schem
 export { KubernetesNodeUsageSchema } from "./kubernetes-node-usage-schema.js";
 export { KubernetesOwnerReferenceSchema } from "./kubernetes-owner-reference-schema.js";
 export { KubernetesPodRuntimeUnitStatusSchema } from "./kubernetes-pod-runtime-unit-status-schema.js";
-export { KubernetesRestrictedSecuritySchema } from "./kubernetes-restricted-security-schema.js";
 export { KubernetesRouteProfileSchema } from "./kubernetes-route-profile-schema.js";
 export { KubernetesRouteProviderOptionsSchema } from "./kubernetes-route-provider-options-schema.js";
 export { KubernetesSandboxHeartbeatDataSchema } from "./kubernetes-sandbox-heartbeat-data-schema.js";
