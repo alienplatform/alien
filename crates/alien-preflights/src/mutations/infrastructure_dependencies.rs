@@ -111,19 +111,21 @@ impl InfrastructureDependenciesMutation {
             ));
         }
 
-        // AWS and GCP controllers need network outputs before they can provision.
-        // Azure's network can depend on Postgres to configure its private endpoint;
-        // adding the reverse edge would create a cycle.
-        if matches!(platform, Platform::Aws | Platform::Gcp)
-            && stack.resources.contains_key("default-network")
-            && stack.resources.get(resource_id).is_some_and(|entry| {
-                resource_requires_network(entry)
-                    || matches!(
-                        resource_type.as_ref(),
-                        "worker" | "azure-container-apps-environment"
-                    )
-            })
-        {
+        // AWS and GCP consumers need network outputs before they provision.
+        // On Azure, the Container Apps environment needs the network, while
+        // Postgres can be a dependency of the network's private endpoint setup.
+        let waits_for_network = match platform {
+            Platform::Aws | Platform::Gcp => {
+                stack.resources.get(resource_id).is_some_and(|entry| {
+                    resource_requires_network(entry) || resource_type.as_ref() == "worker"
+                })
+            }
+            Platform::Azure => {
+                resource_type == &alien_core::AzureContainerAppsEnvironment::RESOURCE_TYPE
+            }
+            _ => false,
+        };
+        if waits_for_network && stack.resources.contains_key("default-network") {
             dependencies.push(ResourceRef::new(Network::RESOURCE_TYPE, "default-network"));
         }
 
@@ -485,6 +487,11 @@ mod tests {
                 Postgres::new("database".to_string()).build(),
                 ResourceLifecycle::Live,
             )
+            .add(
+                alien_core::AzureContainerAppsEnvironment::new("default-container-env".to_string())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
             .build();
         stack
             .resources
@@ -505,6 +512,9 @@ mod tests {
             .unwrap();
         assert!(crate::compile_time::validate_stack_dependencies(&result).success);
         assert!(!result.resources["database"]
+            .dependencies
+            .contains(&ResourceRef::new(Network::RESOURCE_TYPE, "default-network")));
+        assert!(result.resources["default-container-env"]
             .dependencies
             .contains(&ResourceRef::new(Network::RESOURCE_TYPE, "default-network")));
     }
