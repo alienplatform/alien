@@ -313,6 +313,21 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         }
     });
 
+    // Pull deployments report Kubernetes workload health independently of
+    // deployment reconciliation. The latter clears its target config after a
+    // successful rollout, while this read-only loop can recover from an
+    // Operator restart using the Manager-hydrated deployment state.
+    let kubernetes_heartbeat_handle = if matches!(config.platform, Platform::Kubernetes) {
+        Some(tokio::spawn({
+            let state = state.clone();
+            async move {
+                loops::kubernetes_heartbeats::run_kubernetes_heartbeat_loop(state).await;
+            }
+        }))
+    } else {
+        None
+    };
+
     // Start sync and telemetry loops only if not airgapped
     let sync_handle = if !config.is_airgapped() {
         Some(tokio::spawn({
@@ -464,6 +479,13 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
             Err(error) => Err(error),
         },
         _ = deployment_handle => Ok(loop_exit(&cancel, "deployment")),
+        _ = async {
+            if let Some(h) = kubernetes_heartbeat_handle {
+                h.await.ok();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => Ok(loop_exit(&cancel, "kubernetes-heartbeats")),
         _ = async {
             if let Some(h) = debug_session_handle {
                 h.await.ok();

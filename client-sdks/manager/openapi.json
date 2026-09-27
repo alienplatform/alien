@@ -9940,6 +9940,13 @@
               }
             ]
           },
+          "resourcePrefix": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stable prefix for resources owned by this deployment."
+          },
           "scope": {
             "type": [
               "string",

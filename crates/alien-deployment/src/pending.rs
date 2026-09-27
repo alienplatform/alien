@@ -635,8 +635,9 @@ fn gate_resolves_true(
     }
 }
 
-fn should_collect_environment_info(platform: Platform) -> bool {
+fn should_collect_environment_info(platform: Platform, base_platform: Option<Platform>) -> bool {
     !matches!(platform, Platform::Machines)
+        && !(platform == Platform::Kubernetes && base_platform.is_none())
 }
 
 async fn collect_deployment_environment_info(
@@ -644,7 +645,7 @@ async fn collect_deployment_environment_info(
     base_platform: Option<Platform>,
     client_config: &ClientConfig,
 ) -> Result<Option<EnvironmentInfo>> {
-    if !should_collect_environment_info(platform) {
+    if !should_collect_environment_info(platform, base_platform) {
         return Ok(None);
     }
 
@@ -1626,6 +1627,20 @@ mod tests {
             collect_deployment_environment_info(Platform::Machines, None, &ClientConfig::Test)
                 .await
                 .expect("machines should not require a cloud client config");
+
+        assert!(environment_info.is_none());
+    }
+
+    #[tokio::test]
+    async fn kubernetes_without_cloud_base_skips_environment_collection() {
+        let client_config = ClientConfig::Kubernetes(Box::new(KubernetesClientConfig::InCluster {
+            namespace: Some("default".to_string()),
+            additional_headers: None,
+        }));
+        let environment_info =
+            collect_deployment_environment_info(Platform::Kubernetes, None, &client_config)
+                .await
+                .expect("an existing cluster does not need cloud environment details");
 
         assert!(environment_info.is_none());
     }

@@ -6,6 +6,7 @@ pub mod capacity_group_profile;
 pub mod container_lifecycle;
 pub mod external_bindings_required;
 pub mod frozen_resource_lifecycle;
+pub mod kubernetes_workload_settings;
 pub mod live_provision_permissions;
 pub mod machines_resources;
 pub mod network_required;
@@ -32,6 +33,7 @@ pub use capacity_group_profile::CapacityGroupProfileCheck;
 pub use container_lifecycle::ContainerLifecycleCheck;
 pub use external_bindings_required::ExternalBindingsRequiredCheck;
 pub use frozen_resource_lifecycle::FrozenResourceLifecycleCheck;
+pub use kubernetes_workload_settings::KubernetesWorkloadSettingsCheck;
 pub use live_provision_permissions::LiveProvisionPermissionsCheck;
 pub use machines_resources::MachinesResourcesCheck;
 pub use network_required::{

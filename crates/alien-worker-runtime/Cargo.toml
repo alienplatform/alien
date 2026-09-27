@@ -70,6 +70,7 @@ port_check = { workspace = true }
 strip-ansi-escapes = { workspace = true }
 
 [dev-dependencies]
+opentelemetry_sdk = { version = "0.30", features = ["logs", "testing"] }
 port_check = { workspace = true }
 alien-bindings = { workspace = true, features = ["local"] }
 alien-core = { workspace = true }

@@ -29,7 +29,12 @@ impl StackMutation for ServiceAccountMutation {
         stack_state: &StackState,
         _config: &DeploymentConfig,
     ) -> bool {
-        if stack_state.platform == Platform::Machines {
+        // Kubernetes ServiceAccounts are installed by the chart before the Operator starts.
+        // Machines use their own runtime identity and do not create this resource either.
+        if matches!(
+            stack_state.platform,
+            Platform::Kubernetes | Platform::Machines
+        ) {
             return false;
         }
 

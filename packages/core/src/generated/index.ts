@@ -154,6 +154,8 @@ export type { ContainerImageIdentity } from "./zod/container-image-identity-sche
 export type { ContainerOutputs } from "./zod/container-outputs-schema.js";
 export type { ContainerPort } from "./zod/container-port-schema.js";
 export type { Container } from "./zod/container-schema.js";
+export type { ContainerSecurityProfile } from "./zod/container-security-profile-schema.js";
+export type { ContainerSecurity } from "./zod/container-security-schema.js";
 export type { ContainerStatus } from "./zod/container-status-schema.js";
 export type { CreateCommandRequest } from "./zod/create-command-request-schema.js";
 export type { CreateCommandResponse } from "./zod/create-command-response-schema.js";
@@ -253,6 +255,7 @@ export type { KubernetesEventSnapshot } from "./zod/kubernetes-event-snapshot-sc
 export type { KubernetesEventSource } from "./zod/kubernetes-event-source-schema.js";
 export type { KubernetesExposureSettings } from "./zod/kubernetes-exposure-settings-schema.js";
 export type { KubernetesGatewayRouteProfile } from "./zod/kubernetes-gateway-route-profile-schema.js";
+export type { KubernetesHttpProbe } from "./zod/kubernetes-http-probe-schema.js";
 export type { KubernetesIngressRouteProfile } from "./zod/kubernetes-ingress-route-profile-schema.js";
 export type { KubernetesNodeConditionStatus } from "./zod/kubernetes-node-condition-status-schema.js";
 export type { KubernetesNodeResources } from "./zod/kubernetes-node-resources-schema.js";
@@ -262,6 +265,7 @@ export type { KubernetesPodRuntimeUnitStatus } from "./zod/kubernetes-pod-runtim
 export type { KubernetesRouteProfile } from "./zod/kubernetes-route-profile-schema.js";
 export type { KubernetesRouteProviderOptions } from "./zod/kubernetes-route-provider-options-schema.js";
 export type { KubernetesSandboxHeartbeatData } from "./zod/kubernetes-sandbox-heartbeat-data-schema.js";
+export type { KubernetesSecretMount } from "./zod/kubernetes-secret-mount-schema.js";
 export type { KubernetesSecretVaultHeartbeatData } from "./zod/kubernetes-secret-vault-heartbeat-data-schema.js";
 export type { KubernetesSettings } from "./zod/kubernetes-settings-schema.js";
 export type { KubernetesTlsSecretRef } from "./zod/kubernetes-tls-secret-ref-schema.js";
@@ -589,6 +593,8 @@ export { ContainerImageIdentitySchema } from "./zod/container-image-identity-sch
 export { ContainerOutputsSchema } from "./zod/container-outputs-schema.js";
 export { ContainerPortSchema } from "./zod/container-port-schema.js";
 export { ContainerSchema } from "./zod/container-schema.js";
+export { ContainerSecurityProfileSchema } from "./zod/container-security-profile-schema.js";
+export { ContainerSecuritySchema } from "./zod/container-security-schema.js";
 export { ContainerStatusSchema } from "./zod/container-status-schema.js";
 export { CreateCommandRequestSchema } from "./zod/create-command-request-schema.js";
 export { CreateCommandResponseSchema } from "./zod/create-command-response-schema.js";
@@ -688,6 +694,7 @@ export { KubernetesEventSnapshotSchema } from "./zod/kubernetes-event-snapshot-s
 export { KubernetesEventSourceSchema } from "./zod/kubernetes-event-source-schema.js";
 export { KubernetesExposureSettingsSchema } from "./zod/kubernetes-exposure-settings-schema.js";
 export { KubernetesGatewayRouteProfileSchema } from "./zod/kubernetes-gateway-route-profile-schema.js";
+export { KubernetesHttpProbeSchema } from "./zod/kubernetes-http-probe-schema.js";
 export { KubernetesIngressRouteProfileSchema } from "./zod/kubernetes-ingress-route-profile-schema.js";
 export { KubernetesNodeConditionStatusSchema } from "./zod/kubernetes-node-condition-status-schema.js";
 export { KubernetesNodeResourcesSchema } from "./zod/kubernetes-node-resources-schema.js";
@@ -697,6 +704,7 @@ export { KubernetesPodRuntimeUnitStatusSchema } from "./zod/kubernetes-pod-runti
 export { KubernetesRouteProfileSchema } from "./zod/kubernetes-route-profile-schema.js";
 export { KubernetesRouteProviderOptionsSchema } from "./zod/kubernetes-route-provider-options-schema.js";
 export { KubernetesSandboxHeartbeatDataSchema } from "./zod/kubernetes-sandbox-heartbeat-data-schema.js";
+export { KubernetesSecretMountSchema } from "./zod/kubernetes-secret-mount-schema.js";
 export { KubernetesSecretVaultHeartbeatDataSchema } from "./zod/kubernetes-secret-vault-heartbeat-data-schema.js";
 export { KubernetesSettingsSchema } from "./zod/kubernetes-settings-schema.js";
 export { KubernetesTlsSecretRefSchema } from "./zod/kubernetes-tls-secret-ref-schema.js";

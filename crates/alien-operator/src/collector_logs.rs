@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use alien_core::{parse_application_log_level, ApplicationLogLevel};
+use alien_core::{parse_application_log_level, parse_application_log_message, ApplicationLogLevel};
 use alien_error::{AlienError, Context, IntoAlienError};
 use axum::http::HeaderMap;
 use chrono::{DateTime, Utc};
@@ -285,12 +285,18 @@ fn otlp_request(records: Vec<CollectorLogRecord>, deployment_id: &str) -> Export
                         attributes.push(kv("log.file.path", filename));
                     }
 
+                    let original_body = record.body.clone();
+                    let readable_body = parse_application_log_message(&original_body);
+                    if readable_body.is_some() {
+                        attributes.push(kv("log.record.original", &original_body));
+                    }
+
                     LogRecord {
                         time_unix_nano: record.timestamp_unix_nanos,
                         observed_time_unix_nano: record.timestamp_unix_nanos,
                         severity_number,
                         severity_text: severity_text.to_string(),
-                        body: Some(string_value(record.body)),
+                        body: Some(string_value(readable_body.unwrap_or(original_body))),
                         attributes,
                         dropped_attributes_count: 0,
                         flags: 0,
@@ -515,6 +521,43 @@ mod tests {
             record.body.as_ref().and_then(|body| body.value.as_ref()),
             Some(&any_value::Value::StringValue(application_log.to_string()))
         );
+    }
+
+    #[test]
+    fn collector_preserves_structured_stdout_and_exposes_its_message() {
+        let application_log = r#"{"time":"2026-09-26T12:12:02Z","level":"INFO","msg":"service ready","requestId":"request-1"}"#;
+        let body = serde_json::to_vec(&serde_json::json!({
+            "filename": "/var/log/containers/agent-abc_demo_agent-123.log",
+            "stream": "stdout",
+            "log": application_log,
+        }))
+        .unwrap();
+
+        let (_, encoded) =
+            collector_records_to_otlp(&body, "demo", "dep_test").expect("body should convert");
+        let request =
+            ExportLogsServiceRequest::decode(encoded.as_slice()).expect("OTLP should decode");
+        let record = &request.resource_logs[0].scope_logs[0].log_records[0];
+
+        assert_eq!(record.severity_text, "INFO");
+        assert_eq!(
+            record.body.as_ref().and_then(|body| body.value.as_ref()),
+            Some(&any_value::Value::StringValue("service ready".to_string()))
+        );
+        assert!(record.attributes.iter().any(|attribute| {
+            attribute.key == "log.record.original"
+                && attribute
+                    .value
+                    .as_ref()
+                    .and_then(|value| value.value.as_ref())
+                    == Some(&any_value::Value::StringValue(application_log.to_string()))
+        }));
+    }
+
+    #[test]
+    fn collector_leaves_unrecognized_json_body_untouched() {
+        let application_log = r#"{"status":200,"msg":"ready"}"#;
+        assert_eq!(parse_application_log_message(application_log), None);
     }
 
     #[test]
