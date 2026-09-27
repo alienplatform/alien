@@ -21,6 +21,7 @@ impl CompileTimeCheck for KubernetesWorkloadSettingsCheck {
                         !container.kubernetes_secret_mounts.is_empty()
                             || container.kubernetes_liveness_probe.is_some()
                             || container.kubernetes_readiness_probe.is_some()
+                            || container.security.is_some()
                     })
             })
     }
@@ -35,11 +36,12 @@ impl CompileTimeCheck for KubernetesWorkloadSettingsCheck {
                     .filter(|container| {
                         !container.kubernetes_secret_mounts.is_empty()
                             || container.kubernetes_liveness_probe.is_some()
-                        || container.kubernetes_readiness_probe.is_some()
+                            || container.kubernetes_readiness_probe.is_some()
+                            || container.security.is_some()
                     })
                     .map(|_| {
                         format!(
-                            "Container '{id}' configures Kubernetes workload settings, but the target platform is {platform}"
+                            "Container '{id}' configures security or Kubernetes workload settings that the target platform {platform} does not support"
                         )
                     })
             })
@@ -57,8 +59,8 @@ impl CompileTimeCheck for KubernetesWorkloadSettingsCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        ContainerCode, KubernetesSecretMount, Resource, ResourceEntry, ResourceLifecycle,
-        ResourceSpec,
+        ContainerCode, ContainerSecurity, ContainerSecurityProfile, KubernetesSecretMount,
+        Resource, ResourceEntry, ResourceLifecycle, ResourceSpec,
     };
     use indexmap::IndexMap;
 
@@ -116,5 +118,57 @@ mod tests {
             assert!(!result.success);
             assert!(result.errors[0].contains("agent"));
         }
+    }
+
+    #[tokio::test]
+    async fn rejects_security_when_the_target_cannot_apply_it() {
+        let container = Container::new("worker".to_string())
+            .code(ContainerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.05".to_string(),
+                desired: "0.5".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "128Mi".to_string(),
+                desired: "512Mi".to_string(),
+            })
+            .security(ContainerSecurity {
+                profile: ContainerSecurityProfile::Restricted,
+                run_as_user: 65532,
+                run_as_group: 65532,
+                read_only_root_filesystem: true,
+            })
+            .permissions("worker".to_string())
+            .build();
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "worker".to_string(),
+            ResourceEntry {
+                config: Resource::new(container),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: Default::default(),
+            supported_platforms: None,
+            inputs: vec![],
+        };
+
+        assert!(!KubernetesWorkloadSettingsCheck.should_run(&stack, Platform::Kubernetes));
+        assert!(KubernetesWorkloadSettingsCheck.should_run(&stack, Platform::Aws));
+        let result = KubernetesWorkloadSettingsCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .expect("preflight succeeds");
+        assert!(!result.success);
+        assert!(result.errors[0].contains("worker"));
+        assert!(result.errors[0].contains("security"));
     }
 }

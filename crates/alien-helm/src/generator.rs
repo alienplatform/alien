@@ -4716,7 +4716,11 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
     let input_schema = &mut schema["properties"]["inputValues"];
     input_schema["additionalProperties"] = serde_json::Value::Bool(false);
     let mut properties = serde_json::Map::new();
+    let mut required = Vec::new();
     for input in deployer_inputs {
+        if input.required && input.default.is_none() {
+            required.push(input.id.clone());
+        }
         use alien_core::StackInputKind;
         let kind = match input.kind {
             StackInputKind::String | StackInputKind::Secret | StackInputKind::Enum => "string",
@@ -4773,6 +4777,32 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         properties.insert(input.id.clone(), field);
     }
     input_schema["properties"] = serde_json::Value::Object(properties);
+    if !required.is_empty() {
+        // The shipped values.yaml is a reviewable template without credentials
+        // or customer inputs. Keep it lintable, but require every unresolved
+        // input as soon as a real management URL is supplied for installation.
+        schema["oneOf"] = serde_json::json!([
+            {
+                "required": ["management"],
+                "properties": {
+                    "management": {
+                        "required": ["url"],
+                        "properties": { "url": { "enum": [""] } }
+                    }
+                }
+            },
+            {
+                "required": ["management", "inputValues"],
+                "properties": {
+                    "management": {
+                        "required": ["url"],
+                        "properties": { "url": { "minLength": 1 } }
+                    },
+                    "inputValues": { "required": required }
+                }
+            }
+        ]);
+    }
     serde_json::to_string_pretty(&schema)
         .into_alien_error()
         .context(ErrorData::JsonSerializationFailed {
@@ -5045,7 +5075,19 @@ roleRef:
 }
 
 fn secret_tpl() -> String {
-    r#"{{- $createManagementSecret := not .Values.management.existingSecret.name -}}
+    r#"{{- if .Release.IsUpgrade -}}
+  {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
+  {{- if $existing -}}
+    {{- $currentInputs := dict -}}
+    {{- if hasKey (default dict $existing.data) "input-values.json" -}}
+      {{- $currentInputs = (index $existing.data "input-values.json" | b64dec | fromJson) -}}
+    {{- end -}}
+    {{- if not (deepEqual $currentInputs .Values.inputValues) -}}
+      {{- fail "inputValues cannot change through Helm after installation; edit deployment inputs in Alien and keep the original Helm values" -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
 {{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure .Values.logCollector.enabled .Values.inputValues }}
 {{- $collectorToken := .Values.logCollector.token -}}
@@ -5766,7 +5808,6 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        checksum/input-values: {{ toJson .Values.inputValues | sha256sum | quote }}
         checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret) | sha256sum | quote }}
         checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
         {{- with .Values.runtime.podAnnotations }}
@@ -6190,6 +6231,7 @@ spec:
         alien.dev/log-collector-exclude: "true"
       annotations:
         checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
+        checksum/collector-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
     spec:
       serviceAccountName: {{ include "deployment.logCollectorName" . }}
       tolerations:
@@ -6773,7 +6815,7 @@ stackSettings:
 
 fn readme_md(chart_name: &str) -> String {
     format!(
-        "# {chart_name}\n\nFrom this chart directory, set the required values and install into the chosen namespace (`default` shown here):\n\n```bash\nhelm install {chart_name} . --namespace default --values values.yaml\n```\n\nFor a managed package, use its generated install command and values. See `examples/<target>.yaml` for EKS, GKE, AKS, and on-premises values.\n\nTo collect selected workload Pod logs, set `logCollector.enabled: true` in values.yaml. The collector mounts node log directories read-only; namespaces enforcing Baseline or Restricted Pod Security reject those mounts. When `logCollector.token` is empty, Helm generates a per-installation token and retains it across upgrades.\n"
+        "# {chart_name}\n\nFrom this chart directory, set the required values and install into the chosen namespace (`default` shown here):\n\n```bash\nhelm install {chart_name} . --namespace default --values values.yaml\n```\n\nFor a managed package, use its generated install command and values. See `examples/<target>.yaml` for EKS, GKE, AKS, and on-premises values. `inputValues` register the deployment and cannot change through Helm upgrades; edit deployment inputs in Alien and retain the original Helm values.\n\nTo collect selected workload Pod logs, set `logCollector.enabled: true` in values.yaml. The collector mounts node log directories read-only; namespaces enforcing Baseline or Restricted Pod Security reject those mounts. When `logCollector.token` is empty, Helm generates a per-installation token and retains it across upgrades.\n"
     )
 }
 
@@ -7834,32 +7876,14 @@ inputValues:
             .iter()
             .find(|document| document["kind"] == "Deployment")
             .expect("Operator Deployment");
-        let checksum = operator["spec"]["template"]["metadata"]["annotations"]
-            ["checksum/input-values"]
-            .as_str()
-            .expect("input values checksum");
+        assert!(
+            operator["spec"]["template"]["metadata"]["annotations"]["checksum/input-values"]
+                .is_null()
+        );
         let credential_checksum = operator["spec"]["template"]["metadata"]["annotations"]
             ["checksum/management-credential"]
             .as_str()
             .expect("management credential checksum");
-        let changed_values = values.replace(
-            "https://ingest.example.test",
-            "https://ingest-updated.example.test",
-        );
-        let changed = crate::test_utils::helm_template(&chart.files, Some(&changed_values));
-        changed.assert_ok("Helm input change renders");
-        let changed_operator = serde_yaml::Deserializer::from_str(&changed.stdout)
-            .map(|document| YamlValue::deserialize(document).expect("valid Kubernetes YAML"))
-            .find(|document| document["kind"] == "Deployment")
-            .expect("updated Operator Deployment");
-        assert_ne!(
-            checksum,
-            changed_operator["spec"]["template"]["metadata"]["annotations"]
-                ["checksum/input-values"]
-                .as_str()
-                .expect("updated input values checksum"),
-            "changing Helm input values must roll the Operator"
-        );
         let rotated_values = values.replace("ax_dg_example", "ax_dg_rotated");
         let rotated = crate::test_utils::helm_template(&chart.files, Some(&rotated_values));
         rotated.assert_ok("Helm credential rotation renders");
@@ -7874,13 +7898,6 @@ inputValues:
                 .as_str()
                 .expect("rotated management credential checksum"),
             "changing the Helm management credential must roll the Operator"
-        );
-        assert_eq!(
-            checksum,
-            rotated_operator["spec"]["template"]["metadata"]["annotations"]
-                ["checksum/input-values"]
-                .as_str()
-                .expect("unchanged input values checksum")
         );
         let container = &operator["spec"]["template"]["spec"]["containers"][0];
         assert!(container["env"].as_sequence().is_some_and(|entries| {
@@ -7942,6 +7959,7 @@ inputValues:
         crate::test_utils::helm_template(&chart.files, Some(values))
             .assert_ok("valid input values");
         for invalid in [
+            values.replace("  ingestUrl: https://ingest.example.test\n", ""),
             values.replace("ingestUrl: https://ingest.example.test", "ingestUrl: 42"),
             values.replace(
                 "ingestUrl: https://ingest.example.test",
@@ -7950,9 +7968,14 @@ inputValues:
             values.replace("ingestUrl:", "ingestUrll:"),
         ] {
             let rendered = crate::test_utils::helm_template(&chart.files, Some(&invalid));
-            assert!(!rendered.is_ok(), "Helm accepted invalid input values");
             assert!(
-                rendered.stderr.contains("inputValues"),
+                !rendered.is_ok(),
+                "Helm accepted invalid input values: {invalid}"
+            );
+            assert!(
+                rendered
+                    .stderr
+                    .contains("values don't meet the specifications"),
                 "{}",
                 rendered.stderr
             );
@@ -9152,6 +9175,24 @@ logCollector:
             .stdout
             .contains("app.kubernetes.io/component: log-collector"));
         let documents = parse_manifest_docs(&rendered.stdout);
+        let changed_scope = values.replace(
+            "deploymentLabelValue: e2e123",
+            "deploymentLabelValue: e2e456",
+        );
+        let changed_scope_render = crate::test_utils::helm_template(&files, Some(&changed_scope));
+        changed_scope_render.assert_ok("changed collector scope renders");
+        let changed_scope_documents = parse_manifest_docs(&changed_scope_render.stdout);
+        let scope_checksum = |docs: &[YamlValue]| {
+            docs_by_kind(docs, "DaemonSet")[0]["spec"]["template"]["metadata"]["annotations"]
+                ["checksum/collector-scope"]
+                .as_str()
+                .expect("collector scope Pod checksum")
+                .to_string()
+        };
+        assert_ne!(
+            scope_checksum(&documents),
+            scope_checksum(&changed_scope_documents)
+        );
         let generated_values = values.replace("  token: test-collector-token\n", "");
         let generated = crate::test_utils::helm_template(&files, Some(&generated_values));
         generated.assert_ok("Helm generates a collector credential on first install");
