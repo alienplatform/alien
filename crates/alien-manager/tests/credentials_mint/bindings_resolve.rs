@@ -417,6 +417,23 @@ async fn a_sandbox_capability_passes_authorization_only_for_its_named_sandbox() 
     let (status, _, json) =
         post_resolve_binding(&sandbox, "unused", resolve_body(&fixture, "box")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
+    assert!(
+        json.to_string()
+            .contains("Resource 'box' does not exist in stack state"),
+        "body = {json:#}"
+    );
+
+    let other = with_subject(
+        &fixture,
+        remote_bindings_subject(
+            &fixture,
+            alien_manager::auth::RemoteBindingGrant::Sandbox,
+            Some("other"),
+        ),
+    );
+    let (status, _, json) =
+        post_resolve_binding(&other, "unused", resolve_body(&fixture, "box")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "body = {json:#}");
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
@@ -434,7 +451,7 @@ async fn deployment_writers_cannot_resolve_a_sandbox() {
 }
 
 #[tokio::test]
-async fn a_sandbox_sharing_the_release_with_another_remote_resource_refuses_every_resolve() {
+async fn a_sandbox_sharing_the_release_with_another_remote_resource_refuses_a_data_resolve() {
     let (fixture, calls) = fixture().await;
     let sandbox = alien_core::Sandbox::new("box".to_string())
         .code(alien_core::SandboxCode::Image {
@@ -459,13 +476,19 @@ async fn a_sandbox_sharing_the_release_with_another_remote_resource_refuses_ever
     );
     move_current_release(&fixture, stack).await;
 
-    let (status, _, _) = post_resolve_binding(
+    let (status, _, json) = post_resolve_binding(
         &fixture,
         &fixture.admin_token,
         resolve_body(&fixture, "files"),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
+    assert!(
+        json.to_string().contains(
+            "A remotely published Sandbox must be the deployment's only remoteAccess resource"
+        ),
+        "body = {json:#}"
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
@@ -514,6 +537,11 @@ async fn a_data_resolve_is_refused_while_the_desired_release_publishes_a_sandbox
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
+    assert!(
+        json.to_string()
+            .contains("has a remote sandbox in its desired release"),
+        "body = {json:#}"
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
@@ -529,5 +557,5 @@ async fn the_ai_selector_reveals_nothing_to_a_caller_without_a_claim() {
     assert_eq!(status, StatusCode::FORBIDDEN, "body = {json:#}");
 }
 
-#[path = "bindings_resolve_verifier.rs"]
-mod verifier;
+#[path = "bindings_resolve_token_kinds.rs"]
+mod token_kinds;

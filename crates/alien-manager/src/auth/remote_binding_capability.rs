@@ -1,10 +1,8 @@
 //! Shared authorization rules for short-lived remote-bindings capabilities.
 //!
-//! The kind a caller may resolve is decided from the deployment's current
-//! release when the binding is used, never from what the release looked like
-//! when the capability was issued. A capability names the kind (and optionally
-//! the resource) it was issued for; the release decides what the requested
-//! resource is.
+//! A capability names the kind (and optionally the resource) it was issued for;
+//! the deployment's release current at use, not at issue, decides what the
+//! requested resource is.
 
 use alien_core::remote_bindings::RemoteBindingKind;
 
@@ -25,7 +23,10 @@ pub fn grant_covers(grant: RemoteBindingGrant, kind: RemoteBindingKind) -> bool 
 /// arbitrary code in the deployment's cloud, so it needs a capability issued
 /// for it by name.
 pub fn write_authority_covers(kind: RemoteBindingKind) -> bool {
-    kind != RemoteBindingKind::Sandbox
+    match kind {
+        RemoteBindingKind::Storage | RemoteBindingKind::Key | RemoteBindingKind::Ai => true,
+        RemoteBindingKind::Sandbox => false,
+    }
 }
 
 /// True when a resolver's scope names exactly this deployment, whatever kind it grants.
@@ -47,10 +48,8 @@ pub fn names_deployment(subject: &Subject, deployment: &DeploymentRecord) -> boo
 }
 
 /// Decide resolution for a subject that carries a remote-bindings capability.
-///
-/// `None` means the subject is not a remote-bindings resolver and the caller
-/// applies its normal policy. A resolver always gets a definite answer and
-/// never falls through to broader deployment permissions.
+/// `None`: not a resolver, apply the normal policy. A resolver always gets a
+/// definite answer and never falls through to deployment permissions.
 pub fn resolve_decision(
     subject: &Subject,
     deployment: &DeploymentRecord,
@@ -73,8 +72,7 @@ pub fn resolve_decision(
                     .as_deref()
                     .is_none_or(|scoped| scoped == resource_id),
         ),
-        // A resolver token that names no kind predates the capability claim.
-        // It keeps data bindings and never reaches a sandbox.
+        // A resolver token with no kind claim keeps data bindings and never reaches a sandbox.
         Scope::Deployment {
             project_id,
             deployment_id,

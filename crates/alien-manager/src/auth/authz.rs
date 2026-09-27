@@ -41,11 +41,9 @@ pub trait Authz: Send + Sync {
     fn can_create_deployment(&self, subject: &Subject, ctx: DeploymentCreateCtx<'_>) -> bool;
     fn can_read_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
     fn can_update_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
-    /// Whether a caller may resolve one remote binding of a deployment.
-    /// `kind` and `resource_id` come from the deployment's current release, so
-    /// a policy can refuse a kind the caller was never granted even when the
-    /// release gained it after the caller's credential was issued. Separate
-    /// from read access because the response carries short-lived credentials.
+    /// `kind` and `resource_id` come from the release current at use, not at token issue.
+    /// Implementations should apply `remote_binding_capability::resolve_decision`, then
+    /// `write_authority_covers`: write authority must never reach a sandbox.
     fn can_resolve_remote_binding(
         &self,
         _subject: &Subject,

@@ -151,7 +151,7 @@ pub enum TelemetryCapability {
 /// Which binding kinds a remote-bindings capability reaches.
 ///
 /// Storage, Key and AI are grouped as `data`; a sandbox runs arbitrary code in
-/// the deployment's cloud, so it is granted only by name.
+/// the deployment's cloud, so it never shares a grant with them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RemoteBindingGrant {
@@ -621,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_bindings_scope_serde_is_stable_for_embedding_validators() {
+    fn remote_bindings_scope_has_a_stable_wire_format() {
         let subject = sample(
             Role::RemoteBindingResolver,
             Scope::RemoteBindings {

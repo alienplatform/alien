@@ -834,25 +834,26 @@ async fn resolve_binding(
         Err(error) => return error.into_response(),
     };
 
-    if binding_kind != alien_core::remote_bindings::RemoteBindingKind::Sandbox {
-        match sandbox_may_share_the_identity(state.release_store.as_ref(), &deployment).await {
-            Ok(false) => {}
-            Ok(true) => {
-                return ErrorData::bad_request(
-                    "The deployment's Remote Bindings identity may carry sandbox grants during this update; only its sandbox can be resolved",
-                )
-                .into_response()
-            }
-            Err(error) => return error.into_response(),
-        }
-    }
-
     if !state
         .authz
         .can_resolve_remote_binding(&subject, &deployment, binding_kind, &resource_id)
     {
         return ErrorData::forbidden("Cannot resolve this remote binding for this deployment")
             .into_response();
+    }
+
+    if binding_kind != alien_core::remote_bindings::RemoteBindingKind::Sandbox {
+        match sandbox_may_share_the_identity(state.release_store.as_ref(), &deployment).await {
+            Ok(false) => {}
+            Ok(true) => {
+                return ErrorData::bad_request(format!(
+                    "Deployment '{}' has a remote sandbox in its desired release or stack state, so its Remote Bindings identity may carry the sandbox's grants; '{resource_id}' cannot be resolved while it does",
+                    deployment.id
+                ))
+                .into_response()
+            }
+            Err(error) => return error.into_response(),
+        }
     }
 
     if let Err(error) = require_setup_owned_remote_binding(&deployment, &resource_id) {
@@ -1116,10 +1117,9 @@ async fn require_current_release_remote_access(
     // Every resolve hands out the deployment's one shared Remote Bindings identity, so a data
     // resolve on a release that also publishes a sandbox would carry the sandbox's grants.
     let remote_entries = stack.resources.values().filter(|entry| entry.remote_access);
-    let publishes_sandbox = remote_entries.clone().any(|entry| {
-        alien_core::remote_bindings::remote_binding_definition(&entry.config.resource_type())
-            .is_some_and(|d| d.kind == alien_core::remote_bindings::RemoteBindingKind::Sandbox)
-    });
+    let publishes_sandbox = remote_entries
+        .clone()
+        .any(|entry| is_sandbox_binding(&entry.config.resource_type()));
     if publishes_sandbox && remote_entries.count() != 1 {
         return Err(ErrorData::bad_request(
             "A remotely published Sandbox must be the deployment's only remoteAccess resource",
@@ -1129,20 +1129,21 @@ async fn require_current_release_remote_access(
     Ok(definition.kind)
 }
 
+fn is_sandbox_binding(resource_type: &alien_core::ResourceType) -> bool {
+    alien_core::remote_bindings::remote_binding_definition(resource_type)
+        .is_some_and(|d| d.kind == alien_core::remote_bindings::RemoteBindingKind::Sandbox)
+}
+
 /// Setup grants follow the desired release and stack state before the current release moves, so a
 /// sandbox either of them publishes can already sit on the shared identity a data resolve returns.
 async fn sandbox_may_share_the_identity(
     release_store: &dyn ReleaseStore,
     deployment: &DeploymentRecord,
 ) -> Result<bool, alien_error::AlienError<ErrorData>> {
-    let is_sandbox = |resource_type: &alien_core::ResourceType| {
-        alien_core::remote_bindings::remote_binding_definition(resource_type)
-            .is_some_and(|d| d.kind == alien_core::remote_bindings::RemoteBindingKind::Sandbox)
-    };
     if deployment.stack_state.as_ref().is_some_and(|state| {
         state.resources.values().any(|resource| {
             resource.remote_binding_params.is_some()
-                && is_sandbox(&alien_core::ResourceType::from(
+                && is_sandbox_binding(&alien_core::ResourceType::from(
                     resource.resource_type.clone(),
                 ))
         })
@@ -1155,21 +1156,27 @@ async fn sandbox_may_share_the_identity(
     if deployment.current_release_id.as_deref() == Some(desired_id) {
         return Ok(false);
     }
-    let desired = load_current_release(
-        release_store,
-        deployment,
-        desired_id,
-        "remote binding resolution",
-    )
-    .await?;
+    let desired = release_store
+        .get_release(&crate::auth::Subject::system(), desired_id)
+        .await
+        .context(ErrorData::InternalError {
+            message: format!(
+                "Failed to load desired release '{desired_id}' for remote binding resolution"
+            ),
+        })?
+        .ok_or_else(|| {
+            ErrorData::internal(format!(
+                "Desired release '{desired_id}' for deployment '{}' does not exist",
+                deployment.id
+            ))
+        })?;
     Ok(desired
         .stacks
         .get(&deployment.platform)
         .is_some_and(|stack| {
-            stack
-                .resources
-                .values()
-                .any(|entry| entry.remote_access && is_sandbox(&entry.config.resource_type()))
+            stack.resources.values().any(|entry| {
+                entry.remote_access && is_sandbox_binding(&entry.config.resource_type())
+            })
         }))
 }
 
