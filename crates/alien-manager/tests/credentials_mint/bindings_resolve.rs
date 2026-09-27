@@ -528,3 +528,6 @@ async fn the_ai_selector_reveals_nothing_to_a_caller_without_a_claim() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "body = {json:#}");
 }
+
+#[path = "bindings_resolve_verifier.rs"]
+mod verifier;
