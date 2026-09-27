@@ -4779,29 +4779,44 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
     input_schema["properties"] = serde_json::Value::Object(properties);
     if !required.is_empty() {
         // The shipped values.yaml is a reviewable template without credentials
-        // or customer inputs. Keep it lintable, but require every unresolved
-        // input as soon as a real management URL is supplied for installation.
-        schema["oneOf"] = serde_json::json!([
-            {
-                "required": ["management"],
-                "properties": {
-                    "management": {
-                        "required": ["url"],
-                        "properties": { "url": { "enum": [""] } }
+        // or user inputs. Keep it lintable, and require unresolved inputs only
+        // on the initialization path with a real management URL. A registered
+        // deployment already has its inputs. Preserve the base schema's oneOf.
+        schema["allOf"] = serde_json::json!([{
+            "anyOf": [
+                {
+                    "required": ["management"],
+                    "properties": {
+                        "management": {
+                            "required": ["url"],
+                            "properties": { "url": { "enum": [""] } }
+                        }
+                    }
+                },
+                {
+                    "required": ["management"],
+                    "properties": {
+                        "management": {
+                            "required": ["deploymentId"],
+                            "properties": { "deploymentId": { "type": "string", "minLength": 1 } }
+                        }
+                    }
+                },
+                {
+                    "required": ["management", "inputValues"],
+                    "properties": {
+                        "management": {
+                            "required": ["url"],
+                            "properties": {
+                                "url": { "minLength": 1 },
+                                "deploymentId": { "type": "null" }
+                            }
+                        },
+                        "inputValues": { "required": required }
                     }
                 }
-            },
-            {
-                "required": ["management", "inputValues"],
-                "properties": {
-                    "management": {
-                        "required": ["url"],
-                        "properties": { "url": { "minLength": 1 } }
-                    },
-                    "inputValues": { "required": required }
-                }
-            }
-        ]);
+            ]
+        }]);
     }
     serde_json::to_string_pretty(&schema)
         .into_alien_error()
@@ -5077,14 +5092,14 @@ roleRef:
 fn secret_tpl() -> String {
     r#"{{- if .Release.IsUpgrade -}}
   {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
+  {{- $currentInputs := "{}" -}}
   {{- if $existing -}}
-    {{- $currentInputs := dict -}}
     {{- if hasKey (default dict $existing.data) "input-values.json" -}}
-      {{- $currentInputs = (index $existing.data "input-values.json" | b64dec | fromJson) -}}
+      {{- $currentInputs = (index $existing.data "input-values.json" | b64dec) -}}
     {{- end -}}
-    {{- if not (deepEqual $currentInputs .Values.inputValues) -}}
-      {{- fail "inputValues cannot change through Helm after installation; edit deployment inputs in Alien and keep the original Helm values" -}}
-    {{- end -}}
+  {{- end -}}
+  {{- if ne $currentInputs (toJson .Values.inputValues) -}}
+    {{- fail "inputValues cannot change through Helm after installation; edit deployment inputs in the deployment dashboard and keep the original Helm values" -}}
   {{- end -}}
 {{- end -}}
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
@@ -6815,7 +6830,7 @@ stackSettings:
 
 fn readme_md(chart_name: &str) -> String {
     format!(
-        "# {chart_name}\n\nFrom this chart directory, set the required values and install into the chosen namespace (`default` shown here):\n\n```bash\nhelm install {chart_name} . --namespace default --values values.yaml\n```\n\nFor a managed package, use its generated install command and values. See `examples/<target>.yaml` for EKS, GKE, AKS, and on-premises values. `inputValues` register the deployment and cannot change through Helm upgrades; edit deployment inputs in Alien and retain the original Helm values.\n\nTo collect selected workload Pod logs, set `logCollector.enabled: true` in values.yaml. The collector mounts node log directories read-only; namespaces enforcing Baseline or Restricted Pod Security reject those mounts. When `logCollector.token` is empty, Helm generates a per-installation token and retains it across upgrades.\n"
+        "# {chart_name}\n\nFrom this chart directory, set the required values and install into the chosen namespace (`default` shown here):\n\n```bash\nhelm install {chart_name} . --namespace default --values values.yaml\n```\n\nFor a managed package, use its generated install command and values. See `examples/<target>.yaml` for EKS, GKE, AKS, and on-premises values. `inputValues` register the deployment and cannot change through Helm upgrades; edit deployment inputs in the deployment dashboard and retain the original Helm values.\n\nTo collect selected workload Pod logs, set `logCollector.enabled: true` in values.yaml. The collector mounts node log directories read-only; namespaces enforcing Baseline or Restricted Pod Security reject those mounts. When `logCollector.token` is empty, Helm generates a per-installation token and retains it across upgrades.\n"
     )
 }
 
@@ -7958,6 +7973,14 @@ inputValues:
         let values = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: null\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\ninputValues:\n  ingestUrl: https://ingest.example.test\n";
         crate::test_utils::helm_template(&chart.files, Some(values))
             .assert_ok("valid input values");
+        let registered = values
+            .replace("  deploymentId: null", "  deploymentId: dep_existing")
+            .replace(
+                "inputValues:\n  ingestUrl: https://ingest.example.test\n",
+                "",
+            );
+        crate::test_utils::helm_template(&chart.files, Some(&registered))
+            .assert_ok("registered deployment keeps its stored inputs");
         for invalid in [
             values.replace("  ingestUrl: https://ingest.example.test\n", ""),
             values.replace("ingestUrl: https://ingest.example.test", "ingestUrl: 42"),
