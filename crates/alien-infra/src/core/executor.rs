@@ -198,7 +198,7 @@ fn controller_platform_for_state(stack_platform: Platform, state: &StackResource
 #[cfg(test)]
 mod controller_platform_tests {
     use super::*;
-    use alien_core::{KubernetesClusterProvider, Storage};
+    use alien_core::{KubernetesClusterProvider, KubernetesHeartbeatMode, Storage};
 
     #[test]
     fn existing_cloud_cluster_is_verified_by_the_kubernetes_operator() {
@@ -208,6 +208,7 @@ mod controller_platform_tests {
                     .provider(KubernetesClusterProvider::Eks)
                     .ownership(ownership)
                     .namespace("application".to_string())
+                    .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApi)
                     .build(),
             )
         };
