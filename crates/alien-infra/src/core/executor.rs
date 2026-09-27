@@ -31,9 +31,9 @@ use crate::{
     error::{ErrorData, Result},
 };
 use alien_core::{
-    alien_event, ownership_policy_for_resource_type, AlienEvent, Platform, Resource,
-    ResourceHeartbeat, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, StackResourceState,
-    StackState,
+    alien_event, ownership_policy_for_resource_type, AlienEvent, KubernetesCluster,
+    KubernetesClusterOwnership, Platform, Resource, ResourceHeartbeat, ResourceLifecycle,
+    ResourceRef, ResourceStatus, Stack, StackResourceState, StackState,
 };
 use alien_core::{ClientConfig, InitialSetupAuthority};
 
@@ -167,7 +167,16 @@ fn controller_platform_for_entry(
     stack_platform: Platform,
     base_platform: Option<Platform>,
     lifecycle: ResourceLifecycle,
+    resource: Option<&Resource>,
 ) -> Platform {
+    if stack_platform == Platform::Kubernetes
+        && resource
+            .and_then(|resource| resource.downcast_ref::<KubernetesCluster>())
+            .is_some_and(|cluster| cluster.ownership != KubernetesClusterOwnership::Managed)
+    {
+        return Platform::Kubernetes;
+    }
+
     if stack_platform == Platform::Kubernetes && lifecycle == ResourceLifecycle::Frozen {
         base_platform.unwrap_or(stack_platform)
     } else {
@@ -181,8 +190,59 @@ fn controller_platform_for_state(stack_platform: Platform, state: &StackResource
             stack_platform,
             None,
             state.lifecycle.unwrap_or(ResourceLifecycle::Live),
+            Some(&state.config),
         )
     })
+}
+
+#[cfg(test)]
+mod controller_platform_tests {
+    use super::*;
+    use alien_core::{KubernetesClusterProvider, Storage};
+
+    #[test]
+    fn existing_cloud_cluster_is_verified_by_the_kubernetes_operator() {
+        let cluster = |ownership| {
+            Resource::new(
+                KubernetesCluster::new("cluster".to_string())
+                    .provider(KubernetesClusterProvider::Eks)
+                    .ownership(ownership)
+                    .namespace("application".to_string())
+                    .build(),
+            )
+        };
+        let existing = cluster(KubernetesClusterOwnership::Existing);
+        let managed = cluster(KubernetesClusterOwnership::Managed);
+        let storage = Resource::new(Storage::new("bucket".to_string()).build());
+
+        assert_eq!(
+            controller_platform_for_entry(
+                Platform::Kubernetes,
+                Some(Platform::Aws),
+                ResourceLifecycle::Frozen,
+                Some(&existing),
+            ),
+            Platform::Kubernetes,
+        );
+        assert_eq!(
+            controller_platform_for_entry(
+                Platform::Kubernetes,
+                Some(Platform::Aws),
+                ResourceLifecycle::Frozen,
+                Some(&managed),
+            ),
+            Platform::Aws,
+        );
+        assert_eq!(
+            controller_platform_for_entry(
+                Platform::Kubernetes,
+                Some(Platform::Aws),
+                ResourceLifecycle::Frozen,
+                Some(&storage),
+            ),
+            Platform::Aws,
+        );
+    }
 }
 
 fn is_best_effort_delete_error(err: &AlienError<ErrorData>) -> bool {
@@ -434,8 +494,12 @@ impl StackExecutor {
 
             // Ensure that a controller exists for the resource on the specified platform.
             let resource_type = resource_entry.config.resource_type();
-            let controller_platform =
-                controller_platform_for_entry(platform, base_platform, resource_entry.lifecycle);
+            let controller_platform = controller_platform_for_entry(
+                platform,
+                base_platform,
+                resource_entry.lifecycle,
+                Some(&resource_entry.config),
+            );
             resource_registry
                 .get_controller(resource_type.clone(), controller_platform)
                 .context(ErrorData::ControllerNotAvailable {
@@ -1404,6 +1468,7 @@ impl StackExecutor {
                 next_state.platform,
                 self.deployment_config.base_platform,
                 desired_config.lifecycle,
+                Some(&desired_config.resource),
             ));
             initial_transitions.insert(resource_id.clone(), pending_view);
         }
