@@ -6,13 +6,16 @@
 //! confirm the request we chose to send, never that the real API accepts it or that a reconnect
 //! actually reaches the same container.
 //!
-//! The Agent Platform emitter and controller are not yet wired into the provider factory, so a
-//! live test cannot go through a deployed stack. It drives the client and provider directly, as
-//! the proof-of-concept scripts did: create an engine, create a template from a prebuilt agent
-//! image, then exercise the `Sandbox` trait against sandboxes cut from it. That means these tests
-//! prove the runtime path, not the controller's template-body mapping — the inline template body
-//! below mirrors the controller's `build_template_body` so it at least proves the real API accepts
-//! that shape.
+//! These tests drive the client and provider directly rather than through a deployed stack: create
+//! an engine, create a template from a prebuilt agent image, then exercise the `Sandbox` trait
+//! against sandboxes cut from it. They prove the runtime path and that the real API accepts the
+//! template body — the inline body below mirrors the controller's `build_template_body` — but not
+//! the controller or the IAM a deployment grants; `scripts/gcp-agent-platform-live.sh iam-check`
+//! covers the engine-scoped template grant.
+//!
+//! `scripts/gcp-agent-platform-live.sh image` builds and pushes the agent image this suite needs
+//! and grants the project's Agent Sandbox service agent Reader on its repository;
+//! `scripts/gcp-agent-platform-live.sh suite` runs the suite against it.
 //!
 //! Run the full suite (single-threaded, because sandbox quota is pooled per project + location):
 //!

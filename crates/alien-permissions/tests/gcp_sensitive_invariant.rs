@@ -162,4 +162,23 @@ fn is_implicit_management_set(permission_set_id: &str) -> bool {
         || permission_set_id.ends_with("/management")
         || permission_set_id.ends_with("-management")
         || permission_set_id.ends_with("/provision")
+        // Preflight-authored for a Frozen GCP sandbox's manager; its name carries no suffix above.
+        || permission_set_id == "sandbox/templates"
+}
+
+/// The manager's template grant reaches neither a session nor the engine, and has no stack
+/// binding, so it can only ever be bound on one engine.
+#[test]
+fn sandbox_templates_stays_on_the_template_and_its_engine() {
+    let set = alien_permissions::get_permission_set("sandbox/templates").expect("registered");
+    let entries = set.platforms.gcp.as_ref().expect("a gcp entry");
+    for entry in entries {
+        for permission in entry.grant.permissions.iter().flatten() {
+            assert!(
+                permission.starts_with("aiplatform.sandboxEnvironmentTemplates."),
+                "{permission}"
+            );
+        }
+        assert!(entry.binding.stack.is_none(), "{entry:?}");
+    }
 }

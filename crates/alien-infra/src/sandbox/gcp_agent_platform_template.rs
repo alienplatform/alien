@@ -21,7 +21,7 @@ use crate::sandbox::GcpAgentPlatformEngineController;
 use alien_core::sandbox_image::GCP_AGENT_PLATFORM;
 use alien_core::{
     GcpAgentPlatformEngine, ResourceOutputs, ResourceRef, ResourceStatus, Sandbox, SandboxCode,
-    SandboxLimits,
+    SandboxEgress, SandboxLimits,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::agent_platform::{
@@ -149,6 +149,9 @@ pub struct GcpAgentPlatformTemplateController {
     pub(crate) region: Option<String>,
     /// Session lifetime from the declaration, carried into the binding.
     pub(crate) max_lifetime_seconds: Option<u32>,
+    /// Whether the declaration asked for open egress, carried into the binding.
+    #[serde(default)]
+    pub(crate) allow_egress: bool,
 }
 
 #[controller]
@@ -316,6 +319,8 @@ impl GcpAgentPlatformTemplateController {
         // follows can delete the old without a window where sessions point at a deleted template.
         self.template_id = Some(pending);
         self.pending_template_id = None;
+        // Set with the swap, so the binding reports the switch of the template that is serving.
+        self.allow_egress = matches!(config.egress, SandboxEgress::Allow);
 
         Ok(HandlerAction::Continue {
             state: ReapingOldTemplates,
@@ -572,6 +577,7 @@ impl GcpAgentPlatformTemplateController {
             BindingValue::value(template_name),
             BindingValue::value(region.clone()),
             self.max_lifetime_seconds,
+            self.allow_egress,
         );
         Ok(Some(
             serde_json::to_value(binding).into_alien_error().context(
@@ -603,6 +609,7 @@ impl GcpAgentPlatformTemplateController {
         self.project_id = None;
         self.region = None;
         self.max_lifetime_seconds = None;
+        self.allow_egress = false;
     }
 
     fn engine_and_template(&self, resource_id: &str) -> Result<(String, String)> {
@@ -641,6 +648,7 @@ impl GcpAgentPlatformTemplateController {
             project_id: Some("test-project-123".to_string()),
             region: Some("us-central1".to_string()),
             max_lifetime_seconds: None,
+            allow_egress: false,
             _internal_stay_count: None,
         }
     }

@@ -141,6 +141,10 @@ pub struct GcpAgentPlatformSandboxBinding {
     /// absent value takes the service default, which is why it is not defaulted here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_lifetime_seconds: Option<u32>,
+    /// Whether the declaration asked for open egress. The template enforces the policy; this lets a
+    /// reader that never sees the template tell `allow` from `deny`. Absent means `deny`.
+    #[serde(default)]
+    pub allow_egress: bool,
 }
 
 /// Kubernetes sandbox binding configuration.
@@ -229,12 +233,14 @@ impl SandboxBinding {
         template: impl Into<BindingValue<String>>,
         region: impl Into<BindingValue<String>>,
         max_lifetime_seconds: Option<u32>,
+        allow_egress: bool,
     ) -> Self {
         Self::GcpAgentPlatform(GcpAgentPlatformSandboxBinding {
             engine: engine.into(),
             template: template.into(),
             region: region.into(),
             max_lifetime_seconds,
+            allow_egress,
         })
     }
 
@@ -298,6 +304,7 @@ mod tests {
                 "projects/p/locations/us-central1/sandboxTemplates/agent",
                 "us-central1",
                 Some(3600),
+                true,
             ),
             SandboxBinding::kubernetes(
                 "alien-sandboxes",
@@ -332,6 +339,7 @@ mod tests {
             "projects/p/locations/us-central1/sandboxTemplates/agent",
             "us-central1",
             Some(3600),
+            true,
         );
         let full = serde_json::to_value(&binding).expect("serializes");
 
@@ -352,6 +360,11 @@ mod tests {
             .expect("binding serializes as an object")
             .remove("maxLifetimeSeconds")
             .expect("the fixture set a ttl");
+        without_ttl
+            .as_object_mut()
+            .expect("binding serializes as an object")
+            .remove("allowEgress")
+            .expect("the fixture allowed egress");
         let restored: SandboxBinding =
             serde_json::from_value(without_ttl).expect("an absent ttl still loads");
         assert_eq!(
@@ -361,8 +374,9 @@ mod tests {
                 "projects/p/locations/us-central1/sandboxTemplates/agent",
                 "us-central1",
                 None,
+                false,
             ),
-            "an absent ttl deserializes as None"
+            "an absent ttl deserializes as None and an absent allowEgress as deny"
         );
     }
 
@@ -371,7 +385,7 @@ mod tests {
         let tags: Vec<String> = vec![
             SandboxBinding::aws("a", "1", "r"),
             SandboxBinding::azure("g", "e", "r", "rg", "ubuntu", SandboxEgress::Deny, None),
-            SandboxBinding::gcp_agent_platform("e", "t", "us-central1", None),
+            SandboxBinding::gcp_agent_platform("e", "t", "us-central1", None, false),
             SandboxBinding::kubernetes("n", "gvisor", "s", "http://op:8080", "k", "/t"),
             SandboxBinding::local("u", "k", "t"),
         ]
