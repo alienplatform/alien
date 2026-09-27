@@ -1,5 +1,34 @@
 use serde_json::{Map, Value};
 
+/// Extracts a readable message only from recognized structured stdout formats.
+/// The caller can keep the original line as `log.record.original` when this
+/// succeeds. Unknown JSON stays untouched rather than guessing a message key.
+pub fn parse_application_log_message(body: &str) -> Option<String> {
+    let Value::Object(record) = serde_json::from_str::<Value>(body).ok()? else {
+        return None;
+    };
+    parse_application_log_level(body)?;
+
+    if record.get("target").is_some_and(Value::is_string) {
+        return record
+            .get("fields")?
+            .as_object()?
+            .get("message")?
+            .as_str()
+            .map(ToOwned::to_owned);
+    }
+
+    let has_timestamp = record.get("time").is_some_and(|value| match value {
+        Value::String(text) => chrono::DateTime::parse_from_rfc3339(text).is_ok(),
+        Value::Number(number) => number.as_f64().is_some_and(|value| value >= 0.0),
+        _ => false,
+    });
+    if !has_timestamp {
+        return None;
+    }
+    record.get("msg")?.as_str().map(ToOwned::to_owned)
+}
+
 /// A recognized application-provided log level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplicationLogLevel {
@@ -195,6 +224,26 @@ fn is_pino_or_bunyan_record(record: &Map<String, Value>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extracts_recognized_structured_messages_only() {
+        assert_eq!(
+            parse_application_log_message(
+                r#"{"time":"2026-09-26T12:12:02Z","level":"INFO","msg":"service ready"}"#
+            ),
+            Some("service ready".to_string())
+        );
+        assert_eq!(
+            parse_application_log_message(
+                r#"{"timestamp":"2026-09-26T12:12:02Z","level":"INFO","target":"app","fields":{"message":"ready"}}"#
+            ),
+            Some("ready".to_string())
+        );
+        assert_eq!(
+            parse_application_log_message(r#"{"status":200,"msg":"ready"}"#),
+            None
+        );
+    }
 
     #[test]
     fn parses_common_string_fields_and_aliases() {

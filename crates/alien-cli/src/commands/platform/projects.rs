@@ -1,8 +1,14 @@
+use crate::commands::release::{auto_build_settings_for_platform, manager_proxy_push_settings};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
+use crate::get_current_dir;
 use crate::output::print_json;
 use crate::ui::{command, dim_label, make_table, print_table, success_line};
-use alien_error::{Context, IntoAlienError};
+use alien_core::{
+    Platform, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
+    Stack, ToolchainConfig,
+};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::types::{
     ConfigureModelsRequest, ConfigureModelsRequestAllowedProvidersItem,
     ConfigureModelsRequestRequirementsItem, ConfigureModelsRequestRequirementsItemClientApisItem,
@@ -12,11 +18,13 @@ use alien_platform_api::types::{
     ConfigureProjectRegistryBody, ConfigureProjectRegistryBodyCredentialPolicy,
     ConfigureProjectRegistryBodyRepositoriesItem, ConfigureRemoteSandboxRequest,
     ConfigureRemoteSandboxRequestBaseImage, CreateProjectBody, CreateProjectBodyName,
-    CreateProjectWorkspace, ListProjectsWorkspace,
+    CreateProjectWorkspace, ListProjectsWorkspace, SandboxBaseImageRepository,
 };
 use alien_platform_api::SdkResultExt;
 use clap::{Parser, Subcommand, ValueEnum};
 use std::collections::BTreeSet;
+use std::num::NonZeroU64;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -32,7 +40,10 @@ use std::collections::BTreeSet;
     alien projects capabilities status
     alien projects capabilities enable ai --model byo/claude-opus-5
     alien projects capabilities enable encryption
-    alien projects capabilities enable remote-sandbox --base-image public.ecr.aws/example/analysis:v1 --max-session-lifetime-seconds 3600"
+    alien projects capabilities enable remote-sandbox --image public.ecr.aws/example/analysis:v1 --max-session-lifetime-seconds 3600
+    alien projects capabilities enable remote-sandbox --src ./sandbox --max-session-lifetime-seconds 3600
+    alien projects capabilities enable remote-sandbox --src ./sandbox --dockerfile Sandbox.dockerfile --max-session-lifetime-seconds 3600
+    alien projects capabilities enable remote-sandbox --src ./sandbox --rebuild --max-session-lifetime-seconds 3600"
 )]
 pub struct ProjectArgs {
     /// Emit structured JSON output
@@ -90,12 +101,24 @@ pub enum CapabilityCommand {
         /// Permit registry pushes in addition to pulls.
         #[arg(long)]
         push: bool,
-        /// Public container image Alien builds the sandbox bundle from.
+        /// Prebuilt container image the sandbox starts from, used as is. For a private image,
+        /// use --src.
+        #[arg(long = "image", alias = "base-image", conflicts_with = "src")]
+        image: Option<String>,
+        /// Directory with a Dockerfile. The image is built locally with Docker and pushed to the
+        /// project's private repository.
         #[arg(long)]
-        base_image: Option<String>,
+        src: Option<PathBuf>,
+        /// Dockerfile path relative to --src (default: Dockerfile).
+        #[arg(long, requires = "src", conflicts_with = "image")]
+        dockerfile: Option<String>,
+        /// Build and push even when --src looks unchanged. The check reads the files Docker
+        /// sends as the build context, and the images in FROM by name only.
+        #[arg(long, requires = "src", conflicts_with = "image")]
+        rebuild: bool,
         /// Ceiling on a single sandbox session, in seconds.
         #[arg(long)]
-        max_session_lifetime_seconds: Option<std::num::NonZeroU64>,
+        max_session_lifetime_seconds: Option<NonZeroU64>,
     },
 }
 
@@ -133,8 +156,11 @@ pub async fn project_task(args: ProjectArgs, ctx: ExecutionMode) -> Result<()> {
                 providers,
                 repositories,
                 push,
-                base_image,
+                image,
+                src,
+                dockerfile,
                 max_session_lifetime_seconds,
+                ..
             },
     } = &args.cmd
     {
@@ -145,8 +171,12 @@ pub async fn project_task(args: ProjectArgs, ctx: ExecutionMode) -> Result<()> {
             providers,
             repositories,
             *push,
-            base_image.as_deref(),
-            *max_session_lifetime_seconds,
+            &RemoteSandboxOptions {
+                image: image.as_deref(),
+                src: src.as_deref(),
+                dockerfile: dockerfile.as_deref(),
+                max_session_lifetime_seconds: *max_session_lifetime_seconds,
+            },
         )?;
     }
     let http = ctx.auth_http().await?;
@@ -166,6 +196,7 @@ pub async fn project_task(args: ProjectArgs, ctx: ExecutionMode) -> Result<()> {
         ProjectCmd::Capabilities { command } => {
             let (project_id, _) = ctx.resolve_project(None, !args.json).await?;
             capabilities_task(
+                &ctx,
                 &http,
                 workspace_name.as_deref(),
                 &project_id,
@@ -180,6 +211,7 @@ pub async fn project_task(args: ProjectArgs, ctx: ExecutionMode) -> Result<()> {
 }
 
 async fn capabilities_task(
+    ctx: &ExecutionMode,
     http: &crate::auth::AuthHttp,
     workspace: Option<&str>,
     project: &str,
@@ -230,7 +262,10 @@ async fn capabilities_task(
             providers,
             repositories,
             push,
-            base_image,
+            image,
+            src,
+            dockerfile,
+            rebuild,
             max_session_lifetime_seconds,
         } => {
             let client = http.sdk_client();
@@ -377,10 +412,28 @@ async fn capabilities_task(
                     )
                 }
                 CapabilityName::RemoteSandbox => {
-                    let body = remote_sandbox_request(
-                        base_image.as_deref(),
-                        max_session_lifetime_seconds,
-                    )?;
+                    let max_lifetime_seconds =
+                        remote_sandbox_lifetime(max_session_lifetime_seconds)?;
+                    let source = match (image, src) {
+                        (Some(image), _) => SandboxImageSource::Image(image),
+                        (None, Some(src)) => SandboxImageSource::Source(SandboxSource {
+                            src,
+                            dockerfile,
+                            rebuild,
+                        }),
+                        (None, None) => return Err(remote_sandbox_image_required()),
+                    };
+                    let base_image = match source {
+                        SandboxImageSource::Image(image) => image,
+                        SandboxImageSource::Source(source) => {
+                            build_and_push_sandbox_base_image(
+                                ctx, http, workspace, project, &source, json,
+                            )
+                            .await?
+                        }
+                    };
+                    let saved = saved_remote_sandbox_settings(http, workspace, project).await?;
+                    let body = remote_sandbox_request(&base_image, max_lifetime_seconds, saved)?;
                     let mut request = client
                         .configure_project_remote_sandbox()
                         .id_or_name(project)
@@ -431,37 +484,322 @@ impl AiProvider {
     }
 }
 
-fn remote_sandbox_flag_required(field: &str) -> alien_error::AlienError<ErrorData> {
-    alien_error::AlienError::new(ErrorData::ValidationError {
-        field: field.to_string(),
-        message: format!("Remote Sandbox requires --{field}."),
+struct RemoteSandboxOptions<'a> {
+    image: Option<&'a str>,
+    src: Option<&'a Path>,
+    dockerfile: Option<&'a str>,
+    max_session_lifetime_seconds: Option<NonZeroU64>,
+}
+
+/// Where the sandbox base image comes from.
+enum SandboxImageSource {
+    /// A prebuilt image reference, configured as given.
+    Image(String),
+    /// A Docker build context, built and pushed to the project's repository.
+    Source(SandboxSource),
+}
+
+struct SandboxSource {
+    src: PathBuf,
+    dockerfile: Option<String>,
+    rebuild: bool,
+}
+
+/// Hash of everything a source build reads. Equal hashes mean equal build inputs, so the tag it
+/// names lets any machine reuse an image another one already pushed.
+#[derive(PartialEq)]
+struct SourceInputHash(String);
+
+impl SourceInputHash {
+    fn tag(&self) -> String {
+        format!("remote-sandbox-src-{}", &self.0[..16])
+    }
+}
+
+fn remote_sandbox_image_required() -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::ValidationError {
+        field: "image".to_string(),
+        message: "Remote Sandbox requires --image or --src.".to_string(),
     })
 }
 
-fn remote_sandbox_request(
-    base_image: Option<&str>,
-    max_session_lifetime_seconds: Option<std::num::NonZeroU64>,
-) -> Result<ConfigureRemoteSandboxRequest> {
-    let base_image = base_image.ok_or_else(|| remote_sandbox_flag_required("base-image"))?;
-    let base_image = ConfigureRemoteSandboxRequestBaseImage::try_from(base_image)
-        .into_alien_error()
-        .context(ErrorData::ValidationError {
-            field: "base-image".to_string(),
-            message: "Invalid base image reference".to_string(),
-        })?;
-    let max_session_lifetime_seconds = max_session_lifetime_seconds
-        .ok_or_else(|| remote_sandbox_flag_required("max-session-lifetime-seconds"))?;
+fn remote_sandbox_lifetime(max_session_lifetime_seconds: Option<NonZeroU64>) -> Result<NonZeroU64> {
+    let max_session_lifetime_seconds = max_session_lifetime_seconds.ok_or_else(|| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "max-session-lifetime-seconds".to_string(),
+            message: "Remote Sandbox requires --max-session-lifetime-seconds.".to_string(),
+        })
+    })?;
     if max_session_lifetime_seconds.get() > 28_800 {
-        return Err(alien_error::AlienError::new(ErrorData::ValidationError {
+        return Err(AlienError::new(ErrorData::ValidationError {
             field: "max-session-lifetime-seconds".to_string(),
             message: "Sandbox sessions must be at most 28800 seconds (8 hours).".to_string(),
         }));
     }
+    Ok(max_session_lifetime_seconds)
+}
+
+/// The configure endpoint replaces the whole sandbox configuration, so an omitted `azure` turns
+/// Azure off. Returns the saved settings this command does not own, to configure alongside.
+async fn saved_remote_sandbox_settings(
+    http: &crate::auth::AuthHttp,
+    workspace: Option<&str>,
+    project: &str,
+) -> Result<ConfigureRemoteSandboxRequest> {
+    let mut request = http.sdk_client().get_project().id_or_name(project);
+    if let Some(workspace) = workspace {
+        request = request.workspace(workspace);
+    }
+    let azure = request
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("Failed to read project {project}'s remote sandbox configuration"),
+            url: None,
+        })?
+        .into_inner()
+        .project_capabilities
+        .and_then(|capabilities| capabilities.capabilities.remote_sandbox)
+        .and_then(|sandbox| sandbox.azure);
+    // The read and write schemas are generated as separate types; both are the same JSON object.
+    let azure = azure
+        .map(|azure| serde_json::to_value(azure).and_then(serde_json::from_value))
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "The saved Azure sandbox configuration could not be carried over".to_string(),
+            url: None,
+        })?;
+    Ok(ConfigureRemoteSandboxRequest {
+        azure,
+        ..Default::default()
+    })
+}
+
+fn remote_sandbox_request(
+    base_image: &str,
+    max_lifetime_seconds: NonZeroU64,
+    saved: ConfigureRemoteSandboxRequest,
+) -> Result<ConfigureRemoteSandboxRequest> {
+    let base_image = ConfigureRemoteSandboxRequestBaseImage::try_from(base_image)
+        .into_alien_error()
+        .context(ErrorData::ValidationError {
+            field: "image".to_string(),
+            message: "Invalid image reference".to_string(),
+        })?;
     Ok(ConfigureRemoteSandboxRequest {
         base_image: Some(base_image),
-        azure: None,
-        max_lifetime_seconds: Some(max_session_lifetime_seconds),
+        azure: saved.azure,
+        max_lifetime_seconds: Some(max_lifetime_seconds),
     })
+}
+
+/// Resolves the sandbox base image for `source` in the project's private repository and returns
+/// the digest reference to configure. An unchanged source reuses the image already tagged with
+/// its input hash, from any machine, without building.
+async fn build_and_push_sandbox_base_image(
+    ctx: &ExecutionMode,
+    http: &crate::auth::AuthHttp,
+    workspace: Option<&str>,
+    project: &str,
+    source: &SandboxSource,
+    json: bool,
+) -> Result<String> {
+    // Kept apart from `alien release`'s output so neither overwrites the other's stack.json.
+    let output_dir = get_current_dir()?.join(".alien").join("remote-sandbox");
+    let src = source_directory(&source.src)?;
+    let toolchain = ToolchainConfig::Docker {
+        dockerfile: source.dockerfile.clone(),
+        build_args: None,
+        target: None,
+    };
+    let mut settings =
+        auto_build_settings_for_platform(Platform::Aws.as_str(), &output_dir, None, None, None)?;
+    // The registry tag is this command's cache. The local artifact cache's key skips what the
+    // input hash covers (node_modules, the executable bit, symlinks), so a hit there after a
+    // registry miss would push the older image under the new tag.
+    settings.rebuild = true;
+    settings.pull_base_images = source.rebuild;
+    let input_hash = source_input_hash(&src, &toolchain, &settings).await?;
+
+    let manager = ctx
+        .resolve_manager_metadata_only(project, Platform::Aws.as_str())
+        .await?;
+    let mut request = http
+        .sdk_client()
+        .ensure_project_sandbox_base_image_repository()
+        .id_or_name(project);
+    if let Some(workspace) = workspace {
+        request = request.workspace(workspace);
+    }
+    let destination = request
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to prepare the project's sandbox image repository".to_string(),
+            url: None,
+        })?
+        .into_inner();
+    let push_settings = manager_proxy_push_settings(
+        &destination.registry_host,
+        &destination.repository,
+        &manager,
+    )?;
+    let publish_failed = || ErrorData::SandboxImagePublishFailed {
+        repository: push_settings.repository.clone(),
+    };
+
+    let source_image = format!("{}:{}", push_settings.repository, input_hash.tag());
+    let existing = if source.rebuild {
+        None
+    } else {
+        alien_build::registry::manifest_digest(&source_image, &push_settings.options)
+            .await
+            .context(publish_failed())?
+    };
+    let digest = match existing {
+        Some(digest) => {
+            // The lookup ran on the hash taken before it, so a tree edited since would
+            // configure an image of the older tree.
+            ensure_source_unchanged(&src, &toolchain, &settings, &input_hash).await?;
+            if !json {
+                println!("{} {}", dim_label("Unchanged"), source_image);
+            }
+            digest
+        }
+        None => {
+            if !json {
+                println!("{} {}", dim_label("Building"), src.display());
+            }
+            let built =
+                alien_build::build_stack(sandbox_source_stack(&src, toolchain.clone()), &settings)
+                    .await
+                    .context(ErrorData::BuildFailed)?;
+            // The tag is shared by every machine with this tree, so it must not name an image
+            // built from a tree that was edited mid-build.
+            ensure_source_unchanged(&src, &toolchain, &settings, &input_hash).await?;
+            if !json {
+                println!("{} {}", dim_label("Pushing"), push_settings.repository);
+            }
+            // No push cache: the source tag already skips unchanged sources, and a cached
+            // reference the registry has since dropped would leave nothing to tag.
+            let pushed = alien_build::push_stack(built, Platform::Aws, &push_settings)
+                .await
+                .context(publish_failed())?;
+            alien_build::registry::tag_manifest(
+                &sandbox_image(&pushed)?,
+                &source_image,
+                &push_settings.options,
+            )
+            .await
+            .context(publish_failed())?
+        }
+    };
+
+    configured_base_image(
+        &format!("{}@{}", push_settings.repository, digest),
+        &push_settings.repository,
+        &destination,
+    )
+}
+
+async fn source_input_hash(
+    src: &Path,
+    toolchain: &ToolchainConfig,
+    settings: &alien_build::settings::BuildSettings,
+) -> Result<SourceInputHash> {
+    let hash = alien_build::docker_source_input_hash(src, toolchain, settings)
+        .await
+        .context(ErrorData::BuildFailed)?;
+    Ok(SourceInputHash(hash))
+}
+
+async fn ensure_source_unchanged(
+    src: &Path,
+    toolchain: &ToolchainConfig,
+    settings: &alien_build::settings::BuildSettings,
+    input_hash: &SourceInputHash,
+) -> Result<()> {
+    if source_input_hash(src, toolchain, settings).await? != *input_hash {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "src".to_string(),
+            message: format!(
+                "'{}' changed while the command ran. Run the command again.",
+                src.display()
+            ),
+        }));
+    }
+    Ok(())
+}
+
+fn source_directory(src: &Path) -> Result<PathBuf> {
+    // Resolved before any network call, so a missing --src fails as a usage error.
+    std::fs::canonicalize(src)
+        .into_alien_error()
+        .context(ErrorData::ValidationError {
+            field: "src".to_string(),
+            message: format!("Could not resolve the --src directory '{}'", src.display()),
+        })
+}
+
+fn sandbox_source_stack(src: &Path, toolchain: ToolchainConfig) -> Stack {
+    let sandbox = Sandbox::new("remote-sandbox".to_string())
+        .code(SandboxCode::Source {
+            src: src.display().to_string(),
+            toolchain,
+        })
+        .egress(SandboxEgress::Deny)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build();
+    Stack::new("remote-sandbox".to_string())
+        .add(sandbox, ResourceLifecycle::Live)
+        .build()
+}
+
+fn sandbox_image(stack: &Stack) -> Result<String> {
+    stack
+        .resources()
+        .find_map(
+            |(_, entry)| match &entry.config.downcast_ref::<Sandbox>()?.code {
+                SandboxCode::Image { image } => Some(image.clone()),
+                SandboxCode::Source { .. } => None,
+            },
+        )
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: "The stack has no sandbox base image reference".to_string(),
+            })
+        })
+}
+
+/// Names the pushed image under the host and repository the API returned, which is the only
+/// name it accepts as project-owned. The push may address a host rewritten for local access.
+fn configured_base_image(
+    pushed: &str,
+    pushed_repository: &str,
+    destination: &SandboxBaseImageRepository,
+) -> Result<String> {
+    let tag_or_digest = pushed
+        .strip_prefix(pushed_repository)
+        .filter(|rest| rest.starts_with(':') || rest.starts_with('@'))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "Pushed image '{pushed}' is not in the repository '{pushed_repository}'"
+                ),
+            })
+        })?;
+    Ok(format!(
+        "{}/{}{}",
+        alien_core::image_rewrite::strip_url_scheme(&destination.registry_host),
+        destination.repository,
+        tag_or_digest
+    ))
 }
 
 fn validate_capability_options(
@@ -471,17 +809,16 @@ fn validate_capability_options(
     providers: &[AiProvider],
     repositories: &[String],
     push: bool,
-    base_image: Option<&str>,
-    max_session_lifetime_seconds: Option<std::num::NonZeroU64>,
+    sandbox: &RemoteSandboxOptions<'_>,
 ) -> Result<()> {
     if capability == CapabilityName::Ai && models.is_empty() && required_models.is_empty() {
-        return Err(alien_error::AlienError::new(ErrorData::ValidationError {
+        return Err(AlienError::new(ErrorData::ValidationError {
             field: "model".to_string(),
             message: "AI Gateway requires at least one --model or --required-model.".to_string(),
         }));
     }
     if capability == CapabilityName::Registry && repositories.is_empty() {
-        return Err(alien_error::AlienError::new(ErrorData::ValidationError {
+        return Err(AlienError::new(ErrorData::ValidationError {
             field: "repository".to_string(),
             message: "Container Registry requires at least one --repository allowlist entry."
                 .to_string(),
@@ -490,26 +827,47 @@ fn validate_capability_options(
     if capability != CapabilityName::Ai
         && (!models.is_empty() || !required_models.is_empty() || !providers.is_empty())
     {
-        return Err(alien_error::AlienError::new(ErrorData::ValidationError {
+        return Err(AlienError::new(ErrorData::ValidationError {
             field: "capability".to_string(),
             message: "--model, --required-model, and --provider are only valid for AI Gateway."
                 .to_string(),
         }));
     }
     if capability != CapabilityName::Registry && (!repositories.is_empty() || push) {
-        return Err(alien_error::AlienError::new(ErrorData::ValidationError {
+        return Err(AlienError::new(ErrorData::ValidationError {
             field: "capability".to_string(),
             message: "--repository and --push are only valid for Container Registry.".to_string(),
         }));
     }
     if capability == CapabilityName::RemoteSandbox {
-        remote_sandbox_request(base_image, max_session_lifetime_seconds)?;
-    } else if base_image.is_some() || max_session_lifetime_seconds.is_some() {
-        return Err(alien_error::AlienError::new(ErrorData::ValidationError {
+        if sandbox.image.is_none() && sandbox.src.is_none() {
+            return Err(remote_sandbox_image_required());
+        }
+        let max_lifetime_seconds = remote_sandbox_lifetime(sandbox.max_session_lifetime_seconds)?;
+        if let Some(image) = sandbox.image {
+            remote_sandbox_request(image, max_lifetime_seconds, Default::default())?;
+        }
+        if let Some(src) = sandbox.src {
+            let dockerfile = src.join(sandbox.dockerfile.unwrap_or("Dockerfile"));
+            if !dockerfile.is_file() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "dockerfile".to_string(),
+                    message: format!(
+                        "No Dockerfile at '{}'. Pass --dockerfile with its path relative to --src.",
+                        dockerfile.display()
+                    ),
+                }));
+            }
+        }
+    } else if sandbox.image.is_some()
+        || sandbox.src.is_some()
+        || sandbox.max_session_lifetime_seconds.is_some()
+    {
+        return Err(AlienError::new(ErrorData::ValidationError {
             field: "capability".to_string(),
-            message:
-                "--base-image and --max-session-lifetime-seconds are only valid for Remote Sandbox."
-                    .to_string(),
+            message: "--image, --src, and --max-session-lifetime-seconds are only valid for \
+                      Remote Sandbox."
+                .to_string(),
         }));
     }
     Ok(())
@@ -698,9 +1056,15 @@ async fn list_projects_task(
 mod tests {
     use super::*;
 
-    fn sandbox_options(
-        base_image: Option<&str>,
-        lifetime: Option<std::num::NonZeroU64>,
+    fn sandbox_options(image: Option<&str>, lifetime: Option<NonZeroU64>) -> Result<()> {
+        source_options(image, None, None, lifetime)
+    }
+
+    fn source_options(
+        image: Option<&str>,
+        src: Option<&Path>,
+        dockerfile: Option<&str>,
+        lifetime: Option<NonZeroU64>,
     ) -> Result<()> {
         validate_capability_options(
             CapabilityName::RemoteSandbox,
@@ -709,23 +1073,60 @@ mod tests {
             &[],
             &[],
             false,
-            base_image,
-            lifetime,
+            &RemoteSandboxOptions {
+                image,
+                src,
+                dockerfile,
+                max_session_lifetime_seconds: lifetime,
+            },
+        )
+    }
+
+    fn enable_remote_sandbox(flags: &[&str]) -> std::result::Result<ProjectArgs, clap::Error> {
+        ProjectArgs::try_parse_from(
+            ["projects", "capabilities", "enable", "remote-sandbox"]
+                .into_iter()
+                .chain(flags.iter().copied()),
         )
     }
 
     #[test]
-    fn remote_sandbox_request_serializes_only_the_base_image_source() {
+    fn remote_sandbox_request_carries_the_saved_azure_configuration() {
+        let saved_azure = serde_json::json!({
+            "catalogImage": "python-3.12",
+            "idleSuspendSeconds": 900,
+        });
+        let saved = serde_json::from_value(serde_json::json!({ "azure": saved_azure }))
+            .expect("the saved Azure configuration should parse");
         let request = remote_sandbox_request(
-            Some("public.ecr.aws/example/analysis:v1"),
-            std::num::NonZeroU64::new(28_800),
+            "public.ecr.aws/example/analysis:v1",
+            NonZeroU64::new(28_800).unwrap(),
+            saved,
         )
         .expect("the maximum session lifetime should be accepted");
         assert_eq!(
             serde_json::to_value(request).expect("request should serialize"),
             serde_json::json!({
+                "azure": saved_azure,
                 "baseImage": "public.ecr.aws/example/analysis:v1",
                 "maxLifetimeSeconds": 28_800,
+            }),
+        );
+    }
+
+    #[test]
+    fn remote_sandbox_request_omits_azure_when_none_is_saved() {
+        let request = remote_sandbox_request(
+            "public.ecr.aws/example/analysis:v1",
+            NonZeroU64::new(3600).unwrap(),
+            Default::default(),
+        )
+        .expect("a valid image and lifetime should build a request");
+        assert_eq!(
+            serde_json::to_value(request).expect("request should serialize"),
+            serde_json::json!({
+                "baseImage": "public.ecr.aws/example/analysis:v1",
+                "maxLifetimeSeconds": 3600,
             }),
         );
     }
@@ -737,9 +1138,9 @@ mod tests {
             "image with spaces".to_string(),
             "x".repeat(1025),
         ] {
-            let error = sandbox_options(Some(&image), std::num::NonZeroU64::new(3600))
+            let error = sandbox_options(Some(&image), NonZeroU64::new(3600))
                 .expect_err("invalid image references must be rejected");
-            assert!(error.to_string().contains("base-image"), "{error}");
+            assert!(error.to_string().contains("image"), "{error}");
         }
     }
 
@@ -747,7 +1148,7 @@ mod tests {
     fn remote_sandbox_rejects_sessions_longer_than_eight_hours() {
         let error = sandbox_options(
             Some("public.ecr.aws/example/analysis:v1"),
-            std::num::NonZeroU64::new(28_801),
+            NonZeroU64::new(28_801),
         )
         .expect_err("the API session lifetime limit must be enforced locally");
         assert!(error.to_string().contains("28800"), "{error}");
@@ -755,71 +1156,176 @@ mod tests {
 
     #[tokio::test]
     async fn remote_sandbox_validates_before_resolving_auth_or_project() {
-        let args = ProjectArgs::try_parse_from([
-            "projects",
-            "capabilities",
-            "enable",
-            "remote-sandbox",
-            "--json",
-        ])
-        .expect("the command should parse before capability validation");
+        let args = enable_remote_sandbox(&["--json"])
+            .expect("the command should parse before capability validation");
         let error = project_task(args, ExecutionMode::Dev { port: 0 })
             .await
             .expect_err("missing flags must fail before connecting to any API");
-        assert!(error.to_string().contains("--base-image"), "{error}");
+        assert!(error.to_string().contains("--image or --src"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn remote_sandbox_source_still_needs_a_session_ceiling_before_building() {
+        let args = enable_remote_sandbox(&["--src", "./does-not-exist", "--json"])
+            .expect("--src alone should parse");
+        let error = project_task(args, ExecutionMode::Dev { port: 0 })
+            .await
+            .expect_err("a missing session ceiling must fail before any build");
+        assert!(
+            error.to_string().contains("--max-session-lifetime-seconds"),
+            "{error}"
+        );
     }
 
     #[test]
     fn remote_sandbox_parses_its_own_flags() {
-        let args = ProjectArgs::try_parse_from([
-            "projects",
-            "capabilities",
-            "enable",
-            "remote-sandbox",
-            "--base-image",
-            "public.ecr.aws/example/analysis:v1",
+        for flag in ["--image", "--base-image"] {
+            let args = enable_remote_sandbox(&[
+                flag,
+                "public.ecr.aws/example/analysis:v1",
+                "--max-session-lifetime-seconds",
+                "3600",
+            ])
+            .expect("remote sandbox flags should parse");
+
+            let ProjectCmd::Capabilities {
+                command:
+                    CapabilityCommand::Enable {
+                        capability,
+                        image,
+                        rebuild,
+                        max_session_lifetime_seconds,
+                        ..
+                    },
+            } = args.cmd
+            else {
+                panic!("expected a capability enable command");
+            };
+            assert_eq!(capability, CapabilityName::RemoteSandbox);
+            assert_eq!(image.as_deref(), Some("public.ecr.aws/example/analysis:v1"));
+            assert!(!rebuild);
+            assert_eq!(
+                max_session_lifetime_seconds.map(NonZeroU64::get),
+                Some(3600)
+            );
+        }
+    }
+
+    #[test]
+    fn the_old_image_flag_stays_out_of_the_help() {
+        let mut command = <ProjectArgs as clap::CommandFactory>::command();
+        let enable = command
+            .find_subcommand_mut("capabilities")
+            .and_then(|command| command.find_subcommand_mut("enable"))
+            .expect("the enable command exists");
+        let help = enable.render_long_help().to_string();
+        assert!(help.contains("--image"), "{help}");
+        assert!(!help.contains("--base-image"), "{help}");
+    }
+
+    #[test]
+    fn remote_sandbox_parses_a_source_build() {
+        let args = enable_remote_sandbox(&[
+            "--src",
+            "./sandbox",
+            "--dockerfile",
+            "docker/Sandbox.dockerfile",
+            "--rebuild",
             "--max-session-lifetime-seconds",
             "3600",
         ])
-        .expect("remote sandbox flags should parse");
+        .expect("--src with --dockerfile and --rebuild should parse");
 
         let ProjectCmd::Capabilities {
             command:
                 CapabilityCommand::Enable {
-                    capability,
-                    base_image,
-                    max_session_lifetime_seconds,
+                    image,
+                    src,
+                    dockerfile,
+                    rebuild,
                     ..
                 },
         } = args.cmd
         else {
             panic!("expected a capability enable command");
         };
-        assert_eq!(capability, CapabilityName::RemoteSandbox);
-        assert_eq!(
-            base_image.as_deref(),
-            Some("public.ecr.aws/example/analysis:v1")
-        );
-        assert_eq!(
-            max_session_lifetime_seconds.map(std::num::NonZeroU64::get),
-            Some(3600)
-        );
+        assert_eq!(image, None);
+        assert_eq!(src, Some(PathBuf::from("./sandbox")));
+        assert_eq!(dockerfile.as_deref(), Some("docker/Sandbox.dockerfile"));
+        assert!(rebuild);
     }
 
     #[test]
-    fn remote_sandbox_requires_a_base_image() {
-        remote_sandbox_request(
-            Some("public.ecr.aws/x/y:v1"),
-            std::num::NonZeroU64::new(3600),
-        )
-        .expect("a base image is accepted");
+    fn src_and_image_are_mutually_exclusive() {
+        for flag in ["--image", "--base-image"] {
+            let error = enable_remote_sandbox(&[
+                "--src",
+                "./sandbox",
+                flag,
+                "public.ecr.aws/example/analysis:v1",
+            ])
+            .expect_err("--src and --image name two different images");
+            assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        }
+    }
 
-        let error = remote_sandbox_request(None, std::num::NonZeroU64::new(3600))
-            .expect_err("a missing base image must be refused");
+    #[test]
+    fn build_flags_require_src() {
+        for flags in [&["--dockerfile", "Dockerfile"][..], &["--rebuild"][..]] {
+            let error = enable_remote_sandbox(flags)
+                .expect_err("a build flag means nothing without a build");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "{flags:?}"
+            );
+
+            let with_image = [
+                flags,
+                &["--image", "public.ecr.aws/example/analysis:v1"][..],
+            ]
+            .concat();
+            let error =
+                enable_remote_sandbox(&with_image).expect_err("a prebuilt image is never built");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{flags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_sandbox_requires_an_image_source() {
+        let error = sandbox_options(None, NonZeroU64::new(3600))
+            .expect_err("a missing image source must be refused");
         assert!(
-            error.to_string().contains("--base-image"),
+            error.to_string().contains("--image or --src"),
             "unexpected message: {error}"
         );
+
+        let src = tempfile::tempdir().expect("temp dir");
+        std::fs::write(src.path().join("Dockerfile"), "FROM alpine:3.20\n").unwrap();
+        source_options(None, Some(src.path()), None, NonZeroU64::new(3600))
+            .expect("--src is an image source");
+    }
+
+    #[test]
+    fn a_source_without_its_dockerfile_is_refused_before_any_request() {
+        let src = tempfile::tempdir().expect("temp dir");
+        std::fs::write(src.path().join("Sandbox.dockerfile"), "FROM alpine:3.20\n").unwrap();
+
+        let error = source_options(None, Some(src.path()), None, NonZeroU64::new(3600))
+            .expect_err("the default Dockerfile is missing");
+        assert!(error.to_string().contains("--dockerfile"), "{error}");
+
+        source_options(
+            None,
+            Some(src.path()),
+            Some("Sandbox.dockerfile"),
+            NonZeroU64::new(3600),
+        )
+        .expect("the named Dockerfile exists");
     }
 
     #[test]
@@ -834,21 +1340,80 @@ mod tests {
 
     #[test]
     fn sandbox_options_are_refused_for_another_capability() {
-        let error = validate_capability_options(
-            CapabilityName::Registry,
-            &[],
-            &[],
-            &[],
-            &["repo".to_string()],
-            false,
-            Some("public.ecr.aws/x/y:v1"),
-            None,
+        for sandbox in [
+            RemoteSandboxOptions {
+                image: Some("public.ecr.aws/x/y:v1"),
+                src: None,
+                dockerfile: None,
+                max_session_lifetime_seconds: None,
+            },
+            RemoteSandboxOptions {
+                image: None,
+                src: Some(Path::new("./sandbox")),
+                dockerfile: None,
+                max_session_lifetime_seconds: None,
+            },
+        ] {
+            let error = validate_capability_options(
+                CapabilityName::Registry,
+                &[],
+                &[],
+                &[],
+                &["repo".to_string()],
+                false,
+                &sandbox,
+            )
+            .expect_err("sandbox options must not apply to another capability");
+            assert!(
+                error.to_string().contains("only valid for Remote Sandbox"),
+                "unexpected message: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn configure_names_the_pushed_image_under_the_returned_repository() {
+        let destination = SandboxBaseImageRepository {
+            registry_host: "host.docker.internal:8090".to_string(),
+            repository: "acme-sandbox".to_string(),
+        };
+        let digest = "sha256:7d5463a6f1c2b3e4d5c6b7a8f9e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a69788";
+        let base_image = configured_base_image(
+            &format!("localhost:8090/acme-sandbox@{digest}"),
+            "localhost:8090/acme-sandbox",
+            &destination,
         )
-        .expect_err("sandbox options must not apply to another capability");
-        assert!(
-            error.to_string().contains("only valid for Remote Sandbox"),
-            "unexpected message: {error}"
+        .expect("the pushed image is in the pushed repository");
+        assert_eq!(
+            base_image,
+            format!("host.docker.internal:8090/acme-sandbox@{digest}")
         );
+
+        let request = remote_sandbox_request(
+            &base_image,
+            NonZeroU64::new(3600).unwrap(),
+            Default::default(),
+        )
+        .expect("the configured reference is a valid base image");
+        assert_eq!(
+            serde_json::to_value(request).expect("request should serialize")["baseImage"],
+            serde_json::json!(base_image),
+        );
+    }
+
+    #[test]
+    fn configure_refuses_an_image_outside_the_pushed_repository() {
+        let destination = SandboxBaseImageRepository {
+            registry_host: "registry.example.com".to_string(),
+            repository: "acme-sandbox".to_string(),
+        };
+        for pushed in [
+            "registry.example.com/acme-sandbox-other:v1",
+            "registry.example.com/other:v1",
+        ] {
+            configured_base_image(pushed, "registry.example.com/acme-sandbox", &destination)
+                .expect_err("a sibling repository must not be renamed into the project's");
+        }
     }
 
     #[test]

@@ -99,6 +99,10 @@ pub struct BuildSettings {
     /// Build in debug mode for faster builds (default: false for release builds).
     /// Debug builds are faster but produce larger binaries.
     pub debug_mode: bool,
+    /// Build every source resource again instead of reusing the local artifact cache.
+    pub rebuild: bool,
+    /// Have Docker re-resolve the base images its builds start `FROM`.
+    pub pull_base_images: bool,
 }
 
 /// Settings for pushing built images to a registry.
@@ -139,6 +143,8 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: true,
+            rebuild: false,
+            pull_base_images: false,
         }
     }
 

@@ -21,6 +21,7 @@ use alien_core::{
     },
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform, ReleaseInfo, ResourceHeartbeat,
+    StackState,
 };
 use alien_error::AlienError;
 
@@ -228,6 +229,9 @@ pub enum InitialDesiredRelease {
 #[serde(rename_all = "camelCase")]
 pub struct InitializeRequest {
     pub name: Option<String>,
+    /// Stable prefix for resources owned by this deployment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_prefix: Option<String>,
     pub platform: Option<Platform>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
@@ -660,12 +664,13 @@ mod tests {
     use crate::traits::DeploymentRecord;
 
     use super::{
-        agent_report_completes_claim, build_target_deployment_config, deployment_needs_target,
-        deployment_state_from_record, deployment_target_release_id, management_platform,
-        may_deliver_agent_target, preserve_recorded_gate_answers, release_stack_platform,
-        should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
-        validate_initialize_base_platform, AgentSyncRequest, AgentSyncWireRequest,
-        InitialDesiredRelease, InitializeRequest, ReconcileRequest,
+        agent_needs_initial_state_hydration, agent_report_completes_claim,
+        build_target_deployment_config, deployment_needs_target, deployment_state_from_record,
+        deployment_target_release_id, management_platform, may_deliver_agent_target,
+        preserve_recorded_gate_answers, release_stack_platform, should_ignore_agent_state_report,
+        should_return_current_state_for_agent_sync, validate_initialize_base_platform,
+        AgentSyncRequest, AgentSyncWireRequest, InitialDesiredRelease, InitializeRequest,
+        ReconcileRequest,
     };
 
     #[test]
@@ -1005,6 +1010,29 @@ mod tests {
             true,
             true,
             &deployment
+        ));
+    }
+
+    #[test]
+    fn hydrates_seeded_resource_prefix_before_first_execution_claim() {
+        let deployment = deployment_record_with_state(
+            "pending",
+            Some(StackState::with_resource_prefix(
+                Platform::Kubernetes,
+                "chart-release".to_string(),
+            )),
+        );
+        let report = serde_json::to_value(uninitialized_state()).unwrap();
+
+        assert!(agent_needs_initial_state_hydration(
+            &deployment,
+            Some(&report),
+            false,
+        ));
+        assert!(!agent_needs_initial_state_hydration(
+            &deployment,
+            Some(&report),
+            true,
         ));
     }
 
@@ -1770,12 +1798,21 @@ async fn agent_sync(
         None
     };
 
+    // Return the seeded state before an unclaimed first target starts, and
+    // restore authoritative state when an agent reports an empty snapshot.
+    let unclaimed_initial_state = agent_needs_initial_state_hydration(
+        &deployment,
+        req.current_state.as_ref(),
+        report_has_claim,
+    );
+    let agent_state_uninitialized = req
+        .current_state
+        .as_ref()
+        .and_then(|value| serde_json::from_value::<DeploymentState>(value.clone()).ok())
+        .is_some_and(|state| agent_state_is_uninitialized(&state));
     let should_return_current_state = should_return_current_state_for_agent_sync(
-        ignored_agent_state_report,
-        req.current_state
-            .as_ref()
-            .and_then(|value| serde_json::from_value::<DeploymentState>(value.clone()).ok())
-            .is_some_and(|state| agent_state_is_uninitialized(&state)),
+        ignored_agent_state_report || unclaimed_initial_state,
+        agent_state_uninitialized,
         &deployment,
     );
     let current_state = if should_return_current_state {
@@ -2021,6 +2058,19 @@ fn agent_state_is_uninitialized(state: &DeploymentState) -> bool {
         && state.runtime_metadata.is_none()
 }
 
+fn agent_needs_initial_state_hydration(
+    deployment: &DeploymentRecord,
+    reported_state: Option<&serde_json::Value>,
+    has_execution_claim: bool,
+) -> bool {
+    !has_execution_claim
+        && deployment_has_authoritative_state(deployment)
+        && reported_state
+            .and_then(|value| serde_json::from_value::<DeploymentState>(value.clone()).ok())
+            .as_ref()
+            .is_some_and(agent_state_is_uninitialized)
+}
+
 fn deployment_has_authoritative_state(deployment: &DeploymentRecord) -> bool {
     deployment.stack_state.is_some()
         || deployment.environment_info.is_some()
@@ -2238,6 +2288,16 @@ async fn initialize(
                 .name
                 .unwrap_or_else(|| format!("agent-{}", &ids::deployment_id()[3..9]));
             let platform = req.platform.unwrap_or(Platform::Kubernetes);
+            let stack_state = match req.resource_prefix {
+                Some(resource_prefix) => {
+                    if !alien_core::is_valid_resource_prefix(&resource_prefix) {
+                        return ErrorData::bad_request(alien_core::RESOURCE_PREFIX_ERROR_MESSAGE)
+                            .into_response();
+                    }
+                    Some(StackState::with_resource_prefix(platform, resource_prefix))
+                }
+                None => None,
+            };
             let base_platform = match validate_initialize_base_platform(platform, req.base_platform)
             {
                 Ok(base_platform) => base_platform,
@@ -2251,6 +2311,19 @@ async fn initialize(
                 .get_deployment_by_name(&subject, &dg_id, &name)
                 .await
             {
+                if let Some(requested) = &stack_state {
+                    if existing
+                        .stack_state
+                        .as_ref()
+                        .map(|state| &state.resource_prefix)
+                        != Some(&requested.resource_prefix)
+                    {
+                        return ErrorData::bad_request(
+                            "Deployment already uses a different resource prefix",
+                        )
+                        .into_response();
+                    }
+                }
                 let (raw_token, key_prefix, key_hash) =
                     ids::generate_token(TokenType::Deployment.prefix());
                 return match state
@@ -2302,7 +2375,7 @@ async fn initialize(
                         platform,
                         base_platform,
                         stack_settings: settings,
-                        stack_state: None,
+                        stack_state,
                         environment_variables: None,
                         public_subdomain: None,
                         input_values: req.input_values,

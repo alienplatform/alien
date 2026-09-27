@@ -248,6 +248,7 @@ mod tests {
             build_target: target,
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
+            pull_base_images: false,
             workload: WorkloadKind::Container,
         }
     }

@@ -139,6 +139,10 @@ pub enum SandboxEgress {
     ///
     /// Routed traffic only. Link-local is not outbound and no backend's egress control reaches
     /// it, so this is not a boundary against instance metadata.
+    ///
+    /// Nor, on AWS, against DNS: while the connector VPC has DNS support on, a session resolves
+    /// names through that VPC's resolver, which no security group filters, so a query name can
+    /// carry data out.
     Deny,
     /// Unrestricted outbound access to the public internet, and none to private ranges or the
     /// deployment's own network.
@@ -219,7 +223,8 @@ pub struct SandboxCapabilities {
     pub snapshot: bool,
     /// Egress can be restricted to a hostname allowlist
     pub domain_egress_rules: bool,
-    /// Whether a declared `deny` is actually enforced, rather than accepted and dropped
+    /// Whether a declared `deny` is actually enforced, rather than accepted and dropped.
+    /// It covers routed traffic; the `deny` mode says where DNS still resolves.
     pub egress_deny: bool,
     /// The platform enforces the declared cpu, memory and disk ceilings
     pub enforced_limits: bool,
@@ -257,6 +262,8 @@ impl SandboxCapabilities {
                 pause_resume: true,
                 snapshot: false,
                 domain_egress_rules: false,
+                // Routed egress only: while the connector VPC has DNS support on, a session
+                // resolves names through its resolver, which no security group filters.
                 egress_deny: true,
                 enforced_limits: true,
                 // Nothing in the API bounds process count.

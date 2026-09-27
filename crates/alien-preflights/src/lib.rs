@@ -336,6 +336,7 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::ResourceEnabledValidCheck));
         registry.add_compile_time_check(Box::new(compile_time::FrozenResourceLifecycleCheck));
         registry.add_compile_time_check(Box::new(compile_time::ContainerLifecycleCheck));
+        registry.add_compile_time_check(Box::new(compile_time::KubernetesWorkloadSettingsCheck));
         registry.add_compile_time_check(Box::new(compile_time::PublicWorkerLifecycleCheck));
         registry.add_compile_time_check(Box::new(compile_time::MachinesResourcesCheck));
         registry.add_compile_time_check(Box::new(compile_time::LiveProvisionPermissionsCheck));

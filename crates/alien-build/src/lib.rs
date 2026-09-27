@@ -1,11 +1,16 @@
 pub(crate) mod command_output;
 pub mod dependencies;
+mod dockerignore;
 pub mod error;
 pub mod merge;
 pub mod plan;
+pub mod registry;
 pub mod sandbox_bundle;
 pub mod settings;
+mod source_input;
 pub mod toolchain;
+
+pub use source_input::docker_source_input_hash;
 
 use alien_core::{
     alien_event, AlienEvent, BinaryTarget, Container, ContainerCode, Daemon, DaemonCode, Platform,
@@ -2063,13 +2068,17 @@ async fn build_resource(
 
     let platform_name = settings.platform.runtime_platform().as_str();
     let lookup_started = Instant::now();
-    let cached_dir = find_cached_artifact_dir(
-        build_output_dir,
-        resource_name,
-        &targets,
-        &artifact_cache_key,
-    )
-    .await?;
+    let cached_dir = if settings.rebuild {
+        None
+    } else {
+        find_cached_artifact_dir(
+            build_output_dir,
+            resource_name,
+            &targets,
+            &artifact_cache_key,
+        )
+        .await?
+    };
     let lookup_secs = lookup_started.elapsed().as_secs_f64();
 
     if let Some(cached_dir) = cached_dir {
@@ -2190,7 +2199,26 @@ async fn build_resource(
     let final_output_dir = build_output_dir.join(&hashed_dir_name);
 
     let finalized_dir = finalize_artifact_dir(&resource_dir, &final_output_dir, "build").await?;
-    write_artifact_cache_metadata(&PathBuf::from(&finalized_dir), &artifact_cache_key).await?;
+    // The key was taken before the build read the tree. If the tree changed since, the artifact
+    // is not the build of either version, so it stays out of the cache.
+    // A re-key that fails (a file removed since the build) leaves the artifact uncached too.
+    match compute_source_artifact_cache_key(src, toolchain_config, settings, &targets, workload)
+        .await
+    {
+        Ok(key_after_build) if key_after_build == artifact_cache_key => {
+            write_artifact_cache_metadata(&PathBuf::from(&finalized_dir), &artifact_cache_key)
+                .await?;
+        }
+        Ok(_) => warn!(
+            resource = resource_name,
+            "Source changed during the build; the artifact is not cached"
+        ),
+        Err(error) => warn!(
+            resource = resource_name,
+            error = %error,
+            "Could not re-key the source after the build; the artifact is not cached"
+        ),
+    }
 
     // Return the directory path containing all OCI tarballs (with content hash)
     info!(
@@ -2274,7 +2302,29 @@ async fn hash_build_input_source(
             }
             Ok(())
         }
-        _ => hash_source_directory(Path::new(src), hasher).await,
+        ToolchainConfig::Docker { dockerfile, .. } => {
+            hash_source_directory(Path::new(src), hasher).await?;
+            // The Dockerfile can sit outside `src` or under a skipped directory, where the
+            // directory walk does not see it. A missing one is left to the build to report.
+            let dockerfile = Path::new(src).join(dockerfile.as_deref().unwrap_or("Dockerfile"));
+            match fs::read(&dockerfile).await {
+                Ok(bytes) => {
+                    hasher.update(b"dockerfile");
+                    hasher.update(bytes);
+                    Ok(())
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => {
+                    Err(error)
+                        .into_alien_error()
+                        .context(ErrorData::FileOperationFailed {
+                            operation: "read file".to_string(),
+                            file_path: dockerfile.display().to_string(),
+                            reason: "Failed to read the Dockerfile for build cache key".to_string(),
+                        })
+                }
+            }
+        }
     }
 }
 
@@ -2927,6 +2977,7 @@ async fn build_target_to_file(
         build_target: *target,
         runtime_platform_name: settings.platform.runtime_platform().as_str().to_string(),
         debug_mode: settings.debug_mode,
+        pull_base_images: settings.pull_base_images,
         workload,
     };
 
@@ -3900,6 +3951,8 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
 
         let error = build_stack(stack, &settings)
@@ -3933,6 +3986,8 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
 
         let error = build_stack(stack, &settings)
@@ -4188,6 +4243,36 @@ mod tests {
         assert_eq!(index.manifests[0].size, 123);
     }
 
+    #[tokio::test]
+    async fn a_dockerfile_outside_src_is_a_cache_key_input() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let src = root.path().join("app");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("run.sh"), "echo hi\n").unwrap();
+        std::fs::write(root.path().join("Sandbox.dockerfile"), "FROM alpine:3.20\n").unwrap();
+        let toolchain = ToolchainConfig::Docker {
+            dockerfile: Some("../Sandbox.dockerfile".to_string()),
+            build_args: None,
+            target: None,
+        };
+        let key = || async {
+            let mut hasher = Sha256::new();
+            hash_build_input_source(
+                src.to_str().unwrap(),
+                &toolchain,
+                &[BinaryTarget::LinuxArm64],
+                &mut hasher,
+            )
+            .await
+            .expect("the source should hash");
+            format!("{:x}", hasher.finalize())
+        };
+
+        let before = key().await;
+        std::fs::write(root.path().join("Sandbox.dockerfile"), "FROM alpine:3.21\n").unwrap();
+        assert_ne!(key().await, before);
+    }
+
     #[test]
     fn manifest_media_type_reads_field_or_none() {
         assert_eq!(
@@ -4362,6 +4447,8 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
 
         // Pull alpine:latest (small, always available)
@@ -4429,6 +4516,8 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
 
         // Try to pull non-existent image
@@ -4469,6 +4558,8 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
 
         // Pull alpine image
@@ -4528,6 +4619,8 @@ mod tests {
             cache_url: None,
             override_base_image: Some("registry.example.com/base:tag".to_string()),
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
         let azure = BuildSettings {
             platform: PlatformBuildSettings::Azure {},
@@ -4698,6 +4791,8 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
 
         let first = compute_source_artifact_cache_key(
@@ -4760,6 +4855,8 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
 
         let first = compute_source_artifact_cache_key(
@@ -4825,6 +4922,8 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
 
         let first_key = compute_source_artifact_cache_key(
@@ -4889,6 +4988,8 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
 
         let key = |dir: &Path| {
@@ -4972,6 +5073,8 @@ mod tests {
                     cache_url: None,
                     override_base_image: None,
                     debug_mode: false,
+                    rebuild: false,
+                    pull_base_images: false,
                 };
                 compute_source_artifact_cache_key(
                     &dir,
@@ -5020,6 +5123,8 @@ mod tests {
                 cache_url: None,
                 override_base_image: None,
                 debug_mode: false,
+                rebuild: false,
+                pull_base_images: false,
             };
         let x64 = vec![BinaryTarget::LinuxX64];
         let arm64 = vec![BinaryTarget::LinuxArm64];
@@ -5222,6 +5327,7 @@ mod tests {
                 build_target: target,
                 runtime_platform_name: "aws".to_string(),
                 debug_mode: false,
+                pull_base_images: false,
                 workload: crate::toolchain::WorkloadKind::Container,
             };
             toolchain
@@ -5358,6 +5464,7 @@ mod tests {
             build_target: BinaryTarget::LinuxArm64,
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
+            pull_base_images: false,
             workload: crate::toolchain::WorkloadKind::Container,
         };
         toolchain
@@ -5492,6 +5599,7 @@ mod tests {
                 build_target: target,
                 runtime_platform_name: "aws".to_string(),
                 debug_mode: false,
+                pull_base_images: false,
                 workload: crate::toolchain::WorkloadKind::Container,
             };
             toolchain
@@ -5627,6 +5735,8 @@ mod sandbox_build_tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         }
     }
 
