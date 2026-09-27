@@ -2931,6 +2931,14 @@ fn operator_deployment_doc(
     append_env_value(&mut yaml, "OPERATOR_INITIAL_DESIRED_RELEASE", "none");
     append_env_value(&mut yaml, "OPERATOR_SETUP_METHOD", "manual");
     append_env_value(&mut yaml, "DATA_DIR", "/var/lib/operator");
+    if integrated_product_chart {
+        // Identity initialization must bind this Operator to the runtime's
+        // deployment scope before its readiness endpoint becomes healthy.
+        yaml.push_str("            - name: ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY\n");
+        yaml.push_str("              value: {{ default \"alien.dev/deployment\" .Values.logCollector.scope.deploymentLabelKey | quote }}\n");
+        yaml.push_str("            - name: ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE\n");
+        yaml.push_str("              value: {{ default (include \"deployment.fullname\" .) .Values.logCollector.scope.deploymentLabelValue | quote }}\n");
+    }
     if supports_readiness {
         append_env_value(&mut yaml, "OPERATOR_READINESS_PORT", "8081");
         if let Some(config_map_name) = identity_initialized_config_map {
@@ -7694,7 +7702,6 @@ inputValues:
         assert!(chart.files["Chart.yaml"].contains("alien.dev/remote-operator-lifecycle: \"v2\""));
         assert!(remote_template.contains(".Values.remoteOperator.enabled"));
         assert!(remote_template.contains("deployment.remoteOperatorResourceName"));
-        assert!(!remote_template.contains("deployment.fullname"));
         assert!(!remote_template.contains("setup-owned"));
         assert!(!remote_template.contains("kind: 'Secret'"));
         let checks = &chart.files["templates/remote-operator-checks.yaml"];
@@ -8212,6 +8219,14 @@ remoteOperator:
             operator_env_value(&remote, "OPERATOR_POD_LOG_LABEL_VALUE"),
             Some("customer-one")
         );
+        assert_eq!(
+            operator_env_value(&remote, "ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY"),
+            Some("acme/deployment")
+        );
+        assert_eq!(
+            operator_env_value(&remote, "ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE"),
+            Some("customer-one")
+        );
         assert!(docs_by_kind(&docs, "DaemonSet").is_empty());
         assert!(!rendered.stdout.contains("hostPath:"));
     }
@@ -8283,7 +8298,6 @@ remoteOperator:
 
         assert!(identity_record.contains(".Release.Namespace .Release.Name | sha256sum"));
         assert!(identity_record.contains("deployment.remoteOperatorReleaseIdentity"));
-        assert!(!chart.files["templates/remote-operator.yaml"].contains("deployment.fullname"));
         assert!(checks.contains("$identityCompletion := lookup"));
         assert!(checks.contains("identity volume is missing from a partial installation"));
 
@@ -8314,6 +8328,30 @@ remoteOperator:
             assert!(manifest.contains(&format!("name: {stable_name}")));
             assert!(manifest.contains(&format!("identityRecordName: \"{stable_name}\"")));
             assert!(manifest.contains(&format!("name: {stable_name}-complete")));
+            let documents = parse_manifest_docs(manifest);
+            let deployments = docs_by_kind(&documents, "Deployment");
+            let remote = deployments
+                .iter()
+                .find(|deployment| {
+                    yaml_path(deployment, &["metadata", "name"]).and_then(YamlValue::as_str)
+                        == Some(stable_name)
+                })
+                .expect("stable Remote Operator Deployment");
+            let runtime = deployments
+                .iter()
+                .find(|deployment| {
+                    yaml_path(deployment, &["metadata", "name"]).and_then(YamlValue::as_str)
+                        != Some(stable_name)
+                })
+                .expect("runtime Deployment");
+            for suffix in ["KEY", "VALUE"] {
+                let env_name = format!("ALIEN_RUNTIME_DEPLOYMENT_LABEL_{suffix}");
+                assert_eq!(
+                    operator_env_value(remote, &env_name),
+                    operator_env_value(runtime, &env_name),
+                    "Remote Operator and runtime must share the rendered label scope"
+                );
+            }
         }
     }
 
