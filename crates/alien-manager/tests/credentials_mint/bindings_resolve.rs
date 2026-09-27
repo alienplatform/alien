@@ -399,10 +399,78 @@ async fn a_data_capability_cannot_resolve_a_sandbox_the_current_release_gained()
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
+/// Adds a Running Frozen sandbox `box` publishing `binding` to deployment A's stack state.
+async fn state_keeps_a_sandbox(fixture: &Fixture, binding: serde_json::Value) {
+    let deployment = fixture
+        .state
+        .deployment_store
+        .get_deployment(&Subject::system(), &fixture.deployment_a)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut stack_state = deployment.stack_state.unwrap();
+    stack_state.resources.insert(
+        "box".to_string(),
+        StackResourceState::builder()
+            .resource_type(alien_core::Sandbox::RESOURCE_TYPE.as_ref().to_string())
+            .status(ResourceStatus::Running)
+            .config(Resource::new(
+                alien_core::Sandbox::new("box".to_string())
+                    .code(alien_core::SandboxCode::Image {
+                        image: "ubuntu".to_string(),
+                    })
+                    .egress(alien_core::SandboxEgress::Allow)
+                    .lifecycle(alien_core::SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+            ))
+            .maybe_lifecycle(Some(ResourceLifecycle::Frozen))
+            .maybe_remote_binding_params(Some(binding))
+            .dependencies(Vec::new())
+            .build(),
+    );
+    fixture
+        .state
+        .deployment_store
+        .update_imported_stack_state(
+            &Subject::system(),
+            &fixture.deployment_a,
+            UpdateImportedDeploymentParams {
+                stack_settings: StackSettings::default(),
+                stack_state,
+                environment_info: None,
+                runtime_metadata: RuntimeMetadata::default(),
+                setup_metadata: None,
+                current_release_id: deployment.current_release_id,
+                setup_target: "test".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
+                activation_status: None,
+                schedule_reconciliation: false,
+                input_values: Default::default(),
+            },
+        )
+        .await
+        .expect("stack state with a sandbox should persist");
+}
+
 #[tokio::test]
-async fn a_sandbox_capability_passes_authorization_only_for_its_named_sandbox() {
+async fn a_sandbox_capability_resolves_only_its_named_sandbox() {
     let (fixture, calls) = fixture().await;
     current_release_adds_a_remote_sandbox(&fixture).await;
+    state_keeps_a_sandbox(
+        &fixture,
+        serde_json::json!({
+            "service": "sandbox-aws",
+            "imageArn": "arn:aws:lambda:us-east-1:210987654321:microvm-image:box",
+            "imageVersion": "3",
+            "region": "us-east-1",
+            "allowEgress": true,
+        }),
+    )
+    .await;
     let sandbox = with_subject(
         &fixture,
         remote_bindings_subject(
@@ -412,16 +480,20 @@ async fn a_sandbox_capability_passes_authorization_only_for_its_named_sandbox() 
         ),
     );
 
-    // Authorization passes; the fixture publishes no sandbox parameters, so a
-    // later server-state check refuses it without resolving credentials.
-    let (status, _, json) =
+    let (status, headers, json) =
         post_resolve_binding(&sandbox, "unused", resolve_body(&fixture, "box")).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
-    assert!(
-        json.to_string()
-            .contains("Resource 'box' does not exist in stack state"),
-        "body = {json:#}"
+    assert_eq!(status, StatusCode::OK, "body = {json:#}");
+    assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(json["service"], "sandbox-aws");
+    assert_eq!(
+        json["binding"]["imageArn"],
+        "arn:aws:lambda:us-east-1:210987654321:microvm-image:box"
     );
+    assert_eq!(json["binding"]["imageVersion"], "3");
+    assert_eq!(json["binding"]["allowEgress"], true);
+    assert_eq!(json["clientConfig"]["accountId"], "210987654321");
+    assert!(json["expiresAt"].is_string(), "body = {json:#}");
 
     let other = with_subject(
         &fixture,
@@ -434,6 +506,62 @@ async fn a_sandbox_capability_passes_authorization_only_for_its_named_sandbox() 
     let (status, _, json) =
         post_resolve_binding(&other, "unused", resolve_body(&fixture, "box")).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "body = {json:#}");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+/// A kind-scoped capability gets the same 403 for a resource its kind excludes, a resource the
+/// release lacks, and an AI selector, even while the deployment is not operational.
+#[tokio::test]
+async fn a_kind_scoped_capability_learns_nothing_about_bindings_it_cannot_resolve() {
+    let (fixture, calls) = fixture().await;
+    current_release_adds_a_remote_sandbox(&fixture).await;
+    fixture
+        .state
+        .deployment_store
+        .set_delete_pending(&Subject::system(), &fixture.deployment_a)
+        .await
+        .unwrap();
+
+    let sandbox = with_subject(
+        &fixture,
+        remote_bindings_subject(
+            &fixture,
+            alien_manager::auth::RemoteBindingGrant::Sandbox,
+            None,
+        ),
+    );
+    let data = with_subject(
+        &fixture,
+        remote_bindings_subject(
+            &fixture,
+            alien_manager::auth::RemoteBindingGrant::Data,
+            None,
+        ),
+    );
+    let ai_selector = serde_json::json!({ "deploymentId": fixture.deployment_a, "kind": "ai" });
+    for (caller, body) in [
+        (&data, resolve_body(&fixture, "box")),
+        (&data, resolve_body(&fixture, "missing")),
+        (&sandbox, resolve_body(&fixture, "missing")),
+        (&sandbox, ai_selector),
+    ] {
+        let (status, _, json) = post_resolve_binding(caller, "unused", body.clone()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body} -> {json:#}");
+        assert!(
+            json.to_string()
+                .contains("Cannot resolve this remote binding for this deployment"),
+            "{body} -> {json:#}"
+        );
+    }
+
+    // The sandbox it names is past authorization, so the status refusal is its answer.
+    let (status, _, json) =
+        post_resolve_binding(&sandbox, "unused", resolve_body(&fixture, "box")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
+    assert!(
+        json.to_string().contains("not operational"),
+        "body = {json:#}"
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
