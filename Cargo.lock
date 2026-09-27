@@ -7142,6 +7142,8 @@ dependencies = [
  "rand 0.9.5",
  "serde_json",
  "thiserror 2.0.20",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
