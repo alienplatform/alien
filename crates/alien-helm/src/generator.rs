@@ -3593,6 +3593,7 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
   name: ""
   url: ""
   deploymentId: "dep_replace_me"
+  setupItem: ""
   updates: auto
   telemetry: auto
   healthChecks: "on"
@@ -4284,6 +4285,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         "name": { "type": "string" },
         "url": { "type": "string" },
         "deploymentId": { "type": ["string", "null"] },
+        "setupItem": { "type": "string" },
         "updates": { "type": "string", "enum": ["auto", "approval-required"] },
         "telemetry": { "type": "string", "enum": ["auto", "approval-required", "off"] },
         "healthChecks": { "type": "string", "enum": ["on", "off"] }
@@ -5996,6 +5998,10 @@ spec:
               value: {{ .Values.management.name | quote }}
             - name: OPERATOR_RESOURCE_PREFIX
               value: {{ include "deployment.serviceAccountPrefix" . | quote }}
+            {{- if .Values.management.setupItem }}
+            - name: OPERATOR_SETUP_ITEM
+              value: {{ .Values.management.setupItem | quote }}
+            {{- end }}
             {{- if .Values.management.deploymentId }}
             - name: DEPLOYMENT_ID
               value: {{ .Values.management.deploymentId | quote }}
