@@ -3135,6 +3135,11 @@ fn operator_deployment_doc(
             "/etc/operator/secrets/collector-token",
         );
         if options.format == OperatorOutputFormat::HelmTemplate {
+            append_env_value(
+                &mut yaml,
+                "COLLECTOR_TOKEN_REVISION",
+                "{{ default \"\" .Values.remoteOperator.collectorTokenRevision }}",
+            );
             yaml.push_str("            {{- end }}\n");
         }
     }
@@ -9617,6 +9622,26 @@ logCollector:
                 ["checksum/log-collector-scope"],
             scoped_daemonset["spec"]["template"]["metadata"]["annotations"]
                 ["checksum/log-collector-scope"]
+        );
+        let revised_values = remote_values.replace(
+            "  existingSecret:\n",
+            "  collectorTokenRevision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  existingSecret:\n",
+        );
+        let revised = crate::test_utils::helm_template(&remote_files, Some(&revised_values));
+        revised.assert_ok("rotated Remote Operator node collector credential");
+        let revised_docs = parse_manifest_docs(&revised.stdout);
+        let revised_operator = docs_by_kind(&revised_docs, "Deployment")
+            .into_iter()
+            .find(|deployment| operator_env_value(deployment, "COLLECTOR_TOKEN_FILE").is_some())
+            .expect("revised Remote Operator receiver");
+        assert_eq!(
+            operator_env_value(&revised_operator, "COLLECTOR_TOKEN_REVISION"),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+        let revised_collector = docs_by_kind(&revised_docs, "DaemonSet")[0].clone();
+        assert_eq!(
+            revised_collector["spec"]["template"]["spec"]["containers"][0]["env"][1]["value"],
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
     }
 
