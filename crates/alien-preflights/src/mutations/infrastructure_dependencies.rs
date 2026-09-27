@@ -1,9 +1,10 @@
 //! Infrastructure Dependencies mutation that adds dependencies from user resources to infrastructure resources.
 
+use crate::compile_time::network_required::resource_requires_network;
 use crate::error::Result;
 use crate::StackMutation;
 use alien_core::{
-    DeploymentConfig, Platform, RemoteStackManagement, ResourceRef, Stack, StackState,
+    DeploymentConfig, Network, Platform, RemoteStackManagement, ResourceRef, Stack, StackState,
 };
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -35,7 +36,8 @@ impl StackMutation for InfrastructureDependenciesMutation {
         matches!(
             stack_state.platform,
             Platform::Azure | Platform::Gcp | Platform::Kubernetes
-        ) || remote_stack_management_id(stack).is_some()
+        ) || stack.resources.contains_key("default-network")
+            || remote_stack_management_id(stack).is_some()
             || remote_bindings_id(stack).is_some()
     }
 
@@ -107,6 +109,21 @@ impl InfrastructureDependenciesMutation {
                 alien_core::AzureResourceGroup::RESOURCE_TYPE,
                 "default-resource-group",
             ));
+        }
+
+        // Controllers must not read network outputs before the frozen network has finished.
+        // This also covers an explicitly configured network and optional worker networking.
+        if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+            && stack.resources.contains_key("default-network")
+            && stack.resources.get(resource_id).is_some_and(|entry| {
+                resource_requires_network(entry)
+                    || matches!(
+                        resource_type.as_ref(),
+                        "worker" | "azure-container-apps-environment"
+                    )
+            })
+        {
+            dependencies.push(ResourceRef::new(Network::RESOURCE_TYPE, "default-network"));
         }
 
         if !is_infrastructure_resource {
@@ -402,9 +419,9 @@ mod tests {
     use alien_core::{
         AzureResourceGroup, AzureStorageAccount, EnvironmentVariablesSnapshot, ExternalBindings,
         KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
-        KubernetesHeartbeatMode, RemoteBindings, Resource, ResourceEntry, ResourceLifecycle,
-        ServiceAccount, ServiceActivation, StackSettings, Storage, Worker, WorkerCode,
-        WorkerTrigger,
+        KubernetesHeartbeatMode, NetworkSettings, Postgres, RemoteBindings, Resource,
+        ResourceEntry, ResourceLifecycle, ServiceAccount, ServiceActivation, StackSettings,
+        Storage, Worker, WorkerCode, WorkerTrigger,
     };
     use indexmap::IndexMap;
 
@@ -414,6 +431,38 @@ mod tests {
             hash: String::new(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn postgres_waits_for_discovered_default_network() {
+        let stack = Stack::new("test".to_string())
+            .add(
+                Network::new("default-network".to_string())
+                    .settings(NetworkSettings::UseDefault)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Postgres::new("database".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let stack_state = StackState::new(Platform::Aws);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let mutation = InfrastructureDependenciesMutation;
+        assert!(mutation.should_run(&stack, &stack_state, &config));
+        let stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
+        assert_eq!(
+            stack.resources["database"].dependencies,
+            vec![ResourceRef::new(Network::RESOURCE_TYPE, "default-network")]
+        );
+        assert!(stack.resources["default-network"].dependencies.is_empty());
     }
 
     #[tokio::test]
