@@ -193,10 +193,9 @@ pub struct ProductOperatorManifestOptions<'a> {
 }
 
 pub struct OperatorLogCollectorOptions<'a> {
-    /// Kept for source compatibility with node collector callers; ignored by
-    /// the in-process Pod log reader.
+    /// Image used by the node collector when a product chart selects nodeAgent.
     pub image: &'a str,
-    /// Kept for source compatibility; the API reader uses its ServiceAccount.
+    /// Credential used by the node collector in standalone manifests.
     pub token: &'a str,
     /// Existing Pod label key to collect. Set together with `pod_label_value`.
     pub pod_label_key: Option<&'a str>,
@@ -274,6 +273,26 @@ fn generate_helm_chart_internal(
     files.insert("templates/secret.yaml".to_string(), secret_tpl());
     files.insert("templates/configmap.yaml".to_string(), configmap_tpl());
     files.insert("templates/deployment.yaml".to_string(), deployment_tpl());
+    files.insert(
+        "templates/whitelabeled-log-collector-serviceaccount.yaml".to_string(),
+        whitelabeled_log_collector_serviceaccount_tpl(),
+    );
+    files.insert(
+        "templates/whitelabeled-log-collector-role.yaml".to_string(),
+        whitelabeled_log_collector_role_tpl(),
+    );
+    files.insert(
+        "templates/whitelabeled-log-collector-rolebinding.yaml".to_string(),
+        whitelabeled_log_collector_rolebinding_tpl(),
+    );
+    files.insert(
+        "templates/whitelabeled-log-collector-configmap.yaml".to_string(),
+        whitelabeled_log_collector_configmap_tpl(),
+    );
+    files.insert(
+        "templates/whitelabeled-log-collector-daemonset.yaml".to_string(),
+        whitelabeled_log_collector_daemonset_tpl(),
+    );
     files.insert("templates/pvc.yaml".to_string(), pvc_tpl());
     files.insert("templates/service.yaml".to_string(), service_tpl());
     files.insert(
@@ -1404,6 +1423,8 @@ remoteOperator:
   # are kept. Keep it set while the Operator stays removed; clear it to enable.
   confirmRemoval: ""
   syncTokenRevision: 0
+  # Rollout marker for a rotated setup-owned node collector token.
+  collectorTokenRevision: ""
   serviceAccountAnnotations: {}
   podLabels: {}
 "#
@@ -1419,6 +1440,7 @@ fn remote_operator_values_schema() -> serde_json::Value {
             "existingSecret",
             "bootstrapIdentity",
             "syncTokenRevision",
+            "collectorTokenRevision",
             "serviceAccountAnnotations",
             "podLabels"
         ],
@@ -1447,7 +1469,7 @@ fn remote_operator_values_schema() -> serde_json::Value {
             },
             "syncTokenRevision": { "type": "integer", "minimum": 0 },
             "collectorTokenRevision": {
-                "description": "Deprecated upgrade compatibility field; the Pod API reader needs no collector token.",
+                "description": "Node collector credential rollout marker; ignored in podApi mode.",
                 "type": "string",
                 "maxLength": 64,
                 "pattern": "^$|^[0-9a-f]{64}$"
@@ -1575,6 +1597,14 @@ fn remote_operator_checks_tpl() -> String {
 {{- $actualEncryptionKeySha256 := $encryptionKey | sha256sum -}}
 {{- if ne $actualEncryptionKeySha256 $expectedEncryptionKeySha256 -}}
   {{- fail (printf "Remote Operator credentials Secret %s/%s has encryption-key SHA-256 %s, but setup recorded %s. Refusing identity replacement; restore the original encryption-key." .Release.Namespace $secretName $actualEncryptionKeySha256 $expectedEncryptionKeySha256) -}}
+{{- end -}}
+{{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") -}}
+  {{- if not (hasKey $credentials.data "collector-token") -}}
+    {{- fail "The Remote Operator credentials Secret must contain collector-token for nodeAgent logging." -}}
+  {{- end -}}
+  {{- if empty (index $credentials.data "collector-token" | b64dec) -}}
+    {{- fail "The Remote Operator credentials Secret must contain a non-empty collector-token for nodeAgent logging." -}}
+  {{- end -}}
 {{- end -}}
 {{- end -}}
 {{- if or .Release.IsInstall .Release.IsUpgrade -}}
@@ -1911,6 +1941,10 @@ fn generate_operator_manifest_inner(
             &operator_name,
             options.group_token,
             options.encryption_key,
+            options
+                .log_collector
+                .as_ref()
+                .map(|collector| collector.token),
             &labels,
         ));
     }
@@ -1937,6 +1971,81 @@ fn generate_operator_manifest_inner(
         &log_collector_name,
         integrated_product_chart,
     ));
+    if let Some(log_collector) = options
+        .log_collector
+        .as_ref()
+        .filter(|_| integrated_product_chart)
+    {
+        // Product charts manage workloads under the chart's runtime scope, not
+        // under the separately named Remote Operator Deployment.
+        let default_collector_scope = if identity_initialized_config_map.is_some()
+            && options.format == OperatorOutputFormat::HelmTemplate
+        {
+            (
+                "{{ .Values.logCollector.scope.deploymentLabelKey }}".to_string(),
+                "{{ default (include \"deployment.fullname\" .) .Values.logCollector.scope.deploymentLabelValue | regexQuoteMeta }}".to_string(),
+            )
+        } else {
+            (
+                branded_tag_key(
+                    alien_core::access_request_crd::current_kubernetes_label_domain(
+                        options
+                            .label_domain
+                            .unwrap_or(alien_core::DEFAULT_ALIEN_LABEL_DOMAIN),
+                    ),
+                    ALIEN_STACK_TAG_KEY,
+                ),
+                operator_name.clone(),
+            )
+        };
+        let mut collector_labels = labels.clone();
+        collector_labels.insert(
+            "app.kubernetes.io/component".to_string(),
+            "whitelabeled-log-collector".to_string(),
+        );
+        collector_labels.insert(
+            "alien.dev/log-collector-exclude".to_string(),
+            "true".to_string(),
+        );
+        let mut node_docs = Vec::new();
+        node_docs.push(operator_service_doc(namespace, &operator_name, &labels));
+        node_docs.push(operator_log_collector_service_account_doc(
+            namespace,
+            &log_collector_name,
+            &collector_labels,
+        ));
+        node_docs.push(operator_log_collector_role_doc(
+            namespace,
+            &log_collector_name,
+            &collector_labels,
+        ));
+        node_docs.push(operator_log_collector_role_binding_doc(
+            namespace,
+            &log_collector_name,
+            &collector_labels,
+        ));
+        node_docs.push(operator_log_collector_configmap_doc(
+            namespace,
+            &operator_name,
+            &log_collector_name,
+            namespace,
+            &collector_labels,
+            log_collector,
+            (&default_collector_scope.0, &default_collector_scope.1),
+            options.format == OperatorOutputFormat::HelmTemplate,
+        ));
+        node_docs.push(operator_log_collector_daemonset_doc(
+            namespace,
+            &log_collector_name,
+            credentials_secret_name,
+            log_collector.image,
+            &collector_labels,
+            options.format == OperatorOutputFormat::HelmTemplate,
+        ));
+        for doc in node_docs {
+            docs.push(format!("{{{{- if and .Values.logCollector.enabled (eq (default \"nodeAgent\" .Values.logCollector.mode) \"nodeAgent\") }}}}\n{doc}{{{{- end }}}}\n"));
+        }
+    }
     if options.log_collector.is_some() {
         docs.push(operator_pod_log_role_doc(
             namespace,
@@ -2703,6 +2812,7 @@ fn operator_secret_doc(
     operator_name: &str,
     group_token: &str,
     encryption_key: &str,
+    collector_token: Option<&str>,
     labels: &BTreeMap<String, String>,
 ) -> String {
     let mut yaml = operator_metadata_doc("v1", "Secret", namespace, operator_name, labels);
@@ -2713,6 +2823,12 @@ fn operator_secret_doc(
         "  encryption-key: {}\n",
         yaml_string(encryption_key)
     ));
+    if let Some(collector_token) = collector_token {
+        yaml.push_str(&format!(
+            "  collector-token: {}\n",
+            yaml_string(collector_token)
+        ));
+    }
     yaml
 }
 
@@ -2750,7 +2866,7 @@ fn operator_pod_log_role_doc(
     let name = operator_pod_log_role_name(operator_name, format);
     let mut yaml = String::new();
     if format == OperatorOutputFormat::HelmTemplate {
-        yaml.push_str("{{- if .Values.logCollector.enabled }}\n");
+        yaml.push_str("{{- if and .Values.logCollector.enabled (eq (default \"nodeAgent\" .Values.logCollector.mode) \"podApi\") }}\n");
     }
     yaml.push_str(&operator_metadata_doc(
         "rbac.authorization.k8s.io/v1",
@@ -2777,7 +2893,7 @@ fn operator_pod_log_role_binding_doc(
     let name = operator_pod_log_role_name(operator_name, format);
     let mut yaml = String::new();
     if format == OperatorOutputFormat::HelmTemplate {
-        yaml.push_str("{{- if .Values.logCollector.enabled }}\n");
+        yaml.push_str("{{- if and .Values.logCollector.enabled (eq (default \"nodeAgent\" .Values.logCollector.mode) \"podApi\") }}\n");
     }
     yaml.push_str(&operator_metadata_doc(
         "rbac.authorization.k8s.io/v1",
@@ -2951,7 +3067,7 @@ fn operator_deployment_doc(
     }
     if let Some(log_collector) = options.log_collector.as_ref() {
         if options.format == OperatorOutputFormat::HelmTemplate {
-            yaml.push_str("            {{- if .Values.logCollector.enabled }}\n");
+            yaml.push_str("            {{- if and .Values.logCollector.enabled (eq (default \"nodeAgent\" .Values.logCollector.mode) \"podApi\") }}\n");
             yaml.push_str(
                 "            {{- $podLabelKey := .Values.logCollector.scope.podLabelKey }}\n",
             );
@@ -3007,6 +3123,21 @@ fn operator_deployment_doc(
             );
         }
     }
+    if options.log_collector.is_some() && integrated_product_chart {
+        if options.format == OperatorOutputFormat::HelmTemplate {
+            yaml.push_str("            {{- if and .Values.logCollector.enabled (eq (default \"nodeAgent\" .Values.logCollector.mode) \"nodeAgent\") }}\n");
+        }
+        append_env_value(&mut yaml, "OTLP_HOST", "0.0.0.0");
+        append_env_value(&mut yaml, "OTLP_PORT", "8080");
+        append_env_value(
+            &mut yaml,
+            "COLLECTOR_TOKEN_FILE",
+            "/etc/operator/secrets/collector-token",
+        );
+        if options.format == OperatorOutputFormat::HelmTemplate {
+            yaml.push_str("            {{- end }}\n");
+        }
+    }
     if let Some(stack_settings_json) = stack_settings_json {
         append_env_value(&mut yaml, "STACK_SETTINGS", stack_settings_json);
     }
@@ -3025,12 +3156,22 @@ fn operator_deployment_doc(
         "/etc/operator/secrets/encryption-key",
     );
     append_env_value(&mut yaml, "SYNC_INTERVAL", "30");
-    if supports_readiness {
+    if supports_readiness || options.log_collector.is_some() {
         yaml.push_str("          ports:\n");
     }
     if supports_readiness {
         yaml.push_str("            - name: readiness\n");
         yaml.push_str("              containerPort: 8081\n");
+    }
+    if options.log_collector.is_some() {
+        if options.format == OperatorOutputFormat::HelmTemplate {
+            yaml.push_str("            {{- if and .Values.logCollector.enabled (eq (default \"nodeAgent\" .Values.logCollector.mode) \"nodeAgent\") }}\n");
+        }
+        yaml.push_str("            - name: http\n");
+        yaml.push_str("              containerPort: 8080\n");
+        if options.format == OperatorOutputFormat::HelmTemplate {
+            yaml.push_str("            {{- end }}\n");
+        }
     }
     if supports_readiness {
         yaml.push_str("          readinessProbe:\n");
@@ -3072,6 +3213,265 @@ fn operator_deployment_doc(
     yaml.push_str("        - name: tmp\n");
     yaml.push_str("          emptyDir:\n");
     yaml.push_str("            sizeLimit: 64Mi\n");
+    yaml
+}
+
+fn operator_service_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = operator_metadata_doc("v1", "Service", namespace, operator_name, labels);
+    yaml.push_str("spec:\n");
+    yaml.push_str("  type: ClusterIP\n");
+    yaml.push_str("  selector:\n");
+    append_operator_selector_labels(&mut yaml, labels, 4);
+    // The collector shares the release labels but cannot receive Operator logs.
+    yaml.push_str("    app.kubernetes.io/component: operator\n");
+    yaml.push_str("  ports:\n");
+    yaml.push_str("    - name: http\n");
+    yaml.push_str("      port: 8080\n");
+    yaml.push_str("      targetPort: http\n");
+    yaml
+}
+
+fn operator_log_collector_service_account_doc(
+    namespace: &str,
+    collector_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = operator_metadata_doc("v1", "ServiceAccount", namespace, collector_name, labels);
+    yaml.push_str("automountServiceAccountToken: true\n");
+    yaml
+}
+
+fn operator_log_collector_role_doc(
+    namespace: &str,
+    collector_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = operator_metadata_doc(
+        "rbac.authorization.k8s.io/v1",
+        "Role",
+        namespace,
+        collector_name,
+        labels,
+    );
+    yaml.push_str("rules:\n");
+    yaml.push_str("  - apiGroups: [\"\"]\n");
+    yaml.push_str("    resources: [\"pods\"]\n");
+    yaml.push_str("    verbs: [\"get\", \"list\", \"watch\"]\n");
+    yaml
+}
+
+fn operator_log_collector_role_binding_doc(
+    namespace: &str,
+    collector_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = operator_metadata_doc(
+        "rbac.authorization.k8s.io/v1",
+        "RoleBinding",
+        namespace,
+        collector_name,
+        labels,
+    );
+    yaml.push_str("roleRef:\n");
+    yaml.push_str("  apiGroup: rbac.authorization.k8s.io\n");
+    yaml.push_str("  kind: Role\n");
+    yaml.push_str(&format!("  name: {}\n", yaml_string(collector_name)));
+    yaml.push_str("subjects:\n");
+    yaml.push_str("  - kind: ServiceAccount\n");
+    yaml.push_str(&format!("    name: {}\n", yaml_string(collector_name)));
+    yaml.push_str(&format!("    namespace: {}\n", yaml_string(namespace)));
+    yaml
+}
+
+fn operator_log_collector_configmap_doc(
+    namespace: &str,
+    operator_name: &str,
+    collector_name: &str,
+    observed_namespace: &str,
+    labels: &BTreeMap<String, String>,
+    collector: &OperatorLogCollectorOptions<'_>,
+    default_scope: (&str, &str),
+    helm_template: bool,
+) -> String {
+    let mut yaml = operator_metadata_doc("v1", "ConfigMap", namespace, collector_name, labels);
+    yaml.push_str("data:\n");
+    yaml.push_str("  collector.conf: |\n");
+    yaml.push_str("    [SERVICE]\n");
+    yaml.push_str("        Flush        2\n");
+    yaml.push_str("        Log_Level    info\n");
+    yaml.push_str("        Parsers_File parsers.conf\n");
+    yaml.push_str("        storage.path /buffers\n");
+    yaml.push_str("        storage.sync normal\n");
+    yaml.push_str("        storage.backlog.mem_limit 64M\n\n");
+    yaml.push_str("    [INPUT]\n");
+    yaml.push_str("        Name              tail\n");
+    // The Kubernetes filter's default tag parser reads the symlink filename in
+    // /var/log/containers. Files under /var/log/pods cannot supply its metadata.
+    yaml.push_str(&format!(
+        "        Path              /var/log/containers/*_{}_*.log\n",
+        observed_namespace
+    ));
+    yaml.push_str("        Path_Key          filename\n");
+    // Built-in multiline parsers auto-detect the runtime log format: `cri` for
+    // containerd (EKS/GKE/AKS, k8s >=1.24) and `docker` for the docker-json format
+    // used by Docker-runtime clusters (Docker Desktop, OrbStack, legacy on-prem).
+    yaml.push_str("        multiline.parser  docker, cri\n");
+    yaml.push_str("        Tag               kube.*\n");
+    yaml.push_str(&format!(
+        "        DB                /buffers/{collector_name}.db\n"
+    ));
+    yaml.push_str("        Mem_Buf_Limit     64MB\n");
+    yaml.push_str("        Skip_Long_Lines   On\n");
+    yaml.push_str("        Read_from_Head    On\n");
+    yaml.push_str("        Refresh_Interval  5\n");
+    yaml.push_str("        storage.type      filesystem\n\n");
+    yaml.push_str("    [FILTER]\n");
+    yaml.push_str("        Name                kubernetes\n");
+    yaml.push_str("        Match               kube.*\n");
+    yaml.push_str("        Merge_Log           Off\n");
+    yaml.push_str("        Keep_Log            On\n");
+    yaml.push_str("        Labels              On\n");
+    yaml.push_str("        Annotations         Off\n\n");
+    yaml.push_str("    [FILTER]\n");
+    yaml.push_str("        Name                grep\n");
+    yaml.push_str("        Match               kube.*\n");
+    yaml.push_str(
+        "        Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$\n\n",
+    );
+    let label_key = collector.pod_label_key.unwrap_or(default_scope.0);
+    let label_value = collector.pod_label_value.unwrap_or(default_scope.1);
+    let label_pattern = if helm_template && collector.pod_label_value.is_none() {
+        label_value.to_string()
+    } else {
+        label_value.replace('.', "\\.")
+    };
+    yaml.push_str("    [FILTER]\n");
+    yaml.push_str("        Name                grep\n");
+    yaml.push_str("        Match               kube.*\n");
+    yaml.push_str(&format!(
+        "        Regex               $kubernetes['labels']['{label_key}'] ^{label_pattern}$\n\n"
+    ));
+    yaml.push_str("    [OUTPUT]\n");
+    yaml.push_str("        Name          http\n");
+    // Without a Match the router never routes the tailed kube.* records to this
+    // output ("NO match for http.0 output instance"), so no pod logs are shipped.
+    yaml.push_str("        Match         kube.*\n");
+    yaml.push_str(&format!(
+        "        Host          {operator_name}.{namespace}.svc.cluster.local\n"
+    ));
+    yaml.push_str("        Port          8080\n");
+    yaml.push_str("        URI           /internal/logs\n");
+    yaml.push_str("        Format        json\n");
+    yaml.push_str("        Json_Date_Key observed_at\n");
+    yaml.push_str("        Header        Authorization Bearer ${COLLECTOR_TOKEN}\n\n");
+    yaml.push_str("  parsers.conf: |\n");
+    yaml.push_str("    [PARSER]\n");
+    yaml.push_str("        Name        cri\n");
+    yaml.push_str("        Format      regex\n");
+    yaml.push_str(
+        "        Regex       ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<log>.*)$\n",
+    );
+    yaml.push_str("        Time_Key    time\n");
+    yaml.push_str("        Time_Format %Y-%m-%dT%H:%M:%S.%L%z\n");
+    yaml
+}
+
+fn operator_log_collector_daemonset_doc(
+    namespace: &str,
+    collector_name: &str,
+    credentials_secret_name: &str,
+    image: &str,
+    labels: &BTreeMap<String, String>,
+    include_credential_revision: bool,
+) -> String {
+    let mut yaml = operator_metadata_doc("apps/v1", "DaemonSet", namespace, collector_name, labels);
+    yaml.push_str("spec:\n");
+    yaml.push_str("  selector:\n");
+    yaml.push_str("    matchLabels:\n");
+    append_operator_selector_labels(&mut yaml, labels, 6);
+    yaml.push_str("  template:\n");
+    yaml.push_str("    metadata:\n");
+    yaml.push_str("      labels:\n");
+    append_operator_labels(&mut yaml, labels, 8);
+    yaml.push_str("    spec:\n");
+    yaml.push_str(&format!(
+        "      serviceAccountName: {}\n",
+        yaml_string(collector_name)
+    ));
+    yaml.push_str("      tolerations:\n");
+    yaml.push_str("        - operator: Exists\n");
+    yaml.push_str("      securityContext:\n");
+    yaml.push_str("        seccompProfile:\n");
+    yaml.push_str("          type: RuntimeDefault\n");
+    yaml.push_str("      containers:\n");
+    yaml.push_str("        - name: collector\n");
+    yaml.push_str(&format!("          image: {}\n", yaml_string(image)));
+    if include_credential_revision {
+        yaml.push_str("          imagePullPolicy: {{ .Values.logCollector.image.pullPolicy }}\n");
+    } else {
+        yaml.push_str("          imagePullPolicy: IfNotPresent\n");
+    }
+    yaml.push_str("          securityContext:\n");
+    yaml.push_str("            allowPrivilegeEscalation: false\n");
+    yaml.push_str("            readOnlyRootFilesystem: true\n");
+    yaml.push_str("            capabilities:\n");
+    yaml.push_str("              drop: [ALL]\n");
+    yaml.push_str("          args: [\"-c\", \"/collector/etc/collector.conf\"]\n");
+    yaml.push_str("          env:\n");
+    yaml.push_str("            - name: COLLECTOR_TOKEN\n");
+    yaml.push_str("              valueFrom:\n");
+    yaml.push_str("                secretKeyRef:\n");
+    yaml.push_str(&format!(
+        "                  name: {}\n",
+        yaml_string(credentials_secret_name)
+    ));
+    yaml.push_str("                  key: collector-token\n");
+    if include_credential_revision {
+        yaml.push_str("            - name: COLLECTOR_TOKEN_REVISION\n");
+        yaml.push_str(
+            "              value: {{ default \"\" .Values.remoteOperator.collectorTokenRevision | quote }}\n",
+        );
+    }
+    yaml.push_str("          volumeMounts:\n");
+    yaml.push_str("            - name: config\n");
+    yaml.push_str("              mountPath: /collector/etc\n");
+    yaml.push_str("              readOnly: true\n");
+    yaml.push_str("            - name: varlog\n");
+    yaml.push_str("              mountPath: /var/log\n");
+    yaml.push_str("              readOnly: true\n");
+    // Docker-runtime clusters symlink /var/log/pods/.../*.log to the json log files
+    // under /var/lib/docker/containers, so the symlink targets must be mounted too or
+    // fluent-bit reads nothing. Harmless on containerd nodes (DirectoryOrCreate).
+    yaml.push_str("            - name: dockercontainers\n");
+    yaml.push_str("              mountPath: /var/lib/docker/containers\n");
+    yaml.push_str("              readOnly: true\n");
+    yaml.push_str("            - name: buffers\n");
+    yaml.push_str("              mountPath: /buffers\n");
+    if include_credential_revision {
+        yaml.push_str("          resources:\n");
+        yaml.push_str("            {{- toYaml .Values.logCollector.resources | nindent 12 }}\n");
+    }
+    yaml.push_str("      volumes:\n");
+    yaml.push_str("        - name: config\n");
+    yaml.push_str("          configMap:\n");
+    yaml.push_str(&format!(
+        "            name: {}\n",
+        yaml_string(collector_name)
+    ));
+    yaml.push_str("        - name: varlog\n");
+    yaml.push_str("          hostPath:\n");
+    yaml.push_str("            path: /var/log\n");
+    yaml.push_str("            type: Directory\n");
+    yaml.push_str("        - name: dockercontainers\n");
+    yaml.push_str("          hostPath:\n");
+    yaml.push_str("            path: /var/lib/docker/containers\n");
+    yaml.push_str("            type: DirectoryOrCreate\n");
+    yaml.push_str("        - name: buffers\n");
+    yaml.push_str("          emptyDir: {}\n");
     yaml
 }
 
@@ -3470,9 +3870,22 @@ runtime:
 
 logCollector:
   enabled: false
+  # podApi: the Operator reads selected Pod logs through the namespaced API.
+  # nodeAgent: a Fluent Bit DaemonSet reads selected Pod logs on each node.
+  mode: nodeAgent
   maxStreams: 32
-  # The Operator reads selected Pods through the namespace-scoped pods/log API.
-  # No node mounts or extra Pods are installed.
+  # nodeAgent only. Generated on first install and retained on upgrade.
+  token: ""
+  image:
+    repository: fluent/fluent-bit
+    tag: "3.2@sha256:d6dec000c4929a439562525728c708f6e99800d7ddc82efd6aa4f45f3a20b562"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
   scope:
     deploymentLabelKey: "alien.dev/deployment"
     legacyDeploymentLabelKey: ""
@@ -4230,11 +4643,12 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" },
+        "mode": { "type": "string", "enum": ["nodeAgent", "podApi"] },
         "maxStreams": { "type": "integer", "minimum": 1, "maximum": 256 },
-        "token": { "type": "string", "description": "Deprecated upgrade compatibility field; ignored by the Pod API reader." },
+        "token": { "type": "string", "description": "Node collector credential; ignored in podApi mode." },
         "image": {
           "type": "object",
-          "description": "Deprecated upgrade compatibility field; no collector image is installed.",
+          "description": "Node collector image; ignored in podApi mode.",
           "additionalProperties": false,
           "properties": {
             "repository": { "type": "string", "minLength": 1 },
@@ -4242,7 +4656,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
           }
         },
-        "resources": { "type": "object", "description": "Deprecated upgrade compatibility field; no collector Pod is installed." },
+        "resources": { "type": "object", "description": "Node collector resources; ignored in podApi mode." },
         "scope": {
           "type": "object",
           "additionalProperties": false,
@@ -4815,9 +5229,11 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps", "secrets", "services", "pods", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "podApi") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  {{- end }}
   - apiGroups: [""]
     resources: ["serviceaccounts"]
     verbs: ["get"]
@@ -4958,7 +5374,18 @@ fn secret_tpl() -> String {
 {{- end -}}
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
-{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure .Values.inputValues }}
+{{- $nodeCollector := and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) -}}
+{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure $nodeCollector .Values.inputValues }}
+{{- $collectorToken := .Values.logCollector.token -}}
+{{- if and $nodeCollector (empty $collectorToken) -}}
+  {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
+  {{- if and $existing (hasKey (default dict $existing.data) "collector-token") -}}
+    {{- $collectorToken = index $existing.data "collector-token" | b64dec -}}
+    {{- if empty $collectorToken -}}{{ fail "Existing release Secret has an empty collector-token" }}{{- end -}}
+  {{- else -}}
+    {{- $collectorToken = randAlphaNum 48 -}}
+  {{- end -}}
+{{- end -}}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -4975,6 +5402,9 @@ stringData:
   {{- end }}
   {{- if .Values.infrastructure }}
   external-bindings.json: {{ toJson .Values.infrastructure | quote }}
+  {{- end }}
+  {{- if $nodeCollector }}
+  collector-token: {{ $collectorToken | quote }}
   {{- end }}
   {{- if .Values.inputValues }}
   input-values.json: {{ toJson .Values.inputValues | quote }}
@@ -5805,7 +6235,7 @@ spec:
               value: {{ .Values.runtime.api.port | quote }}
             - name: OTLP_HOST
               value: {{ .Values.runtime.api.bindHost | quote }}
-            {{- if and .Values.logCollector.enabled (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+            {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "podApi") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
             {{- $podLabelKey := .Values.logCollector.scope.podLabelKey }}
             {{- $podLabelValue := .Values.logCollector.scope.podLabelValue }}
             {{- if ne (empty $podLabelKey) (empty $podLabelValue) }}
@@ -5819,6 +6249,10 @@ spec:
               value: {{ include "deployment.logCollectorName" . | quote }}
             - name: OPERATOR_POD_LOG_MAX_STREAMS
               value: {{ default 32 .Values.logCollector.maxStreams | quote }}
+            {{- end }}
+            {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+            - name: COLLECTOR_TOKEN_FILE
+              value: /etc/deployment/secrets/collector-token
             {{- end }}
           ports:
             - name: otlp
@@ -5866,6 +6300,12 @@ spec:
               subPath: external-bindings.json
               readOnly: true
             {{- end }}
+            {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+            - name: collector-token
+              mountPath: /etc/deployment/secrets/collector-token
+              subPath: collector-token
+              readOnly: true
+            {{- end }}
             {{- if .Values.runtime.tmp.enabled }}
             - name: tmp
               mountPath: /tmp
@@ -5907,6 +6347,15 @@ spec:
                 path: external-bindings.json
             defaultMode: 384
         {{- end }}
+        {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+        - name: collector-token
+          secret:
+            secretName: {{ include "deployment.fullname" . }}
+            items:
+              - key: collector-token
+                path: collector-token
+            defaultMode: 384
+        {{- end }}
         {{- if .Values.runtime.tmp.enabled }}
         - name: tmp
           emptyDir:
@@ -5924,7 +6373,7 @@ spec:
 }
 
 fn service_tpl() -> String {
-    r#"{{- if .Values.runtime.api.enabled }}
+    r#"{{- if or .Values.runtime.api.enabled (and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator)))) }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -5940,6 +6389,226 @@ spec:
     - name: http
       port: {{ .Values.runtime.api.port }}
       targetPort: otlp
+{{- end }}
+"#
+    .to_string()
+}
+
+fn whitelabeled_log_collector_serviceaccount_tpl() -> String {
+    r#"{{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "deployment.logCollectorName" . }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: log-collector
+automountServiceAccountToken: true
+{{- end }}
+"#
+    .to_string()
+}
+
+fn whitelabeled_log_collector_role_tpl() -> String {
+    r#"{{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "deployment.logCollectorName" . }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: log-collector
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+{{- end }}
+"#
+    .to_string()
+}
+
+fn whitelabeled_log_collector_rolebinding_tpl() -> String {
+    r#"{{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "deployment.logCollectorName" . }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: log-collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "deployment.logCollectorName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.logCollectorName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+"#
+    .to_string()
+}
+
+fn whitelabeled_log_collector_configmap_tpl() -> String {
+    r#"{{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+{{- $podLabelKey := .Values.logCollector.scope.podLabelKey -}}
+{{- $podLabelValue := .Values.logCollector.scope.podLabelValue -}}
+{{- if ne (empty $podLabelKey) (empty $podLabelValue) -}}
+  {{- fail "logCollector.scope.podLabelKey and podLabelValue must be set together" -}}
+{{- end -}}
+{{- $logLabelKey := default .Values.logCollector.scope.deploymentLabelKey $podLabelKey -}}
+{{- $logLabelValue := default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "deployment.logCollectorName" . }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: log-collector
+data:
+  collector.conf: |
+    [SERVICE]
+        Flush        2
+        Log_Level    info
+        Parsers_File parsers.conf
+        storage.path /buffers
+        storage.sync normal
+        storage.backlog.mem_limit 64M
+
+    [INPUT]
+        Name              tail
+        # The Kubernetes filter parses the /var/log/containers symlink filename.
+        Path              /var/log/containers/*_{{ .Release.Namespace }}_*.log
+        Path_Key          filename
+        multiline.parser  docker, cri
+        Tag               kube.*
+        DB                /buffers/{{ include "deployment.logCollectorName" . }}.db
+        Mem_Buf_Limit     64MB
+        Skip_Long_Lines   On
+        Read_from_Head    On
+        Refresh_Interval  5
+        storage.type      filesystem
+
+    [FILTER]
+        Name                kubernetes
+        Match               kube.*
+        Merge_Log           Off
+        Keep_Log            On
+        Labels              On
+        Annotations         Off
+
+    [FILTER]
+        Name                grep
+        Match               kube.*
+        Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$
+
+    [FILTER]
+        Name                grep
+        Match               kube.*
+        Regex               $kubernetes['labels']['{{ $logLabelKey }}'] ^{{ $logLabelValue | regexQuoteMeta }}$
+
+    [OUTPUT]
+        Name          http
+        Match         kube.*
+        Host          {{ include "deployment.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+        Port          {{ .Values.runtime.api.port }}
+        URI           /internal/logs
+        Format        json
+        Json_Date_Key observed_at
+        Header        Authorization Bearer ${COLLECTOR_TOKEN}
+
+  parsers.conf: |
+    [PARSER]
+        Name        cri
+        Format      regex
+        Regex       ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<log>.*)$
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+{{- end }}
+"#
+    .to_string()
+}
+
+fn whitelabeled_log_collector_daemonset_tpl() -> String {
+    r#"{{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "deployment.logCollectorName" . }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: log-collector
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "deployment.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: log-collector
+  template:
+    metadata:
+      labels:
+        {{- include "deployment.labels" . | nindent 8 }}
+        app.kubernetes.io/component: log-collector
+        alien.dev/log-collector-exclude: "true"
+      annotations:
+        checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
+        checksum/collector-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
+    spec:
+      serviceAccountName: {{ include "deployment.logCollectorName" . }}
+      tolerations:
+        - operator: Exists
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: collector
+          image: "{{ .Values.logCollector.image.repository }}:{{ .Values.logCollector.image.tag }}"
+          imagePullPolicy: {{ .Values.logCollector.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          args:
+            - -c
+            - /collector/etc/collector.conf
+          env:
+            - name: COLLECTOR_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "deployment.fullname" . }}
+                  key: collector-token
+          volumeMounts:
+            - name: config
+              mountPath: /collector/etc
+              readOnly: true
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: dockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+            - name: buffers
+              mountPath: /buffers
+          resources:
+            {{- toYaml .Values.logCollector.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "deployment.logCollectorName" . }}
+        - name: varlog
+          hostPath:
+            path: /var/log
+            type: Directory
+        # Docker-runtime clusters symlink pod logs to /var/lib/docker/containers;
+        # mount it so fluent-bit can follow them. DirectoryOrCreate is harmless on
+        # containerd nodes where the path doesn't exist.
+        - name: dockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+            type: DirectoryOrCreate
+        - name: buffers
+          emptyDir: {}
 {{- end }}
 "#
     .to_string()
@@ -6467,7 +7136,48 @@ stackSettings:
 
 fn readme_md(chart_name: &str) -> String {
     format!(
-        "# {chart_name}\n\nFrom this chart directory, set the required values and install into the chosen namespace (`default` shown here):\n\n```bash\nhelm install {chart_name} . --namespace default --values values.yaml\n```\n\nFor a managed package, use its generated install command and values. See `examples/<target>.yaml` for EKS, GKE, AKS, and on-premises values. `inputValues` register the deployment and cannot change through Helm upgrades; edit deployment inputs in the deployment dashboard and retain the original Helm values. Preview upgrades with `helm upgrade --dry-run=server` so the chart can compare those values with the installed Secret; client-side `helm template --is-upgrade` cannot verify installed inputs.\n\nTo collect selected workload Pod logs, set `logCollector.enabled: true` in values.yaml. The Operator reads `pods/log` in the release namespace for Pods matching `logCollector.scope`; no node mounts or extra collector Pods are installed. Kubernetes exposes only retained Pod logs through this API, so logs can be lost after node rotation or a long control-plane outage. The Operator defaults to 32 concurrent streams (`logCollector.maxStreams` may be set up to 256) and bounds queued log data to 64 MiB. With the Remote Operator disabled (the default), the runtime Operator stores its log resume cursor in an `emptyDir`, so replacing that Pod can replay retained lines. Set `runtime.data.persistence.enabled: true` with a suitable StorageClass or existing claim to keep the cursor across rollouts; this adds a PVC. With the Remote Operator enabled, its cursor already uses the identity PVC and `runtime.data.persistence` applies only to the separate runtime Deployment. Upgrading from the earlier node collector favors no gaps; overlapping retained lines can be replayed if the previous collector already forwarded them.\n"
+        r#"# {chart_name}
+
+Set the required values and install in the chosen namespace (`default` shown here):
+
+```bash
+helm install {chart_name} . --namespace default --values values.yaml
+```
+
+For a managed package, use its generated install command and values. See
+`examples/<target>.yaml` for EKS, GKE, AKS, and on-premises values. `inputValues`
+register the deployment and cannot change through Helm upgrades; edit them in
+the deployment dashboard and retain the original Helm values. Preview upgrades
+with `helm upgrade --dry-run=server` so the chart can compare values with the
+installed Secret. Client-side `helm template --is-upgrade` cannot do that.
+
+## Logs
+
+Log collection is off by default. Enable it and choose one mode:
+
+```yaml
+logCollector:
+  enabled: true
+  mode: podApi
+```
+
+`podApi` reads selected Pod logs through the Operator's namespace-scoped
+`pods/log` permission. It adds no collector Pod or node mount. This fits small
+deployments and clusters that restrict node access. The Operator supports 32
+concurrent streams by default (`logCollector.maxStreams`, up to 256) and a
+bounded 64 MiB queue. Kubernetes exposes only retained Pod logs, so rotation
+or a prolonged API outage can lose lines. The default runtime Operator keeps
+its resume cursor on `emptyDir`; replacing that Pod can replay retained lines.
+Set `runtime.data.persistence.enabled: true` to keep the cursor on a PVC if the
+cluster has suitable storage. A Remote Operator already keeps its cursor on
+its identity PVC; runtime persistence affects only the separate runtime Pod.
+
+`nodeAgent` runs a Fluent Bit DaemonSet and reads the selected Pod log files on
+each node. Choose it for larger workloads in clusters that permit read-only
+host log mounts. It uses `logCollector.image` and `logCollector.resources`.
+The chart installs only the selected mode. Scope both modes with
+`logCollector.scope`; switching modes can replay previously forwarded lines.
+"#
     )
 }
 
@@ -7346,7 +8056,7 @@ mod tests {
                     encryption_key: "",
                     image: "registry.example.com/operator@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                     log_collector: include_collector.then_some(OperatorLogCollectorOptions {
-                        image: "fluent/fluent-bit:3.2",
+                        image: "{{ printf \"%s:%s\" .Values.logCollector.image.repository .Values.logCollector.image.tag }}",
                         token: "",
                         pod_label_key: None,
                         pod_label_value: None,
@@ -8197,6 +8907,7 @@ management:
   url: https://manager.example.com
 logCollector:
   enabled: true
+  mode: podApi
 remoteOperator:
   enabled: true
   existingSecret:
@@ -8513,6 +9224,7 @@ management:
   url: https://manager.example.com
 logCollector:
   enabled: true
+  mode: podApi
 remoteOperator:
   enabled: true
   existingSecret:
@@ -8670,7 +9382,8 @@ remoteOperator:
             );
         }
         assert!(checks.contains("non-empty sync-token and encryption-key values"));
-        assert!(!checks.contains("collector-token"));
+        assert!(checks.contains("collector-token for nodeAgent logging"));
+        assert!(checks.contains(".Values.logCollector.enabled"));
     }
 
     #[test]
@@ -8763,6 +9476,7 @@ remoteOperator:
         let values = r#"
 logCollector:
   enabled: true
+  mode: podApi
   scope:
     deploymentLabelValue: e2e123
 "#;
@@ -8820,6 +9534,55 @@ logCollector:
         assert_eq!(
             operator_env_value(&changed_runtime, "OPERATOR_POD_LOG_LABEL_VALUE"),
             Some("e2e456")
+        );
+    }
+
+    #[test]
+    fn node_collector_renders_without_pod_log_reader() {
+        let chart = sample_product_chart_with_collector(true);
+        let values = r#"
+management:
+  url: https://manager.example.com
+logCollector:
+  enabled: true
+  mode: nodeAgent
+"#;
+        let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
+        rendered.assert_ok("node collector chart render");
+        let docs = parse_manifest_docs(&rendered.stdout);
+        let daemonsets = docs_by_kind(&docs, "DaemonSet");
+        assert_eq!(daemonsets.len(), 1);
+        assert_eq!(
+            daemonsets[0]["spec"]["template"]["spec"]["containers"][0]["image"],
+            "fluent/fluent-bit:3.2@sha256:d6dec000c4929a439562525728c708f6e99800d7ddc82efd6aa4f45f3a20b562"
+        );
+        assert!(docs_by_kind(&docs, "Role").iter().all(|role| !role["rules"]
+            .as_sequence()
+            .is_some_and(|rules| rules
+                .iter()
+                .any(|rule| rule["resources"] == serde_yaml::to_value(["pods/log"]).unwrap()))));
+        let remote = docs_by_kind(&docs, "Deployment")
+            .into_iter()
+            .find(|deployment| operator_env_value(deployment, "COLLECTOR_TOKEN_FILE").is_some())
+            .expect("node collector receiver");
+        assert_eq!(
+            operator_env_value(&remote, "OPERATOR_POD_LOG_LABEL_KEY"),
+            None
+        );
+
+        let mut remote_files = chart.files.clone();
+        remote_files.shift_remove("templates/remote-operator-checks.yaml");
+        let remote_values = format!(
+            "{values}\nremoteOperator:\n  enabled: true\n  existingSecret:\n    name: setup-owned\n    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+        );
+        let remote_rendered = crate::test_utils::helm_template(&remote_files, Some(&remote_values));
+        remote_rendered.assert_ok("remote node collector chart render");
+        let remote_docs = parse_manifest_docs(&remote_rendered.stdout);
+        assert_eq!(docs_by_kind(&remote_docs, "DaemonSet").len(), 1);
+        let remote_daemonset = docs_by_kind(&remote_docs, "DaemonSet")[0].clone();
+        assert_eq!(
+            remote_daemonset["spec"]["template"]["spec"]["containers"][0]["image"],
+            "fluent/fluent-bit:3.2@sha256:d6dec000c4929a439562525728c708f6e99800d7ddc82efd6aa4f45f3a20b562"
         );
     }
 

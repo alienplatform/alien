@@ -124,9 +124,22 @@ runtime:
 
 logCollector:
   enabled: false
+  # podApi: the Operator reads selected Pod logs through the namespaced API.
+  # nodeAgent: a Fluent Bit DaemonSet reads selected Pod logs on each node.
+  mode: nodeAgent
   maxStreams: 32
-  # The Operator reads selected Pods through the namespace-scoped pods/log API.
-  # No node mounts or extra Pods are installed.
+  # nodeAgent only. Generated on first install and retained on upgrade.
+  token: ""
+  image:
+    repository: fluent/fluent-bit
+    tag: "3.2@sha256:d6dec000c4929a439562525728c708f6e99800d7ddc82efd6aa4f45f3a20b562"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
   scope:
     deploymentLabelKey: "alien.dev/deployment"
     legacyDeploymentLabelKey: ""
@@ -440,11 +453,12 @@ ephemeralStorage:
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" },
+        "mode": { "type": "string", "enum": ["nodeAgent", "podApi"] },
         "maxStreams": { "type": "integer", "minimum": 1, "maximum": 256 },
-        "token": { "type": "string", "description": "Deprecated upgrade compatibility field; ignored by the Pod API reader." },
+        "token": { "type": "string", "description": "Node collector credential; ignored in podApi mode." },
         "image": {
           "type": "object",
-          "description": "Deprecated upgrade compatibility field; no collector image is installed.",
+          "description": "Node collector image; ignored in podApi mode.",
           "additionalProperties": false,
           "properties": {
             "repository": { "type": "string", "minLength": 1 },
@@ -452,7 +466,7 @@ ephemeralStorage:
             "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
           }
         },
-        "resources": { "type": "object", "description": "Deprecated upgrade compatibility field; no collector Pod is installed." },
+        "resources": { "type": "object", "description": "Node collector resources; ignored in podApi mode." },
         "scope": {
           "type": "object",
           "additionalProperties": false,
@@ -888,9 +902,11 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps", "secrets", "services", "pods", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "podApi") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  {{- end }}
   - apiGroups: [""]
     resources: ["serviceaccounts"]
     verbs: ["get"]
@@ -1019,7 +1035,18 @@ roleRef:
 {{- end -}}
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
-{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure .Values.inputValues }}
+{{- $nodeCollector := and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) -}}
+{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure $nodeCollector .Values.inputValues }}
+{{- $collectorToken := .Values.logCollector.token -}}
+{{- if and $nodeCollector (empty $collectorToken) -}}
+  {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
+  {{- if and $existing (hasKey (default dict $existing.data) "collector-token") -}}
+    {{- $collectorToken = index $existing.data "collector-token" | b64dec -}}
+    {{- if empty $collectorToken -}}{{ fail "Existing release Secret has an empty collector-token" }}{{- end -}}
+  {{- else -}}
+    {{- $collectorToken = randAlphaNum 48 -}}
+  {{- end -}}
+{{- end -}}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -1036,6 +1063,9 @@ stringData:
   {{- end }}
   {{- if .Values.infrastructure }}
   external-bindings.json: {{ toJson .Values.infrastructure | quote }}
+  {{- end }}
+  {{- if $nodeCollector }}
+  collector-token: {{ $collectorToken | quote }}
   {{- end }}
   {{- if .Values.inputValues }}
   input-values.json: {{ toJson .Values.inputValues | quote }}
@@ -1213,7 +1243,7 @@ spec:
               value: {{ .Values.runtime.api.port | quote }}
             - name: OTLP_HOST
               value: {{ .Values.runtime.api.bindHost | quote }}
-            {{- if and .Values.logCollector.enabled (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+            {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "podApi") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
             {{- $podLabelKey := .Values.logCollector.scope.podLabelKey }}
             {{- $podLabelValue := .Values.logCollector.scope.podLabelValue }}
             {{- if ne (empty $podLabelKey) (empty $podLabelValue) }}
@@ -1227,6 +1257,10 @@ spec:
               value: {{ include "deployment.logCollectorName" . | quote }}
             - name: OPERATOR_POD_LOG_MAX_STREAMS
               value: {{ default 32 .Values.logCollector.maxStreams | quote }}
+            {{- end }}
+            {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+            - name: COLLECTOR_TOKEN_FILE
+              value: /etc/deployment/secrets/collector-token
             {{- end }}
           ports:
             - name: otlp
@@ -1274,6 +1308,12 @@ spec:
               subPath: external-bindings.json
               readOnly: true
             {{- end }}
+            {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+            - name: collector-token
+              mountPath: /etc/deployment/secrets/collector-token
+              subPath: collector-token
+              readOnly: true
+            {{- end }}
             {{- if .Values.runtime.tmp.enabled }}
             - name: tmp
               mountPath: /tmp
@@ -1315,6 +1355,15 @@ spec:
                 path: external-bindings.json
             defaultMode: 384
         {{- end }}
+        {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+        - name: collector-token
+          secret:
+            secretName: {{ include "deployment.fullname" . }}
+            items:
+              - key: collector-token
+                path: collector-token
+            defaultMode: 384
+        {{- end }}
         {{- if .Values.runtime.tmp.enabled }}
         - name: tmp
           emptyDir:
@@ -1327,6 +1376,211 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+
+=== templates/whitelabeled-log-collector-serviceaccount.yaml ===
+{{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "deployment.logCollectorName" . }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: log-collector
+automountServiceAccountToken: true
+{{- end }}
+
+=== templates/whitelabeled-log-collector-role.yaml ===
+{{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "deployment.logCollectorName" . }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: log-collector
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+{{- end }}
+
+=== templates/whitelabeled-log-collector-rolebinding.yaml ===
+{{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "deployment.logCollectorName" . }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: log-collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "deployment.logCollectorName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.logCollectorName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+
+=== templates/whitelabeled-log-collector-configmap.yaml ===
+{{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+{{- $podLabelKey := .Values.logCollector.scope.podLabelKey -}}
+{{- $podLabelValue := .Values.logCollector.scope.podLabelValue -}}
+{{- if ne (empty $podLabelKey) (empty $podLabelValue) -}}
+  {{- fail "logCollector.scope.podLabelKey and podLabelValue must be set together" -}}
+{{- end -}}
+{{- $logLabelKey := default .Values.logCollector.scope.deploymentLabelKey $podLabelKey -}}
+{{- $logLabelValue := default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "deployment.logCollectorName" . }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: log-collector
+data:
+  collector.conf: |
+    [SERVICE]
+        Flush        2
+        Log_Level    info
+        Parsers_File parsers.conf
+        storage.path /buffers
+        storage.sync normal
+        storage.backlog.mem_limit 64M
+
+    [INPUT]
+        Name              tail
+        # The Kubernetes filter parses the /var/log/containers symlink filename.
+        Path              /var/log/containers/*_{{ .Release.Namespace }}_*.log
+        Path_Key          filename
+        multiline.parser  docker, cri
+        Tag               kube.*
+        DB                /buffers/{{ include "deployment.logCollectorName" . }}.db
+        Mem_Buf_Limit     64MB
+        Skip_Long_Lines   On
+        Read_from_Head    On
+        Refresh_Interval  5
+        storage.type      filesystem
+
+    [FILTER]
+        Name                kubernetes
+        Match               kube.*
+        Merge_Log           Off
+        Keep_Log            On
+        Labels              On
+        Annotations         Off
+
+    [FILTER]
+        Name                grep
+        Match               kube.*
+        Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$
+
+    [FILTER]
+        Name                grep
+        Match               kube.*
+        Regex               $kubernetes['labels']['{{ $logLabelKey }}'] ^{{ $logLabelValue | regexQuoteMeta }}$
+
+    [OUTPUT]
+        Name          http
+        Match         kube.*
+        Host          {{ include "deployment.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+        Port          {{ .Values.runtime.api.port }}
+        URI           /internal/logs
+        Format        json
+        Json_Date_Key observed_at
+        Header        Authorization Bearer ${COLLECTOR_TOKEN}
+
+  parsers.conf: |
+    [PARSER]
+        Name        cri
+        Format      regex
+        Regex       ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<log>.*)$
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+{{- end }}
+
+=== templates/whitelabeled-log-collector-daemonset.yaml ===
+{{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "deployment.logCollectorName" . }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: log-collector
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "deployment.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: log-collector
+  template:
+    metadata:
+      labels:
+        {{- include "deployment.labels" . | nindent 8 }}
+        app.kubernetes.io/component: log-collector
+        alien.dev/log-collector-exclude: "true"
+      annotations:
+        checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
+        checksum/collector-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
+    spec:
+      serviceAccountName: {{ include "deployment.logCollectorName" . }}
+      tolerations:
+        - operator: Exists
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: collector
+          image: "{{ .Values.logCollector.image.repository }}:{{ .Values.logCollector.image.tag }}"
+          imagePullPolicy: {{ .Values.logCollector.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          args:
+            - -c
+            - /collector/etc/collector.conf
+          env:
+            - name: COLLECTOR_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "deployment.fullname" . }}
+                  key: collector-token
+          volumeMounts:
+            - name: config
+              mountPath: /collector/etc
+              readOnly: true
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: dockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+            - name: buffers
+              mountPath: /buffers
+          resources:
+            {{- toYaml .Values.logCollector.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "deployment.logCollectorName" . }}
+        - name: varlog
+          hostPath:
+            path: /var/log
+            type: Directory
+        # Docker-runtime clusters symlink pod logs to /var/lib/docker/containers;
+        # mount it so fluent-bit can follow them. DirectoryOrCreate is harmless on
+        # containerd nodes where the path doesn't exist.
+        - name: dockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+            type: DirectoryOrCreate
+        - name: buffers
+          emptyDir: {}
+{{- end }}
 
 === templates/pvc.yaml ===
 {{- if and .Values.runtime.data.persistence.enabled (not .Values.runtime.data.persistence.existingClaim) }}
@@ -1348,7 +1602,7 @@ spec:
 {{- end }}
 
 === templates/service.yaml ===
-{{- if .Values.runtime.api.enabled }}
+{{- if or .Values.runtime.api.enabled (and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator)))) }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -2496,15 +2750,45 @@ services:
 === README.md ===
 # pure-fn
 
-From this chart directory, set the required values and install into the chosen namespace (`default` shown here):
+Set the required values and install in the chosen namespace (`default` shown here):
 
 ```bash
 helm install pure-fn . --namespace default --values values.yaml
 ```
 
-For a managed package, use its generated install command and values. See `examples/<target>.yaml` for EKS, GKE, AKS, and on-premises values. `inputValues` register the deployment and cannot change through Helm upgrades; edit deployment inputs in the deployment dashboard and retain the original Helm values. Preview upgrades with `helm upgrade --dry-run=server` so the chart can compare those values with the installed Secret; client-side `helm template --is-upgrade` cannot verify installed inputs.
+For a managed package, use its generated install command and values. See
+`examples/<target>.yaml` for EKS, GKE, AKS, and on-premises values. `inputValues`
+register the deployment and cannot change through Helm upgrades; edit them in
+the deployment dashboard and retain the original Helm values. Preview upgrades
+with `helm upgrade --dry-run=server` so the chart can compare values with the
+installed Secret. Client-side `helm template --is-upgrade` cannot do that.
 
-To collect selected workload Pod logs, set `logCollector.enabled: true` in values.yaml. The Operator reads `pods/log` in the release namespace for Pods matching `logCollector.scope`; no node mounts or extra collector Pods are installed. Kubernetes exposes only retained Pod logs through this API, so logs can be lost after node rotation or a long control-plane outage. The Operator defaults to 32 concurrent streams (`logCollector.maxStreams` may be set up to 256) and bounds queued log data to 64 MiB. With the Remote Operator disabled (the default), the runtime Operator stores its log resume cursor in an `emptyDir`, so replacing that Pod can replay retained lines. Set `runtime.data.persistence.enabled: true` with a suitable StorageClass or existing claim to keep the cursor across rollouts; this adds a PVC. With the Remote Operator enabled, its cursor already uses the identity PVC and `runtime.data.persistence` applies only to the separate runtime Deployment. Upgrading from the earlier node collector favors no gaps; overlapping retained lines can be replayed if the previous collector already forwarded them.
+## Logs
+
+Log collection is off by default. Enable it and choose one mode:
+
+```yaml
+logCollector:
+  enabled: true
+  mode: podApi
+```
+
+`podApi` reads selected Pod logs through the Operator's namespace-scoped
+`pods/log` permission. It adds no collector Pod or node mount. This fits small
+deployments and clusters that restrict node access. The Operator supports 32
+concurrent streams by default (`logCollector.maxStreams`, up to 256) and a
+bounded 64 MiB queue. Kubernetes exposes only retained Pod logs, so rotation
+or a prolonged API outage can lose lines. The default runtime Operator keeps
+its resume cursor on `emptyDir`; replacing that Pod can replay retained lines.
+Set `runtime.data.persistence.enabled: true` to keep the cursor on a PVC if the
+cluster has suitable storage. A Remote Operator already keeps its cursor on
+its identity PVC; runtime persistence affects only the separate runtime Pod.
+
+`nodeAgent` runs a Fluent Bit DaemonSet and reads the selected Pod log files on
+each node. Choose it for larger workloads in clusters that permit read-only
+host log mounts. It uses `logCollector.image` and `logCollector.resources`.
+The chart installs only the selected mode. Scope both modes with
+`logCollector.scope`; switching modes can replay previously forwarded lines.
 
 === files/stack.json ===
 {

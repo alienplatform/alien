@@ -681,7 +681,7 @@ fn operator_template_can_reference_setup_owned_credentials() {
             ),
             (
                 "values.yaml".to_string(),
-                "remoteOperator:\n  existingSecret:\n    name: setup-owned\nlogCollector:\n  enabled: true\n  scope:\n    deploymentLabelKey: alien.dev/deployment\n    deploymentLabelValue: my-saas-operator\n".to_string(),
+                "remoteOperator:\n  existingSecret:\n    name: setup-owned\nlogCollector:\n  enabled: true\n  mode: podApi\n  scope:\n    deploymentLabelKey: alien.dev/deployment\n    deploymentLabelValue: my-saas-operator\n".to_string(),
             ),
             ("templates/byoc-operator.yaml".to_string(), template),
         ]),

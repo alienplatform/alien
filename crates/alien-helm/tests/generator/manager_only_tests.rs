@@ -46,11 +46,13 @@ fn pod_log_reader_requires_a_scope_and_can_select_an_existing_pod_label() {
         &Stack::new("logs".to_string()).build(),
         StackSettings::default(),
     );
-    let default_values = chart.files["values.yaml"].replacen(
-        "logCollector:\n  enabled: false",
-        "logCollector:\n  enabled: true",
-        1,
-    );
+    let default_values = chart.files["values.yaml"]
+        .replacen(
+            "logCollector:\n  enabled: false",
+            "logCollector:\n  enabled: true",
+            1,
+        )
+        .replacen("  mode: nodeAgent", "  mode: podApi", 1);
     let default_render = test_utils::helm_template(&chart.files, Some(&default_values));
     default_render.assert_ok("Pod logs with managed deployment scope");
     assert!(default_render.stdout.contains(
@@ -319,7 +321,7 @@ fn manager_chart_uses_explicit_secrets_and_restricted_defaults() {
     assert!(secret.contains("sync-token: {{ .Values.management.token | quote }}"));
     assert!(secret
         .contains("runtime.encryption.key or runtime.encryption.existingSecret.name is required"));
-    assert!(!secret.contains("$collectorToken"));
+    assert!(secret.contains("$collectorToken"));
     assert!(secret.contains(".Values.management.existingSecret.name"));
     assert!(secret.contains(".Values.runtime.encryption.existingSecret.name"));
 
