@@ -106,11 +106,11 @@ fn deployment_rollout_complete(
         && status
             .observed_generation
             .is_some_and(|observed| observed >= generation)
-        && status.updated_replicas == Some(desired_replicas)
-        && status.replicas == Some(desired_replicas)
-        && status
-            .available_replicas
-            .is_some_and(|available| available >= desired_replicas)
+        // Kubernetes omits replica counters when a Deployment is scaled to
+        // zero. An observed generation is enough to complete that rollout.
+        && status.updated_replicas.unwrap_or(0) == desired_replicas
+        && status.replicas.unwrap_or(0) == desired_replicas
+        && status.available_replicas.unwrap_or(0) >= desired_replicas
 }
 
 fn statefulset_rollout_complete(
@@ -127,11 +127,9 @@ fn statefulset_rollout_complete(
         && status
             .observed_generation
             .is_some_and(|observed| observed >= generation)
-        && status.updated_replicas == Some(desired_replicas)
+        && status.updated_replicas.unwrap_or(0) == desired_replicas
         && status.replicas == desired_replicas
-        && status
-            .ready_replicas
-            .is_some_and(|ready| ready >= desired_replicas)
+        && status.ready_replicas.unwrap_or(0) >= desired_replicas
         && status.current_revision.is_some()
         && status.current_revision == status.update_revision
 }
@@ -2548,6 +2546,26 @@ mod tests {
 
         deployment.metadata.generation = Some(1);
         deployment.status.as_mut().unwrap().observed_generation = Some(1);
+        assert!(!deployment_rollout_complete(&deployment, 1, Some(2)));
+    }
+
+    #[test]
+    fn zero_replica_deployment_update_waits_only_for_observed_generation() {
+        let mut deployment = Deployment {
+            metadata: ObjectMeta {
+                generation: Some(2),
+                ..Default::default()
+            },
+            status: Some(DeploymentStatus {
+                observed_generation: Some(1),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert!(!deployment_rollout_complete(&deployment, 0, Some(2)));
+        deployment.status.as_mut().unwrap().observed_generation = Some(2);
+        assert!(deployment_rollout_complete(&deployment, 0, Some(2)));
         assert!(!deployment_rollout_complete(&deployment, 1, Some(2)));
     }
 
