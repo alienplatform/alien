@@ -3434,6 +3434,8 @@ runtime:
   data:
     mountPath: /var/lib/deployment-operator
     persistence:
+      # An emptyDir keeps setup lightweight but loses log resume cursors when
+      # the Operator Pod is replaced, so retained Pod lines may be replayed.
       enabled: false
       existingClaim: ""
       storageClassName: ""
@@ -6465,7 +6467,7 @@ stackSettings:
 
 fn readme_md(chart_name: &str) -> String {
     format!(
-        "# {chart_name}\n\nFrom this chart directory, set the required values and install into the chosen namespace (`default` shown here):\n\n```bash\nhelm install {chart_name} . --namespace default --values values.yaml\n```\n\nFor a managed package, use its generated install command and values. See `examples/<target>.yaml` for EKS, GKE, AKS, and on-premises values. `inputValues` register the deployment and cannot change through Helm upgrades; edit deployment inputs in the deployment dashboard and retain the original Helm values. Preview upgrades with `helm upgrade --dry-run=server` so the chart can compare those values with the installed Secret; client-side `helm template --is-upgrade` cannot verify installed inputs.\n\nTo collect selected workload Pod logs, set `logCollector.enabled: true` in values.yaml. The Operator reads `pods/log` in the release namespace for Pods matching `logCollector.scope`; no node mounts or extra collector Pods are installed. Kubernetes exposes only retained Pod logs through this API, so logs can be lost after node rotation or a long control-plane outage. The Operator defaults to 32 concurrent streams (`logCollector.maxStreams` may be set up to 256) and bounds queued log data to 64 MiB. Upgrading from the earlier node collector favors no gaps; overlapping retained lines can be replayed if the previous collector already forwarded them.\n"
+        "# {chart_name}\n\nFrom this chart directory, set the required values and install into the chosen namespace (`default` shown here):\n\n```bash\nhelm install {chart_name} . --namespace default --values values.yaml\n```\n\nFor a managed package, use its generated install command and values. See `examples/<target>.yaml` for EKS, GKE, AKS, and on-premises values. `inputValues` register the deployment and cannot change through Helm upgrades; edit deployment inputs in the deployment dashboard and retain the original Helm values. Preview upgrades with `helm upgrade --dry-run=server` so the chart can compare those values with the installed Secret; client-side `helm template --is-upgrade` cannot verify installed inputs.\n\nTo collect selected workload Pod logs, set `logCollector.enabled: true` in values.yaml. The Operator reads `pods/log` in the release namespace for Pods matching `logCollector.scope`; no node mounts or extra collector Pods are installed. Kubernetes exposes only retained Pod logs through this API, so logs can be lost after node rotation or a long control-plane outage. The Operator defaults to 32 concurrent streams (`logCollector.maxStreams` may be set up to 256) and bounds queued log data to 64 MiB. By default, `runtime.data.persistence.enabled` is false and replacing the Operator Pod can replay retained lines because its resume cursor is stored in an `emptyDir`. Enable persistence with a suitable StorageClass or existing claim to keep that cursor across rollouts; this adds a PVC. Upgrading from the earlier node collector favors no gaps; overlapping retained lines can be replayed if the previous collector already forwarded them.\n"
     )
 }
 
