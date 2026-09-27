@@ -63,7 +63,7 @@ const AGENT_READY_TIMEOUT: Duration = Duration::from_millis(50);
 #[cfg(test)]
 const AGENT_READY_POLL: Duration = Duration::from_millis(5);
 
-/// How long a lifecycle operation (`create`, `:pause`, `:resume`, `:snapshot`) is polled before it
+/// How long a lifecycle operation (`create`, `:snapshot`) is polled before it
 /// is reported incomplete rather than waited on forever.
 const OPERATION_POLL_ATTEMPTS: u32 = 150;
 const OPERATION_POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -677,34 +677,6 @@ impl Sandbox for GcpAgentPlatformSandbox {
                 Ok(Some(sandbox)) if sandbox.state == SandboxState::Running => {
                     return Ok(ResolvedSandbox::found(sandbox))
                 }
-                // The ordinary resting state for a reconnect: a suspended sandbox is woken and
-                // confirmed, and handed back if it comes up healthy. A wake this call made that
-                // cannot be confirmed is put back to sleep before a fresh sandbox is provisioned —
-                // the paused one may be another revision's, and a second live sandbox beside it is
-                // a leak the caller never receives an id for.
-                Ok(Some(sandbox)) if sandbox.state == SandboxState::Paused => {
-                    if self.resume(id).await.is_ok() {
-                        match self.get(id).await {
-                            Ok(Some(woken)) if woken.state == SandboxState::Running => {
-                                return Ok(ResolvedSandbox::found(woken))
-                            }
-                            _ => {
-                                // The wake could not be undone: leaving it live beside a fresh
-                                // sandbox is a leak the caller gets no id for. Fail so the woken
-                                // sandbox stays identifiable rather than provisioning a second one.
-                                if let Err(error) = self.pause(id).await {
-                                    return Err(error.context(ErrorData::SandboxCommandFailed {
-                                        failure: "resumeRollbackFailed".to_string(),
-                                        reason: format!(
-                                            "{GET_OR_CREATE}: woke sandbox '{id}' but could not \
-                                             confirm it healthy or put it back to sleep"
-                                        ),
-                                    }));
-                                }
-                            }
-                        }
-                    }
-                }
                 // Still coming up, or already being woken by someone else. Waited for rather than
                 // replaced: the sandbox keeps starting either way, and a second one beside it is
                 // the leak the arm above exists to avoid. A slow data plane is answered with the
@@ -923,26 +895,12 @@ impl Sandbox for GcpAgentPlatformSandbox {
 
     async fn pause(&self, sandbox_id: &str) -> Result<()> {
         Self::checked_sandbox_id("sandbox.pause", sandbox_id)?;
-        let started = self.client.pause(&self.engine, sandbox_id).await.context(
-            ErrorData::SandboxCommandFailed {
-                failure: "pauseFailed".to_string(),
-                reason: format!("sandbox.pause: sandbox '{sandbox_id}' could not be paused"),
-            },
-        )?;
-        self.await_operation("sandbox.pause", started).await?;
-        Ok(())
+        Err(pause_resume_unsupported("sandbox.pause"))
     }
 
     async fn resume(&self, sandbox_id: &str) -> Result<()> {
         Self::checked_sandbox_id("sandbox.resume", sandbox_id)?;
-        let started = self.client.resume(&self.engine, sandbox_id).await.context(
-            ErrorData::SandboxCommandFailed {
-                failure: "resumeFailed".to_string(),
-                reason: format!("sandbox.resume: sandbox '{sandbox_id}' could not be resumed"),
-            },
-        )?;
-        self.await_operation("sandbox.resume", started).await?;
-        Ok(())
+        Err(pause_resume_unsupported("sandbox.resume"))
     }
 
     async fn snapshot(&self, sandbox_id: &str) -> Result<String> {
@@ -1564,6 +1522,16 @@ fn finish_operation(operation: &str, name: &str, op: Operation) -> Result<serde_
             response_json: format!("operation '{name}' reported done without a result"),
         })),
     }
+}
+
+/// Refused rather than forwarded: Agent Platform's `:resume` can return a fresh container while
+/// reporting success, so nothing the sandbox held is guaranteed to survive a pause.
+fn pause_resume_unsupported(operation: &str) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::OperationNotSupported {
+        operation: operation.to_string(),
+        reason: "Agent Platform sandboxes cannot be paused and resumed with their state kept"
+            .to_string(),
+    })
 }
 
 /// The agent's own refusal, when `:execute` relayed one.

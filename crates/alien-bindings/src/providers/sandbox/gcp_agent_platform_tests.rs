@@ -352,10 +352,8 @@ async fn get_or_create_replaces_a_stale_sandbox_without_deleting_it() {
     assert!(sandbox.created, "a replacement is a sandbox this call made");
 }
 
-/// A reconnect to a suspended sandbox wakes it and hands it back, rather than creating a second
 /// A reconnect to a sandbox still coming up waits for it. Replacing it would leave the first one
-/// starting, reaching RUNNING and costing its owner, with nobody holding its id — the same leak the
-/// suspended arm avoids. Mutation check: delete the `Starting` arm and `create_sandbox().never()`
+/// starting, reaching RUNNING and costing its owner, with nobody holding its id. Mutation check: delete the `Starting` arm and `create_sandbox().never()`
 /// fires.
 #[tokio::test]
 async fn get_or_create_waits_for_a_booting_sandbox_rather_than_creating_a_second() {
@@ -375,7 +373,6 @@ async fn get_or_create_waits_for_a_booting_sandbox_rather_than_creating_a_second
         .returning(|_, _, _| Ok(health_reply()));
     client.expect_create_sandbox().never();
     client.expect_delete_sandbox().never();
-    client.expect_resume().never();
 
     let sandbox = provider(client)
         .get_or_create(CreateSandboxRequest {
@@ -413,8 +410,6 @@ async fn get_or_create_waits_out_a_wake_someone_else_started() {
         .returning(|_, _, _| Ok(health_reply()));
     client.expect_create_sandbox().never();
     client.expect_delete_sandbox().never();
-    // Not ours to wake: someone else's resume is already in flight.
-    client.expect_resume().never();
 
     let sandbox = provider(client)
         .get_or_create(CreateSandboxRequest {
@@ -425,88 +420,6 @@ async fn get_or_create_waits_out_a_wake_someone_else_started() {
         .expect("a wake already in flight is waited out");
 
     assert!(!sandbox.created, "the sandbox existed before this call");
-}
-
-/// sandbox and orphaning the paused one. Mutation check: fold the `Suspended` arm into `Ok(_) =>
-/// {}` and `create_sandbox().never()` fails while a second sandbox is minted.
-#[tokio::test]
-async fn get_or_create_resumes_a_suspended_sandbox_rather_than_creating_a_second() {
-    let reads = Arc::new(AtomicUsize::new(0));
-    let mut client = MockAgentPlatformApi::new();
-    client.expect_get_sandbox().returning(move |_, id| {
-        // Paused on the first read, running once resumed.
-        if reads.fetch_add(1, Ordering::SeqCst) == 0 {
-            Ok(sandbox_in_state(id, "STATE_PAUSED"))
-        } else {
-            Ok(sandbox_in_state(id, "STATE_RUNNING"))
-        }
-    });
-    client
-        .expect_resume()
-        .times(1)
-        .returning(|_, _| Ok(done_op(serde_json::json!({}))));
-    client
-        .expect_execute()
-        .withf(|_, _, input| op_of(input) == "health")
-        .returning(|_, _, _| Ok(health_reply()));
-    client.expect_create_sandbox().never();
-    client.expect_delete_sandbox().never();
-
-    let sandbox = provider(client)
-        .get_or_create(CreateSandboxRequest {
-            sandbox_id: Some("paused".to_string()),
-            ..Default::default()
-        })
-        .await
-        .expect("a suspended sandbox is resumed and returned");
-    assert_eq!(sandbox.sandbox.sandbox_id, "paused");
-    assert_eq!(sandbox.sandbox.state, SandboxState::Running);
-    assert!(
-        !sandbox.created,
-        "waking a sleeping sandbox is not creating one"
-    );
-    // The reconnect path the capability flip promises: a woken sandbox carries a real generation
-    // read from the container it came back on, not the unprobed sentinel.
-    assert_ne!(
-        sandbox.sandbox.generation, NO_GENERATION,
-        "a woken sandbox carries its container generation"
-    );
-}
-
-#[tokio::test]
-async fn get_or_create_fails_rather_than_leaking_a_resume_it_cannot_roll_back() {
-    let mut client = MockAgentPlatformApi::new();
-    // Paused before the wake and paused after it: the wake never brought the sandbox up.
-    client
-        .expect_get_sandbox()
-        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_PAUSED")));
-    client
-        .expect_resume()
-        .times(1)
-        .returning(|_, _| Ok(done_op(serde_json::json!({}))));
-    // The compensating suspend fails, so the woken sandbox cannot be put back to sleep.
-    client
-        .expect_pause()
-        .times(1)
-        .returning(|_, _| Err(not_found()));
-    client
-        .expect_execute()
-        .returning(|_, _, _| Ok(health_reply()));
-    // A second live sandbox must never be provisioned beside the one this call woke.
-    client.expect_create_sandbox().never();
-    client.expect_delete_sandbox().never();
-
-    let error = provider(client)
-        .get_or_create(CreateSandboxRequest {
-            sandbox_id: Some("paused".to_string()),
-            ..Default::default()
-        })
-        .await
-        .expect_err("a resume that cannot be rolled back must fail, not leak a live sandbox");
-    assert!(
-        error.to_string().contains("paused"),
-        "the failure names the woken sandbox so it stays identifiable: {error}"
-    );
 }
 
 // ---- generation and health -------------------------------------------------------------------
@@ -665,12 +578,6 @@ impl AgentPlatformApi for WedgedAgent {
         unimplemented!()
     }
     async fn delete_sandbox(&self, _engine: &str, _sandbox: &str) -> ClientResult<()> {
-        unimplemented!()
-    }
-    async fn pause(&self, _engine: &str, _sandbox: &str) -> ClientResult<Operation> {
-        unimplemented!()
-    }
-    async fn resume(&self, _engine: &str, _sandbox: &str) -> ClientResult<Operation> {
         unimplemented!()
     }
     async fn snapshot(
@@ -1520,21 +1427,18 @@ async fn a_relayed_agent_404_is_a_refusal_not_a_gone_sandbox() {
 
 // ---- pause / resume / snapshot ----------------------------------------------------------------
 
+/// The capability row says no pause, and the provider agrees without calling the API: a resume
+/// that reports success on a fresh container must never reach a caller as a kept sandbox.
 #[tokio::test]
-async fn pause_and_resume_await_their_operations() {
-    let mut client = MockAgentPlatformApi::new();
-    client
-        .expect_pause()
-        .times(1)
-        .returning(|_, _| Ok(done_op(serde_json::json!({}))));
-    client
-        .expect_resume()
-        .times(1)
-        .returning(|_, _| Ok(done_op(serde_json::json!({}))));
-
-    let provider = provider(client);
-    provider.pause("s1").await.expect("pause completes");
-    provider.resume("s1").await.expect("resume completes");
+async fn pause_and_resume_are_refused_as_unsupported() {
+    assert!(!SandboxCapabilities::gcp_agent_platform().pause_resume);
+    let provider = provider(MockAgentPlatformApi::new());
+    for error in [
+        provider.pause("s1").await.expect_err("pause is refused"),
+        provider.resume("s1").await.expect_err("resume is refused"),
+    ] {
+        assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+    }
 }
 
 #[tokio::test]

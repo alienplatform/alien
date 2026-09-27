@@ -74,7 +74,7 @@ create_engine() {
 }
 
 template_body() {
-  jq -nc --arg image "$image" --arg name "alien-sbx-live-iam-$(uuidgen | tr -d - | tr '[:upper:]' '[:lower:]' | cut -c1-12)" '{
+  jq -nc --arg image "${ALIEN_TEST_GCP_AGENT_IMAGE:-$image}" --arg name "alien-sbx-live-iam-$(uuidgen | tr -d - | tr '[:upper:]' '[:lower:]' | cut -c1-12)" '{
     displayName: $name,
     customContainerEnvironment: {
       customContainerSpec: {imageUri: $image},
@@ -106,6 +106,29 @@ caller_member() {
   fi
 }
 
+# Fails fast when the image was never pushed: a template on a missing image sits in PROVISIONING
+# until the operation wait gives up, with nothing naming the cause.
+require_image() {
+  local want="${ALIEN_TEST_GCP_AGENT_IMAGE:-$image}" path tag found
+  # A digest pins an immutable manifest the pull itself reports on, so only tags are checked.
+  if [[ "$want" == *@sha256:* ]]; then
+    return 0
+  fi
+  path="${want%:*}"
+  tag="${want##*:}"
+  if ! found="$(gcloud artifacts docker tags list "$path" --project "$project" \
+    --filter="tag~${tag}\$" --format='value(tag)' 2>"$state_dir/tags.err")"; then
+    echo "could not look up tags of ${path}:" >&2
+    cat "$state_dir/tags.err" >&2
+    exit 1
+  fi
+  if ! grep -qE "(^|/)${tag//./\\.}$" <<<"$found"; then
+    echo "agent image ${want} is not in Artifact Registry." >&2
+    echo "Push it with '$0 image', or set ALIEN_TEST_GCP_AGENT_TAG (or ALIEN_TEST_GCP_AGENT_IMAGE) to a pushed one." >&2
+    exit 1
+  fi
+}
+
 cmd_image() {
   gcloud services enable artifactregistry.googleapis.com aiplatform.googleapis.com --project "$project"
   gcloud artifacts repositories describe "$repo" --location "$region" --project "$project" >/dev/null 2>&1 \
@@ -131,12 +154,14 @@ cmd_suite() {
   : "${GOOGLE_TARGET_SERVICE_ACCOUNT_KEY:?set GOOGLE_TARGET_SERVICE_ACCOUNT_KEY}"
   : "${ALIEN_TEST_GIT_TOKEN:?set ALIEN_TEST_GIT_TOKEN}"
   : "${ALIEN_TEST_PRIVATE_REPO:?set ALIEN_TEST_PRIVATE_REPO}"
+  require_image
   cd "$repo_root"
   ALIEN_TEST_GCP_AGENT_IMAGE="${ALIEN_TEST_GCP_AGENT_IMAGE:-$image}" \
     cargo test -p alien-test --test gcp_agent_platform_sandbox_live -- --ignored --test-threads=1
 }
 
 cmd_iam_check() {
+  require_image
   local admin_token own other role_name holder_token status operation template
   admin_token="$(gcloud auth print-access-token)"
 

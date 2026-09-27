@@ -50,8 +50,8 @@ use alien_bindings::traits::{
 use alien_core::{GcpClientConfig, GcpCredentials};
 use alien_gcp_clients::gcp::agent_platform::{
     AgentPlatformApi, AgentPlatformClient, ContainerResources, CustomContainerEnvironment,
-    CustomContainerSpec, EgressControlConfig, PollBudget, ReasoningEngine, SandboxCreateRequest,
-    SandboxEnvironment, SandboxEnvironmentTemplate,
+    CustomContainerSpec, EgressControlConfig, PollBudget, ReasoningEngine,
+    SandboxEnvironmentTemplate,
 };
 
 // ---- Configuration and clients ----------------------------------------------------------------
@@ -610,61 +610,6 @@ async fn a_command_past_the_proxy_cap_completes_detached() {
 
 // ---- Capability rows measured live ------------------------------------------------------------
 
-/// `pauseResume`: a paused session resumes onto the same container with its filesystem intact.
-#[tokio::test]
-#[ignore = "requires a real GCP project; see module docs"]
-async fn pause_resume_preserves_the_container_and_filesystem() {
-    let config = LiveConfig::from_env();
-    let client = config.client();
-    let engine = provision_engine(&client).await;
-    record_engine(&engine);
-    let _guard = EngineGuard {
-        client: client.clone(),
-        engine: engine.clone(),
-    };
-    let template = provision_template(&client, &engine, &agent_image(), true).await;
-    let provider = provider(&client, &engine, &template);
-
-    let session = provider
-        .create(CreateSandboxRequest::default())
-        .await
-        .expect("create succeeds");
-    let sid = session.sandbox_id.clone();
-    let before = session.generation;
-
-    let marker = format!("mark-{}", uuid::Uuid::new_v4().simple());
-    let wrote = shell(
-        &provider,
-        &sid,
-        &format!("printf %s '{marker}' > /sandbox/keep"),
-    )
-    .await;
-    assert_eq!(wrote.exit_code, 0, "the pre-pause marker writes");
-
-    provider.pause(&sid).await.expect("the session pauses");
-    provider.resume(&sid).await.expect("the session resumes");
-
-    let after = wait_until_running(&provider, &sid).await;
-    // The load-bearing guarantee is that the filesystem survives. Resume may return onto a
-    // reissued container with a fresh boot id — the generation is derived from it precisely so a
-    // caller detects that — so the generation is observed, not asserted to be unchanged.
-    eprintln!("pause/resume generation: before={before} after={after}");
-    let kept = provider
-        .read_file(&sid, "/keep")
-        .await
-        .expect("the marker survives the pause/resume");
-    assert_eq!(
-        kept,
-        marker.as_bytes(),
-        "the filesystem is intact across pause/resume"
-    );
-
-    provider
-        .terminate(&sid)
-        .await
-        .expect("terminate confirms gone");
-}
-
 /// `egressDeny`: a `deny` template closes the network — the connection fails and DNS with it.
 #[tokio::test]
 #[ignore = "requires a real GCP project; see module docs"]
@@ -688,13 +633,13 @@ async fn egress_deny_blocks_the_network_including_dns() {
         .expect("create succeeds");
     let sid = session.sandbox_id.clone();
 
-    // `git` is the one network client the agent image carries (it has no resolver tool), and its
-    // own message names a failed lookup, so a blocked DNS cannot pass as a refused connection or a
-    // missing binary.
+    // `git` is the one network client in the agent image, and its message names a failed lookup.
+    // A dropped resolver otherwise waits past the 20s command timeout, so glibc is held to one 2s
+    // try and `timeout` caps the whole probe; 124 then means something other than DNS hung.
     let resolve = shell(
         &provider,
         &sid,
-        "git ls-remote https://github.com/git/git HEAD 2>&1; echo rc=$?",
+        "RES_OPTIONS='timeout:2 attempts:1' timeout 10 git ls-remote https://github.com/git/git HEAD 2>&1; echo rc=$?",
     )
     .await;
     assert_eq!(resolve.exit_code, 0, "the probe wrapper itself runs");
@@ -704,143 +649,21 @@ async fn egress_deny_blocks_the_network_including_dns() {
         .rsplit_once("rc=")
         .and_then(|(_, code)| code.trim().parse().ok())
         .unwrap_or_else(|| panic!("the probe reported no exit code: {stdout}"));
-    assert_ne!(rc, 127, "git must exist in the image: {stdout}");
+    assert_ne!(rc, 127, "git and timeout must exist in the image: {stdout}");
+    assert_ne!(
+        rc, 124,
+        "the probe hung past its bound instead of failing the lookup: {stdout}"
+    );
     assert_ne!(rc, 0, "a closed sandbox cannot reach github.com: {stdout}");
     assert!(
         stdout.contains("Could not resolve host"),
-        "the failure must be the DNS lookup: {stdout}"
+        "the failure must be the DNS lookup, not a refused connection: {stdout}"
     );
 
     provider
         .terminate(&sid)
         .await
         .expect("terminate confirms gone");
-}
-
-/// Snapshot **restore**: a sandbox restored from a snapshot carries the pre-snapshot filesystem and
-/// not a mutation made after the snapshot. Both halves are asserted — one alone proves nothing.
-///
-/// Restore has no trait verb (`create` hardcodes no snapshot), so it goes through the client
-/// directly, which is the only path that can restore today.
-#[tokio::test]
-#[ignore = "requires a real GCP project; see module docs"]
-async fn snapshot_restore_carries_pre_snapshot_state_only() {
-    let config = LiveConfig::from_env();
-    let client = config.client();
-    let engine = provision_engine(&client).await;
-    record_engine(&engine);
-    let _guard = EngineGuard {
-        client: client.clone(),
-        engine: engine.clone(),
-    };
-    let template = provision_template(&client, &engine, &agent_image(), true).await;
-    let provider = provider(&client, &engine, &template);
-
-    let session = provider
-        .create(CreateSandboxRequest::default())
-        .await
-        .expect("create succeeds");
-    let sid = session.sandbox_id.clone();
-
-    let before = format!("before-{}", uuid::Uuid::new_v4().simple());
-    assert_eq!(
-        shell(
-            &provider,
-            &sid,
-            &format!("printf %s '{before}' > /sandbox/before")
-        )
-        .await
-        .exit_code,
-        0,
-        "the pre-snapshot marker writes"
-    );
-
-    let snapshot = provider
-        .snapshot(&sid)
-        .await
-        .expect("a snapshot is captured");
-
-    // A mutation the restore must not carry.
-    assert_eq!(
-        shell(&provider, &sid, "printf %s after > /sandbox/after")
-            .await
-            .exit_code,
-        0,
-        "the post-snapshot marker writes"
-    );
-
-    let engine_seg = last_segment(&engine);
-    let operation = client
-        .create_sandbox(
-            engine_seg,
-            SandboxCreateRequest {
-                display_name: Some(format!("restore-{}", uuid::Uuid::new_v4().simple())),
-                sandbox_environment_template: None,
-                sandbox_environment_snapshot: Some(snapshot),
-                ttl: Some(format!("{TTL_SECONDS}s")),
-            },
-        )
-        .await
-        .expect("restore create accepted");
-    let restored: SandboxEnvironment = client
-        .await_operation(&operation, budget())
-        .await
-        .expect("restore create resolves");
-    let restored_id = last_segment(&restored.name.expect("the restore carries a name")).to_string();
-    wait_until_running(&provider, &restored_id).await;
-
-    // Whether the restore carried the session root at all, printed before the assertion so a
-    // failure says which it was.
-    let listing = shell(&provider, &restored_id, "ls -la /sandbox 2>&1").await;
-    eprintln!(
-        "restored /sandbox:\n{}",
-        String::from_utf8_lossy(&listing.stdout)
-    );
-    let carried = provider
-        .read_file(&restored_id, "/before")
-        .await
-        .expect("the restore carries the pre-snapshot marker");
-    assert_eq!(
-        carried,
-        before.as_bytes(),
-        "the pre-snapshot state is present"
-    );
-    let after = provider
-        .read_file(&restored_id, "/after")
-        .await
-        .expect_err("the post-snapshot mutation is absent from the restore");
-    assert!(
-        format!("{after:?}").contains("PATH_NOT_FOUND"),
-        "absent means the agent found no file, not any failure: {after:?}"
-    );
-
-    provider
-        .terminate(&restored_id)
-        .await
-        .expect("the restore tears down");
-    provider
-        .terminate(&sid)
-        .await
-        .expect("the source tears down");
-}
-
-// ---- Orphan sweep -----------------------------------------------------------------------------
-
-fn sweep_log() -> PathBuf {
-    std::env::temp_dir().join("alien-sbx-live-engines.log")
-}
-
-/// Records an engine name the instant it exists, so a run killed before its guard runs still leaves
-/// a trail the sweep can reap.
-fn record_engine(engine: &str) {
-    use std::io::Write as _;
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(sweep_log())
-    {
-        let _ = writeln!(file, "{engine}");
-    }
 }
 
 /// Deletes every engine a prior live run recorded, tolerating not-found. This is the sweep for

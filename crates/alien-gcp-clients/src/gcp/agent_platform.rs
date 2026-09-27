@@ -5,8 +5,8 @@
 //! through here rather than speaking REST directly, so retry classification, redaction and error
 //! typing live in one place.
 //!
-//! Retry classification is the load-bearing part. `create_*`, `execute` and the `pause`/`resume`/
-//! `snapshot` transitions are delivered **once** — a silent re-send mints an orphan the caller has
+//! Retry classification is the load-bearing part. `create_*`, `execute` and the `snapshot`
+//! transition are delivered **once** — a silent re-send mints an orphan the caller has
 //! no id for, or repeats a transition the server already refuses for the state the first attempt
 //! produced. `get_*`/`list_*` retry; `delete_*` retries and treats a not-found as done.
 
@@ -369,7 +369,7 @@ pub struct SandboxSnapshot {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-/// The `google.protobuf.Empty` a `pause` operation resolves to. Deserializes from any object,
+/// The `google.protobuf.Empty` a value-less operation resolves to. Deserializes from any object,
 /// ignoring the `@type` marker, so `await_operation::<Empty>` works for value-less operations.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Empty {}
@@ -471,10 +471,6 @@ pub trait AgentPlatformApi: Send + Sync + Debug {
     /// body is redacted out of any error. `input` is opaque JSON bytes; the decoded reply is returned.
     async fn execute(&self, engine: &str, sandbox: &str, input: &[u8]) -> Result<Vec<u8>>;
 
-    /// Pause a sandbox. Single-attempt state transition; returns the operation to poll.
-    async fn pause(&self, engine: &str, sandbox: &str) -> Result<Operation>;
-    /// Resume a sandbox. Single-attempt state transition; returns the operation to poll.
-    async fn resume(&self, engine: &str, sandbox: &str) -> Result<Operation>;
     /// Snapshot a sandbox. Single-attempt state transition; returns the operation to poll.
     async fn snapshot(&self, engine: &str, sandbox: &str, display_name: &str) -> Result<Operation>;
 
@@ -873,40 +869,6 @@ impl AgentPlatformApi for AgentPlatformClient {
             })
     }
 
-    async fn pause(&self, engine: &str, sandbox: &str) -> Result<Operation> {
-        let path = format!("{}:pause", self.sandbox_path(engine, sandbox));
-        self.base
-            .execute_request_once(
-                Method::POST,
-                &path,
-                None,
-                Some(serde_json::json!({})),
-                sandbox,
-            )
-            .await
-            .context(AgentPlatformErrorData::RequestFailed {
-                operation: "pause sandbox".to_string(),
-                message: sandbox.to_string(),
-            })
-    }
-
-    async fn resume(&self, engine: &str, sandbox: &str) -> Result<Operation> {
-        let path = format!("{}:resume", self.sandbox_path(engine, sandbox));
-        self.base
-            .execute_request_once(
-                Method::POST,
-                &path,
-                None,
-                Some(serde_json::json!({})),
-                sandbox,
-            )
-            .await
-            .context(AgentPlatformErrorData::RequestFailed {
-                operation: "resume sandbox".to_string(),
-                message: sandbox.to_string(),
-            })
-    }
-
     async fn snapshot(&self, engine: &str, sandbox: &str, display_name: &str) -> Result<Operation> {
         let path = format!("{}:snapshot", self.sandbox_path(engine, sandbox));
         self.base
@@ -1071,38 +1033,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pause_is_sent_once() {
-        let server = MockServer::start_async().await;
-        let pause = server
-            .mock_async(|when, then| {
-                when.method(POST).path_contains(":pause");
-                then.status(503);
-            })
-            .await;
-        client(&server)
-            .pause(ENGINE, SANDBOX)
-            .await
-            .expect_err("pause should surface the failure");
-        assert_eq!(pause.hits_async().await, 1, "pause must be sent once");
-    }
-
-    #[tokio::test]
-    async fn resume_is_sent_once() {
-        let server = MockServer::start_async().await;
-        let resume = server
-            .mock_async(|when, then| {
-                when.method(POST).path_contains(":resume");
-                then.status(503);
-            })
-            .await;
-        client(&server)
-            .resume(ENGINE, SANDBOX)
-            .await
-            .expect_err("resume should surface the failure");
-        assert_eq!(resume.hits_async().await, 1, "resume must be sent once");
-    }
-
-    #[tokio::test]
     async fn snapshot_is_sent_once() {
         let server = MockServer::start_async().await;
         let snapshot = server
@@ -1223,7 +1153,7 @@ mod tests {
         assert_eq!(sandbox.state.as_deref(), Some("STATE_RUNNING"));
     }
 
-    /// A value-less `pause` operation resolves to `Empty` without choking on the `@type` marker.
+    /// A value-less operation resolves to `Empty` without choking on the `@type` marker.
     #[tokio::test]
     async fn await_operation_handles_a_value_less_result() {
         let server = MockServer::start_async().await;
