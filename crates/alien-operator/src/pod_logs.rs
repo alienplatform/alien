@@ -207,7 +207,7 @@ pub async fn run_loop(state: Arc<OperatorState>, config: PodLogCollectionConfig)
             None => Ok(()),
         };
         if let Err(error) = result {
-            stop_all(&mut tasks);
+            stop_all(&mut tasks).await;
             warn!(error = %error, "Pod log discovery failed; will retry");
         }
         tokio::select! {
@@ -215,9 +215,7 @@ pub async fn run_loop(state: Arc<OperatorState>, config: PodLogCollectionConfig)
             _ = time::sleep(DISCOVERY_INTERVAL) => {}
         }
     }
-    for task in tasks.into_values() {
-        task.cancel.cancel();
-    }
+    stop_all(&mut tasks).await;
     info!("Kubernetes Pod log collection stopped");
 }
 
@@ -236,7 +234,7 @@ async fn reconcile(
         // first observation across discovery passes and Operator restarts.
         let observed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true);
         if legacy_collector_running(client, namespace, legacy_daemonset).await? {
-            stop_all(tasks);
+            stop_all(tasks).await;
             completed.clear();
             state
                 .db
@@ -267,7 +265,7 @@ async fn reconcile(
     let deployment_id = match state.db.get_deployment_id().await? {
         Some(id) => id,
         None => {
-            stop_all(tasks);
+            stop_all(tasks).await;
             return Ok(());
         }
     };
@@ -301,16 +299,20 @@ async fn reconcile(
         );
     }
     let desired: BTreeSet<_> = desired.into_iter().take(config.max_streams).collect();
-    tasks.retain(|source, task| {
-        let keep = desired.contains(source) && !task.handle.is_finished();
-        if !keep {
-            if source.terminal && desired.contains(source) && task.handle.is_finished() {
-                completed.insert(source.clone());
-            }
-            task.cancel.cancel();
+    let stale: Vec<_> = tasks
+        .iter()
+        .filter(|(source, task)| !desired.contains(*source) || task.handle.is_finished())
+        .map(|(source, _)| source.clone())
+        .collect();
+    for source in stale {
+        let task = tasks.remove(&source).expect("stale task is present");
+        let finished = task.handle.is_finished();
+        task.cancel.cancel();
+        let _ = task.handle.await;
+        if source.terminal && desired.contains(&source) && finished {
+            completed.insert(source);
         }
-        keep
-    });
+    }
     for source in desired {
         if completed.contains(&source) || tasks.contains_key(&source) {
             continue;
@@ -438,9 +440,12 @@ async fn legacy_collector_running(
     }))
 }
 
-fn stop_all(tasks: &mut HashMap<Source, StreamTask>) {
-    for task in tasks.drain().map(|(_, task)| task) {
+async fn stop_all(tasks: &mut HashMap<Source, StreamTask>) {
+    for task in tasks.values() {
         task.cancel.cancel();
+    }
+    for task in tasks.drain().map(|(_, task)| task) {
+        let _ = task.handle.await;
     }
 }
 
@@ -560,6 +565,14 @@ async fn read_stream_once(
                     message: "Kubernetes Pod log stream ended with an error".to_string(),
                 })?;
                 let Some(chunk) = chunk else {
+                    if !partial.is_empty() {
+                        if let Some(record) = parse_line(
+                            &partial, truncated, namespace, source, replay_time,
+                            saved.as_ref(), &mut last_time, &mut ordinal, &mut offset,
+                        ) {
+                            batch.push(record);
+                        }
+                    }
                     flush_batch(db, deployment_id, source, &mut batch, offset.as_ref()).await?;
                     return Ok(());
                 };
@@ -666,7 +679,91 @@ async fn flush_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_k8s_clients::KubernetesClientConfig;
+    use axum::{extract::Query, routing::get, Router};
     use k8s_openapi::api::core::v1::{Container, PodSpec, PodStatus};
+    use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+    use prost::Message;
+
+    #[tokio::test]
+    async fn terminal_pod_api_logs_queue_once_across_reader_restart() {
+        let app = Router::new().route(
+            "/api/v1/namespaces/demo/pods/app-123/log",
+            get(|Query(query): Query<HashMap<String, String>>| async move {
+                assert_eq!(query.get("container").map(String::as_str), Some("app"));
+                assert_eq!(query.get("follow").map(String::as_str), Some("false"));
+                assert_eq!(query.get("timestamps").map(String::as_str), Some("true"));
+                assert!(query.contains_key("sinceTime"));
+                "2026-09-27T09:00:00.000000001Z {\"time\":\"2026-09-27T09:00:00Z\",\"level\":\"INFO\",\"msg\":\"first\"}\n2026-09-27T09:00:00.000000001Z {\"time\":\"2026-09-27T09:00:00Z\",\"level\":\"INFO\",\"msg\":\"second\"}"
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind fake Kubernetes API");
+        let address = listener.local_addr().expect("fake Kubernetes address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake Kubernetes API");
+        });
+        let client = KubernetesClient::new(KubernetesClientConfig::Manual {
+            server_url: format!("http://{address}"),
+            certificate_authority_data: None,
+            insecure_skip_tls_verify: None,
+            client_certificate_data: None,
+            client_key_data: None,
+            token: Some("test-token".to_string()),
+            username: None,
+            password: None,
+            namespace: Some("demo".to_string()),
+            additional_headers: HashMap::new(),
+        })
+        .await
+        .expect("create fake Kubernetes client");
+        let data_dir = tempfile::tempdir().expect("temporary encrypted state");
+        let db = OperatorDb::new(
+            data_dir.path().to_str().unwrap(),
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .await
+        .expect("open encrypted state");
+        let source = Source {
+            pod_uid: "uid-123".to_string(),
+            pod_name: "app-123".to_string(),
+            container: "app".to_string(),
+            restart_count: 0,
+            terminal: true,
+            initial_since: DateTime::parse_from_rfc3339("2026-09-27T08:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        };
+        let cancel = CancellationToken::new();
+        read_stream_once(&client, &db, "demo", "dep_test", &source, &cancel)
+            .await
+            .expect("read completed Pod logs");
+        let queued = db
+            .get_pending_telemetry(10)
+            .await
+            .expect("read queued logs");
+        assert_eq!(queued.len(), 1);
+        let otlp = ExportLogsServiceRequest::decode(queued[0].2.as_slice())
+            .expect("decode queued Pod logs");
+        let records = &otlp.resource_logs[0].scope_logs[0].log_records;
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            db.get_pod_log_offset("uid-123", "app", 0)
+                .await
+                .unwrap()
+                .unwrap()
+                .ordinal,
+            2
+        );
+        read_stream_once(&client, &db, "demo", "dep_test", &source, &cancel)
+            .await
+            .expect("replay completed Pod logs");
+        assert_eq!(db.get_pending_telemetry(10).await.unwrap().len(), 1);
+        server.abort();
+    }
 
     #[test]
     fn only_selected_workload_pods_are_read() {
