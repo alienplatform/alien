@@ -3651,7 +3651,9 @@ async fn initialize_deployment(
         input_values: input_values.into_iter().collect(),
         scope: None,
         permission: None,
-        setup_method: None,
+        // The Kubernetes CLI installs the Operator with Helm. Runtime work
+        // starts inside that Operator, so this must use Helm's setup handoff.
+        setup_method: (platform == Platform::Kubernetes).then(|| "helm".to_string()),
     };
 
     let response = match client.initialize().body(body).send().await {
