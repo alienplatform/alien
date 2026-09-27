@@ -16,8 +16,7 @@ use alien_core::{
     EnvironmentInfo, KubernetesClusterOwnership, KubernetesClusterSettings,
     KubernetesExposureSettings, KubernetesSettings, ManagementConfig, NetworkSettings, Platform,
     PublicEndpointUrls, ReleaseInfo, ResourceLifecycle, Stack, StackInputDefinition,
-    StackInputKind, StackInputProvider, StackSettings, StackState, TelemetryMode, UpdatesMode,
-    Worker,
+    StackInputKind, StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker,
 };
 use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
@@ -38,6 +37,7 @@ use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResult
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeSet, HashMap},
     io::{IsTerminal, Write},
@@ -298,6 +298,21 @@ mod tests {
     use clap::Parser;
     use httpmock::{Method::PATCH, MockServer};
     use std::io::Write;
+
+    #[test]
+    fn kubernetes_install_retry_reuses_resource_prefix() {
+        let first = kubernetes_resource_prefix("setup-token", "production");
+        assert_eq!(
+            first,
+            kubernetes_resource_prefix("setup-token", "production")
+        );
+        assert!(alien_core::is_valid_resource_prefix(&first));
+        assert_ne!(
+            first,
+            kubernetes_resource_prefix("another-token", "production")
+        );
+        assert_ne!(first, kubernetes_resource_prefix("setup-token", "preview"));
+    }
 
     #[test]
     fn cloud_push_platforms_require_install_context() {
@@ -1190,7 +1205,8 @@ api = "https://old.example.test"
                 "https://gateway.example.test".to_string(),
             )]),
         )]);
-        validate_public_endpoint_names(&valid, &stack).expect("gateway exposes a public endpoint");
+        validate_public_endpoint_names(&valid, &stack, true)
+            .expect("gateway exposes a public endpoint");
 
         let invalid = HashMap::from([(
             "gateway".to_string(),
@@ -1199,9 +1215,50 @@ api = "https://old.example.test"
                 "https://missing.example.test".to_string(),
             )]),
         )]);
-        let error = validate_public_endpoint_names(&invalid, &stack)
+        let error = validate_public_endpoint_names(&invalid, &stack, true)
             .expect_err("missing endpoint should fail");
         assert_eq!(error.code, "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn external_kubernetes_ingress_requires_all_declared_endpoints() {
+        let daemon = alien_core::Daemon::new("gateway".to_string())
+            .code(alien_core::DaemonCode::Image {
+                image: "gateway:latest".to_string(),
+            })
+            .permissions("default".to_string())
+            .public_endpoint(alien_core::PublicEndpoint {
+                name: "api".to_string(),
+                port: 8080,
+                protocol: alien_core::ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .public_endpoint(alien_core::PublicEndpoint {
+                name: "admin".to_string(),
+                port: 8081,
+                protocol: alien_core::ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .build();
+        let stack = Stack::new("test".to_string())
+            .add(daemon, alien_core::ResourceLifecycle::Live)
+            .build();
+        let partial = HashMap::from([(
+            "gateway".to_string(),
+            HashMap::from([(
+                "api".to_string(),
+                "https://gateway.example.test".to_string(),
+            )]),
+        )]);
+
+        let error = validate_public_endpoint_names(&partial, &stack, true)
+            .expect_err("external ingress would leave admin unreachable");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(error.to_string().contains("gateway.admin"));
+        validate_public_endpoint_names(&partial, &stack, false)
+            .expect("other platforms allow partial mappings");
     }
 
     #[test]
@@ -1995,7 +2052,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 })
             })?;
         let stack = fetch_release_stack_by_id(&client, release_id, platform).await?;
-        validate_public_endpoint_names(public_endpoints, &stack)?;
+        validate_public_endpoint_names(public_endpoints, &stack, platform == Platform::Kubernetes)?;
     }
 
     if current_deployment.status == "running"
@@ -2382,6 +2439,7 @@ async fn fetch_release_stack_by_id(
 fn validate_public_endpoint_names(
     public_endpoints: &PublicEndpointUrls,
     stack: &Stack,
+    require_complete: bool,
 ) -> Result<()> {
     let valid_endpoints = public_endpoint_names(stack);
     for (resource_id, endpoints) in public_endpoints {
@@ -2404,6 +2462,29 @@ fn validate_public_endpoint_names(
                 field: "public-endpoint".to_string(),
                 message: format!(
                     "Endpoint '{key}' is not declared by the stack. Available public endpoints: {available}"
+                ),
+            }));
+        }
+    }
+    // Supplying an external URL disables chart-owned ingress for the whole
+    // Kubernetes stack. Reject a partial mapping before installing Helm: the
+    // remaining endpoints would otherwise have no public route.
+    if require_complete {
+        let supplied: BTreeSet<String> = public_endpoints
+            .iter()
+            .flat_map(|(resource_id, endpoints)| {
+                endpoints
+                    .keys()
+                    .map(move |name| format!("{resource_id}.{name}"))
+            })
+            .collect();
+        let missing: Vec<_> = valid_endpoints.difference(&supplied).cloned().collect();
+        if !missing.is_empty() {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "public-endpoint".to_string(),
+                message: format!(
+                    "External Kubernetes ingress requires a URL for every public endpoint. Missing: {}",
+                    missing.join(", ")
                 ),
             }));
         }
@@ -3664,9 +3745,18 @@ struct InitResult {
     deployment_token: Option<String>,
 }
 
+fn kubernetes_resource_prefix(token: &str, name: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"alien-kubernetes-setup-prefix-v1\0");
+    hash.update(token.as_bytes());
+    hash.update([0]);
+    hash.update(name.as_bytes());
+    format!("k{}", hex::encode(&hash.finalize()[..12]))
+}
+
 async fn initialize_deployment(
     client: &ServerClient,
-    _token: &str,
+    token: &str,
     platform: Platform,
     base_platform: Option<Platform>,
     name: &str,
@@ -3679,8 +3769,11 @@ async fn initialize_deployment(
         // Helm needs the runtime prefix before it creates workload identities.
         // Register the same prefix with the manager so its StackState and the
         // chart agree even before the Operator's first sync.
+        // A setup link may be retried after registration but before Helm
+        // finishes. Reuse the same prefix so Manager can resume the existing
+        // deployment and its chart-owned ServiceAccounts keep their names.
         resource_prefix: (platform == Platform::Kubernetes)
-            .then(|| StackState::new(platform).resource_prefix),
+            .then(|| kubernetes_resource_prefix(token, name)),
         platform: Some(sdk_platform(platform)),
         base_platform: base_platform.map(sdk_platform),
         initial_desired_release: alien_manager_api::types::InitialDesiredRelease::Active,
