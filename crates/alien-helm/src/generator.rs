@@ -2029,7 +2029,7 @@ pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -
     ));
 
     append_stack_settings(&mut yaml, options.stack_settings)?;
-    yaml.push_str("\ninfrastructure: null\n\n");
+    yaml.push_str("\ninfrastructure: null\ninfrastructureExistingSecret: \"\"\n\n");
 
     match options.base_platform {
         Some(platform) => yaml.push_str(&format!(
@@ -3767,7 +3767,7 @@ clusterBootstrap:
 
     append_service_accounts(&mut yaml, analysis);
     append_stack_settings(&mut yaml, stack_settings)?;
-    yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
+    yaml.push_str("\ninfrastructure: null\ninfrastructureExistingSecret: \"\"\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicEndpoints: {}\n");
 
@@ -4555,6 +4555,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
       "additionalProperties": true
     },
     "infrastructure": { "type": ["object", "null"] },
+    "infrastructureExistingSecret": { "type": "string" },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
     "basePlatformConfig": {
       "type": "object",
@@ -5185,6 +5186,9 @@ fn secret_tpl() -> String {
   {{- if ne $currentInputs (toJson .Values.inputValues) -}}
     {{- fail "inputValues cannot change through Helm after installation; edit deployment inputs in the deployment dashboard and keep the original Helm values" -}}
   {{- end -}}
+{{- end -}}
+{{- if and .Values.infrastructure .Values.infrastructureExistingSecret -}}
+  {{- fail "Set either infrastructure or infrastructureExistingSecret, not both" -}}
 {{- end -}}
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
@@ -6022,7 +6026,7 @@ spec:
             {{- end }}
             - name: PUBLIC_ENDPOINTS_FILE
               value: /etc/deployment/config/public-endpoints.json
-            {{- if .Values.infrastructure }}
+            {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
             - name: EXTERNAL_BINDINGS_FILE
               value: /etc/deployment/secrets/external-bindings.json
             {{- end }}
@@ -6076,7 +6080,7 @@ spec:
               mountPath: /etc/deployment/secrets/encryption-key
               subPath: {{ include "deployment.encryptionSecretKey" . }}
               readOnly: true
-            {{- if .Values.infrastructure }}
+            {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
             - name: external-bindings
               mountPath: /etc/deployment/secrets/external-bindings.json
               subPath: external-bindings.json
@@ -6120,10 +6124,10 @@ spec:
           secret:
             secretName: {{ include "deployment.encryptionSecretName" . }}
             defaultMode: 384
-        {{- if .Values.infrastructure }}
+        {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
         - name: external-bindings
           secret:
-            secretName: {{ include "deployment.fullname" . }}
+            secretName: {{ default (include "deployment.fullname" .) .Values.infrastructureExistingSecret }}
             items:
               - key: external-bindings.json
                 path: external-bindings.json
@@ -7998,6 +8002,52 @@ inputValues:
                     mount["name"] == "input-values"
                         && mount["mountPath"] == "/etc/deployment/input-values"
                         && mount["readOnly"].as_bool() == Some(true)
+                })
+            }));
+    }
+
+    #[test]
+    fn helm_mounts_precreated_external_bindings_secret() {
+        let chart = sample_product_chart();
+        let values = r#"
+management:
+  token: ax_dg_example
+  name: prod
+  url: https://manager.example.test
+runtime:
+  encryption:
+    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+infrastructureExistingSecret: customer-bindings
+"#;
+        let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
+        rendered.assert_ok("Helm existing bindings Secret render");
+        let documents = serde_yaml::Deserializer::from_str(&rendered.stdout)
+            .map(|document| YamlValue::deserialize(document).expect("valid Kubernetes YAML"))
+            .collect::<Vec<_>>();
+        let operator = documents
+            .iter()
+            .find(|document| document["kind"] == "Deployment")
+            .expect("Operator Deployment");
+        let pod = &operator["spec"]["template"]["spec"];
+        assert!(pod["volumes"].as_sequence().is_some_and(|volumes| {
+            volumes.iter().any(|volume| {
+                volume["name"] == "external-bindings"
+                    && volume["secret"]["secretName"] == "customer-bindings"
+            })
+        }));
+        let container = &pod["containers"][0];
+        assert!(container["env"].as_sequence().is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                entry["name"] == "EXTERNAL_BINDINGS_FILE"
+                    && entry["value"] == "/etc/deployment/secrets/external-bindings.json"
+            })
+        }));
+        assert!(container["volumeMounts"]
+            .as_sequence()
+            .is_some_and(|mounts| {
+                mounts.iter().any(|mount| {
+                    mount["name"] == "external-bindings"
+                        && mount["mountPath"] == "/etc/deployment/secrets/external-bindings.json"
                 })
             }));
     }

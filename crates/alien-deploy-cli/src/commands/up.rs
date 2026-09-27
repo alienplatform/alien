@@ -13,7 +13,8 @@ use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{
     parse_public_endpoint_assignment, validate_public_endpoint_urls, ClientConfig, ComputeSettings,
     Container, Daemon, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
-    EnvironmentInfo, ManagementConfig, NetworkSettings, Platform, PublicEndpointUrls, ReleaseInfo,
+    EnvironmentInfo, KubernetesClusterOwnership, KubernetesClusterSettings, KubernetesSettings,
+    ManagementConfig, NetworkSettings, Platform, PublicEndpointUrls, ReleaseInfo,
     ResourceLifecycle, Stack, StackInputDefinition, StackInputKind, StackInputProvider,
     StackSettings, TelemetryMode, UpdatesMode, Worker,
 };
@@ -154,6 +155,11 @@ pub struct UpArgs {
     /// alien-operator image for Kubernetes Helm installs.
     #[arg(long, env = "ALIEN_OPERATOR_IMAGE")]
     pub operator_image: Option<String>,
+
+    /// Kubernetes Secret containing external-bindings.json for existing services.
+    /// The Secret must exist in the install namespace before deployment.
+    #[arg(long)]
+    pub external_bindings_secret: Option<String>,
 
     /// TOML file containing deployment settings.
     #[arg(long)]
@@ -866,6 +872,35 @@ mod tests {
     }
 
     #[test]
+    fn kubernetes_cli_declares_cluster_ownership() {
+        let existing = UpArgs::parse_from([
+            "alien-deploy",
+            "--platform",
+            "kubernetes",
+            "--namespace",
+            "customer-app",
+        ]);
+        let settings =
+            load_stack_settings(&existing, Platform::Kubernetes, Platform::Kubernetes, None)
+                .expect("existing-cluster settings should load");
+        let cluster = settings.kubernetes.unwrap().cluster.unwrap();
+        assert_eq!(cluster.ownership, KubernetesClusterOwnership::External);
+        assert_eq!(cluster.namespace.as_deref(), Some("customer-app"));
+
+        let managed = UpArgs::parse_from([
+            "alien-deploy",
+            "--platform",
+            "kubernetes",
+            "--base-platform",
+            "aws",
+        ]);
+        let settings = load_stack_settings(&managed, Platform::Kubernetes, Platform::Aws, None)
+            .expect("managed-cluster settings should load");
+        let cluster = settings.kubernetes.unwrap().cluster.unwrap();
+        assert_eq!(cluster.ownership, KubernetesClusterOwnership::Managed);
+    }
+
+    #[test]
     fn sdk_stack_settings_serializes_explicit_deployment_model() {
         let settings = StackSettings {
             deployment_model: DeploymentModel::Pull,
@@ -1072,6 +1107,29 @@ api = "https://old.example.test"
             public_endpoints
                 .get("gateway")
                 .and_then(|endpoints| endpoints.get("api"))
+                .map(String::as_str),
+            Some("https://gateway.example.test")
+        );
+    }
+
+    #[test]
+    fn public_endpoint_flag_accepts_kubernetes_platform() {
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--platform",
+            "kubernetes",
+            "--public-endpoint",
+            "gateway.web=https://gateway.example.test",
+        ]);
+
+        let public_endpoints = load_public_endpoints(&args, Platform::Kubernetes, None)
+            .expect("kubernetes should accept external public endpoints")
+            .expect("public endpoints should exist");
+
+        assert_eq!(
+            public_endpoints
+                .get("gateway")
+                .and_then(|endpoints| endpoints.get("web"))
                 .map(String::as_str),
             Some("https://gateway.example.test")
         );
@@ -2495,12 +2553,12 @@ fn load_public_endpoints(
     }
 
     match platform {
-        Platform::Local | Platform::Machines => Ok(Some(public_endpoints)),
-        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Kubernetes | Platform::Test => {
+        Platform::Local | Platform::Machines | Platform::Kubernetes => Ok(Some(public_endpoints)),
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Test => {
             Err(AlienError::new(ErrorData::ValidationError {
                 field: "public-endpoint".to_string(),
                 message: format!(
-                    "--public-endpoint is currently supported only for local or machines deployments, got '{}'",
+                    "--public-endpoint is currently supported only for local, machines, or kubernetes deployments, got '{}'",
                     platform.as_str()
                 ),
             }))
@@ -2686,6 +2744,14 @@ fn load_stack_settings(
     network_platform: Platform,
     deploy_config: Option<&DeployConfigFile>,
 ) -> Result<StackSettings> {
+    if let Some(secret) = args.external_bindings_secret.as_deref() {
+        if platform != Platform::Kubernetes || secret.trim().is_empty() {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "external-bindings-secret".to_string(),
+                message: "A nonempty external bindings Secret name is supported only for Kubernetes deployments".to_string(),
+            }));
+        }
+    }
     let mut settings = StackSettings::default();
 
     // The manager owns the deployment model for cloud platforms (push) and
@@ -2696,6 +2762,22 @@ fn load_stack_settings(
     // initial setup has no local platform services.
     if platform == Platform::Local {
         settings.deployment_model = DeploymentModel::Pull;
+    }
+    if platform == Platform::Kubernetes {
+        // A CLI install without a base cloud uses the cluster named by the
+        // selected kubeconfig context. With a base cloud, setup creates one.
+        settings.kubernetes = Some(KubernetesSettings {
+            cluster: Some(KubernetesClusterSettings {
+                ownership: if args.base_platform.is_some() {
+                    KubernetesClusterOwnership::Managed
+                } else {
+                    KubernetesClusterOwnership::External
+                },
+                namespace: args.namespace.clone(),
+                cloud: None,
+            }),
+            exposure: None,
+        });
     }
 
     if let Some(config) = deploy_config {
@@ -3663,6 +3745,7 @@ async fn run_pull_model(
                 deployment_id,
                 deployment_name,
                 stack_settings,
+                public_endpoints,
             )
             .await
         }
@@ -3928,6 +4011,7 @@ async fn run_kubernetes_pull_model(
     deployment_id: &str,
     deployment_name: &str,
     stack_settings: &StackSettings,
+    public_endpoints: Option<&PublicEndpointUrls>,
 ) -> Result<()> {
     output::info("Kubernetes platform detected — installing alien-operator with Helm.");
     let stack = fetch_kubernetes_release_stack(client, deployment_id).await?;
@@ -3953,6 +4037,8 @@ async fn run_kubernetes_pull_model(
         deployment_name,
         stack_settings,
         &operator_image,
+        args.external_bindings_secret.as_deref(),
+        public_endpoints,
     )?;
 
     helm_upgrade_install(
@@ -4082,6 +4168,8 @@ fn write_kubernetes_helm_values(
     deployment_name: &str,
     stack_settings: &StackSettings,
     operator_image: &str,
+    external_bindings_secret: Option<&str>,
+    public_endpoints: Option<&PublicEndpointUrls>,
 ) -> Result<PathBuf> {
     let (repository, tag) = split_image_tag(operator_image)?;
     let mut helm_settings = stack_settings.clone();
@@ -4108,7 +4196,9 @@ fn write_kubernetes_helm_values(
             }
         },
         "stackSettings": helm_settings,
+        "publicEndpoints": public_endpoints.cloned().unwrap_or_default(),
         "infrastructure": null,
+        "infrastructureExistingSecret": external_bindings_secret.unwrap_or(""),
     });
     let values_path = chart_dir.join("alien-deploy-values.json");
     let contents = serde_json::to_string_pretty(&values)

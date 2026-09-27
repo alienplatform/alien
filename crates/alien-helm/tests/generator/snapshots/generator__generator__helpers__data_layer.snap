@@ -194,6 +194,7 @@ serviceAccounts:
 stackSettings: null
 
 infrastructure: null
+infrastructureExistingSecret: ""
 
 basePlatform: null
 basePlatformConfig:
@@ -529,6 +530,7 @@ ephemeralStorage:
       "additionalProperties": true
     },
     "infrastructure": { "type": ["object", "null"] },
+    "infrastructureExistingSecret": { "type": "string" },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
     "basePlatformConfig": {
       "type": "object",
@@ -1011,6 +1013,9 @@ roleRef:
     {{- fail "inputValues cannot change through Helm after installation; edit deployment inputs in the deployment dashboard and keep the original Helm values" -}}
   {{- end -}}
 {{- end -}}
+{{- if and .Values.infrastructure .Values.infrastructureExistingSecret -}}
+  {{- fail "Set either infrastructure or infrastructureExistingSecret, not both" -}}
+{{- end -}}
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
 {{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure .Values.logCollector.enabled .Values.inputValues }}
@@ -1214,7 +1219,7 @@ spec:
             {{- end }}
             - name: PUBLIC_ENDPOINTS_FILE
               value: /etc/deployment/config/public-endpoints.json
-            {{- if .Values.infrastructure }}
+            {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
             - name: EXTERNAL_BINDINGS_FILE
               value: /etc/deployment/secrets/external-bindings.json
             {{- end }}
@@ -1268,7 +1273,7 @@ spec:
               mountPath: /etc/deployment/secrets/encryption-key
               subPath: {{ include "deployment.encryptionSecretKey" . }}
               readOnly: true
-            {{- if .Values.infrastructure }}
+            {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
             - name: external-bindings
               mountPath: /etc/deployment/secrets/external-bindings.json
               subPath: external-bindings.json
@@ -1312,10 +1317,10 @@ spec:
           secret:
             secretName: {{ include "deployment.encryptionSecretName" . }}
             defaultMode: 384
-        {{- if .Values.infrastructure }}
+        {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
         - name: external-bindings
           secret:
-            secretName: {{ include "deployment.fullname" . }}
+            secretName: {{ default (include "deployment.fullname" .) .Values.infrastructureExistingSecret }}
             items:
               - key: external-bindings.json
                 path: external-bindings.json
