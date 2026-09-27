@@ -245,6 +245,11 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
                     .to_string(),
             }));
         }
+        if config.is_airgapped() {
+            return Err(AlienError::new(error::ErrorData::ConfigurationError {
+                message: "Pod log collection requires a configured telemetry forwarder".to_string(),
+            }));
+        }
     }
 
     // Local runtimes are real child processes owned by LocalBindingsProvider.

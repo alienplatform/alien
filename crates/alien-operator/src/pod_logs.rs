@@ -5,7 +5,7 @@
 //! OTLP batch and its resume cursor to the encrypted local database together.
 
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
     time::Duration,
 };
@@ -146,6 +146,7 @@ struct Source {
     pod_name: String,
     container: String,
     restart_count: i32,
+    terminal: bool,
     initial_since: DateTime<Utc>,
 }
 
@@ -170,6 +171,7 @@ pub async fn run_loop(state: Arc<OperatorState>, config: PodLogCollectionConfig)
     }
 
     let mut tasks = HashMap::<Source, StreamTask>::new();
+    let mut completed = HashSet::<Source>::new();
     let mut client = None;
     let mut legacy_was_running = false;
     info!(namespace, label_key = %config.label_key, label_value = %config.label_value,
@@ -198,6 +200,7 @@ pub async fn run_loop(state: Arc<OperatorState>, config: PodLogCollectionConfig)
                     &config,
                     &mut legacy_was_running,
                     &mut tasks,
+                    &mut completed,
                 )
                 .await
             }
@@ -225,29 +228,40 @@ async fn reconcile(
     config: &PodLogCollectionConfig,
     legacy_was_running: &mut bool,
     tasks: &mut HashMap<Source, StreamTask>,
+    completed: &mut HashSet<Source>,
 ) -> Result<()> {
     let selector = format!("{}={}", config.label_key, config.label_value);
     if let Some(legacy_daemonset) = config.legacy_daemonset.as_deref() {
+        // Capture this time before querying the API. The database keeps the
+        // first observation across discovery passes and Operator restarts.
+        let observed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true);
         if legacy_collector_running(client, namespace, legacy_daemonset).await? {
             stop_all(tasks);
+            completed.clear();
+            state
+                .db
+                .observe_legacy_pod_log_collector(&selector, &observed_at)
+                .await?;
+            if !*legacy_was_running {
+                info!(
+                    legacy_daemonset,
+                    "Waiting for old node collector to stop before reading Pod logs"
+                );
+            }
             *legacy_was_running = true;
-            info!(
-                legacy_daemonset,
-                "Waiting for old node collector to stop before reading Pod logs"
-            );
             return Ok(());
         }
         if *legacy_was_running {
-            stop_all(tasks);
-            state
-                .db
-                .reset_pod_log_cutover_at(
-                    &selector,
-                    &Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true),
-                )
-                .await?;
+            info!(
+                legacy_daemonset,
+                "Old node collector stopped; reading selected Pod logs"
+            );
             *legacy_was_running = false;
         }
+        state
+            .db
+            .mark_legacy_pod_log_collector_gone(&selector)
+            .await?;
     }
 
     let deployment_id = match state.db.get_deployment_id().await? {
@@ -265,10 +279,7 @@ async fn reconcile(
         })?;
     let cutover = state
         .db
-        .pod_log_cutover_at(
-            &selector,
-            &Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true),
-        )
+        .pod_log_cutover_at(&selector, "1970-01-01T00:00:00Z")
         .await?;
     let cutover = DateTime::parse_from_rfc3339(&cutover)
         .into_alien_error()
@@ -280,6 +291,8 @@ async fn reconcile(
     for pod in &pods.items {
         desired.extend(selected_sources(pod, config, cutover.clone()));
     }
+    completed.retain(|source| desired.contains(source));
+    desired.retain(|source| !completed.contains(source));
     if desired.len() > config.max_streams {
         warn!(
             selected = desired.len(),
@@ -291,12 +304,15 @@ async fn reconcile(
     tasks.retain(|source, task| {
         let keep = desired.contains(source) && !task.handle.is_finished();
         if !keep {
+            if source.terminal && desired.contains(source) && task.handle.is_finished() {
+                completed.insert(source.clone());
+            }
             task.cancel.cancel();
         }
         keep
     });
     for source in desired {
-        if tasks.contains_key(&source) {
+        if completed.contains(&source) || tasks.contains_key(&source) {
             continue;
         }
         let task_cancel = state.cancel.child_token();
@@ -328,15 +344,15 @@ fn selected_sources(
     cutover: DateTime<Utc>,
 ) -> Vec<Source> {
     let labels = pod.metadata.labels.as_ref();
+    let phase = pod
+        .status
+        .as_ref()
+        .and_then(|status| status.phase.as_deref());
     if labels.and_then(|labels| labels.get(&config.label_key)) != Some(&config.label_value)
         || labels
             .and_then(|labels| labels.get("alien.dev/log-collector-exclude"))
             .is_some_and(|value| value == "true")
-        || pod
-            .status
-            .as_ref()
-            .and_then(|status| status.phase.as_deref())
-            != Some("Running")
+        || !matches!(phase, Some("Running" | "Succeeded" | "Failed"))
     {
         return Vec::new();
     }
@@ -368,6 +384,7 @@ fn selected_sources(
                 pod_name: pod_name.clone(),
                 container: container.name.clone(),
                 restart_count,
+                terminal: phase != Some("Running"),
                 initial_since: initial_since.clone(),
             }
         })
@@ -439,12 +456,14 @@ async fn stream_source(
         if cancel.is_cancelled() {
             return;
         }
-        if let Err(error) =
-            read_stream_once(&client, &db, &namespace, &deployment_id, &source, &cancel).await
-        {
-            if !cancel.is_cancelled() {
-                warn!(error = %error, pod = %source.pod_name, container = %source.container,
-                    "Pod log stream failed; will reconnect");
+        match read_stream_once(&client, &db, &namespace, &deployment_id, &source, &cancel).await {
+            Ok(()) if source.terminal => return,
+            Ok(()) => {}
+            Err(error) => {
+                if !cancel.is_cancelled() {
+                    warn!(error = %error, pod = %source.pod_name, container = %source.container,
+                        "Pod log stream failed; will reconnect");
+                }
             }
         }
         tokio::select! {
@@ -487,7 +506,7 @@ async fn read_stream_once(
     );
     let mut request = client.client().get(&url).query(&[
         ("container", source.container.as_str()),
-        ("follow", "true"),
+        ("follow", if source.terminal { "false" } else { "true" }),
         ("timestamps", "true"),
     ]);
     if let Some(timestamp) = replay_time {
@@ -650,7 +669,7 @@ mod tests {
     use k8s_openapi::api::core::v1::{Container, PodSpec, PodStatus};
 
     #[test]
-    fn only_selected_running_workload_pods_are_read() {
+    fn only_selected_workload_pods_are_read() {
         let cutover = Utc::now();
         let config = PodLogCollectionConfig {
             label_key: "example.com/deployment".to_string(),
@@ -703,6 +722,14 @@ mod tests {
             .unwrap()
             .remove("alien.dev/log-collector-exclude");
         pod.status.as_mut().unwrap().phase = Some("Succeeded".to_string());
+        assert!(selected_sources(&pod, &config, cutover)
+            .iter()
+            .all(|source| source.terminal));
+        pod.status.as_mut().unwrap().phase = Some("Failed".to_string());
+        assert!(selected_sources(&pod, &config, cutover)
+            .iter()
+            .all(|source| source.terminal));
+        pod.status.as_mut().unwrap().phase = Some("Pending".to_string());
         assert!(selected_sources(&pod, &config, cutover).is_empty());
     }
 
@@ -713,6 +740,7 @@ mod tests {
             pod_name: "app-123".to_string(),
             container: "app".to_string(),
             restart_count: 0,
+            terminal: false,
             initial_since: Utc::now(),
         };
         let mut last_time = None;

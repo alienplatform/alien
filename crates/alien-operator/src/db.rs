@@ -998,15 +998,15 @@ impl OperatorDb {
         }))
     }
 
-    /// Record the one-time handoff from a previous collector. Pods already
-    /// present at handoff start at this time; Pods created later start from
-    /// their creation time. The marker survives Operator restarts and upgrades.
-    pub async fn pod_log_cutover_at(&self, scope: &str, now: &str) -> Result<String> {
+    /// Return the durable lower bound for a Pod-log handoff. A new installation
+    /// starts at Pod creation time; an observed legacy collector advances the
+    /// lower bound before it disappears. The marker survives Operator restarts.
+    pub async fn pod_log_cutover_at(&self, scope: &str, initial: &str) -> Result<String> {
         let conn = self.conn.lock().await;
         let key = format!("pod_log_cutover_at:{scope}");
         conn.execute(
             "INSERT OR IGNORE INTO state (key, value, updated_at) VALUES (?, ?, datetime('now'))",
-            (key.clone(), now),
+            (key.clone(), initial),
         )
         .await
         .into_alien_error()
@@ -1039,19 +1039,96 @@ impl OperatorDb {
             })
     }
 
-    /// A returned node collector can have forwarded lines since the last API
-    /// cursor. Start a new handoff when it disappears again.
-    pub async fn reset_pod_log_cutover_at(&self, scope: &str, now: &str) -> Result<()> {
+    /// Start a handoff at the first observation of a previous collector.
+    /// Further discovery passes and Operator restarts retain that earlier
+    /// timestamp, so shutdown latency cannot create a missing interval.
+    pub async fn observe_legacy_pod_log_collector(
+        &self,
+        scope: &str,
+        observed_at: &str,
+    ) -> Result<()> {
         let conn = self.conn.lock().await;
-        let key = format!("pod_log_cutover_at:{scope}");
+        conn.execute("BEGIN IMMEDIATE", ())
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to begin Pod log collector handoff".to_string(),
+            })?;
+        let result = async {
+            let active_key = format!("pod_log_legacy_active:{scope}");
+            let mut rows = conn
+                .query("SELECT value FROM state WHERE key = ?", (active_key.clone(),))
+                .await
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to read previous Pod log collector state".to_string(),
+                })?;
+            let already_active = match rows.next().await.into_alien_error().context(
+                ErrorData::DatabaseError {
+                    message: "Failed to fetch previous Pod log collector state".to_string(),
+                },
+            )? {
+                Some(row) => {
+                    let value: String = row.get(0).into_alien_error().context(
+                        ErrorData::DatabaseError {
+                            message: "Failed to decode previous Pod log collector state".to_string(),
+                        },
+                    )?;
+                    value == "true"
+                }
+                None => false,
+            };
+            if !already_active {
+                let cutover_key = format!("pod_log_cutover_at:{scope}");
+                conn.execute(
+                    "INSERT INTO state (key, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    (cutover_key, observed_at),
+                )
+                .await
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to record Pod log collector handoff start".to_string(),
+                })?;
+                conn.execute(
+                    "INSERT INTO state (key, value, updated_at) VALUES (?, 'true', datetime('now')) ON CONFLICT(key) DO UPDATE SET value = 'true', updated_at = excluded.updated_at",
+                    (active_key,),
+                )
+                .await
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to mark previous Pod log collector active".to_string(),
+                })?;
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(error) = result {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(error);
+        }
+        conn.execute("COMMIT", ())
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to commit Pod log collector handoff".to_string(),
+            })?;
+        Ok(())
+    }
+
+    /// Allow a later rollback to start a new handoff when its old collector
+    /// returns. If this write is interrupted, replay starts earlier rather
+    /// than dropping lines.
+    pub async fn mark_legacy_pod_log_collector_gone(&self, scope: &str) -> Result<()> {
+        let conn = self.conn.lock().await;
+        let key = format!("pod_log_legacy_active:{scope}");
         conn.execute(
-            "INSERT INTO state (key, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-            (key, now),
+            "UPDATE state SET value = 'false', updated_at = datetime('now') WHERE key = ? AND value = 'true'",
+            (key,),
         )
         .await
         .into_alien_error()
         .context(ErrorData::DatabaseError {
-            message: "Failed to reset Pod log collector handoff".to_string(),
+            message: "Failed to finish Pod log collector handoff".to_string(),
         })?;
         Ok(())
     }
@@ -1630,6 +1707,65 @@ mod tests {
 
     const TEST_ENCRYPTION_KEY: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[tokio::test]
+    async fn pod_log_handoff_survives_operator_restart() {
+        let data_dir = tempfile::tempdir().expect("create temp data directory");
+        let path = data_dir.path().to_str().unwrap();
+        let initial = "1970-01-01T00:00:00Z";
+        let observed = "2026-09-27T09:00:00Z";
+        let later = "2026-09-27T09:05:00Z";
+        let db = OperatorDb::new(path, TEST_ENCRYPTION_KEY)
+            .await
+            .expect("open encrypted operator db");
+        assert_eq!(
+            db.pod_log_cutover_at("app=release", initial).await.unwrap(),
+            initial
+        );
+        db.observe_legacy_pod_log_collector("app=release", observed)
+            .await
+            .expect("record old collector observation");
+        db.observe_legacy_pod_log_collector("app=release", later)
+            .await
+            .expect("repeat old collector observation");
+        drop(db);
+        let reopened = OperatorDb::new(path, TEST_ENCRYPTION_KEY)
+            .await
+            .expect("reopen encrypted operator db");
+        assert_eq!(
+            reopened
+                .pod_log_cutover_at("app=release", initial)
+                .await
+                .unwrap(),
+            observed
+        );
+        reopened
+            .observe_legacy_pod_log_collector("app=release", later)
+            .await
+            .expect("observation after restart");
+        assert_eq!(
+            reopened
+                .pod_log_cutover_at("app=release", initial)
+                .await
+                .unwrap(),
+            observed
+        );
+        reopened
+            .mark_legacy_pod_log_collector_gone("app=release")
+            .await
+            .expect("finish handoff");
+        reopened
+            .observe_legacy_pod_log_collector("app=release", later)
+            .await
+            .expect("new handoff after rollback");
+        assert_eq!(
+            reopened
+                .pod_log_cutover_at("app=release", initial)
+                .await
+                .unwrap(),
+            later
+        );
+    }
 
     #[tokio::test]
     async fn pod_log_cursor_and_queued_batch_commit_together() {
