@@ -7189,6 +7189,10 @@ each node. Choose it for larger workloads in clusters that permit read-only
 host log mounts. It uses `logCollector.image` and `logCollector.resources`.
 The chart installs only the selected mode. Scope both modes with
 `logCollector.scope`; switching modes can replay previously forwarded lines.
+If the Remote Operator uses `nodeAgent` and its setup-owned collector token is
+rotated, set `remoteOperator.collectorTokenRevision` to the new token's
+64-character SHA-256 hex digest during the chart upgrade. This restarts both
+the receiver and the DaemonSet with the new credential.
 "#
     )
 }
