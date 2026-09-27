@@ -47,6 +47,12 @@ pub fn names_deployment(subject: &Subject, deployment: &DeploymentRecord) -> boo
         }
 }
 
+/// True when the subject's capability names a binding kind, so authorization can exclude a
+/// resource of its own deployment.
+pub fn is_kind_scoped(subject: &Subject) -> bool {
+    matches!(subject.scope, Scope::RemoteBindings { .. })
+}
+
 /// Decide resolution for a subject that carries a remote-bindings capability.
 /// `None`: not a resolver, apply the normal policy. A resolver always gets a
 /// definite answer and never falls through to deployment permissions.

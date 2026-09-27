@@ -26,7 +26,7 @@ use crate::credential_materialization::{
     materialize_remote_binding_lease, MaterializedCredentialLease, RemoteBindingCredentialScope,
 };
 use crate::error::ErrorData;
-use crate::traits::{deployment_status_from_record, DeploymentRecord, ReleaseStore};
+use crate::traits::{deployment_status_from_record, DeploymentRecord, ReleaseRecord, ReleaseStore};
 
 /// The remote client refreshes five minutes before this server-provided hint.
 /// One hour matches the maximum supported lifetime for manager-minted cloud credentials.
@@ -795,13 +795,30 @@ async fn resolve_binding(
         return ErrorData::forbidden("Cannot resolve remote bindings for this deployment")
             .into_response();
     }
+    // A kind-scoped capability is refused with the same 403 whether the release lacks the
+    // resource or authorization excludes it, so it cannot probe what it may not resolve.
+    let before_authorization = |error: alien_error::AlienError<ErrorData>| -> Response {
+        let client_error = error
+            .http_status_code
+            .is_some_and(|code| (400..500).contains(&code));
+        if client_error && remote_binding_capability::is_kind_scoped(&subject) {
+            tracing::debug!(
+                deployment_id = %deployment.id,
+                reason = %error,
+                "Refusing a kind-scoped remote bindings capability before authorization"
+            );
+            return ErrorData::forbidden("Cannot resolve this remote binding for this deployment")
+                .into_response();
+        }
+        error.into_response()
+    };
     let resource_id = match (&request.resource_id, &request.kind) {
         (Some(resource_id), None) => resource_id.clone(),
         (None, Some(ResolveBindingKind::Ai)) => {
             match unique_current_release_remote_ai(state.release_store.as_ref(), &deployment).await
             {
                 Ok(resource_id) => resource_id,
-                Err(error) => return error.into_response(),
+                Err(error) => return before_authorization(error),
             }
         }
         _ => {
@@ -812,6 +829,24 @@ async fn resolve_binding(
         }
     };
 
+    // The kind comes from the release current at use, so authorization sees a
+    // sandbox even when the release gained it after the caller's token was issued.
+    let (release, binding_kind) =
+        match current_release_binding_kind(state.release_store.as_ref(), &deployment, &resource_id)
+            .await
+        {
+            Ok(found) => found,
+            Err(error) => return before_authorization(error),
+        };
+
+    if !state
+        .authz
+        .can_resolve_remote_binding(&subject, &deployment, binding_kind, &resource_id)
+    {
+        return ErrorData::forbidden("Cannot resolve this remote binding for this deployment")
+            .into_response();
+    }
+
     if !deployment_status_allows_remote_bindings(deployment_status_from_record(&deployment.status))
     {
         return ErrorData::bad_request(format!(
@@ -821,25 +856,8 @@ async fn resolve_binding(
         .into_response();
     }
 
-    // The kind comes from the release current at use, so authorization sees a
-    // sandbox even when the release gained it after the caller's token was issued.
-    let binding_kind = match require_current_release_remote_access(
-        state.release_store.as_ref(),
-        &deployment,
-        &resource_id,
-    )
-    .await
-    {
-        Ok(kind) => kind,
-        Err(error) => return error.into_response(),
-    };
-
-    if !state
-        .authz
-        .can_resolve_remote_binding(&subject, &deployment, binding_kind, &resource_id)
-    {
-        return ErrorData::forbidden("Cannot resolve this remote binding for this deployment")
-            .into_response();
+    if let Err(error) = require_current_release_remote_access(&release, &deployment, &resource_id) {
+        return error.into_response();
     }
 
     if binding_kind != alien_core::remote_bindings::RemoteBindingKind::Sandbox {
@@ -1055,18 +1073,18 @@ fn remote_binding_expiry(
     Ok(expires_at)
 }
 
-/// Require remote access in the user-authored current release before trusting
-/// controller-published binding parameters in stack state.
-///
-/// Stack state can outlive a release update or come from an older manager that
-/// did not clear `remote_binding_params`. The current release is therefore the
-/// authoritative opt-in source. In particular, desired/prepared release data
-/// must not grant access while an update is still in progress.
-async fn require_current_release_remote_access(
+/// Load the deployment's current release and the binding kind it declares for `resource_id`.
+async fn current_release_binding_kind(
     release_store: &dyn ReleaseStore,
     deployment: &DeploymentRecord,
     resource_id: &str,
-) -> Result<alien_core::remote_bindings::RemoteBindingKind, alien_error::AlienError<ErrorData>> {
+) -> Result<
+    (
+        ReleaseRecord,
+        alien_core::remote_bindings::RemoteBindingKind,
+    ),
+    alien_error::AlienError<ErrorData>,
+> {
     let release_id = deployment.current_release_id.as_deref().ok_or_else(|| {
         ErrorData::bad_request(
             "Deployment has no current release; remote bindings cannot be resolved",
@@ -1080,16 +1098,37 @@ async fn require_current_release_remote_access(
         "remote binding resolution",
     )
     .await?;
-    let (stack, resource) =
-        current_release_resource(&release, deployment, release_id, resource_id)?;
-
-    let definition =
+    let (_, resource) = current_release_resource(&release, deployment, release_id, resource_id)?;
+    let kind =
         alien_core::remote_bindings::remote_binding_definition(&resource.config.resource_type())
             .ok_or_else(|| {
                 ErrorData::bad_request(format!(
                     "Resource '{resource_id}' does not support Remote Bindings"
                 ))
-            })?;
+            })?
+            .kind;
+    Ok((release, kind))
+}
+
+/// Require remote access in the user-authored current release before trusting
+/// controller-published binding parameters in stack state.
+///
+/// Stack state can outlive a release update or come from an older manager that
+/// did not clear `remote_binding_params`. The current release is therefore the
+/// authoritative opt-in source. In particular, desired/prepared release data
+/// must not grant access while an update is still in progress.
+fn require_current_release_remote_access(
+    release: &ReleaseRecord,
+    deployment: &DeploymentRecord,
+    resource_id: &str,
+) -> Result<(), alien_error::AlienError<ErrorData>> {
+    let (stack, resource) =
+        current_release_resource(release, deployment, &release.id, resource_id)?;
+    let is_key =
+        alien_core::remote_bindings::remote_binding_definition(&resource.config.resource_type())
+            .is_some_and(|definition| {
+                definition.kind == alien_core::remote_bindings::RemoteBindingKind::Key
+            });
     if !resource.remote_access {
         return Err(ErrorData::bad_request(format!(
             "Resource '{resource_id}' is not enabled for remote access in the deployment's current release"
@@ -1102,7 +1141,7 @@ async fn require_current_release_remote_access(
             resource.lifecycle
         )));
     }
-    if definition.kind == alien_core::remote_bindings::RemoteBindingKind::Key
+    if is_key
         && stack
             .resources
             .values()
@@ -1126,7 +1165,7 @@ async fn require_current_release_remote_access(
         ));
     }
 
-    Ok(definition.kind)
+    Ok(())
 }
 
 fn is_sandbox_binding(resource_type: &alien_core::ResourceType) -> bool {
