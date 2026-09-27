@@ -940,6 +940,12 @@ spec:
     spec:
       automountServiceAccountToken: false
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       volumes:
         - name: helm-history
           {{- if eq .Values.remoteOperator.helmHistoryBackend "secret" }}
@@ -953,6 +959,10 @@ spec:
         - name: verify-history-backend
           image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           command:
             - /bin/sh
             - -ec
@@ -993,10 +1003,20 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: wait-for-identity
           image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           command:
             - /bin/sh
             - -ec
@@ -1062,10 +1082,20 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.remoteOperatorCleanupName" . }}
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: cleanup
           image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           command:
             - /bin/sh
             - -ec
@@ -1294,10 +1324,20 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: rollback-guard
           image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           command:
             - /bin/sh
             - -ec
@@ -5070,6 +5110,12 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       volumes:
         - name: current-history
           {{- if eq $backend "secret" }}
@@ -5085,6 +5131,10 @@ spec:
         - name: prune-unsafe-history
           image: "{{ dig "image" "repository" "alpine/k8s" $cleanup }}:{{ dig "image" "tag" "1.32.0" $cleanup }}"
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" $cleanup }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           command:
             - /bin/sh
             - -ec
@@ -5282,10 +5332,20 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: cleanup
           image: "{{ dig "image" "repository" "alpine/k8s" $cleanup }}:{{ dig "image" "tag" "1.32.0" $cleanup }}"
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" $cleanup }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           command:
             - /bin/sh
             - -ec

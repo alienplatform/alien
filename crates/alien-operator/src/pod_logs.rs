@@ -565,7 +565,9 @@ async fn read_stream_once(
                     message: "Kubernetes Pod log stream ended with an error".to_string(),
                 })?;
                 let Some(chunk) = chunk else {
-                    if !partial.is_empty() {
+                    // A live watch can end in the middle of a line. Reconnect from
+                    // the last complete line instead of advancing past a fragment.
+                    if source.terminal && !partial.is_empty() {
                         if let Some(record) = parse_line(
                             &partial, truncated, namespace, source, replay_time,
                             saved.as_ref(), &mut last_time, &mut ordinal, &mut offset,
@@ -683,18 +685,36 @@ mod tests {
     use axum::{extract::Query, routing::get, Router};
     use k8s_openapi::api::core::v1::{Container, PodSpec, PodStatus};
     use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+    use opentelemetry_proto::tonic::common::v1::any_value::Value;
     use prost::Message;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[tokio::test]
     async fn terminal_pod_api_logs_queue_once_across_reader_restart() {
+        const TERMINAL_LINES: &str = concat!(
+            "2026-09-27T09:00:00.000000001Z {\"time\":\"2026-09-27T09:00:00Z\",\"level\":\"INFO\",\"msg\":\"first\"}\n",
+            "2026-09-27T09:00:00.000000001Z {\"time\":\"2026-09-27T09:00:00Z\",\"level\":\"INFO\",\"msg\":\"second\"}",
+        );
+        const LIVE_PARTIAL: &str = "2026-09-27T09:00:00.000000002Z {\"time\":\"2026-09-27T09:00:00Z\",\"level\":\"INFO\",\"msg\":\"comp";
+        const LIVE_COMPLETE: &str = "2026-09-27T09:00:00.000000002Z {\"time\":\"2026-09-27T09:00:00Z\",\"level\":\"INFO\",\"msg\":\"complete\"}\n";
+        let live_calls = Arc::new(AtomicUsize::new(0));
         let app = Router::new().route(
             "/api/v1/namespaces/demo/pods/app-123/log",
-            get(|Query(query): Query<HashMap<String, String>>| async move {
-                assert_eq!(query.get("container").map(String::as_str), Some("app"));
-                assert_eq!(query.get("follow").map(String::as_str), Some("false"));
-                assert_eq!(query.get("timestamps").map(String::as_str), Some("true"));
-                assert!(query.contains_key("sinceTime"));
-                "2026-09-27T09:00:00.000000001Z {\"time\":\"2026-09-27T09:00:00Z\",\"level\":\"INFO\",\"msg\":\"first\"}\n2026-09-27T09:00:00.000000001Z {\"time\":\"2026-09-27T09:00:00Z\",\"level\":\"INFO\",\"msg\":\"second\"}"
+            get(move |Query(query): Query<HashMap<String, String>>| {
+                let live_calls = live_calls.clone();
+                async move {
+                    assert_eq!(query.get("container").map(String::as_str), Some("app"));
+                    assert_eq!(query.get("timestamps").map(String::as_str), Some("true"));
+                    assert!(query.contains_key("sinceTime"));
+                    match query.get("follow").map(String::as_str) {
+                        Some("false") => TERMINAL_LINES,
+                        Some("true") if live_calls.fetch_add(1, Ordering::SeqCst) == 0 => {
+                            LIVE_PARTIAL
+                        }
+                        Some("true") => LIVE_COMPLETE,
+                        other => panic!("unexpected follow query: {other:?}"),
+                    }
+                }
             }),
         );
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
@@ -762,6 +782,33 @@ mod tests {
             .await
             .expect("replay completed Pod logs");
         assert_eq!(db.get_pending_telemetry(10).await.unwrap().len(), 1);
+
+        let live_source = Source {
+            pod_uid: "uid-live".to_string(),
+            terminal: false,
+            ..source
+        };
+        read_stream_once(&client, &db, "demo", "dep_test", &live_source, &cancel)
+            .await
+            .expect("read interrupted live stream");
+        assert!(db
+            .get_pod_log_offset("uid-live", "app", 0)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(db.get_pending_telemetry(10).await.unwrap().len(), 1);
+        read_stream_once(&client, &db, "demo", "dep_test", &live_source, &cancel)
+            .await
+            .expect("reconnect live stream");
+        let queued = db.get_pending_telemetry(10).await.unwrap();
+        assert_eq!(queued.len(), 2);
+        let otlp = ExportLogsServiceRequest::decode(queued[1].2.as_slice())
+            .expect("decode reconnected live logs");
+        let record = &otlp.resource_logs[0].scope_logs[0].log_records[0];
+        assert!(matches!(
+            record.body.as_ref().and_then(|body| body.value.as_ref()),
+            Some(Value::StringValue(body)) if body == "complete"
+        ));
         server.abort();
     }
 
