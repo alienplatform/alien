@@ -25,6 +25,7 @@ alien-client-config = { workspace = true }
 alien-commands = { workspace = true, default-features = false, features = ["dispatchers"] }
 alien-manager-api = { path = "../../client-sdks/manager/rust" }
 alien-k8s-clients = { workspace = true }
+k8s-openapi = { workspace = true }
 
 # Async & HTTP
 tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt-multi-thread", "time", "net", "fs", "signal"] }
@@ -56,6 +57,7 @@ async-trait = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["v4"] }
 url = { workspace = true }
+urlencoding = { workspace = true }
 hostname = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
 

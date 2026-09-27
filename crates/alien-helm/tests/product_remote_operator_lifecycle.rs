@@ -14,7 +14,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Output},
-    time::Duration,
 };
 
 const CLUSTER_CONTEXT: &str = "kind-alien-product-lifecycle";
@@ -30,7 +29,6 @@ const ENCRYPTION_KEY_SHA256: &str =
 const GOOD_OPERATOR_IMAGE: &str = "alien-product-lifecycle-operator:local";
 const NOT_READY_OPERATOR_IMAGE: &str = "alien-product-lifecycle-operator-not-ready:local";
 const OPERATOR_FIXTURE_BASE_IMAGE: &str = "alpine/k8s:1.32.0";
-const LOG_COLLECTOR_BASE_IMAGE: &str = "fluent/fluent-bit:3.2";
 const LOG_COLLECTOR_IMAGE: &str = "alien-product-lifecycle-collector:local";
 const GOOD_RUNTIME_IMAGE_REPOSITORY: &str = "alien-product-lifecycle-runtime";
 const GOOD_RUNTIME_IMAGE_TAG: &str = "local";
@@ -90,19 +88,16 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
     let terraform_failure_chart_dir = temp.path().join("terraform-failure-chart");
     let operator_fixture_dir = temp.path().join("operator-fixture");
     let not_ready_operator_fixture_dir = temp.path().join("operator-fixture-not-ready");
-    let log_collector_fixture_dir = temp.path().join("log-collector-fixture");
     let runtime_fixture_dir = temp.path().join("runtime-fixture");
     fs::create_dir_all(&operator_fixture_dir).expect("create Operator fixture directory");
     fs::create_dir_all(&not_ready_operator_fixture_dir)
         .expect("create not-ready Operator fixture directory");
-    fs::create_dir_all(&log_collector_fixture_dir).expect("create log-collector fixture directory");
     fs::create_dir_all(&runtime_fixture_dir).expect("create runtime fixture directory");
     fs::write(
         operator_fixture_dir.join("Dockerfile"),
         r#"FROM __OPERATOR_FIXTURE_BASE_IMAGE__
 RUN mkdir -p /www && printf ready > /www/ready && chmod -R a+rX /www
 USER 1000:1000
-COPY collector_receiver.py /collector_receiver.py
 COPY start.sh /start.sh
 ENTRYPOINT []
 CMD ["/bin/sh", "/start.sh"]
@@ -118,34 +113,10 @@ CMD ["/bin/sh", "/start.sh"]
         r#"#!/bin/sh
 set -eu
 kubectl --namespace="$KUBERNETES_NAMESPACE" patch configmap "$OPERATOR_IDENTITY_INITIALIZED_CONFIGMAP" --type=merge -p '{"metadata":{"labels":{"alien.dev/remote-operator-identity-phase":"initialized"}},"immutable":true}'
-python3 /collector_receiver.py &
 exec python3 -m http.server 8081 --directory /www
 "#,
     )
     .expect("write Operator startup fixture");
-    fs::write(
-        operator_fixture_dir.join("collector_receiver.py"),
-        r#"from http.server import BaseHTTPRequestHandler, HTTPServer
-
-class Handler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
-        if self.path != "/internal/logs":
-            self.send_error(404)
-            return
-        for marker in (b"selected-log-marker", b"unselected-log-marker"):
-            if marker in body:
-                print(marker.decode(), flush=True)
-        self.send_response(202)
-        self.end_headers()
-
-    def log_message(self, _format, *_args):
-        pass
-
-HTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
-"#,
-    )
-    .expect("write collector receiver fixture");
     fs::write(
         not_ready_operator_fixture_dir.join("Dockerfile"),
         format!("FROM {OPERATOR_FIXTURE_BASE_IMAGE}\nUSER 1000:1000\nENTRYPOINT []\nCMD [\"sleep\", \"3600\"]\n"),
@@ -158,25 +129,7 @@ HTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
         ),
     )
     .expect("write runtime fixture Dockerfile");
-    fs::write(
-        log_collector_fixture_dir.join("Dockerfile"),
-        format!("FROM {LOG_COLLECTOR_BASE_IMAGE}\nCOPY marker /alien-e2e-marker\n"),
-    )
-    .expect("write log-collector fixture Dockerfile");
-    fs::write(log_collector_fixture_dir.join("marker"), "lifecycle-e2e\n")
-        .expect("write log-collector fixture marker");
     run_ok("docker", ["pull", OPERATOR_FIXTURE_BASE_IMAGE], None);
-    run_ok("docker", ["pull", LOG_COLLECTOR_BASE_IMAGE], None);
-    run_ok(
-        "docker",
-        [
-            "build",
-            "--tag",
-            LOG_COLLECTOR_IMAGE,
-            path_str(&log_collector_fixture_dir),
-        ],
-        None,
-    );
     run_ok(
         "docker",
         [
@@ -224,17 +177,6 @@ HTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
             "load",
             "docker-image",
             GOOD_RUNTIME_IMAGE,
-            "--name",
-            "alien-product-lifecycle",
-        ],
-        None,
-    );
-    run_ok(
-        "kind",
-        [
-            "load",
-            "docker-image",
-            LOG_COLLECTOR_IMAGE,
             "--name",
             "alien-product-lifecycle",
         ],
@@ -743,141 +685,62 @@ rules:
         "2m",
     );
     run_ok("helm", bridged_enable.iter().map(String::as_str), None);
-    let collector_name = remote_operator_log_collector_name(&helm_namespace, bridge_release);
-    run_ok(
-        "kubectl",
-        [
-            "rollout",
-            "status",
-            &format!("daemonset/{collector_name}"),
-            "--namespace",
-            &helm_namespace,
-            "--timeout=90s",
-        ],
-        None,
-    );
-    for (pod, label, marker) in [
-        ("unselected-log-probe", "other", "unselected-log-marker"),
-        ("selected-log-probe", "selected", "selected-log-marker"),
-    ] {
-        run_ok(
-            "kubectl",
-            [
-                "run",
-                pod,
-                "--namespace",
-                &helm_namespace,
-                &format!("--image={GOOD_RUNTIME_IMAGE}"),
-                &format!("--labels=app={label}"),
-                "--command",
-                "--",
-                "/bin/sh",
-                "-ec",
-                &format!("echo {marker}; sleep 120"),
-            ],
-            None,
-        );
-        run_ok(
-            "kubectl",
-            [
-                "wait",
-                &format!("pod/{pod}"),
-                "--namespace",
-                &helm_namespace,
-                "--for=condition=Ready",
-                "--timeout=60s",
-            ],
-            None,
-        );
-    }
     let operator_name =
         remote_operator_record_name(&helm_namespace, bridge_release, "remote-operator");
-    let operator_selector =
-        format!("app.kubernetes.io/instance={operator_name},app.kubernetes.io/component=operator");
-    let mut forwarded = String::new();
-    for _ in 0..30 {
-        let logs = run_ok(
-            "kubectl",
-            [
-                "logs",
-                &format!("--selector={operator_selector}"),
-                "--namespace",
-                &helm_namespace,
-            ],
-            None,
-        );
-        forwarded = logs.stdout;
-        if forwarded.contains("selected-log-marker") {
-            break;
-        }
-        std::thread::sleep(Duration::from_secs(2));
-    }
-    if !forwarded.contains("selected-log-marker") {
-        let collector_logs = run(
-            "kubectl",
-            [
-                "logs",
-                &format!("daemonset/{collector_name}"),
-                "--namespace",
-                &helm_namespace,
-                "--tail=80",
-            ],
-            None,
-        );
-        let selected_logs = run(
-            "kubectl",
-            ["logs", "selected-log-probe", "--namespace", &helm_namespace],
-            None,
-        );
-        let service = run(
-            "kubectl",
-            [
-                "get",
-                "endpoints",
-                &operator_name,
-                "--namespace",
-                &helm_namespace,
-                "--output=wide",
-            ],
-            None,
-        );
-        panic!(
-            "selected Pod log did not reach the collector receiver; selected={:?}; endpoints={:?}; collector={:?}; receiver={:?}",
-            selected_logs.diagnostic,
-            service.diagnostic,
-            collector_logs.diagnostic,
-            forwarded,
-        );
-    }
-    std::thread::sleep(Duration::from_secs(8));
-    forwarded = run_ok(
+    let daemonsets = run_ok(
         "kubectl",
         [
-            "logs",
-            &format!("--selector={operator_selector}"),
+            "get",
+            "daemonsets",
             "--namespace",
             &helm_namespace,
+            "--output=json",
         ],
         None,
-    )
-    .stdout;
+    );
+    let daemonsets: serde_json::Value =
+        serde_json::from_str(&daemonsets.stdout).expect("parse namespace DaemonSets");
     assert!(
-        !forwarded.contains("unselected-log-marker"),
-        "unselected Pod log reached the collector receiver"
+        daemonsets["items"].as_array().is_some_and(Vec::is_empty),
+        "Pod log collection must not install a node DaemonSet: {daemonsets:?}"
     );
-    run_ok(
+    let pod_log_access = run_ok(
         "kubectl",
         [
-            "delete",
-            "pod",
-            "selected-log-probe",
-            "unselected-log-probe",
+            "auth",
+            "can-i",
+            "get",
+            "pods/log",
             "--namespace",
             &helm_namespace,
-            "--wait=true",
+            &format!("--as=system:serviceaccount:{helm_namespace}:{operator_name}"),
         ],
         None,
     );
+    assert_eq!(pod_log_access.stdout.trim(), "yes");
+    let operator = run_ok(
+        "kubectl",
+        [
+            "get",
+            "deployment",
+            &operator_name,
+            "--namespace",
+            &helm_namespace,
+            "--output=json",
+        ],
+        None,
+    );
+    let operator: serde_json::Value =
+        serde_json::from_str(&operator.stdout).expect("parse remote Operator Deployment");
+    let env = operator["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_array()
+        .expect("remote Operator environment");
+    assert!(env
+        .iter()
+        .any(|entry| { entry["name"] == "OPERATOR_POD_LOG_LABEL_KEY" && entry["value"] == "app" }));
+    assert!(env.iter().any(|entry| {
+        entry["name"] == "OPERATOR_POD_LOG_LABEL_VALUE" && entry["value"] == "selected"
+    }));
     run_fails(
         "helm",
         [
@@ -2729,6 +2592,7 @@ fn helm_upgrade_args(
         helm_rollback_on_failure_flag().to_string(),
         format!("--timeout={timeout}"),
         "--set-string=management.url=https://management.example.test".to_string(),
+        "--set=logCollector.enabled=true".to_string(),
         "--set=remoteOperator.enabled=true".to_string(),
         format!("--set=remoteOperator.bootstrapIdentity={bootstrap_identity}"),
         format!("--set=remoteOperator.syncTokenRevision={token_revision}"),
@@ -3015,10 +2879,6 @@ fn write_chart(directory: &Path, chart: &HelmChart) {
 
 fn remote_operator_record_name(namespace: &str, release: &str, record: &str) -> String {
     remote_operator_name_with_limit(namespace, release, record, 21)
-}
-
-fn remote_operator_log_collector_name(namespace: &str, release: &str) -> String {
-    remote_operator_name_with_limit(namespace, release, "log-collector", 22)
 }
 
 fn remote_operator_name_with_limit(

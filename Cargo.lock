@@ -1100,6 +1100,7 @@ dependencies = [
  "fs2",
  "futures",
  "hostname 0.4.2",
+ "k8s-openapi",
  "libc",
  "opentelemetry-proto",
  "prost 0.13.5",
@@ -1116,6 +1117,7 @@ dependencies = [
  "tracing-subscriber",
  "turso",
  "url",
+ "urlencoding",
  "uuid",
  "windows-service",
 ]
@@ -7140,6 +7142,8 @@ dependencies = [
  "rand 0.9.5",
  "serde_json",
  "thiserror 2.0.20",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
