@@ -3397,6 +3397,10 @@ fn operator_log_collector_daemonset_doc(
     yaml.push_str("    metadata:\n");
     yaml.push_str("      labels:\n");
     append_operator_labels(&mut yaml, labels, 8);
+    if include_credential_revision {
+        yaml.push_str("      annotations:\n");
+        yaml.push_str("        checksum/log-collector-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}\n");
+    }
     yaml.push_str("    spec:\n");
     yaml.push_str(&format!(
         "      serviceAccountName: {}\n",
@@ -6116,6 +6120,9 @@ spec:
       annotations:
         checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret) | sha256sum | quote }}
         checksum/pod-log-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
+        {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+        checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
+        {{- end }}
         {{- with .Values.runtime.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -9569,6 +9576,19 @@ logCollector:
             operator_env_value(&remote, "OPERATOR_POD_LOG_LABEL_KEY"),
             None
         );
+        let rotated_values = values.replace("mode: nodeAgent", "mode: nodeAgent\n  token: rotated");
+        let rotated = crate::test_utils::helm_template(&chart.files, Some(&rotated_values));
+        rotated.assert_ok("rotated node collector token");
+        let rotated_docs = parse_manifest_docs(&rotated.stdout);
+        let rotated_runtime = docs_by_kind(&rotated_docs, "Deployment")
+            .into_iter()
+            .find(|deployment| operator_env_value(deployment, "COLLECTOR_TOKEN_FILE").is_some())
+            .expect("rotated runtime receiver");
+        assert_ne!(
+            remote["spec"]["template"]["metadata"]["annotations"]["checksum/collector-credential"],
+            rotated_runtime["spec"]["template"]["metadata"]["annotations"]
+                ["checksum/collector-credential"]
+        );
 
         let mut remote_files = chart.files.clone();
         remote_files.shift_remove("templates/remote-operator-checks.yaml");
@@ -9583,6 +9603,20 @@ logCollector:
         assert_eq!(
             remote_daemonset["spec"]["template"]["spec"]["containers"][0]["image"],
             "fluent/fluent-bit:3.2@sha256:d6dec000c4929a439562525728c708f6e99800d7ddc82efd6aa4f45f3a20b562"
+        );
+        let scoped_values = remote_values.replace(
+            "mode: nodeAgent",
+            "mode: nodeAgent\n  scope:\n    deploymentLabelValue: other",
+        );
+        let scoped = crate::test_utils::helm_template(&remote_files, Some(&scoped_values));
+        scoped.assert_ok("changed Remote Operator node collector scope");
+        let scoped_docs = parse_manifest_docs(&scoped.stdout);
+        let scoped_daemonset = docs_by_kind(&scoped_docs, "DaemonSet")[0].clone();
+        assert_ne!(
+            remote_daemonset["spec"]["template"]["metadata"]["annotations"]
+                ["checksum/log-collector-scope"],
+            scoped_daemonset["spec"]["template"]["metadata"]["annotations"]
+                ["checksum/log-collector-scope"]
         );
     }
 

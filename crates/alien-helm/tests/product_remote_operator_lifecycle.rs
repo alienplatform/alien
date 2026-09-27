@@ -2594,6 +2594,7 @@ fn helm_upgrade_args(
         format!("--timeout={timeout}"),
         "--set-string=management.url=https://management.example.test".to_string(),
         "--set=logCollector.enabled=true".to_string(),
+        "--set=logCollector.mode=podApi".to_string(),
         "--set=remoteOperator.enabled=true".to_string(),
         format!("--set=remoteOperator.bootstrapIdentity={bootstrap_identity}"),
         format!("--set=remoteOperator.syncTokenRevision={token_revision}"),
