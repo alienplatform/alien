@@ -1005,6 +1005,18 @@ roleRef:
 {{- end }}
 
 === templates/secret.yaml ===
+{{- if .Release.IsUpgrade -}}
+  {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
+  {{- $currentInputs := "{}" -}}
+  {{- if $existing -}}
+    {{- if hasKey (default dict $existing.data) "input-values.json" -}}
+      {{- $currentInputs = (index $existing.data "input-values.json" | b64dec) -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if ne $currentInputs (toJson .Values.inputValues) -}}
+    {{- fail "inputValues cannot change through Helm after installation; edit deployment inputs in the deployment dashboard and keep the original Helm values" -}}
+  {{- end -}}
+{{- end -}}
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
 {{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure .Values.logCollector.enabled .Values.inputValues }}
@@ -1093,7 +1105,6 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        checksum/input-values: {{ toJson .Values.inputValues | sha256sum | quote }}
         checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret) | sha256sum | quote }}
         checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
         {{- with .Values.runtime.podAnnotations }}
@@ -1480,6 +1491,7 @@ spec:
         alien.dev/log-collector-exclude: "true"
       annotations:
         checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
+        checksum/collector-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
     spec:
       serviceAccountName: {{ include "deployment.logCollectorName" . }}
       tolerations:
@@ -2692,7 +2704,7 @@ From this chart directory, set the required values and install into the chosen n
 helm install pure-fn . --namespace default --values values.yaml
 ```
 
-For a managed package, use its generated install command and values. See `examples/<target>.yaml` for EKS, GKE, AKS, and on-premises values.
+For a managed package, use its generated install command and values. See `examples/<target>.yaml` for EKS, GKE, AKS, and on-premises values. `inputValues` register the deployment and cannot change through Helm upgrades; edit deployment inputs in the deployment dashboard and retain the original Helm values. Preview upgrades with `helm upgrade --dry-run=server` so the chart can compare those values with the installed Secret; client-side `helm template --is-upgrade` cannot verify installed inputs.
 
 To collect selected workload Pod logs, set `logCollector.enabled: true` in values.yaml. The collector mounts node log directories read-only; namespaces enforcing Baseline or Restricted Pod Security reject those mounts. When `logCollector.token` is empty, Helm generates a per-installation token and retains it across upgrades.
 
