@@ -1,10 +1,8 @@
 //! GCP Agent Platform sandbox emitter.
 //!
-//! The sandbox is the release-owned environment template, which the runtime controller creates
-//! under its engine, so setup emits no resource for it — only engine-scoped grants: the remote
-//! grant, and on a Frozen sandbox the management identity's template verbs. It refuses
-//! domain-scoped egress here rather than at apply, because the single internet-access switch
-//! cannot express a hostname list.
+//! The template is release-owned, so setup emits only engine-scoped grants: the remote grant and,
+//! on a Frozen sandbox, the manager's template verbs. Domain-scoped egress is refused here, since
+//! the single internet-access switch cannot express a hostname list.
 
 use crate::{
     block::{attr, resource_block},

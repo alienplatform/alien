@@ -688,26 +688,28 @@ async fn egress_deny_blocks_the_network_including_dns() {
         .expect("create succeeds");
     let sid = session.sandbox_id.clone();
 
-    // DNS alone, and the resolver's own exit code is captured so a missing binary (127) cannot be
-    // mistaken for a blocked network — that mistake is exactly the false PASS this row must avoid.
+    // `git` is the one network client the agent image carries (it has no resolver tool), and its
+    // own message names a failed lookup, so a blocked DNS cannot pass as a refused connection or a
+    // missing binary.
     let resolve = shell(
         &provider,
         &sid,
-        "getent hosts github.com >/dev/null 2>&1; echo rc=$?",
+        "git ls-remote https://github.com/git/git HEAD 2>&1; echo rc=$?",
     )
     .await;
     assert_eq!(resolve.exit_code, 0, "the probe wrapper itself runs");
     let stdout = String::from_utf8_lossy(&resolve.stdout);
     let rc: i32 = stdout
         .trim()
-        .strip_prefix("rc=")
-        .and_then(|code| code.parse().ok())
-        .unwrap_or_else(|| panic!("the probe reported no resolver exit code: {stdout}"));
-    assert_ne!(
-        rc, 127,
-        "the resolver must exist, so a nonzero code is a blocked network, not a missing binary"
+        .rsplit_once("rc=")
+        .and_then(|(_, code)| code.trim().parse().ok())
+        .unwrap_or_else(|| panic!("the probe reported no exit code: {stdout}"));
+    assert_ne!(rc, 127, "git must exist in the image: {stdout}");
+    assert_ne!(rc, 0, "a closed sandbox cannot reach github.com: {stdout}");
+    assert!(
+        stdout.contains("Could not resolve host"),
+        "the failure must be the DNS lookup: {stdout}"
     );
-    assert_ne!(rc, 0, "a closed sandbox cannot resolve github.com");
 
     provider
         .terminate(&sid)
@@ -787,6 +789,13 @@ async fn snapshot_restore_carries_pre_snapshot_state_only() {
     let restored_id = last_segment(&restored.name.expect("the restore carries a name")).to_string();
     wait_until_running(&provider, &restored_id).await;
 
+    // Whether the restore carried the session root at all, printed before the assertion so a
+    // failure says which it was.
+    let listing = shell(&provider, &restored_id, "ls -la /sandbox 2>&1").await;
+    eprintln!(
+        "restored /sandbox:\n{}",
+        String::from_utf8_lossy(&listing.stdout)
+    );
     let carried = provider
         .read_file(&restored_id, "/before")
         .await
@@ -796,9 +805,13 @@ async fn snapshot_restore_carries_pre_snapshot_state_only() {
         before.as_bytes(),
         "the pre-snapshot state is present"
     );
+    let after = provider
+        .read_file(&restored_id, "/after")
+        .await
+        .expect_err("the post-snapshot mutation is absent from the restore");
     assert!(
-        provider.read_file(&restored_id, "/after").await.is_err(),
-        "the post-snapshot mutation is absent from the restore"
+        format!("{after:?}").contains("PATH_NOT_FOUND"),
+        "absent means the agent found no file, not any failure: {after:?}"
     );
 
     provider

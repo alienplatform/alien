@@ -27,7 +27,9 @@ host="https://${region}-aiplatform.googleapis.com/v1"
 parent="projects/${project}/locations/${region}"
 holder_id="alien-sbx-templates-probe"
 holder="${holder_id}@${project}.iam.gserviceaccount.com"
-role_id="alienSandboxTemplatesProbe"
+# A deleted custom role lingers for 7 days, still describable, and its id cannot be reused, so each
+# run creates its own and records it for teardown.
+role_prefix="alienSandboxTemplatesProbe"
 mkdir -p "$state_dir"
 
 project_number() {
@@ -93,6 +95,17 @@ expect_status() {
   fi
 }
 
+# The gcloud caller as an IAM member: a service account needs `serviceAccount:`, a person `user:`.
+caller_member() {
+  local account
+  account="$(gcloud config get-value account 2>/dev/null)"
+  if [[ "$account" == *.gserviceaccount.com ]]; then
+    echo "serviceAccount:${account}"
+  else
+    echo "user:${account}"
+  fi
+}
+
 cmd_image() {
   gcloud services enable artifactregistry.googleapis.com aiplatform.googleapis.com --project "$project"
   gcloud artifacts repositories describe "$repo" --location "$region" --project "$project" >/dev/null 2>&1 \
@@ -135,15 +148,17 @@ cmd_iam_check() {
 
   # The same verbs as permission-sets/sandbox/templates.jsonc, as a project custom role that is
   # bound only on the engine, never on the project.
-  gcloud iam roles describe "$role_id" --project "$project" >/dev/null 2>&1 \
-    || gcloud iam roles create "$role_id" --project "$project" --title "Alien sandbox templates probe" \
+  local role_id
+  role_id="${role_prefix}_$(date +%s)"
+  echo "$role_id" >>"$state_dir/roles"
+  gcloud iam roles create "$role_id" --project "$project" --title "Alien sandbox templates probe" \
       --permissions aiplatform.sandboxEnvironmentTemplates.create,aiplatform.sandboxEnvironmentTemplates.delete,aiplatform.sandboxEnvironmentTemplates.get,aiplatform.sandboxEnvironmentTemplates.list
   role_name="projects/${project}/roles/${role_id}"
   gcloud iam service-accounts describe "$holder" --project "$project" >/dev/null 2>&1 \
     || gcloud iam service-accounts create "$holder_id" --project "$project"
   # The holder is impersonated rather than keyed, so the caller needs Token Creator on it.
   gcloud iam service-accounts add-iam-policy-binding "$holder" --project "$project" \
-    --member "user:$(gcloud config get-value account)" --role roles/iam.serviceAccountTokenCreator >/dev/null
+    --member "$(caller_member)" --role roles/iam.serviceAccountTokenCreator >/dev/null
 
   # Engine IAM is served on v1beta1, the API version the google-beta IAM member resource calls.
   status="$(host="https://${region}-aiplatform.googleapis.com/v1beta1" call "$admin_token" POST "${own}:setIamPolicy" \
@@ -201,7 +216,13 @@ cmd_teardown() {
     rm -f "$state_dir/engines"
   fi
   gcloud iam service-accounts delete "$holder" --project "$project" --quiet 2>/dev/null || true
-  gcloud iam roles delete "$role_id" --project "$project" --quiet 2>/dev/null || true
+  if [[ -f "$state_dir/roles" ]]; then
+    while read -r role; do
+      [[ -n "$role" ]] || continue
+      gcloud iam roles delete "$role" --project "$project" --quiet 2>/dev/null || true
+    done <"$state_dir/roles"
+    rm -f "$state_dir/roles"
+  fi
 }
 
 case "${1:-}" in

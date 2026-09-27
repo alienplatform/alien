@@ -49,6 +49,20 @@ const MAX_SANDBOX_ID: usize = 63;
 const SANDBOX_READY_ATTEMPTS: u32 = 150;
 const SANDBOX_READY_INTERVAL: Duration = Duration::from_secs(2);
 
+/// How long `create` keeps probing a RUNNING sandbox's agent before giving up, and how often.
+///
+/// The proxy answers `Bad Gateway: Unable to reach the sandbox environment` for a few seconds after
+/// RUNNING while the container starts listening; `create` promises a sandbox that can take work.
+#[cfg(not(test))]
+const AGENT_READY_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(not(test))]
+const AGENT_READY_POLL: Duration = Duration::from_secs(1);
+// A unit test's mock answers at once, so the budget only decides how long it takes to say no.
+#[cfg(test)]
+const AGENT_READY_TIMEOUT: Duration = Duration::from_millis(50);
+#[cfg(test)]
+const AGENT_READY_POLL: Duration = Duration::from_millis(5);
+
 /// How long a lifecycle operation (`create`, `:pause`, `:resume`, `:snapshot`) is polled before it
 /// is reported incomplete rather than waited on forever.
 const OPERATION_POLL_ATTEMPTS: u32 = 150;
@@ -283,6 +297,12 @@ impl GcpAgentPlatformSandbox {
         operation: &str,
         error: AlienError<AgentPlatformErrorData>,
     ) -> AlienError<ErrorData> {
+        if let Some(answer) = agent_answer(&error) {
+            return error.context(ErrorData::SandboxCommandFailed {
+                failure: "agentRefused".to_string(),
+                reason: format!("{operation} was refused: {answer}"),
+            });
+        }
         if is_not_found(&error) {
             return error.context(ErrorData::SandboxCommandFailed {
                 failure: "sandboxGone".to_string(),
@@ -420,9 +440,7 @@ impl GcpAgentPlatformSandbox {
                 }));
             };
             match sandbox_state(CREATE, sandbox.state.as_deref())? {
-                SandboxState::Running => {
-                    return self.probe_agent(CREATE, sandbox_id).await;
-                }
+                SandboxState::Running => return self.wait_until_servable(sandbox_id).await,
                 SandboxState::Terminated => {
                     return Err(AlienError::new(ErrorData::SandboxCommandFailed {
                         failure: "sandboxTerminated".to_string(),
@@ -445,6 +463,28 @@ impl GcpAgentPlatformSandbox {
                 SANDBOX_READY_ATTEMPTS as u64 * SANDBOX_READY_INTERVAL.as_secs()
             ),
         }))
+    }
+
+    /// Probes a RUNNING sandbox's agent until it answers or [`AGENT_READY_TIMEOUT`] passes, returning
+    /// the generation or the last probe's error.
+    async fn wait_until_servable(&self, sandbox_id: &str) -> Result<u64> {
+        let deadline = tokio::time::Instant::now() + AGENT_READY_TIMEOUT;
+        loop {
+            match self.probe_agent(CREATE, sandbox_id).await {
+                Ok(generation) => return Ok(generation),
+                Err(error) if tokio::time::Instant::now() >= deadline => {
+                    return Err(error.context(ErrorData::SandboxUnreachable {
+                        operation: CREATE.to_string(),
+                        reason: format!(
+                            "sandbox '{sandbox_id}' was running but its agent did not answer \
+                             within {}s",
+                            AGENT_READY_TIMEOUT.as_secs()
+                        ),
+                    }))
+                }
+                Err(_) => tokio::time::sleep(AGENT_READY_POLL).await,
+            }
+        }
     }
 
     /// Runs a command inside the proxy's synchronous window, streaming the buffered NDJSON body.
@@ -1524,6 +1564,21 @@ fn finish_operation(operation: &str, name: &str, op: Operation) -> Result<serde_
             response_json: format!("operation '{name}' reported done without a result"),
         })),
     }
+}
+
+/// The agent's own refusal, when `:execute` relayed one.
+///
+/// The proxy forwards the agent's status, so an agent's `PATH_NOT_FOUND` arrives as a 404 exactly
+/// like a missing sandbox; only the body tells them apart. A relayed answer carries the agent's
+/// error code after `Error Details:`, which a sandbox the API cannot find never does.
+fn agent_answer(error: &AlienError<AgentPlatformErrorData>) -> Option<String> {
+    const RELAYED: &str = "Error Details: ";
+    let message = super::refusal::captured_service_message(error)?;
+    let details = message.split_once(RELAYED)?.1.trim();
+    let code = details.split(':').next()?;
+    let is_agent_code =
+        !code.is_empty() && code.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_');
+    is_agent_code.then(|| details.to_string())
 }
 
 /// Whether a client error means the sandbox is already gone.

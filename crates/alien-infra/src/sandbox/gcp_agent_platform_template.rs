@@ -999,6 +999,75 @@ mod tests {
         }
     }
 
+    /// The binding reports the egress of the template that is serving: the declared mode after
+    /// create, and the new mode once a replacement that flips the switch goes ACTIVE.
+    #[tokio::test]
+    async fn the_binding_reports_the_serving_templates_egress() {
+        use crate::core::ResourceController;
+        let allow_egress = |executor: &SingleControllerExecutor| {
+            let params = executor
+                .internal_state::<GcpAgentPlatformTemplateController>()
+                .expect("downcasts")
+                .get_binding_params()
+                .expect("binding serializes")
+                .expect("a running template has a binding");
+            match serde_json::from_value(params).expect("binding parses") {
+                alien_core::bindings::SandboxBinding::GcpAgentPlatform(b) => b.allow_egress,
+                other => panic!("expected a GCP Agent Platform binding, got {other:?}"),
+            }
+        };
+
+        for egress in [SandboxEgress::Allow, SandboxEgress::Deny] {
+            let mut executor = build_executor(
+                sandbox_with(egress.clone(), "ubuntu:24.04", None, None),
+                provider_with(happy_client()),
+            )
+            .await;
+            executor.run_until_terminal().await.expect("create runs");
+            assert_eq!(
+                allow_egress(&executor),
+                egress == SandboxEgress::Allow,
+                "{egress:?}"
+            );
+        }
+
+        let mut m = MockAgentPlatformApi::new();
+        m.expect_create_template()
+            .returning(|_, _| Ok(pending_op()));
+        m.expect_get_operation().returning(|_| Ok(done_op("tpl2")));
+        m.expect_get_template()
+            .returning(|_, id| Ok(active_template(id)));
+        m.expect_list_templates()
+            .returning(|_| Ok(vec![active_template("tpl1"), active_template("tpl2")]));
+        m.expect_delete_template().returning(|_, _| Ok(()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox_with(
+                SandboxEgress::Deny,
+                "ubuntu:24.04",
+                None,
+                None,
+            ))
+            .controller(GcpAgentPlatformTemplateController::mock_ready(
+                "eng", "tpl1",
+            ))
+            .platform(Platform::Gcp)
+            .service_provider(provider_with(Arc::new(m)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .expect("executor builds");
+        executor
+            .update(sandbox_with(
+                SandboxEgress::Allow,
+                "ubuntu:24.04",
+                None,
+                None,
+            ))
+            .expect("update accepted");
+        executor.run_until_terminal().await.expect("replace runs");
+        assert!(allow_egress(&executor), "the replacement opened egress");
+    }
+
     // ---- 2. Update flow: no-op when the body is unchanged. -------------------------------------
 
     #[tokio::test]

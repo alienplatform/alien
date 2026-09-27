@@ -792,18 +792,29 @@ async fn an_azure_sandbox_lease_without_open_egress_is_refused() {
 /// template, a sandbox runs an unpinned image with none of the declared limits or egress applied.
 #[tokio::test]
 async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_gcp_provider() {
+    // Absent is what a manager older than the field sends; it must still decode, as deny.
+    for allow_egress in [Some(true), Some(false), None] {
+        decode_gcp_sandbox_lease(allow_egress).await;
+    }
+}
+
+async fn decode_gcp_sandbox_lease(allow_egress: Option<bool>) {
     let expires_at = Utc::now() + ChronoDuration::minutes(5);
     let engine = "projects/acme/locations/us-central1/reasoningEngines/4242";
+    let mut binding_json = json!({
+        "engine": engine,
+        "template": format!("{engine}/sandboxEnvironmentTemplates/7"),
+        "region": "us-central1",
+        "maxLifetimeSeconds": 3600,
+    });
+    if let Some(allow) = allow_egress {
+        binding_json["allowEgress"] = json!(allow);
+    }
     let response = Arc::new(StdRwLock::new((
         StatusCode::OK,
         json!({
             "service": "sandbox-gcp-agent-platform",
-            "binding": {
-                "engine": engine,
-                "template": format!("{engine}/sandboxEnvironmentTemplates/7"),
-                "region": "us-central1",
-                "maxLifetimeSeconds": 3600,
-            },
+            "binding": binding_json,
             "clientConfig": {
                 "projectId": "acme",
                 "region": "us-central1",
@@ -851,6 +862,7 @@ async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_gcp_provide
     );
     assert_eq!(binding.region, value("us-central1"));
     assert_eq!(binding.max_lifetime_seconds, Some(3600));
+    assert_eq!(binding.allow_egress, allow_egress.unwrap_or(false));
     assert_eq!(client_config.project_id, "acme");
     assert!(client_config.service_overrides.is_none());
     let alien_core::GcpCredentials::AccessToken { token } = client_config.credentials else {

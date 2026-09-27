@@ -96,6 +96,24 @@ where
     service.or(innermost)
 }
 
+/// The service message of the first layer on `error`'s chain that captured a response body.
+pub(crate) fn captured_service_message<E>(error: &AlienError<E>) -> Option<String>
+where
+    E: AlienErrorData + Clone + std::fmt::Debug + Serialize,
+{
+    if let Some(message) = service_message(error.context.as_ref()) {
+        return Some(message);
+    }
+    let mut layer = error.source.as_deref();
+    while let Some(current) = layer {
+        if let Some(message) = service_message(current.context.as_ref()) {
+            return Some(message);
+        }
+        layer = current.source.as_deref();
+    }
+    None
+}
+
 /// The service's own sentence out of a captured JSON error body — AWS answers `{"message": …}`
 /// and GCP and Azure nest the same field under `error`. A body that is not JSON is left to the
 /// chain's innermost message instead: the first line of an HTML error page says less.

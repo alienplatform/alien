@@ -4,10 +4,9 @@
   "platforms": {
     "gcp": [
       {
-        // A Frozen sandbox's engine is setup-owned but its template is release-owned: the manager
-        // creates the first one and replaces it when the image changes. No reasoningEngines verb,
-        // so the holder cannot create or delete the engine, and no sandboxEnvironments verb, so it
-        // cannot reach a live session.
+        // A Frozen sandbox's engine is setup-owned but its template (the image) is release-owned.
+        // No reasoningEngines verb, so the engine stays setup's; no sandboxEnvironments verb, so
+        // no live session is reachable.
         "label": "sandbox-templates",
         "description": "Create, read and delete environment templates under the selected reasoning engine.",
         "grant": {

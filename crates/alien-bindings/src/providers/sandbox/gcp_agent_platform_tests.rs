@@ -148,6 +148,52 @@ async fn create_awaits_running_probes_the_agent_and_pins_its_arguments() {
     assert_eq!(sandbox.state, SandboxState::Running);
 }
 
+/// `create` resolves only once the agent answers: a probe the proxy refuses while the container is
+/// still coming up is retried, and one that never answers within the budget deletes the sandbox.
+#[tokio::test]
+async fn create_waits_for_the_agent_and_deletes_the_sandbox_when_it_never_answers() {
+    fn bad_gateway() -> AlienError<AgentPlatformErrorData> {
+        AlienError::new(AgentPlatformErrorData::ExecuteFailed {
+            sandbox: "s1".to_string(),
+            message: "Bad Gateway: Unable to reach the sandbox environment.".to_string(),
+        })
+    }
+    let client_with = |answer_after: Option<usize>, deletes: usize| {
+        let mut client = MockAgentPlatformApi::new();
+        client
+            .expect_create_sandbox()
+            .returning(|_, _| Ok(done_op(serde_json::json!({ "name": sandbox_name("s1") }))));
+        client
+            .expect_get_sandbox()
+            .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+        let probes = AtomicUsize::new(0);
+        client.expect_execute().returning(move |_, _, _| {
+            let seen = probes.fetch_add(1, Ordering::SeqCst);
+            match answer_after {
+                Some(after) if seen >= after => Ok(health_reply()),
+                _ => Err(bad_gateway()),
+            }
+        });
+        client
+            .expect_delete_sandbox()
+            .times(deletes)
+            .returning(|_, _| Ok(()));
+        client
+    };
+
+    let ready = provider(client_with(Some(2), 0))
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("the agent answers on the third probe");
+    assert_eq!(ready.sandbox_id, "s1");
+
+    let error = provider(client_with(None, 1))
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect_err("an agent that never answers fails create");
+    assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+}
+
 /// Pins the unit as well as the value: `timeoutMs` is milliseconds and Agent Platform's `ttl` is
 /// a duration string in seconds, so a missed conversion is 1000x either way. The declared ceiling
 /// (3600s, from `provider`) must not be raised by a request asking for more.
@@ -1419,6 +1465,57 @@ async fn read_file_decodes_the_agent_reply() {
         .await
         .expect("read succeeds");
     assert_eq!(contents, b"file body");
+}
+
+/// The `:execute` proxy relays an agent's 404 as its own, so a file the agent cannot find must not
+/// read as a gone sandbox, while a 404 without an agent code still does.
+#[tokio::test]
+async fn a_relayed_agent_404_is_a_refusal_not_a_gone_sandbox() {
+    fn relayed_404(details: &'static str) -> AlienError<AgentPlatformErrorData> {
+        let body = serde_json::json!({
+            "error": {
+                "code": 404,
+                "message": format!("Execution Failed. URL not found `https://x.sandbox.vertexai.goog`. Error Details: {details}"),
+                "status": "NOT_FOUND"
+            }
+        })
+        .to_string();
+        AlienError::new(alien_client_core::ErrorData::HttpResponseError {
+            message: "Request failed with HTTP 404: Not Found".to_string(),
+            url: "https://example.invalid/:execute".to_string(),
+            http_status: 404,
+            http_request_text: None,
+            http_response_text: Some(body),
+        })
+        .context(alien_client_core::ErrorData::RemoteResourceNotFound {
+            resource_type: "Vertex AI Agent Platform".to_string(),
+            resource_name: "s1".to_string(),
+        })
+        .context(AgentPlatformErrorData::ExecuteFailed {
+            sandbox: "s1".to_string(),
+            message: "the API rejected or cut short the request".to_string(),
+        })
+    }
+
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_execute().returning(|_, _, _| {
+        Err(relayed_404(
+            "PATH_NOT_FOUND: No such file in the sandbox: /before",
+        ))
+    });
+    let error = provider(client)
+        .read_file("s1", "/before")
+        .await
+        .expect_err("a missing file is an error");
+    let rendered = format!("{error:?}");
+    assert!(rendered.contains("agentRefused"), "{rendered}");
+    assert!(rendered.contains("PATH_NOT_FOUND"), "{rendered}");
+
+    assert!(agent_answer(&not_found()).is_none());
+    assert!(agent_answer(&relayed_404(
+        "Bad Gateway: Unable to reach the sandbox environment."
+    ))
+    .is_none());
 }
 
 // ---- pause / resume / snapshot ----------------------------------------------------------------
