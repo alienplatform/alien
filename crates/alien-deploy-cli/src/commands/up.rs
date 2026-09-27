@@ -13,10 +13,11 @@ use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{
     parse_public_endpoint_assignment, validate_public_endpoint_urls, ClientConfig, ComputeSettings,
     Container, Daemon, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
-    EnvironmentInfo, KubernetesClusterOwnership, KubernetesClusterSettings, KubernetesSettings,
-    ManagementConfig, NetworkSettings, Platform, PublicEndpointUrls, ReleaseInfo,
-    ResourceLifecycle, Stack, StackInputDefinition, StackInputKind, StackInputProvider,
-    StackSettings, TelemetryMode, UpdatesMode, Worker,
+    EnvironmentInfo, KubernetesClusterOwnership, KubernetesClusterSettings,
+    KubernetesExposureSettings, KubernetesSettings, ManagementConfig, NetworkSettings, Platform,
+    PublicEndpointUrls, ReleaseInfo, ResourceLifecycle, Stack, StackInputDefinition,
+    StackInputKind, StackInputProvider, StackSettings, StackState, TelemetryMode, UpdatesMode,
+    Worker,
 };
 use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
@@ -906,6 +907,25 @@ mod tests {
         assert_eq!(
             settings.kubernetes.unwrap().cluster.unwrap().ownership,
             KubernetesClusterOwnership::Managed
+        );
+
+        let external_endpoint = UpArgs::parse_from([
+            "alien-deploy",
+            "--platform",
+            "kubernetes",
+            "--public-endpoint",
+            "gateway.web=https://example.com",
+        ]);
+        let settings = load_stack_settings(
+            &external_endpoint,
+            Platform::Kubernetes,
+            Platform::Kubernetes,
+            None,
+        )
+        .expect("external ingress settings should load");
+        assert_eq!(
+            settings.kubernetes.unwrap().exposure,
+            Some(KubernetesExposureSettings::Disabled)
         );
     }
 
@@ -2775,6 +2795,10 @@ fn load_stack_settings(
     if platform == Platform::Kubernetes {
         // A CLI install without a base cloud uses the cluster named by the
         // selected kubeconfig context. With a base cloud, setup creates one.
+        let external_public_endpoints = !args.public_endpoints.is_empty()
+            || deploy_config
+                .and_then(|config| config.public_endpoints.as_ref())
+                .is_some_and(|endpoints| !endpoints.is_empty());
         settings.kubernetes = Some(KubernetesSettings {
             cluster: Some(KubernetesClusterSettings {
                 ownership: if network_platform != Platform::Kubernetes {
@@ -2785,7 +2809,8 @@ fn load_stack_settings(
                 namespace: args.namespace.clone(),
                 cloud: None,
             }),
-            exposure: None,
+            // The supplied URL already has customer-owned ingress and TLS.
+            exposure: external_public_endpoints.then_some(KubernetesExposureSettings::Disabled),
         });
     }
 
@@ -3651,7 +3676,11 @@ async fn initialize_deployment(
 ) -> Result<InitResult> {
     let body = alien_manager_api::types::InitializeRequest {
         name: Some(name.to_string()),
-        resource_prefix: None,
+        // Helm needs the runtime prefix before it creates workload identities.
+        // Register the same prefix with the manager so its StackState and the
+        // chart agree even before the Operator's first sync.
+        resource_prefix: (platform == Platform::Kubernetes)
+            .then(|| StackState::new(platform).resource_prefix),
         platform: Some(sdk_platform(platform)),
         base_platform: base_platform.map(sdk_platform),
         initial_desired_release: alien_manager_api::types::InitialDesiredRelease::Active,
