@@ -1350,6 +1350,100 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn bare_enable_resends_the_saved_settings_it_read_from_the_project() {
+        use axum::{
+            body::Bytes,
+            http::header::CONTENT_TYPE,
+            routing::{get, put},
+            Router,
+        };
+        use std::sync::{Arc, Mutex};
+
+        const PROJECT_ID: &str = "prj_mcytp6z3j91f7tn5ryqsfwtr0000";
+        let saved_azure = serde_json::json!({
+            "catalogImage": "python-3.12",
+            "idleSuspendSeconds": 900,
+        });
+        let project = serde_json::json!({
+            "id": PROJECT_ID,
+            "name": "my-app",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "workspaceId": "ws_It13CUaGEhLLAB87simX0abc",
+            "projectCapabilities": {
+                "schemaVersion": 1,
+                "capabilities": {
+                    "remoteSandbox": {
+                        "enabled": true,
+                        "baseImage": "public.ecr.aws/example/saved:v1",
+                        "azure": saved_azure,
+                        "maxLifetimeSeconds": 1200,
+                    },
+                },
+            },
+        });
+        let materialization = serde_json::json!({
+            "projectCapabilities": { "schemaVersion": 1, "capabilities": {} },
+            "source": {
+                "definitionId": "customer-sandbox",
+                "definitionVersion": "1",
+                "releaseId": "rel_1",
+            },
+            "packages": [],
+        });
+
+        let configured = Arc::new(Mutex::new(None::<serde_json::Value>));
+        let app =
+            Router::new()
+                .route(
+                    &format!("/v1/projects/{PROJECT_ID}"),
+                    get(move || async move {
+                        ([(CONTENT_TYPE, "application/json")], project.to_string())
+                    }),
+                )
+                .route(
+                    &format!("/v1/projects/{PROJECT_ID}/project-capabilities/remote-sandbox"),
+                    put({
+                        let configured = configured.clone();
+                        move |body: Bytes| async move {
+                            *configured.lock().unwrap() =
+                                Some(serde_json::from_slice(&body).unwrap());
+                            (
+                                [(CONTENT_TYPE, "application/json")],
+                                materialization.to_string(),
+                            )
+                        }
+                    }),
+                );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let ProjectCmd::Capabilities { command } = enable_remote_sandbox(&["--json"])
+            .expect("bare enable should parse")
+            .cmd
+        else {
+            unreachable!("the parsed command is a capabilities command");
+        };
+        capabilities_task(
+            &ExecutionMode::Dev { port: 0 },
+            &crate::auth::AuthHttp::new_unauthenticated(base_url),
+            None,
+            PROJECT_ID,
+            command,
+            true,
+        )
+        .await
+        .expect("bare enable should configure the sandbox");
+        server.abort();
+
+        // No baseImage, so the API keeps the saved image.
+        assert_eq!(
+            configured.lock().unwrap().take(),
+            Some(serde_json::json!({ "azure": saved_azure, "maxLifetimeSeconds": 1200 })),
+        );
+    }
+
     #[test]
     fn a_source_without_its_dockerfile_is_refused_before_any_request() {
         let src = tempfile::tempdir().expect("temp dir");
