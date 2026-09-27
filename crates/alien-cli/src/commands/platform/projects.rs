@@ -102,7 +102,8 @@ pub enum CapabilityCommand {
         #[arg(long)]
         push: bool,
         /// Prebuilt container image the sandbox starts from, used as is. For a private image,
-        /// use --src. Omit to use the platform's default image.
+        /// use --src. Omit to keep the saved image, or to use the platform's default image when
+        /// none is saved.
         #[arg(long = "image", alias = "base-image", conflicts_with = "src")]
         image: Option<String>,
         /// Directory with a Dockerfile. The image is built locally with Docker and pushed to the
