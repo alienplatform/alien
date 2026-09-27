@@ -898,6 +898,15 @@ mod tests {
             .expect("managed-cluster settings should load");
         let cluster = settings.kubernetes.unwrap().cluster.unwrap();
         assert_eq!(cluster.ownership, KubernetesClusterOwnership::Managed);
+
+        // A TOML base platform reaches this function through network_platform
+        // even when the CLI flag is absent.
+        let settings = load_stack_settings(&existing, Platform::Kubernetes, Platform::Aws, None)
+            .expect("configured base platform should manage the cluster");
+        assert_eq!(
+            settings.kubernetes.unwrap().cluster.unwrap().ownership,
+            KubernetesClusterOwnership::Managed
+        );
     }
 
     #[test]
@@ -2768,7 +2777,7 @@ fn load_stack_settings(
         // selected kubeconfig context. With a base cloud, setup creates one.
         settings.kubernetes = Some(KubernetesSettings {
             cluster: Some(KubernetesClusterSettings {
-                ownership: if args.base_platform.is_some() {
+                ownership: if network_platform != Platform::Kubernetes {
                     KubernetesClusterOwnership::Managed
                 } else {
                     KubernetesClusterOwnership::External
@@ -4016,7 +4025,7 @@ async fn run_kubernetes_pull_model(
     public_endpoints: Option<&PublicEndpointUrls>,
 ) -> Result<()> {
     output::info("Kubernetes platform detected — installing alien-operator with Helm.");
-    let stack = fetch_kubernetes_release_stack(client, deployment_id).await?;
+    let (stack, resource_prefix) = fetch_kubernetes_release_stack(client, deployment_id).await?;
     let namespace = args
         .namespace
         .clone()
@@ -4037,6 +4046,7 @@ async fn run_kubernetes_pull_model(
         token,
         deployment_id,
         deployment_name,
+        &resource_prefix,
         stack_settings,
         &operator_image,
         args.external_bindings_secret.as_deref(),
@@ -4065,7 +4075,7 @@ async fn run_kubernetes_pull_model(
 async fn fetch_kubernetes_release_stack(
     client: &ServerClient,
     deployment_id: &str,
-) -> Result<Stack> {
+) -> Result<(Stack, String)> {
     let deployment = client
         .get_deployment()
         .id(deployment_id)
@@ -4076,6 +4086,22 @@ async fn fetch_kubernetes_release_stack(
             message: "Failed to get deployment from manager".to_string(),
         })?
         .into_inner();
+
+    // Helm creates workload identities before the Operator starts. Their names
+    // must use the prefix assigned to this deployment, not the Helm release name.
+    let resource_prefix = deployment
+        .stack_state
+        .as_ref()
+        .and_then(|state| state.get("resourcePrefix"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|prefix| !prefix.is_empty())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: "Deployment has no resource prefix for Kubernetes ServiceAccounts"
+                    .to_string(),
+            })
+        })?
+        .to_string();
 
     let release_id = deployment
         .desired_release_id
@@ -4103,11 +4129,12 @@ async fn fetch_kubernetes_release_stack(
         })
     })?;
 
-    serde_json::from_value(stack_value)
+    let stack = serde_json::from_value(stack_value)
         .into_alien_error()
         .context(ErrorData::ConfigurationError {
             message: format!("Failed to parse Kubernetes stack from release '{release_id}'"),
-        })
+        })?;
+    Ok((stack, resource_prefix))
 }
 
 fn render_kubernetes_helm_chart(
@@ -4168,6 +4195,7 @@ fn write_kubernetes_helm_values(
     token: &str,
     deployment_id: &str,
     deployment_name: &str,
+    resource_prefix: &str,
     stack_settings: &StackSettings,
     operator_image: &str,
     external_bindings_secret: Option<&str>,
@@ -4198,6 +4226,7 @@ fn write_kubernetes_helm_values(
             }
         },
         "stackSettings": helm_settings,
+        "serviceAccountPrefix": resource_prefix,
         "publicEndpoints": public_endpoints.cloned().unwrap_or_default(),
         "infrastructure": null,
         "infrastructureExistingSecret": external_bindings_secret.unwrap_or(""),
