@@ -111,9 +111,10 @@ impl InfrastructureDependenciesMutation {
             ));
         }
 
-        // Controllers must not read network outputs before the frozen network has finished.
-        // This also covers an explicitly configured network and optional worker networking.
-        if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+        // AWS and GCP controllers need network outputs before they can provision.
+        // Azure's network can depend on Postgres to configure its private endpoint;
+        // adding the reverse edge would create a cycle.
+        if matches!(platform, Platform::Aws | Platform::Gcp)
             && stack.resources.contains_key("default-network")
             && stack.resources.get(resource_id).is_some_and(|entry| {
                 resource_requires_network(entry)
@@ -463,6 +464,49 @@ mod tests {
             vec![ResourceRef::new(Network::RESOURCE_TYPE, "default-network")]
         );
         assert!(stack.resources["default-network"].dependencies.is_empty());
+    }
+
+    #[tokio::test]
+    async fn azure_private_endpoint_network_does_not_cycle_with_postgres() {
+        let mut stack = Stack::new("test".to_string())
+            .add(
+                Network::new("default-network".to_string())
+                    .settings(NetworkSettings::ByoVnetAzure {
+                        vnet_resource_id: "vnet-id".to_string(),
+                        public_subnet_name: "public".to_string(),
+                        private_subnet_name: "private".to_string(),
+                        application_gateway_subnet_name: None,
+                        private_endpoint_subnet_name: Some("private-endpoints".to_string()),
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Postgres::new("database".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        stack
+            .resources
+            .get_mut("default-network")
+            .unwrap()
+            .dependencies
+            .push(ResourceRef::new(Postgres::RESOURCE_TYPE, "database"));
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result = InfrastructureDependenciesMutation
+            .mutate(stack, &StackState::new(Platform::Azure), &config)
+            .await
+            .unwrap();
+        assert!(crate::compile_time::validate_stack_dependencies(&result).success);
+        assert!(!result.resources["database"]
+            .dependencies
+            .contains(&ResourceRef::new(Network::RESOURCE_TYPE, "default-network")));
     }
 
     #[tokio::test]
