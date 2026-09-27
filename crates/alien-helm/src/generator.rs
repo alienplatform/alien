@@ -365,6 +365,35 @@ fn add_remote_operator_files(
     })?;
     chart.push_str("annotations:\n  alien.dev/remote-operator-lifecycle: \"v2\"\n");
 
+    if let Some(collector) = options.manifest.log_collector.as_ref() {
+        if let (Some(key), Some(value)) = (collector.pod_label_key, collector.pod_label_value) {
+            let values = files.get_mut("values.yaml").ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: "the product chart is missing values.yaml".to_string(),
+                })
+            })?;
+            let default_key = "    podLabelKey: \"\"";
+            let default_value = "    podLabelValue: \"\"";
+            if !values.contains(default_key) || !values.contains(default_value) {
+                return Err(AlienError::new(ErrorData::GenericError {
+                    message: "the product chart is missing its Pod log selector defaults"
+                        .to_string(),
+                }));
+            }
+            *values = values
+                .replacen(
+                    default_key,
+                    &format!("    podLabelKey: {}", yaml_string(key)),
+                    1,
+                )
+                .replacen(
+                    default_value,
+                    &format!("    podLabelValue: {}", yaml_string(value)),
+                    1,
+                );
+        }
+    }
+
     if let Some(label_domain) = options.manifest.label_domain {
         let values = files.get_mut("values.yaml").ok_or_else(|| {
             AlienError::new(ErrorData::GenericError {
