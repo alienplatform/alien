@@ -66,6 +66,7 @@ pub(crate) struct KubernetesPublicEndpointTarget<'a> {
     pub(crate) target_port: u16,
     pub(crate) health_check_path: Option<String>,
     pub(crate) public: bool,
+    pub(crate) wildcard_subdomains: bool,
     pub(crate) deployment_labels: BTreeMap<String, String>,
 }
 
@@ -1153,6 +1154,7 @@ pub(crate) fn worker_public_endpoint_target<'a>(
         target_port: 8080,
         health_check_path: health_check_path.map(ToString::to_string),
         public,
+        wildcard_subdomains: false,
         deployment_labels: BTreeMap::new(),
     }
 }
@@ -1167,10 +1169,10 @@ pub(crate) fn daemon_public_endpoint_target<'a>(
     public_endpoints: &'a [alien_core::PublicEndpoint],
     health_check_path: Option<&str>,
 ) -> Result<KubernetesPublicEndpointTarget<'a>> {
-    let http_port = public_endpoints
+    let http_endpoint = public_endpoints
         .iter()
-        .find(|endpoint| endpoint.protocol == alien_core::ExposeProtocol::Http)
-        .map(|endpoint| endpoint.port);
+        .find(|endpoint| endpoint.protocol == alien_core::ExposeProtocol::Http);
+    let http_port = http_endpoint.map(|endpoint| endpoint.port);
 
     Ok(KubernetesPublicEndpointTarget {
         resource_id,
@@ -1182,6 +1184,7 @@ pub(crate) fn daemon_public_endpoint_target<'a>(
         target_port: http_port.unwrap_or(80),
         health_check_path: health_check_path.map(ToString::to_string),
         public: http_port.is_some(),
+        wildcard_subdomains: http_endpoint.is_some_and(|endpoint| endpoint.wildcard_subdomains),
         deployment_labels: BTreeMap::new(),
     })
 }
@@ -1194,10 +1197,10 @@ pub(crate) fn container_public_endpoint_target<'a>(
     public_endpoints: &'a [alien_core::PublicEndpoint],
     health_check_path: Option<&str>,
 ) -> Result<KubernetesPublicEndpointTarget<'a>> {
-    let http_port = public_endpoints
+    let http_endpoint = public_endpoints
         .iter()
-        .find(|endpoint| endpoint.protocol == alien_core::ExposeProtocol::Http)
-        .map(|endpoint| endpoint.port);
+        .find(|endpoint| endpoint.protocol == alien_core::ExposeProtocol::Http);
+    let http_port = http_endpoint.map(|endpoint| endpoint.port);
 
     Ok(KubernetesPublicEndpointTarget {
         resource_id,
@@ -1209,6 +1212,7 @@ pub(crate) fn container_public_endpoint_target<'a>(
         target_port: http_port.unwrap_or(80),
         health_check_path: health_check_path.map(ToString::to_string),
         public: http_port.is_some(),
+        wildcard_subdomains: http_endpoint.is_some_and(|endpoint| endpoint.wildcard_subdomains),
         deployment_labels: BTreeMap::new(),
     })
 }
@@ -1430,6 +1434,21 @@ fn build_service(target: &KubernetesPublicEndpointTarget<'_>, service_name: &str
     }
 }
 
+/// Keep routing and TLS names aligned. A wildcard does not include its base host.
+fn endpoint_hostnames(
+    target: &KubernetesPublicEndpointTarget<'_>,
+    plan: &EndpointPlan,
+) -> Vec<String> {
+    let Some(hostname) = &plan.hostname else {
+        return Vec::new();
+    };
+    let mut hostnames = vec![hostname.clone()];
+    if target.wildcard_subdomains {
+        hostnames.push(format!("*.{hostname}"));
+    }
+    hostnames
+}
+
 fn build_ingress(
     target: &KubernetesPublicEndpointTarget<'_>,
     plan: &EndpointPlan,
@@ -1485,36 +1504,47 @@ fn build_ingress(
         ..Default::default()
     };
 
+    let hostnames = endpoint_hostnames(target, plan);
+    // A hostname-free endpoint retains its catch-all rule.
+    let rule_hosts = if hostnames.is_empty() {
+        vec![None]
+    } else {
+        hostnames.iter().cloned().map(Some).collect()
+    };
+
     Ok(K8sIngress {
         metadata,
         spec: Some(IngressSpec {
             ingress_class_name: Some(profile.ingress_class_name.clone()),
-            rules: Some(vec![IngressRule {
-                host: plan.hostname.clone(),
-                http: Some(HTTPIngressRuleValue {
-                    paths: vec![HTTPIngressPath {
-                        path: Some("/".to_string()),
-                        path_type: "Prefix".to_string(),
-                        backend: IngressBackend {
-                            service: Some(IngressServiceBackend {
-                                name: service_name.to_string(),
-                                port: Some(ServiceBackendPort {
-                                    number: Some(target.service_port as i32),
-                                    name: None,
-                                }),
-                            }),
-                            ..Default::default()
-                        },
-                    }],
-                }),
-            }]),
-            tls: tls_ref.and_then(|secret| {
-                plan.hostname.as_ref().map(|hostname| {
-                    vec![IngressTLS {
-                        hosts: Some(vec![hostname.clone()]),
-                        secret_name: Some(secret.secret_name.clone()),
-                    }]
-                })
+            rules: Some(
+                rule_hosts
+                    .into_iter()
+                    .map(|host| IngressRule {
+                        host,
+                        http: Some(HTTPIngressRuleValue {
+                            paths: vec![HTTPIngressPath {
+                                path: Some("/".to_string()),
+                                path_type: "Prefix".to_string(),
+                                backend: IngressBackend {
+                                    service: Some(IngressServiceBackend {
+                                        name: service_name.to_string(),
+                                        port: Some(ServiceBackendPort {
+                                            number: Some(target.service_port as i32),
+                                            name: None,
+                                        }),
+                                    }),
+                                    ..Default::default()
+                                },
+                            }],
+                        }),
+                    })
+                    .collect(),
+            ),
+            tls: tls_ref.filter(|_| !hostnames.is_empty()).map(|secret| {
+                vec![IngressTLS {
+                    hosts: Some(hostnames),
+                    secret_name: Some(secret.secret_name.clone()),
+                }]
             }),
             ..Default::default()
         }),
@@ -1589,6 +1619,20 @@ fn build_gateway(
         });
     }
 
+    let mut listeners = vec![listener];
+    if target.wildcard_subdomains {
+        if let Some(hostname) = &plan.hostname {
+            let mut wildcard_listener = listeners[0].clone();
+            wildcard_listener["name"] = json!(if uses_tls {
+                "https-wildcard"
+            } else {
+                "http-wildcard"
+            });
+            wildcard_listener["hostname"] = json!(format!("*.{hostname}"));
+            listeners.push(wildcard_listener);
+        }
+    }
+
     Ok(json!({
         "apiVersion": "gateway.networking.k8s.io/v1",
         "kind": "Gateway",
@@ -1600,7 +1644,7 @@ fn build_gateway(
         },
         "spec": {
             "gatewayClassName": profile.gateway_class_name,
-            "listeners": [listener],
+            "listeners": listeners,
         }
     }))
 }
@@ -1638,8 +1682,9 @@ fn build_http_route(
             }]
         }
     });
-    if let Some(hostname) = &plan.hostname {
-        route["spec"]["hostnames"] = json!([hostname]);
+    let hostnames = endpoint_hostnames(target, plan);
+    if !hostnames.is_empty() {
+        route["spec"]["hostnames"] = json!(hostnames);
     }
     route
 }
@@ -2553,6 +2598,7 @@ mod tests {
             target_port: 8080,
             health_check_path: None,
             public: true,
+            wildcard_subdomains: false,
             deployment_labels: BTreeMap::from([(
                 "alien.dev/deployment".to_string(),
                 "test-release".to_string(),
@@ -2582,6 +2628,116 @@ mod tests {
         assert!(target.public);
         assert_eq!(target.service_port, 8080);
         assert_eq!(target.target_port, 8080);
+    }
+
+    #[test]
+    fn wildcard_endpoint_keeps_ingress_tls_and_gateway_routes_aligned() {
+        for wildcard_subdomains in [false, true] {
+            let endpoints = [PublicEndpoint {
+                name: "web".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains,
+            }];
+            let target = container_public_endpoint_target(
+                "api",
+                "api-v1",
+                "app",
+                BTreeMap::new(),
+                &endpoints,
+                None,
+            )
+            .expect("container target");
+            let daemon_target = daemon_public_endpoint_target(
+                "api",
+                "api-v1",
+                "app",
+                BTreeMap::new(),
+                &endpoints,
+                None,
+            )
+            .expect("daemon target");
+            assert_eq!(daemon_target.wildcard_subdomains, wildcard_subdomains);
+            let mut hosts = vec!["api.example.com".to_string()];
+            if wildcard_subdomains {
+                hosts.push("*.api.example.com".to_string());
+            }
+            let secret = KubernetesTlsSecretRef {
+                secret_name: "api-tls".to_string(),
+                namespace: None,
+            };
+            let ingress_profile = KubernetesIngressRouteProfile {
+                ingress_class_name: "nginx".to_string(),
+                ..Default::default()
+            };
+            let plan = EndpointPlan {
+                hostname: Some("api.example.com".to_string()),
+                public_url: Some("https://api.example.com".to_string()),
+                route: KubernetesRouteProfile::Ingress(ingress_profile.clone()),
+                certificate: EndpointCertificate::TlsSecretRef(secret.clone()),
+            };
+            let ingress = build_ingress(
+                &target,
+                &plan,
+                &ingress_profile,
+                "api-public",
+                "api-ingress",
+                Some(&secret),
+            )
+            .expect("ingress");
+            let spec = ingress.spec.expect("spec");
+            let rules = spec.rules.expect("rules");
+            assert_eq!(
+                rules
+                    .iter()
+                    .map(|rule| rule.host.clone().expect("host"))
+                    .collect::<Vec<_>>(),
+                hosts
+            );
+            for rule in rules {
+                let paths = rule.http.expect("http").paths;
+                assert_eq!(paths.len(), 1);
+                let backend = paths[0].backend.service.as_ref().expect("service");
+                assert_eq!(backend.name, "api-public");
+                assert_eq!(backend.port.as_ref().expect("port").number, Some(8080));
+            }
+            let tls = spec.tls.expect("TLS");
+            assert_eq!(tls.len(), 1);
+            assert_eq!(tls[0].hosts.as_ref(), Some(&hosts));
+            assert_eq!(tls[0].secret_name.as_deref(), Some("api-tls"));
+
+            let gateway_profile = KubernetesGatewayRouteProfile {
+                gateway_class_name: "shared-gateway".to_string(),
+                listener_port: 443,
+                ..Default::default()
+            };
+            let gateway = build_gateway(
+                &target,
+                &plan,
+                &gateway_profile,
+                "api-gateway",
+                Some(&secret),
+            )
+            .expect("gateway");
+            let listeners = gateway["spec"]["listeners"].as_array().expect("listeners");
+            assert_eq!(listeners.len(), hosts.len());
+            for (listener, host) in listeners.iter().zip(&hosts) {
+                assert_eq!(listener["hostname"], json!(host));
+                assert_eq!(listener["protocol"], "HTTPS");
+                assert_eq!(listener["port"], 443);
+                assert_eq!(listener["tls"]["certificateRefs"][0]["name"], "api-tls");
+            }
+            if wildcard_subdomains {
+                assert_ne!(listeners[0]["name"], listeners[1]["name"]);
+            }
+            let route = build_http_route(&target, &plan, "api-public", "api-gateway", "api-route");
+            assert_eq!(route["spec"]["hostnames"], json!(hosts));
+            assert_eq!(
+                route["spec"]["rules"][0]["backendRefs"][0]["name"],
+                "api-public"
+            );
+        }
     }
 
     #[test]
