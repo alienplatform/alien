@@ -1,7 +1,10 @@
 use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
-use alien_core::{ClientConfig, EnvironmentInfo, Platform, Stack, StackState};
+use alien_core::{
+    frozen_gated, gate_resolves_true, gate_value_as_bool, live_gate_resolves_true, live_gated,
+    ClientConfig, EnvironmentInfo, Platform, Stack, StackState,
+};
 use alien_error::AlienError;
 use alien_error::Context;
 use tracing::info;
@@ -255,58 +258,15 @@ pub fn strip_declined_live_resources(
     persisted_gate_answers: &alien_core::GateAnswers,
     still_frozen_gating: &std::collections::HashSet<String>,
 ) -> Result<Stack> {
-    let mut declined: Vec<String> = Vec::new();
-    for (resource_id, input_id) in live_gated(&stack) {
-        let (accepted, _source) = live_gate_resolves_true(
-            &stack.inputs,
-            input_id,
-            input_values,
-            persisted_gate_answers,
-            still_frozen_gating,
-            resource_id,
-        )?;
-        if !accepted {
-            declined.push(resource_id.clone());
-        }
-    }
+    let declined = alien_core::declined_live_resources(
+        &stack,
+        input_values,
+        persisted_gate_answers,
+        still_frozen_gating,
+    )
+    .map_err(|message| AlienError::new(ErrorData::MissingConfiguration { message }))?;
     remove_declined(&mut stack, &declined);
     Ok(stack)
-}
-
-/// A live gate's answer: the provided value, else the answer recorded when
-/// the deployment was created (frozen dominance — a live resource sharing a
-/// frozen-gating input follows the fixed answer, not the declared default),
-/// else the declared default.
-fn live_gate_resolves_true(
-    inputs: &[alien_core::StackInputDefinition],
-    input_id: &str,
-    input_values: &std::collections::HashMap<String, serde_json::Value>,
-    persisted_gate_answers: &alien_core::GateAnswers,
-    still_frozen_gating: &std::collections::HashSet<String>,
-    resource_id: &str,
-) -> Result<(bool, &'static str)> {
-    // The recorded answer outranks the default only while the input actually
-    // gates a frozen resource — that is what dominance means. Once a release
-    // frees the input, its recorded answer is history, and a live gate
-    // resolves the way any other live gate does.
-    //
-    // The source travels with the answer so the audit log cannot describe a
-    // precedence this function did not apply.
-    if input_values.contains_key(input_id) {
-        return Ok((
-            gate_resolves_true(inputs, input_id, input_values, resource_id)?,
-            "provided",
-        ));
-    }
-    if still_frozen_gating.contains(input_id) {
-        if let Some(answer) = persisted_gate_answers.get(input_id) {
-            return Ok((*answer, "persisted"));
-        }
-    }
-    Ok((
-        gate_resolves_true(inputs, input_id, input_values, resource_id)?,
-        "default",
-    ))
 }
 
 /// The canonical resolved answers for every input that gates a Frozen
@@ -336,7 +296,8 @@ pub fn resolve_frozen_gate_answers_from_presence(
     let mut answers = alien_core::GateAnswers::new();
     for (resource_id, input_id) in frozen_gated(stack) {
         let answer = if present_resource_ids.is_empty() {
-            gate_resolves_true(&stack.inputs, input_id, input_values, resource_id)?
+            gate_resolves_true(&stack.inputs, input_id, input_values, resource_id)
+                .map_err(|message| AlienError::new(ErrorData::MissingConfiguration { message }))?
         } else {
             present_resource_ids.contains(resource_id.as_str())
         };
@@ -357,40 +318,6 @@ pub fn resolve_frozen_gate_answers_from_presence(
         }
     }
     Ok(answers)
-}
-
-/// The gate input of a setup-created gated resource, `None` for anything else.
-fn frozen_gate_of(entry: &alien_core::ResourceEntry) -> Option<&str> {
-    gate_of(entry, true)
-}
-
-/// The gate input of a runtime-created gated resource, `None` for anything
-/// else. The mirror of [`frozen_gate_of`] — which side of the setup boundary a
-/// gated resource falls on is decided in exactly these two places.
-fn live_gate_of(entry: &alien_core::ResourceEntry) -> Option<&str> {
-    gate_of(entry, false)
-}
-
-fn gate_of(entry: &alien_core::ResourceEntry, setup_created: bool) -> Option<&str> {
-    let input_id = entry.enabled_when.as_deref()?;
-    let emitted_in_setup =
-        alien_core::ownership_policy_for_resource_type(entry.config.resource_type().as_ref())
-            .should_emit_in_setup(entry.lifecycle);
-    (emitted_in_setup == setup_created).then_some(input_id)
-}
-
-/// Every gated resource setup creates, as `(resource_id, input_id)`.
-fn frozen_gated(stack: &Stack) -> impl Iterator<Item = (&String, &str)> {
-    stack
-        .resources()
-        .filter_map(|(resource_id, entry)| Some((resource_id, frozen_gate_of(entry)?)))
-}
-
-/// Every gated resource the runtime creates, as `(resource_id, input_id)`.
-fn live_gated(stack: &Stack) -> impl Iterator<Item = (&String, &str)> {
-    stack
-        .resources()
-        .filter_map(|(resource_id, entry)| Some((resource_id, live_gate_of(entry)?)))
 }
 
 /// The inputs that gate a setup-created resource in `stack`. Fixity applies
@@ -582,56 +509,6 @@ fn scrub_declined_grants(stack: &mut Stack, declined: &[String]) {
         alien_core::permissions::ManagementPermissions::Extend(profile)
         | alien_core::permissions::ManagementPermissions::Override(profile) => scrub(profile),
         alien_core::permissions::ManagementPermissions::Auto => {}
-    }
-}
-
-/// A gate value from the wire: JSON booleans stay booleans, and the
-/// CloudFormation parameter strings "true"/"false" coerce — CloudFormation
-/// has no boolean parameter type, so its registration payloads deliver gate
-/// answers as strings. Anything else is `None`, refused loudly by callers.
-fn gate_value_as_bool(value: &serde_json::Value) -> Option<bool> {
-    match value {
-        serde_json::Value::Bool(answer) => Some(*answer),
-        serde_json::Value::String(text) => match text.as_str() {
-            "true" => Some(true),
-            "false" => Some(false),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// The deployer's answer for a live gate: the provided value, else the
-/// input's declared boolean default.
-fn gate_resolves_true(
-    inputs: &[alien_core::StackInputDefinition],
-    input_id: &str,
-    input_values: &std::collections::HashMap<String, serde_json::Value>,
-    resource_id: &str,
-) -> Result<bool> {
-    if let Some(value) = input_values.get(input_id) {
-        return gate_value_as_bool(value).ok_or_else(|| {
-            AlienError::new(ErrorData::MissingConfiguration {
-                message: format!(
-                    "Input '{input_id}' enables resource '{resource_id}' but its value is not \
-                     a boolean: {value}"
-                ),
-            })
-        });
-    }
-
-    match inputs
-        .iter()
-        .find(|input| input.id == input_id)
-        .and_then(|input| input.default.as_ref())
-    {
-        Some(alien_core::StackInputDefaultValue::Boolean(answer)) => Ok(*answer),
-        _ => Err(AlienError::new(ErrorData::MissingConfiguration {
-            message: format!(
-                "Input '{input_id}' enables resource '{resource_id}' but no value was provided \
-                 and the input declares no boolean default"
-            ),
-        })),
     }
 }
 

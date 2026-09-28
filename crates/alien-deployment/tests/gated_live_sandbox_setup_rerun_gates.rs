@@ -34,12 +34,10 @@ fn release_stack(default: Option<bool>, shares_frozen_gate: bool, with_archive: 
         "Whether to run the sandbox.",
         default,
     );
-    let mut stack = Stack::new("stack".to_string())
-        .inputs(vec![input])
-        .add(
-            Storage::new("ledger".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        );
+    let mut stack = Stack::new("stack".to_string()).inputs(vec![input]).add(
+        Storage::new("ledger".to_string()).build(),
+        ResourceLifecycle::Frozen,
+    );
     if shares_frozen_gate {
         stack = stack.add_enabled_when(
             Storage::new("gated-store".to_string()).build(),

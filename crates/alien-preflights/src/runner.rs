@@ -484,49 +484,22 @@ impl PreflightRunner {
     }
 }
 
-/// The target as the setup re-import hashed it. The re-import strips declined Live resources
-/// before hashing, while an update strips them only after these preflights, so a declined Live
-/// sandbox's repository would otherwise never match. Frozen-dominated declines were stripped
-/// before the preflights, so a Frozen resource still sharing the gate means the answer was yes.
+/// The target as the setup re-import hashed it, which strips declined Live resources before
+/// hashing; an update strips them only after these preflights. An unresolvable gate keeps its
+/// resource, so the digests differ and setup is required.
 fn without_declined_live_resources(
     stack: &Stack,
     input_values: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Stack {
-    let accepted = |input_id: &str| {
-        if let Some(value) = input_values.get(input_id) {
-            return match value {
-                serde_json::Value::Bool(answer) => Some(*answer),
-                serde_json::Value::String(text) => text.parse().ok(),
-                _ => None,
-            };
-        }
-        let gates_a_frozen_resource = stack.resources().any(|(_, entry)| {
-            entry.lifecycle == alien_core::ResourceLifecycle::Frozen
-                && entry.enabled_when.as_deref() == Some(input_id)
-        });
-        if gates_a_frozen_resource {
-            return Some(true);
-        }
-        match stack
-            .inputs()
-            .iter()
-            .find(|input| input.id == input_id)?
-            .default
-            .as_ref()?
-        {
-            alien_core::StackInputDefaultValue::Boolean(answer) => Some(*answer),
-            _ => None,
-        }
-    };
+    let (answers, still_frozen_gating) = alien_core::surviving_frozen_gate_answers(stack);
     let mut projected = stack.clone();
-    // An unresolvable gate keeps its resource: the digests then differ and setup is required.
-    projected.resources.retain(|_, entry| {
-        entry.lifecycle == alien_core::ResourceLifecycle::Frozen
-            || entry
-                .enabled_when
-                .as_deref()
-                .is_none_or(|input_id| accepted(input_id) != Some(false))
-    });
+    if let Ok(declined) =
+        alien_core::declined_live_resources(stack, input_values, &answers, &still_frozen_gating)
+    {
+        projected
+            .resources
+            .retain(|resource_id, _| !declined.contains(resource_id));
+    }
     projected
 }
 

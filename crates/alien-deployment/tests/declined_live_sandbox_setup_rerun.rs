@@ -32,12 +32,10 @@ fn release_stack(with_archive: bool) -> Stack {
         "Whether to run the sandbox.",
         Some(false),
     );
-    let mut stack = Stack::new("stack".to_string())
-        .inputs(vec![input])
-        .add(
-            Storage::new("ledger".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        );
+    let mut stack = Stack::new("stack".to_string()).inputs(vec![input]).add(
+        Storage::new("ledger".to_string()).build(),
+        ResourceLifecycle::Frozen,
+    );
     if with_archive {
         stack = stack.add(
             Storage::new("archive".to_string()).build(),
@@ -60,9 +58,10 @@ fn config(accepted: bool) -> DeploymentConfig {
         .allow_frozen_changes(false)
         .external_bindings(ExternalBindings::default())
         .build();
-    config
-        .input_values
-        .insert("sandboxEnabled".to_string(), serde_json::Value::Bool(accepted));
+    config.input_values.insert(
+        "sandboxEnabled".to_string(),
+        serde_json::Value::Bool(accepted),
+    );
     config
 }
 

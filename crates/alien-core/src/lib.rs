@@ -46,6 +46,9 @@ pub use ownership::*;
 mod gateability;
 pub use gateability::*;
 
+mod gate_resolution;
+pub use gate_resolution::*;
+
 mod tags;
 pub use tags::*;
 
