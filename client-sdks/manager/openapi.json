@@ -15234,7 +15234,7 @@
           },
           "diskImage": {
             "type": "string",
-            "description": "Catalog disk image every sandbox is created from."
+            "description": "Catalog name or registry image every sandbox is created from. A registry image is\nstarted from the disk image built from it, found by label in the group."
           },
           "idlePauseSeconds": {
             "type": [

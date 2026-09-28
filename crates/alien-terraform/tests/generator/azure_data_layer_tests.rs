@@ -679,6 +679,91 @@ fn azure_remote_sandbox_grants_the_access_identity_its_own_group_and_nothing_wid
     snapshot_module("azure_remote_sandbox", &module);
 }
 
+/// The manager's disk-image grant lands on the one group and on the management identity, through
+/// a role that carries the disk-image data actions and nothing that reaches a sandbox. A grant
+/// that rendered at resource-group scope would let the manager replace a sibling's image.
+#[test]
+fn azure_sandbox_image_grant_reaches_the_manager_on_its_own_group_only() {
+    let sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "docker.io/library/python:3.14-slim".to_string(),
+        })
+        .egress(SandboxEgress::Allow)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build();
+    let stack = Stack::new("byo-sandbox".to_string())
+        .management(alien_core::ManagementPermissions::extend(
+            PermissionProfile::new().resource("agents", ["sandbox/images"]),
+        ))
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(sandbox, ResourceLifecycle::Frozen)
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = module
+        .files
+        .iter()
+        .filter(|(name, _)| name.ends_with(".tf"))
+        .map(|(_, contents)| contents.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let body: hcl::Body = hcl::from_str(&rendered).expect("the module parses");
+
+    let assignments: Vec<&hcl::Block> = body
+        .blocks()
+        .filter(|block| {
+            block.identifier() == "resource"
+                && block.labels().first().map(|label| label.as_str())
+                    == Some("azurerm_role_assignment")
+                && block
+                    .labels()
+                    .get(1)
+                    .is_some_and(|label| label.as_str().starts_with("agents_images_"))
+        })
+        .collect();
+    assert_eq!(assignments.len(), 1, "{rendered}");
+    let attribute = |name: &str| {
+        assignments[0]
+            .body()
+            .attributes()
+            .find(|attribute| attribute.key() == name)
+            .map(|attribute| attribute.expr().to_string())
+            .unwrap_or_default()
+    };
+    assert_eq!(attribute("scope"), "azapi_resource.agents.id");
+    assert_eq!(
+        attribute("principal_id"),
+        "azurerm_user_assigned_identity.management.principal_id"
+    );
+
+    let role_label = attribute("role_definition_id")
+        .strip_prefix("azurerm_role_definition.")
+        .and_then(|rest| rest.strip_suffix(".role_definition_resource_id"))
+        .map(str::to_string)
+        .expect("the assignment names a rendered custom role");
+    let role = body
+        .blocks()
+        .find(|block| {
+            block.identifier() == "resource"
+                && block.labels().get(1).map(|label| label.as_str()) == Some(role_label.as_str())
+        })
+        .unwrap_or_else(|| panic!("role definition '{role_label}' is not rendered: {rendered}"));
+    let role_text = hcl::to_string(role).expect("the role renders");
+    for action in ["diskimages/read", "diskimages/write", "diskimages/delete"] {
+        assert!(role_text.contains(action), "{action}: {role_text}");
+    }
+    assert!(!role_text.contains("sandboxes/"), "{role_text}");
+
+    assert_terraform_valid(&module, "azure sandbox image grant");
+}
+
 /// An AKS target is `Platform::Azure` but skips sandbox emission, so a note keyed off the platform
 /// would tell that installer to register a provider for a resource their package does not contain.
 #[test]

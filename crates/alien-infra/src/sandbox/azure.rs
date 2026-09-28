@@ -11,19 +11,33 @@
 //! group and heartbeats it. It cannot prove the linking resource's data-plane access by probing
 //! with its own credential (which lacks Data Owner by design); the execute grant that opens the
 //! data plane is authored on that resource's permission set by a preflight, not verified here.
+//!
+//! A registry image is the one data-plane object this controller owns: it builds the image into
+//! a disk image in the group after the group exists, as the AWS controller builds its MicroVM
+//! image after registration, and deletes the one a changed reference replaced. That takes the
+//! disk-image verbs of `sandbox/images` alone, which reach no sandbox.
 
 use std::time::Duration;
 
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_core::{
-    ResourceOutputs as CoreResourceOutputs, ResourceStatus, Sandbox, SandboxEgress, SandboxLimits,
-    SandboxOutputs,
+use alien_azure_clients::azure::sandbox_data_plane::{
+    CreateDiskImage, DiskImage, SandboxDataPlaneApi,
 };
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_client_core::ErrorData as CloudClientErrorData;
+use alien_core::{
+    azure_disk_image_label, AzureSandboxImage, ResourceOutputs as CoreResourceOutputs,
+    ResourceStatus, Sandbox, SandboxEgress, SandboxLimits, SandboxOutputs, AZURE_DISK_IMAGE_LABEL,
+};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
+
+/// A disk image builds in 10-30s. 60 polls at this interval is a 5-minute ceiling, an order of
+/// magnitude past a healthy build, so reaching it means the build is wedged rather than slow.
+const DISK_IMAGE_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const DISK_IMAGE_MAX_POLLS: u32 = 60;
 
 /// Azure Sandbox controller.
 #[controller]
@@ -34,9 +48,18 @@ pub struct AzureSandboxController {
     pub(crate) region: Option<String>,
     /// Resource group the sandbox group sits in.
     pub(crate) resource_group: Option<String>,
-    /// Catalog disk image every sandbox is created from, taken from the declaration's `code`.
+    /// Catalog name or registry image every sandbox is created from, taken from the declaration's
+    /// `code`. A registry image is set only once its disk image is Ready, so the binding never
+    /// names one sessions cannot start from yet.
     #[serde(default)]
     pub(crate) disk_image: Option<String>,
+    /// Disk image built from a registry `disk_image`, which sessions start from.
+    #[serde(default)]
+    pub(crate) disk_image_id: Option<String>,
+    /// Disk images a changed image replaced, deleted from `Ready`. One a stopped sandbox's
+    /// snapshot still holds is refused with a 409 and stays here for the next tick.
+    #[serde(default)]
+    pub(crate) retired_disk_images: Vec<String>,
     /// Outbound policy every sandbox is created with, from the declaration.
     #[serde(default)]
     pub(crate) egress: Option<SandboxEgress>,
@@ -79,9 +102,25 @@ impl AzureSandboxController {
         info!(sandbox_id = %config.id, %group, "Azure sandbox group adopted");
 
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: if self.pending_image(config).is_some() {
+                EnsureDiskImage
+            } else {
+                Ready
+            },
             suggested_delay: None,
         })
+    }
+
+    #[handler(
+        state = EnsureDiskImage,
+        on_failure = ProvisionFailed,
+        status = ResourceStatus::Provisioning
+    )]
+    async fn ensure_disk_image(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.build_disk_image(ctx).await
     }
 
     #[handler(
@@ -96,15 +135,30 @@ impl AzureSandboxController {
         // fail on, and must not flip a serving sandbox to a terminal RefreshFailed here. The
         // capture is all-or-nothing, so a refusal cannot pair a new policy or size with an
         // older image.
-        if let Err(error) = self.capture_session_inputs(&config) {
-            debug!(
+        match self.capture_session_inputs(&config) {
+            // An imported group arrives here with nothing built for a registry image, and a
+            // Frozen one whose image changed without an update flow arrives serving the old one.
+            // The second builds as an update, so a failed build leaves the served binding alone.
+            Ok(()) if self.pending_image(&config).is_some() => {
+                return Ok(HandlerAction::Continue {
+                    state: if self.disk_image.is_some() {
+                        UpdatingDiskImage
+                    } else {
+                        EnsureDiskImage
+                    },
+                    suggested_delay: None,
+                });
+            }
+            Ok(()) => {}
+            Err(error) => debug!(
                 sandbox_id = %config.id,
                 %error,
                 "the declaration did not capture, so the binding keeps the one it has"
-            );
+            ),
         }
+        self.reap_retired_disk_images(ctx, &config.id).await;
 
-        // The data plane has no list operation, so the heartbeat carries the group's ARM
+        // The data plane has no sandbox list operation, so the heartbeat carries the group's ARM
         // provisioning state rather than a sandbox count. A read failure here leaves the sandbox
         // serving: the heartbeat is an observation, not a health gate.
         if let Ok((group, _region, resource_group)) = self.identity(&config.id) {
@@ -186,9 +240,27 @@ impl AzureSandboxController {
         info!(sandbox_id = %config.id, "Updated Azure sandbox configuration");
 
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: if self.pending_image(config).is_some() {
+                UpdatingDiskImage
+            } else {
+                Ready
+            },
             suggested_delay: None,
         })
+    }
+
+    /// The create flow's build, routed to `UpdateFailed`: a new image that fails to build leaves
+    /// the sandbox updatable, with the previous image still published and serving.
+    #[handler(
+        state = UpdatingDiskImage,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating
+    )]
+    async fn updating_disk_image(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.build_disk_image(ctx).await
     }
 
     // ─────────────── DELETE FLOW ──────────────────────────────────────────
@@ -294,19 +366,220 @@ impl AzureSandboxController {
         // The image is resolved before anything is assigned: the executor persists this controller
         // and republishes its binding on the error branch too, so a capture that stopped halfway
         // would leave half a declaration applied on every retry.
-        let disk_image = config
-            .azure_catalog_image()
+        let image = config
+            .azure_image()
             .context(ErrorData::CloudPlatformError {
-                message: "sandbox code.image is not a valid Azure catalog image".to_string(),
+                message: "sandbox code.image is neither an Azure catalog name nor a registry image"
+                    .to_string(),
                 resource_id: Some(config.id.clone()),
-            })?
-            .to_string();
+            })?;
 
-        self.disk_image = Some(disk_image);
+        match image {
+            AzureSandboxImage::Catalog(name) => {
+                self.disk_image = Some(name.to_string());
+                if let Some(replaced) = self.disk_image_id.take() {
+                    self.retired_disk_images.push(replaced);
+                }
+            }
+            // Published by the build once its disk image is Ready; until then the binding keeps
+            // naming the image sessions can start from now.
+            AzureSandboxImage::Registry(_) => {}
+        }
         self.egress = Some(config.egress.clone());
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
         self.limits = config.limits.clone();
         Ok(())
+    }
+
+    /// The registry image the declaration names when no Ready disk image serves it yet.
+    fn pending_image(&self, config: &Sandbox) -> Option<String> {
+        let Ok(AzureSandboxImage::Registry(reference)) = config.azure_image() else {
+            return None;
+        };
+        (self.disk_image.as_deref() != Some(reference) || self.disk_image_id.is_none())
+            .then(|| reference.to_string())
+    }
+
+    /// Finds or builds the disk image for the declared registry image, then publishes it.
+    ///
+    /// Looked up by label before any create, and on every poll: the id is server-minted, so a
+    /// create whose response was lost leaves an image only the label can find, and a second
+    /// create would build a duplicate. Extra images under the label are retired.
+    async fn build_disk_image(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<AzureSandboxHandlerAction> {
+        let config = ctx.desired_resource_config::<Sandbox>()?;
+        let Some(reference) = self.pending_image(config) else {
+            return Ok(AzureSandboxHandlerAction::Continue {
+                state: AzureSandboxState::Ready,
+                suggested_delay: None,
+            });
+        };
+        let (group, client) = self.data_plane(ctx, &config.id)?;
+        let label = azure_disk_image_label(&reference);
+
+        let ours: Vec<DiskImage> = client
+            .list_disk_images(&group)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to list the disk images of sandbox group '{group}'"),
+                resource_id: Some(config.id.clone()),
+            })?
+            .into_iter()
+            .filter(|image| image.labels.get(AZURE_DISK_IMAGE_LABEL) == Some(&label))
+            .collect();
+
+        let image = match ours.iter().find(|image| image.state() == Some("Ready")) {
+            Some(ready) => ready.clone(),
+            None if ours
+                .iter()
+                .any(|image| !matches!(image.state(), Some("Failed"))) =>
+            {
+                debug!(sandbox_id = %config.id, %reference, "disk image is still building");
+                return Ok(AzureSandboxHandlerAction::Stay {
+                    max_times: Some(DISK_IMAGE_MAX_POLLS),
+                    suggested_delay: Some(DISK_IMAGE_POLL_INTERVAL),
+                });
+            }
+            None => {
+                // Failed builds are retired so the retry that follows builds afresh rather than
+                // finding the same failure under the label again.
+                if let Some(failed) = ours.first() {
+                    let reason = failed
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.error_message.clone())
+                        .filter(|message| !message.is_empty())
+                        .unwrap_or_else(|| "no reason given".to_string());
+                    self.retired_disk_images
+                        .extend(ours.iter().map(|image| image.id.clone()));
+                    return Err(AlienError::new(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "the disk image built from '{reference}' failed: {reason}"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+
+                let registry_credentials = registry_credentials(ctx, &reference, &config.id)?;
+                let created = client
+                    .create_disk_image(
+                        &group,
+                        CreateDiskImage {
+                            base: reference.clone(),
+                            labels: [(AZURE_DISK_IMAGE_LABEL.to_string(), label.clone())].into(),
+                            registry_credentials,
+                        },
+                    )
+                    .await
+                    .map_err(|error| {
+                        // Azure's own reason (an arm64-only image, a denied pull) is the one
+                        // worth reading, so it leads rather than sitting at the end of the chain.
+                        let reason = error.to_string();
+                        error.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Azure refused to build a disk image from '{reference}': {reason}"
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        })
+                    })?;
+                info!(sandbox_id = %config.id, %reference, image = %created.id, "disk image build started");
+                if created.state() != Some("Ready") {
+                    return Ok(AzureSandboxHandlerAction::Stay {
+                        max_times: Some(DISK_IMAGE_MAX_POLLS),
+                        suggested_delay: Some(DISK_IMAGE_POLL_INTERVAL),
+                    });
+                }
+                created
+            }
+        };
+
+        self.retired_disk_images.extend(
+            ours.iter()
+                .filter(|other| other.id != image.id)
+                .map(|other| other.id.clone()),
+        );
+        if let Some(replaced) = self.disk_image_id.replace(image.id.clone()) {
+            if replaced != image.id {
+                self.retired_disk_images.push(replaced);
+            }
+        }
+        self.disk_image = Some(reference.clone());
+        info!(sandbox_id = %config.id, %reference, image = %image.id, "disk image is Ready");
+
+        Ok(AzureSandboxHandlerAction::Continue {
+            state: AzureSandboxState::Ready,
+            suggested_delay: None,
+        })
+    }
+
+    /// Deletes the disk images a changed image replaced, best-effort.
+    ///
+    /// Never fails the heartbeat it runs beside, unlike the AWS reaper: a sandbox that serves is
+    /// not unhealthy because an old image lingers. A 409 means a stopped sandbox's snapshot still
+    /// holds the image; it and any other failure keep the id for the next tick, so none is lost.
+    async fn reap_retired_disk_images(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) {
+        if self.retired_disk_images.is_empty() {
+            return;
+        }
+        let (group, client) = match self.data_plane(ctx, resource_id) {
+            Ok(plane) => plane,
+            Err(error) => {
+                warn!(sandbox_id = %resource_id, %error, "retired disk images kept for the next tick");
+                return;
+            }
+        };
+
+        let mut kept = Vec::new();
+        for image_id in std::mem::take(&mut self.retired_disk_images) {
+            if self.disk_image_id.as_deref() == Some(image_id.as_str()) || kept.contains(&image_id)
+            {
+                continue;
+            }
+            match client.delete_disk_image(&group, &image_id).await {
+                Ok(()) => {
+                    debug!(sandbox_id = %resource_id, image = %image_id, "retired disk image deleted")
+                }
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceConflict { .. })
+                    ) =>
+                {
+                    debug!(sandbox_id = %resource_id, image = %image_id, "retired disk image is still held by a snapshot");
+                    kept.push(image_id);
+                }
+                Err(error) => {
+                    warn!(sandbox_id = %resource_id, image = %image_id, %error, "retired disk image kept for the next tick");
+                    kept.push(image_id);
+                }
+            }
+        }
+        self.retired_disk_images = kept;
+    }
+
+    fn data_plane(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        sandbox_id: &str,
+    ) -> Result<(String, std::sync::Arc<dyn SandboxDataPlaneApi>)> {
+        let (group, region, resource_group) = self.identity(sandbox_id)?;
+        let client = ctx.service_provider.get_azure_sandbox_data_plane_client(
+            ctx.get_azure_config()?,
+            &region,
+            &resource_group,
+        )?;
+        Ok((group, client))
     }
 
     fn identity(&self, sandbox_id: &str) -> Result<(String, String, String)> {
@@ -342,6 +615,41 @@ impl AzureSandboxController {
             }
         }
     }
+}
+
+/// Basic credentials for an image pulled through the manager's registry proxy, as an Azure Worker
+/// pulls: `deployment` and the deployment token.
+///
+/// Only for a reference on the proxy's own host. A Worker's image always is; a sandbox's may be a
+/// public image elsewhere, where the deployment token is a credential that registry must not see.
+fn registry_credentials(
+    ctx: &ResourceControllerContext<'_>,
+    reference: &str,
+    resource_id: &str,
+) -> Result<Option<(String, String)>> {
+    let Some(manager_url) = ctx.deployment_config.manager_url.as_deref() else {
+        return Ok(None);
+    };
+    let proxy_host = alien_core::image_rewrite::strip_url_scheme(manager_url);
+    let proxied = reference
+        .split_once('/')
+        .is_some_and(|(host, _)| host.eq_ignore_ascii_case(proxy_host));
+    if !proxied {
+        return Ok(None);
+    }
+    let token = ctx
+        .deployment_config
+        .deployment_token
+        .clone()
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "deployment_token is required for Azure to pull a sandbox image from \
+                          the registry proxy"
+                    .to_string(),
+                resource_id: Some(resource_id.to_string()),
+            })
+        })?;
+    Ok(Some(("deployment".to_string(), token)))
 }
 
 /// ADC data-plane host for a region. The plane is per-region, so the region selects it.
@@ -384,6 +692,8 @@ mod tests {
             region: Some("swedencentral".to_string()),
             resource_group: Some("rg".to_string()),
             disk_image: Some("ubuntu".to_string()),
+            disk_image_id: None,
+            retired_disk_images: Vec::new(),
             egress: Some(SandboxEgress::Deny),
             idle_pause_seconds: Some(300),
             limits: None,
@@ -428,6 +738,8 @@ mod tests {
             region: Some("swedencentral".to_string()),
             resource_group: Some("rg".to_string()),
             disk_image: Some("ubuntu".to_string()),
+            disk_image_id: None,
+            retired_disk_images: Vec::new(),
             egress: Some(SandboxEgress::Allow),
             idle_pause_seconds: None,
             limits: None,
@@ -553,6 +865,8 @@ mod tests {
             region: Some("swedencentral".to_string()),
             resource_group: Some("rg".to_string()),
             disk_image: Some("ubuntu".to_string()),
+            disk_image_id: None,
+            retired_disk_images: Vec::new(),
             egress: Some(SandboxEgress::Deny),
             idle_pause_seconds: None,
             limits: None,
@@ -594,6 +908,8 @@ mod tests {
             region: Some("swedencentral".to_string()),
             resource_group: Some("rg".to_string()),
             disk_image: Some("ubuntu".to_string()),
+            disk_image_id: None,
+            retired_disk_images: Vec::new(),
             egress: Some(SandboxEgress::Allow),
             idle_pause_seconds: None,
             limits: None,
@@ -638,6 +954,8 @@ mod tests {
             region: Some("swedencentral".to_string()),
             resource_group: Some("rg".to_string()),
             disk_image: Some("ubuntu".to_string()),
+            disk_image_id: None,
+            retired_disk_images: Vec::new(),
             egress: Some(SandboxEgress::Deny),
             idle_pause_seconds: Some(300),
             limits: Some(SandboxLimits {
@@ -669,6 +987,8 @@ mod tests {
             region: Some("swedencentral".to_string()),
             resource_group: Some("rg".to_string()),
             disk_image: Some("ubuntu".to_string()),
+            disk_image_id: None,
+            retired_disk_images: Vec::new(),
             egress: Some(SandboxEgress::Deny),
             idle_pause_seconds: None,
             limits: None,
@@ -695,6 +1015,8 @@ mod tests {
             region: Some("swedencentral".to_string()),
             resource_group: Some("rg".to_string()),
             disk_image: Some("ubuntu".to_string()),
+            disk_image_id: None,
+            retired_disk_images: Vec::new(),
             egress: Some(SandboxEgress::AllowDomains {
                 domains: vec!["api.example.com".to_string()],
             }),
@@ -739,5 +1061,379 @@ mod tests {
                 .is_none(),
             "no binding is published until the sandbox fields are captured"
         );
+    }
+
+    mod disk_images {
+        use super::*;
+        use alien_azure_clients::azure::sandbox_data_plane::{
+            DiskImageStatus, MockSandboxDataPlaneApi,
+        };
+        use alien_azure_clients::azure::sandbox_groups::MockSandboxGroupsApi;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        const PYTHON: &str = "docker.io/library/python:3.14-slim";
+        const NODE: &str = "docker.io/library/node:22";
+
+        fn sandbox(image: &str) -> Sandbox {
+            Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: image.to_string(),
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build()
+        }
+
+        fn adopted(
+            disk_image: Option<&str>,
+            disk_image_id: Option<&str>,
+        ) -> AzureSandboxController {
+            AzureSandboxController {
+                state: AzureSandboxState::Ready,
+                sandbox_group: Some("sbg".to_string()),
+                region: Some("westus2".to_string()),
+                resource_group: Some("rg".to_string()),
+                disk_image: disk_image.map(str::to_string),
+                disk_image_id: disk_image_id.map(str::to_string),
+                retired_disk_images: Vec::new(),
+                egress: Some(SandboxEgress::Allow),
+                idle_pause_seconds: None,
+                limits: None,
+                _internal_stay_count: None,
+            }
+        }
+
+        fn image(id: &str, reference: &str, state: &str) -> DiskImage {
+            DiskImage {
+                id: id.to_string(),
+                labels: [(
+                    AZURE_DISK_IMAGE_LABEL.to_string(),
+                    azure_disk_image_label(reference),
+                )]
+                .into(),
+                status: Some(DiskImageStatus {
+                    state: Some(state.to_string()),
+                    error_message: None,
+                }),
+            }
+        }
+
+        /// A provider handing out `client` for the data plane, and an ARM client whose read fails,
+        /// which the heartbeat reports as a partial collection rather than an error.
+        fn provider_with(client: MockSandboxDataPlaneApi) -> Arc<MockPlatformServiceProvider> {
+            let client: Arc<dyn SandboxDataPlaneApi> = Arc::new(client);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_azure_sandbox_data_plane_client()
+                .returning(move |_, _, _| Ok(client.clone()));
+            provider
+                .expect_get_azure_sandbox_groups_client()
+                .returning(|_| {
+                    let mut arm = MockSandboxGroupsApi::new();
+                    arm.expect_get_sandbox_group().returning(|_, name| {
+                        Err(AlienError::new(
+                            alien_client_core::ErrorData::RemoteResourceNotFound {
+                                resource_type: "SandboxGroup".to_string(),
+                                resource_name: name.to_string(),
+                            },
+                        ))
+                    });
+                    Ok(Arc::new(arm))
+                });
+            Arc::new(provider)
+        }
+
+        async fn executor(
+            declared: Sandbox,
+            controller: AzureSandboxController,
+            client: MockSandboxDataPlaneApi,
+        ) -> SingleControllerExecutor {
+            SingleControllerExecutor::builder()
+                .resource(declared)
+                .controller(controller)
+                .platform(Platform::Azure)
+                .resource_lifecycle(ResourceLifecycle::Frozen)
+                .service_provider(provider_with(client))
+                .build()
+                .await
+                .expect("executor should build")
+        }
+
+        fn state_of(executor: &SingleControllerExecutor) -> &AzureSandboxController {
+            executor
+                .internal_state::<AzureSandboxController>()
+                .expect("an Azure sandbox controller")
+        }
+
+        /// An imported group reaches `Ready` with nothing built for its registry image, so the
+        /// first tick builds it. The binding names the image only once the build is Ready, and
+        /// the build carries the label the provider finds it by and no registry credential.
+        #[tokio::test]
+        async fn an_imported_registry_image_is_built_before_its_binding_is_published() {
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .times(1)
+                .returning(|_| Ok(Vec::new()));
+            client
+                .expect_create_disk_image()
+                .withf(|group, request| {
+                    group == "sbg"
+                        && request.base == PYTHON
+                        && request.labels.get(AZURE_DISK_IMAGE_LABEL)
+                            == Some(&azure_disk_image_label(PYTHON))
+                        && request.registry_credentials.is_none()
+                })
+                .times(1)
+                .returning(|_, _| Ok(image("img-1", PYTHON, "Ready")));
+            let mut executor = executor(sandbox(PYTHON), adopted(None, None), client).await;
+            assert!(
+                state_of(&executor).get_binding_params().unwrap().is_none(),
+                "no binding names an image nothing has built"
+            );
+
+            executor.step().await.expect("the tick routes to the build");
+            executor.step().await.expect("the build succeeds");
+
+            let controller = state_of(&executor);
+            assert!(matches!(controller.state, AzureSandboxState::Ready));
+            assert_eq!(controller.disk_image_id.as_deref(), Some("img-1"));
+            let params = controller.get_binding_params().unwrap().expect("a binding");
+            assert_eq!(params["diskImage"], PYTHON);
+        }
+
+        /// A create whose response was lost left an image under the label. The retry finds and
+        /// adopts it rather than building a second one, and a duplicate from an earlier loss is
+        /// retired.
+        #[tokio::test]
+        async fn a_retried_build_reuses_the_image_already_built() {
+            let mut client = MockSandboxDataPlaneApi::new();
+            client.expect_list_disk_images().returning(|_| {
+                Ok(vec![
+                    image("other", NODE, "Ready"),
+                    image("img-1", PYTHON, "Ready"),
+                    image("dup", PYTHON, "Ready"),
+                ])
+            });
+            client.expect_create_disk_image().times(0);
+            let mut executor = executor(sandbox(PYTHON), adopted(None, None), client).await;
+
+            executor.step().await.expect("the tick routes to the build");
+            executor
+                .step()
+                .await
+                .expect("the build adopts what is there");
+
+            let controller = state_of(&executor);
+            assert_eq!(controller.disk_image_id.as_deref(), Some("img-1"));
+            assert_eq!(controller.retired_disk_images, vec!["dup".to_string()]);
+        }
+
+        /// A build that is not Ready yet is polled on the same label rather than re-created.
+        #[tokio::test]
+        async fn a_building_image_is_polled_until_ready() {
+            let polls = Arc::new(AtomicUsize::new(0));
+            let seen = polls.clone();
+            let mut client = MockSandboxDataPlaneApi::new();
+            client.expect_list_disk_images().returning(move |_| {
+                let state = if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                    "Building"
+                } else {
+                    "Ready"
+                };
+                Ok(vec![image("img-1", PYTHON, state)])
+            });
+            client.expect_create_disk_image().times(0);
+            let mut executor = executor(sandbox(PYTHON), adopted(None, None), client).await;
+
+            executor.step().await.expect("the tick routes to the build");
+            executor.step().await.expect("the build is still running");
+            assert!(state_of(&executor).disk_image_id.is_none());
+            executor.step().await.expect("the build is Ready");
+
+            assert_eq!(state_of(&executor).disk_image_id.as_deref(), Some("img-1"));
+            assert_eq!(polls.load(Ordering::SeqCst), 2);
+        }
+
+        /// A changed reference builds a new image, then retires the old one. The delete a stopped
+        /// sandbox's snapshot refuses with a 409 is kept and retried on a later tick, not lost.
+        #[tokio::test]
+        async fn a_changed_image_is_rebuilt_and_the_old_one_retired_through_a_409() {
+            let deletes = Arc::new(AtomicUsize::new(0));
+            let seen = deletes.clone();
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .returning(|_| Ok(vec![image("old", PYTHON, "Ready")]));
+            client
+                .expect_create_disk_image()
+                .withf(|_, request| request.base == NODE)
+                .times(1)
+                .returning(|_, _| Ok(image("new", NODE, "Ready")));
+            client
+                .expect_delete_disk_image()
+                .withf(|group, id| group == "sbg" && id == "old")
+                .times(2)
+                .returning(move |_, _| {
+                    if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                        Err(AlienError::new(
+                            alien_client_core::ErrorData::RemoteResourceConflict {
+                                message: "DiskImageHasDependents".to_string(),
+                                resource_type: "Resource".to_string(),
+                                resource_name: "old".to_string(),
+                            },
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                });
+            let mut executor =
+                executor(sandbox(PYTHON), adopted(Some(PYTHON), Some("old")), client).await;
+
+            executor
+                .update(sandbox(NODE))
+                .expect("transition to update");
+            executor
+                .step()
+                .await
+                .expect("the update routes to the build");
+            executor.step().await.expect("the new image builds");
+            let controller = state_of(&executor);
+            assert_eq!(controller.disk_image_id.as_deref(), Some("new"));
+            assert_eq!(controller.retired_disk_images, vec!["old".to_string()]);
+            assert_eq!(
+                controller.get_binding_params().unwrap().unwrap()["diskImage"],
+                NODE
+            );
+
+            executor
+                .step()
+                .await
+                .expect("a held image does not fail the tick");
+            assert_eq!(
+                state_of(&executor).retired_disk_images,
+                vec!["old".to_string()]
+            );
+
+            executor.step().await.expect("the next tick deletes it");
+            assert!(state_of(&executor).retired_disk_images.is_empty());
+            assert_eq!(deletes.load(Ordering::SeqCst), 2);
+        }
+
+        /// A Frozen sandbox whose image changed without an update flow reaches `Ready` serving the
+        /// old image, and builds the new one as an update, so a failed build leaves the served
+        /// binding alone rather than failing the sandbox's provisioning.
+        #[tokio::test]
+        async fn an_image_changed_under_a_serving_sandbox_builds_as_an_update() {
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .returning(|_| Ok(Vec::new()));
+            client
+                .expect_create_disk_image()
+                .times(1)
+                .returning(|_, _| Ok(image("new", NODE, "Ready")));
+            let mut executor =
+                executor(sandbox(NODE), adopted(Some(PYTHON), Some("old")), client).await;
+
+            executor.step().await.expect("the tick routes to the build");
+            assert!(
+                matches!(
+                    state_of(&executor).state,
+                    AzureSandboxState::UpdatingDiskImage
+                ),
+                "{:?}",
+                state_of(&executor).state
+            );
+            assert_eq!(executor.status(), ResourceStatus::Updating);
+
+            executor.step().await.expect("the new image builds");
+            let controller = state_of(&executor);
+            assert_eq!(controller.disk_image_id.as_deref(), Some("new"));
+            assert_eq!(controller.retired_disk_images, vec!["old".to_string()]);
+        }
+
+        /// An image on the manager's own host is pulled through its registry proxy, which takes
+        /// the deployment's Basic credentials as an Azure Worker's pull does.
+        #[tokio::test]
+        async fn a_proxied_image_builds_with_the_deployment_credentials() {
+            const PROXIED: &str = "test-manager.alien.dev/artifacts/prj_test:sandbox-v1";
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .returning(|_| Ok(Vec::new()));
+            client
+                .expect_create_disk_image()
+                .withf(|_, request| {
+                    request.registry_credentials
+                        == Some((
+                            "deployment".to_string(),
+                            "test-deployment-token".to_string(),
+                        ))
+                })
+                .times(1)
+                .returning(|_, _| Ok(image("img-1", PROXIED, "Ready")));
+            let mut executor = executor(sandbox(PROXIED), adopted(None, None), client).await;
+
+            executor.step().await.expect("the tick routes to the build");
+            executor.step().await.expect("the build succeeds");
+            assert_eq!(state_of(&executor).disk_image_id.as_deref(), Some("img-1"));
+        }
+
+        /// An arm64-only image is refused by Azure at create, and its reason is what the failure
+        /// leads with rather than a generic build error.
+        #[tokio::test]
+        async fn a_refused_build_fails_with_azures_reason() {
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .returning(|_| Ok(Vec::new()));
+            client
+                .expect_create_disk_image()
+                .times(1)
+                .returning(|_, _| {
+                    Err(AlienError::new(
+                        alien_client_core::ErrorData::InvalidInput {
+                            message: "Bad request for Resource 'sbg': The container image \
+                              'docker.io/arm64v8/alpine:3.19' does not provide a linux/amd64 \
+                              variant. Only linux/amd64 images are supported."
+                                .to_string(),
+                            field_name: None,
+                        },
+                    ))
+                });
+            let mut executor = executor(
+                sandbox("docker.io/arm64v8/alpine:3.19"),
+                adopted(None, None),
+                client,
+            )
+            .await;
+
+            executor.step().await.expect("the tick routes to the build");
+            let error = executor
+                .step()
+                .await
+                .expect_err("an arm64-only image is refused");
+
+            assert!(error.to_string().contains("linux/amd64"), "{error}");
+            assert!(state_of(&executor).get_binding_params().unwrap().is_none());
+        }
+
+        /// Switching back to a catalog name publishes it at once and retires the built image.
+        #[test]
+        fn a_catalog_name_retires_the_image_a_registry_reference_built() {
+            let mut controller = adopted(Some(PYTHON), Some("img-1"));
+
+            controller
+                .capture_session_inputs(&sandbox("ubuntu"))
+                .expect("a catalog name captures");
+
+            assert_eq!(controller.disk_image.as_deref(), Some("ubuntu"));
+            assert_eq!(controller.disk_image_id, None);
+            assert_eq!(controller.retired_disk_images, vec!["img-1".to_string()]);
+        }
     }
 }

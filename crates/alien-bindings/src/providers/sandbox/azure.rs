@@ -19,7 +19,10 @@ use alien_azure_clients::azure::sandbox_data_plane::{
     CreateSandbox, EgressHostRule, EgressPolicy, SandboxDataPlaneApi,
 };
 use alien_client_core::ErrorData as ClientErrorData;
-use alien_core::{SandboxCapabilities, SandboxCapability, SandboxEgress};
+use alien_core::{
+    azure_disk_image_label, classify_azure_sandbox_image, AzureSandboxImage, SandboxCapabilities,
+    SandboxCapability, SandboxEgress, AZURE_DISK_IMAGE_LABEL,
+};
 use alien_error::{AlienError, ContextError};
 use tracing::warn;
 
@@ -28,8 +31,11 @@ use tracing::warn;
 pub struct AzureSandbox {
     client: std::sync::Arc<dyn SandboxDataPlaneApi>,
     sandbox_group: String,
-    /// Catalog disk image every sandbox is created from, from the declaration.
+    /// Catalog name or registry image every sandbox is created from, from the declaration.
     disk_image: String,
+    /// Id of the disk image built from a registry `disk_image`, found once by label. A miss is
+    /// not cached: the controller may still be building it.
+    disk_image_id: tokio::sync::OnceCell<String>,
     /// Outbound policy every sandbox is created with, from the declaration.
     egress: SandboxEgress,
     /// Idle seconds after which a sandbox suspends itself, if the declaration asked for one.
@@ -57,6 +63,7 @@ impl AzureSandbox {
             client,
             sandbox_group,
             disk_image,
+            disk_image_id: tokio::sync::OnceCell::new(),
             egress,
             idle_pause_seconds,
             cpu,
@@ -65,7 +72,56 @@ impl AzureSandbox {
         }
     }
 
-    /// The catalog image sandboxes are created from. Exists so a test can prove the declaration
+    /// The built disk image a sandbox starts from, or `None` for a catalog name.
+    ///
+    /// A value neither shape classifies is sent as a catalog name: planning refuses such a
+    /// declaration, so only a hand-written binding carries one, and the data plane judges it.
+    async fn disk_image_id(&self) -> Result<Option<String>> {
+        let Some(AzureSandboxImage::Registry(reference)) =
+            classify_azure_sandbox_image(&self.disk_image)
+        else {
+            return Ok(None);
+        };
+        let id = self
+            .disk_image_id
+            .get_or_try_init(|| async {
+                let label = azure_disk_image_label(reference);
+                let images = self
+                    .client
+                    .list_disk_images(&self.sandbox_group)
+                    .await
+                    .map_err(|error| {
+                        error.context(ErrorData::SandboxUnreachable {
+                            operation: CREATE.to_string(),
+                            reason: format!(
+                                "could not read the disk images of sandbox group '{}'",
+                                self.sandbox_group
+                            ),
+                        })
+                    })?;
+                images
+                    .into_iter()
+                    .find(|image| {
+                        image.labels.get(AZURE_DISK_IMAGE_LABEL) == Some(&label)
+                            && image.state() == Some("Ready")
+                    })
+                    .map(|image| image.id)
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::SandboxUnreachable {
+                            operation: CREATE.to_string(),
+                            reason: format!(
+                                "no disk image built from '{reference}' is ready in sandbox \
+                                 group '{}' yet; the sandbox's controller builds it after setup",
+                                self.sandbox_group
+                            ),
+                        })
+                    })
+            })
+            .await?;
+        Ok(Some(id.clone()))
+    }
+
+    /// The image sandboxes are created from. Exists so a test can prove the declaration
     /// reached the provider — the failure it guards is silent, so nothing else would show it.
     #[cfg(test)]
     pub(crate) fn disk_image(&self) -> &str {
@@ -175,12 +231,14 @@ impl Sandbox for AzureSandbox {
         refuse_unsupported_create_fields(&request, CREATE)?;
 
         let asked = egress_policy(&self.egress);
+        let disk_image_id = self.disk_image_id().await?;
         let sandbox = self
             .client
             .create_sandbox(
                 &self.sandbox_group,
                 CreateSandbox {
                     disk_image: self.disk_image.clone(),
+                    disk_image_id,
                     cpu: self.cpu.clone(),
                     memory: self.memory.clone(),
                     disk: self.disk.clone(),
@@ -1370,6 +1428,7 @@ mod tests {
     use super::*;
     use alien_azure_clients::azure::sandbox_data_plane::ExecResult;
     use alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi;
+    use alien_azure_clients::azure::sandbox_data_plane::{DiskImage, DiskImageStatus};
     use alien_azure_clients::azure::sandbox_data_plane::{
         EgressRule, EgressRuleAction, EgressRuleMatch,
     };
@@ -1442,6 +1501,119 @@ mod tests {
             .create(CreateSandboxRequest::default())
             .await
             .expect("create succeeds");
+    }
+
+    fn disk_image(id: &str, label: &str, state: &str) -> DiskImage {
+        DiskImage {
+            id: id.to_string(),
+            labels: BTreeMap::from([(AZURE_DISK_IMAGE_LABEL.to_string(), label.to_string())]),
+            status: Some(DiskImageStatus {
+                state: Some(state.to_string()),
+                error_message: None,
+            }),
+        }
+    }
+
+    fn registry_sandbox(client: MockSandboxDataPlaneApi) -> AzureSandbox {
+        AzureSandbox::new(
+            std::sync::Arc::new(client),
+            "grp".to_string(),
+            "docker.io/library/python:3.14-slim".to_string(),
+            SandboxEgress::Allow,
+            None,
+            "1000m".to_string(),
+            "2048Mi".to_string(),
+            None,
+        )
+    }
+
+    /// A registry image starts sandboxes from the Ready disk image built from it, found by its
+    /// label once: a second create does not list again. Another reference's image, and one still
+    /// building, are passed over.
+    #[tokio::test]
+    async fn a_registry_image_starts_from_the_disk_image_built_from_it() {
+        let label = azure_disk_image_label("docker.io/library/python:3.14-slim");
+        let mut client = MockSandboxDataPlaneApi::new();
+        let listed = label.clone();
+        client
+            .expect_list_disk_images()
+            .times(1)
+            .returning(move |_| {
+                Ok(vec![
+                    disk_image(
+                        "other",
+                        &azure_disk_image_label("docker.io/library/node:22"),
+                        "Ready",
+                    ),
+                    disk_image("building", &listed, "Building"),
+                    disk_image("built", &listed, "Ready"),
+                ])
+            });
+        client
+            .expect_create_sandbox()
+            .withf(|_, request| request.disk_image_id.as_deref() == Some("built"))
+            .times(2)
+            .returning(|_, _| {
+                Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    id: "s1".to_string(),
+                    egress_policy: None,
+                    state: Some("Running".to_string()),
+                })
+            });
+        settles_running(&mut client, None);
+
+        let sandbox = registry_sandbox(client);
+        for _ in 0..2 {
+            sandbox
+                .create(CreateSandboxRequest::default())
+                .await
+                .expect("create succeeds");
+        }
+    }
+
+    /// Before the controller has built the image there is nothing to start from, and the miss is
+    /// not remembered: the next create looks again and finds the image once it is Ready.
+    #[tokio::test]
+    async fn an_image_not_built_yet_fails_the_create_and_is_looked_up_again() {
+        let label = azure_disk_image_label("docker.io/library/python:3.14-slim");
+        let mut client = MockSandboxDataPlaneApi::new();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+        client
+            .expect_list_disk_images()
+            .times(2)
+            .returning(move |_| {
+                if seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Ok(Vec::new())
+                } else {
+                    Ok(vec![disk_image("built", &label, "Ready")])
+                }
+            });
+        client
+            .expect_create_sandbox()
+            .withf(|_, request| request.disk_image_id.as_deref() == Some("built"))
+            .times(1)
+            .returning(|_, _| {
+                Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    id: "s1".to_string(),
+                    egress_policy: None,
+                    state: Some("Running".to_string()),
+                })
+            });
+        settles_running(&mut client, None);
+
+        let sandbox = registry_sandbox(client);
+        let error = sandbox
+            .create(CreateSandboxRequest::default())
+            .await
+            .expect_err("no image is built yet");
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+        assert!(error.to_string().contains("python:3.14-slim"), "{error}");
+
+        sandbox
+            .create(CreateSandboxRequest::default())
+            .await
+            .expect("the image is found once it is Ready");
     }
 
     /// Azure accepts a delete and completes it later, so returning on the accepted call would
@@ -1664,6 +1836,40 @@ mod tests {
                 }),
                 None => std::future::pending().await,
             }
+        }
+
+        async fn create_disk_image(
+            &self,
+            _group: &str,
+            _request: alien_azure_clients::azure::sandbox_data_plane::CreateDiskImage,
+        ) -> alien_client_core::Result<alien_azure_clients::azure::sandbox_data_plane::DiskImage>
+        {
+            unreachable!("the command paths never build images")
+        }
+
+        async fn get_disk_image(
+            &self,
+            _group: &str,
+            _image_id: &str,
+        ) -> alien_client_core::Result<alien_azure_clients::azure::sandbox_data_plane::DiskImage>
+        {
+            unreachable!("the command paths never read images")
+        }
+
+        async fn list_disk_images(
+            &self,
+            _group: &str,
+        ) -> alien_client_core::Result<Vec<alien_azure_clients::azure::sandbox_data_plane::DiskImage>>
+        {
+            unreachable!("the command paths never list images")
+        }
+
+        async fn delete_disk_image(
+            &self,
+            _group: &str,
+            _image_id: &str,
+        ) -> alien_client_core::Result<()> {
+            unreachable!("the command paths never delete images")
         }
     }
 

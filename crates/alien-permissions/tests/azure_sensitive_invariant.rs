@@ -109,6 +109,28 @@ fn is_implicit_management_set(permission_set_id: &str) -> bool {
     permission_set_id.ends_with("/heartbeat")
         || permission_set_id.ends_with("/management")
         || permission_set_id.ends_with("/provision")
+        // Preflight-authored for an Azure sandbox's manager; its name carries no suffix above.
+        || permission_set_id == "sandbox/images"
+}
+
+/// The manager's disk-image grant reaches no sandbox and has no stack binding, so it can only
+/// ever be bound on one sandbox group. A predefined role is refused outright: the one Azure
+/// ships for this plane carries every session's contents too.
+#[test]
+fn sandbox_images_stays_on_disk_images_and_its_group() {
+    let set = alien_permissions::get_permission_set("sandbox/images").expect("registered");
+    let entries = set.platforms.azure.as_ref().expect("an azure entry");
+    for entry in entries {
+        assert!(entry.grant.predefined_roles.is_none(), "{entry:?}");
+        assert!(entry.grant.actions.is_none(), "{entry:?}");
+        for data_action in entry.grant.data_actions.iter().flatten() {
+            assert!(
+                data_action.starts_with("Microsoft.App/sandboxGroups/diskimages/"),
+                "{data_action}"
+            );
+        }
+        assert!(entry.binding.stack.is_none(), "{entry:?}");
+    }
 }
 
 /// Whether a granted action carrying a `*` covers anything on `sensitive`. Compared as a prefix

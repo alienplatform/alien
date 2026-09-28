@@ -1257,7 +1257,10 @@ async fn validate_pull_access(
 /// Extract the set of repo names from a release's stack.
 fn extract_repo_names(stack: &alien_core::Stack) -> Vec<String> {
     use alien_core::image_rewrite::strip_registry_host;
-    use alien_core::{Container, ContainerCode, Daemon, DaemonCode, Worker, WorkerCode};
+    use alien_core::{
+        classify_azure_sandbox_image, AzureSandboxImage, Container, ContainerCode, Daemon,
+        DaemonCode, Sandbox, SandboxCode, Worker, WorkerCode,
+    };
 
     let mut repos = Vec::new();
 
@@ -1276,6 +1279,16 @@ fn extract_repo_names(stack: &alien_core::Stack) -> Vec<String> {
             match &daemon.code {
                 DaemonCode::Image { image } => Some(image.as_str()),
                 DaemonCode::Source { .. } => None,
+            }
+        } else if let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() {
+            // A registry image only: an Azure sandbox's disk image is built by pulling it through
+            // here. A catalog name or an AWS `s3://` bundle is never pulled, so it opens nothing.
+            match &sandbox.code {
+                SandboxCode::Image { image } => match classify_azure_sandbox_image(image) {
+                    Some(AzureSandboxImage::Registry(reference)) => Some(reference),
+                    _ => None,
+                },
+                SandboxCode::Source { .. } => None,
             }
         } else {
             None
@@ -1492,7 +1505,10 @@ async fn load_artifact_registry_for_repo(
 mod tests {
     use super::*;
     use alien_core::image_rewrite::strip_registry_host;
-    use alien_core::{Daemon, DaemonCode, ResourceLifecycle, Stack};
+    use alien_core::{
+        Daemon, DaemonCode, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
+        SandboxLifecyclePolicy, Stack,
+    };
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
@@ -1578,6 +1594,43 @@ mod tests {
             .build();
         let stack = Stack::new("test-stack".to_string())
             .add(daemon, ResourceLifecycle::Live)
+            .build();
+
+        assert_eq!(
+            extract_repo_names(&stack),
+            vec!["artifacts/prj_test".to_string()]
+        );
+    }
+
+    /// An Azure sandbox's disk image is built by pulling its registry image through the proxy,
+    /// so that repo is in the release; a catalog name or an `s3://` bundle is never pulled.
+    #[test]
+    fn extract_repo_names_includes_sandbox_registry_images_only() {
+        let sandbox = |id: &str, image: &str| {
+            Sandbox::new(id.to_string())
+                .code(SandboxCode::Image {
+                    image: image.to_string(),
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build()
+        };
+        let stack = Stack::new("test-stack".to_string())
+            .add(
+                sandbox(
+                    "agents",
+                    "manager.example.com/artifacts/prj_test:sandbox-v1",
+                ),
+                ResourceLifecycle::Frozen,
+            )
+            .add(sandbox("catalog", "ubuntu"), ResourceLifecycle::Frozen)
+            .add(
+                sandbox("bundle", "s3://bucket/sandbox/bundle.zip"),
+                ResourceLifecycle::Frozen,
+            )
             .build();
 
         assert_eq!(

@@ -2,7 +2,8 @@
 
 use alien_core::{
     import::{data::AzureSandboxImportData, ImportContext},
-    ErrorData as CoreErrorData, Platform, ResourceStatus, Result, Sandbox, StackResourceState,
+    AzureSandboxImage, ErrorData as CoreErrorData, Platform, ResourceStatus, Result, Sandbox,
+    StackResourceState,
 };
 use alien_error::AlienError;
 
@@ -47,7 +48,14 @@ impl ResourceImporter for AzureSandboxImporter {
             sandbox_group: Some(data.sandbox_group),
             region: Some(data.region),
             resource_group: Some(data.resource_group),
-            disk_image: Some(sandbox.azure_catalog_image()?.to_string()),
+            // A registry image is published once the controller has built its disk image, which
+            // `Ready` starts on its first tick; a catalog name serves at once.
+            disk_image: match sandbox.azure_image()? {
+                AzureSandboxImage::Catalog(name) => Some(name.to_string()),
+                AzureSandboxImage::Registry(_) => None,
+            },
+            disk_image_id: None,
+            retired_disk_images: Vec::new(),
             egress: Some(sandbox.egress.clone()),
             idle_pause_seconds: sandbox.lifecycle.idle_pause_seconds,
             limits: sandbox.limits.clone(),
@@ -137,6 +145,36 @@ mod tests {
         assert_eq!(internal["limits"]["cpu"], "4000m");
         assert_eq!(internal["limits"]["memory"], "8192Mi");
         assert_eq!(internal["limits"]["disk"], "40960Mi");
+    }
+
+    /// A registry image has no disk image yet at import, so it is not published: the binding would
+    /// name an image no sandbox can start from until the controller's first tick builds it.
+    #[test]
+    fn azure_sandbox_import_leaves_a_registry_image_for_the_controller_to_build() {
+        let resource = entry(Resource::new(
+            Sandbox::new("sbx".to_string())
+                .code(SandboxCode::Image {
+                    image: "docker.io/library/python:3.14-slim".to_string(),
+                })
+                .egress(SandboxEgress::Deny)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+        ));
+        let settings = StackSettings::default();
+        let ctx = import_context(&settings, &resource);
+
+        let imported = AzureSandboxImporter
+            .import(import_data(), &ctx)
+            .expect("a registry image imports");
+
+        let internal = imported
+            .internal_state
+            .expect("imported sandbox should have controller state");
+        assert!(internal["diskImage"].is_null(), "{internal}");
+        assert!(internal["diskImageId"].is_null(), "{internal}");
     }
 
     /// Azure creates a sandbox only from a catalog image, so a source-built sandbox is refused at
