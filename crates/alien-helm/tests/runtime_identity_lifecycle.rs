@@ -106,6 +106,8 @@ fn runtime_identity_survives_upgrade_and_pod_replacement() {
         "heartbeat.collection.nodes.enabled=false",
         "--set",
         "runtime.cleanup.onUninstall.enabled=false",
+        "--set-string",
+        "management.defaultUrl=https://default-manager.example.test",
     ];
     let mut install = vec!["install", release, chart, "--create-namespace"];
     install.extend(common);
@@ -146,7 +148,35 @@ fn runtime_identity_survives_upgrade_and_pod_replacement() {
     upgrade.extend(common);
     // A different annotation forces a replacement Pod rather than a no-op upgrade.
     upgrade.extend(["--set-string", "runtime.podAnnotations.revision=second"]);
+    upgrade.extend([
+        "--set-string",
+        "management.url=https://corrected-manager.example.test",
+    ]);
     run("helm", &upgrade, &kubeconfig);
+    let deployment: serde_json::Value = serde_json::from_str(&run(
+        "kubectl",
+        &[
+            "--namespace",
+            namespace,
+            "get",
+            "deployment",
+            name,
+            "-o",
+            "json",
+        ],
+        &kubeconfig,
+    ))
+    .expect("installed Deployment");
+    let variables = deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_array()
+        .expect("runtime environment");
+    assert_eq!(
+        variables
+            .iter()
+            .find(|variable| variable["name"] == "SYNC_URL")
+            .expect("management endpoint")["value"],
+        "https://corrected-manager.example.test"
+    );
     assert_eq!(state(), original_identity);
     assert_eq!(key(), original_key);
     run(
@@ -190,6 +220,18 @@ fn runtime_identity_survives_upgrade_and_pod_replacement() {
         &unsafe_upgrade,
         &kubeconfig,
         "Changing the runtime identity volume",
+    );
+    let mut unsafe_upgrade = upgrade.clone();
+    unsafe_upgrade.extend([
+        "--set-string",
+        "runtime.encryption.existingSecret.name=runtime-identity",
+        "--set-string",
+        "runtime.encryption.existingSecret.key=another-key",
+    ]);
+    rejected(
+        &unsafe_upgrade,
+        &kubeconfig,
+        "Preserve the installed key selector",
     );
     assert_eq!(state(), original_identity);
     assert_eq!(key(), original_key);

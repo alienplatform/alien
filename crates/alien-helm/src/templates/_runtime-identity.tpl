@@ -19,12 +19,21 @@
       {{- fail "Changing the runtime encryption Secret requires a state migration. Preserve the installed Secret reference when upgrading." -}}
     {{- end -}}
   {{- end -}}
+  {{- range $container := $installed.spec.template.spec.containers -}}
+    {{- if eq $container.name "operator" -}}
+      {{- range $mount := $container.volumeMounts -}}
+        {{- if and (eq $mount.name "encryption-key") (ne $mount.subPath (include "deployment.encryptionSecretKey" $)) -}}
+          {{- fail "Changing the runtime encryption Secret key requires a state migration. Preserve the installed key selector when upgrading." -}}
+        {{- end -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
 {{- end -}}
 
 {{- end -}}
 
 {{- define "deployment.managementUrl" -}}
-{{- $endpoint := .Values.management.url -}}
+{{- $endpoint := .Values.management.defaultUrl -}}
 {{- $installed := lookup "apps/v1" "Deployment" .Release.Namespace (include "deployment.fullname" .) -}}
 {{- if $installed -}}
   {{- range $container := $installed.spec.template.spec.containers -}}
@@ -37,7 +46,7 @@
     {{- end -}}
   {{- end -}}
 {{- end -}}
-{{- $endpoint -}}
+{{- default $endpoint .Values.management.url -}}
 {{- end -}}
 
 {{- define "deployment.runtimeEncryptionKey" -}}

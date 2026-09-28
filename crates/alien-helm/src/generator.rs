@@ -1573,7 +1573,7 @@ fn remote_operator_checks_tpl() -> String {
 {{- end -}}
 {{- end -}}
 {{- if .Values.remoteOperator.enabled -}}
-{{- if not .Values.management.url -}}
+{{- if not (include "deployment.managementUrl" .) -}}
   {{- fail "management.url is required when Remote Operator is enabled." -}}
 {{- end -}}
 {{- $expected := include "deployment.remoteOperatorAccessRequestCrd" . | fromYaml -}}
@@ -3862,7 +3862,9 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
     name: ""
     tokenKey: sync-token
   name: ""
-  # Use the resolved management endpoint supplied by the installation flow.
+  # Resolved management endpoint captured when this package was built.
+  defaultUrl: ""
+  # Override the captured or installed endpoint when routing changes.
   url: ""
   # Leave unset to create a deployment from the bootstrap token.
   deploymentId: null
@@ -4561,6 +4563,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         },
         "name": { "type": "string" },
         "url": { "type": "string" },
+        "defaultUrl": { "type": "string" },
         "deploymentId": { "type": ["string", "null"] },
         "setupItem": { "type": "string" },
         "updates": { "type": "string", "enum": ["auto", "approval-required"] },
@@ -5183,11 +5186,11 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
                     "required": ["management", "inputValues"],
                     "properties": {
                         "management": {
-                            "required": ["url"],
-                            "properties": {
-                                "url": { "minLength": 1 },
-                                "deploymentId": { "type": "null" }
-                            }
+                            "anyOf": [
+                                { "required": ["url"], "properties": { "url": { "minLength": 1 } } },
+                                { "required": ["defaultUrl"], "properties": { "defaultUrl": { "minLength": 1 } } }
+                            ],
+                            "properties": { "deploymentId": { "type": "null" } }
                         },
                         "inputValues": { "required": required }
                     }
@@ -7285,7 +7288,9 @@ helm install {chart_name} . --namespace={namespace} --create-namespace --values 
 Managed packages can supply the project's resolved management endpoint as a
 chart default. The installation service supplies an override when the selected
 manager or active custom domain differs from that captured default. Existing
-runtime installations retain their installed endpoint across chart upgrades.
+runtime installations retain their installed endpoint across chart upgrades unless
+`management.url` explicitly supplies a new endpoint. `management.defaultUrl` is
+the package default, used only for an installation without an assigned endpoint.
 The chart does not assume a hosted endpoint. The setup item defaults to `deployment`; override
 `management.setupItem` when your setup link selects another item. Leave
 `management.deploymentId` unset for a new installation. Set it only when
@@ -8233,7 +8238,7 @@ mod tests {
             },
             ProductOperatorManifestOptions {
                 manifest: OperatorManifestOptions {
-                    manager_url: "{{ .Values.management.url }}",
+                    manager_url: r#"{{ include "deployment.managementUrl" . }}"#,
                     group_token: "",
                     encryption_key: "",
                     image: "registry.example.com/operator@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -8476,8 +8481,15 @@ infrastructureExistingSecret: customer-bindings
             );
         crate::test_utils::helm_template(&chart.files, Some(&registered))
             .assert_ok("registered deployment keeps its stored inputs");
+        let captured_endpoint = values.replace(
+            "  url: https://manager.example.test",
+            "  defaultUrl: https://manager.example.test",
+        );
+        crate::test_utils::helm_template(&chart.files, Some(&captured_endpoint))
+            .assert_ok("bootstrap with captured management endpoint");
         let missing_inputs = values.replace("  ingestUrl: https://ingest.example.test\n", "");
         for invalid in [
+            captured_endpoint.replace("  ingestUrl: https://ingest.example.test\n", ""),
             missing_inputs.clone(),
             missing_inputs.replace(
                 "  token: ax_test",

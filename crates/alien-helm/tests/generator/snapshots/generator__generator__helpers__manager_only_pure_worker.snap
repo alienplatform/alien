@@ -17,7 +17,9 @@ management:
     name: ""
     tokenKey: sync-token
   name: ""
-  # Use the resolved management endpoint supplied by the installation flow.
+  # Resolved management endpoint captured when this package was built.
+  defaultUrl: ""
+  # Override the captured or installed endpoint when routing changes.
   url: ""
   # Leave unset to create a deployment from the bootstrap token.
   deploymentId: null
@@ -271,6 +273,7 @@ ephemeralStorage:
         },
         "name": { "type": "string" },
         "url": { "type": "string" },
+        "defaultUrl": { "type": "string" },
         "deploymentId": { "type": ["string", "null"] },
         "setupItem": { "type": "string" },
         "updates": { "type": "string", "enum": ["auto", "approval-required"] },
@@ -883,12 +886,21 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
       {{- fail "Changing the runtime encryption Secret requires a state migration. Preserve the installed Secret reference when upgrading." -}}
     {{- end -}}
   {{- end -}}
+  {{- range $container := $installed.spec.template.spec.containers -}}
+    {{- if eq $container.name "operator" -}}
+      {{- range $mount := $container.volumeMounts -}}
+        {{- if and (eq $mount.name "encryption-key") (ne $mount.subPath (include "deployment.encryptionSecretKey" $)) -}}
+          {{- fail "Changing the runtime encryption Secret key requires a state migration. Preserve the installed key selector when upgrading." -}}
+        {{- end -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
 {{- end -}}
 
 {{- end -}}
 
 {{- define "deployment.managementUrl" -}}
-{{- $endpoint := .Values.management.url -}}
+{{- $endpoint := .Values.management.defaultUrl -}}
 {{- $installed := lookup "apps/v1" "Deployment" .Release.Namespace (include "deployment.fullname" .) -}}
 {{- if $installed -}}
   {{- range $container := $installed.spec.template.spec.containers -}}
@@ -901,7 +913,7 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
     {{- end -}}
   {{- end -}}
 {{- end -}}
-{{- $endpoint -}}
+{{- default $endpoint .Values.management.url -}}
 {{- end -}}
 
 {{- define "deployment.runtimeEncryptionKey" -}}
@@ -2864,7 +2876,9 @@ helm install pure-fn . --namespace=pure-fn --create-namespace --values install-v
 Managed packages can supply the project's resolved management endpoint as a
 chart default. The installation service supplies an override when the selected
 manager or active custom domain differs from that captured default. Existing
-runtime installations retain their installed endpoint across chart upgrades.
+runtime installations retain their installed endpoint across chart upgrades unless
+`management.url` explicitly supplies a new endpoint. `management.defaultUrl` is
+the package default, used only for an installation without an assigned endpoint.
 The chart does not assume a hosted endpoint. The setup item defaults to `deployment`; override
 `management.setupItem` when your setup link selects another item. Leave
 `management.deploymentId` unset for a new installation. Set it only when
