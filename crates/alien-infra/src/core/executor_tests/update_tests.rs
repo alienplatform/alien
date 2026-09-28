@@ -1,9 +1,17 @@
 //! Tests for resource update flows and config changes.
 
 use super::helpers::*;
+use crate::core::{MockPlatformServiceProvider, StackExecutor, StackStateExt};
 use crate::error::Result;
 use alien_core::{
-    Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, StackResourceState,
+    ClientConfig, ComputeCluster, KubernetesClientConfig, Platform, Resource, ResourceLifecycle,
+    ResourceRef, ResourceStatus, Stack, StackResourceState, StackState,
+};
+use alien_error::AlienError;
+use alien_k8s_clients::kubernetes::deployments::MockDeploymentApi;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
 
 /// Tests that a config change triggers an update.
@@ -314,5 +322,95 @@ async fn test_combined_add_update_remove() -> Result<()> {
         get_status(&final_state, "func-c"),
         Some(ResourceStatus::Running)
     );
+    Ok(())
+}
+
+/// Cloud setup omits logical pools; continuation must verify the namespace
+/// through their controller instead of inventing imported cloud fleet state.
+#[tokio::test]
+async fn imported_kubernetes_compute_retries_namespace_verification() -> Result<()> {
+    let mut deployments = MockDeploymentApi::new();
+    let allowed = Arc::new(AtomicBool::new(false));
+    let access = allowed.clone();
+    deployments
+        .expect_list_deployments()
+        .withf(|namespace, labels, fields| {
+            namespace == "application"
+                && labels.is_none()
+                && fields.as_deref() == Some("metadata.name=alien-compute-access-check")
+        })
+        .times(2..)
+        .returning(move |_, _, _| {
+            if access.load(Ordering::SeqCst) {
+                Ok(Default::default())
+            } else {
+                Err(AlienError::new(
+                    alien_client_core::ErrorData::RemoteAccessDenied {
+                        resource_type: "Deployment".to_string(),
+                        resource_name: "application".to_string(),
+                    },
+                ))
+            }
+        });
+    let deployments = Arc::new(deployments);
+    let mut provider = MockPlatformServiceProvider::new();
+    provider
+        .expect_get_kubernetes_deployment_client()
+        .returning(move |_| Ok(deployments.clone()));
+    let stack = Stack::new("imported-pools".to_string())
+        .add(
+            ComputeCluster::new("compute".to_string())
+                .capacity_group(alien_core::CapacityGroup {
+                    group_id: "general".to_string(),
+                    instance_type: None,
+                    profile: None,
+                    min_size: 1,
+                    max_size: 1,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let executor = StackExecutor::builder(
+        &stack,
+        ClientConfig::Kubernetes(Box::new(KubernetesClientConfig::InCluster {
+            namespace: Some("application".to_string()),
+            additional_headers: None,
+        })),
+    )
+    .deployment_config(&default_deployment_config())
+    .service_provider(Arc::new(provider))
+    .build()?;
+    let mut state = StackState::new(Platform::Kubernetes);
+    for _ in 0..24 {
+        state = executor.continue_imported(state).await?.next_state;
+        if state.resources["compute"].status == ResourceStatus::ProvisionFailed {
+            break;
+        }
+    }
+    assert_eq!(
+        state.resources["compute"].status,
+        ResourceStatus::ProvisionFailed
+    );
+    // Initial setup retries only after the caller requests a retry. Restore the
+    // saved checkpoint exactly as the deployment engine does before continuation.
+    assert!(executor.continue_imported(state.clone()).await.is_err());
+    allowed.store(true, Ordering::SeqCst);
+    let retried = state.retry_failed_with_lifecycle_filter(&[ResourceLifecycle::Frozen])?;
+    assert_eq!(retried, vec!["compute".to_string()]);
+    for _ in 0..8 {
+        state = executor.continue_imported(state).await?.next_state;
+        if state.resources["compute"].status == ResourceStatus::Running {
+            break;
+        }
+    }
+    assert_eq!(state.resources["compute"].status, ResourceStatus::Running);
+    assert_eq!(
+        state.resources["compute"].controller_platform,
+        Some(Platform::Kubernetes)
+    );
+    assert!(state.resources["compute"].outputs.is_none());
     Ok(())
 }

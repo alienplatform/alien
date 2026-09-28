@@ -49,7 +49,19 @@ const MAX_SANDBOX_ID: usize = 63;
 const SANDBOX_READY_ATTEMPTS: u32 = 150;
 const SANDBOX_READY_INTERVAL: Duration = Duration::from_secs(2);
 
-/// How long a lifecycle operation (`create`, `:pause`, `:resume`, `:snapshot`) is polled before it
+/// How long `create` keeps probing a RUNNING sandbox's agent, and how often. The proxy answers
+/// `Bad Gateway` for a few seconds after RUNNING while the container starts listening.
+#[cfg(not(test))]
+const AGENT_READY_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(not(test))]
+const AGENT_READY_POLL: Duration = Duration::from_secs(1);
+// A unit test's mock answers at once, so the budget only decides how long it takes to say no.
+#[cfg(test)]
+const AGENT_READY_TIMEOUT: Duration = Duration::from_millis(50);
+#[cfg(test)]
+const AGENT_READY_POLL: Duration = Duration::from_millis(5);
+
+/// How long a lifecycle operation (`create`, `:snapshot`) is polled before it
 /// is reported incomplete rather than waited on forever.
 const OPERATION_POLL_ATTEMPTS: u32 = 150;
 const OPERATION_POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -178,6 +190,15 @@ impl GcpAgentPlatformSandbox {
         })
     }
 
+    /// Refused rather than forwarded: Agent Platform's `:resume` can return a fresh container while
+    /// reporting success, so nothing the sandbox held is guaranteed to survive a pause.
+    fn pause_resume_unsupported(&self) -> AlienError<ErrorData> {
+        self.unsupported(
+            alien_core::SandboxCapability::PauseResume.as_str(),
+            "Agent Platform sandboxes cannot be paused and resumed with their state kept",
+        )
+    }
+
     /// A sandbox id that stays a single path segment.
     ///
     /// The id is interpolated into the proxy URL, so one carrying `/`, `..`, `?` or `#` would
@@ -283,6 +304,12 @@ impl GcpAgentPlatformSandbox {
         operation: &str,
         error: AlienError<AgentPlatformErrorData>,
     ) -> AlienError<ErrorData> {
+        if let Some(answer) = agent_answer(&error) {
+            return error.context(ErrorData::SandboxCommandFailed {
+                failure: "agentRefused".to_string(),
+                reason: format!("{operation} was refused: {answer}"),
+            });
+        }
         if is_not_found(&error) {
             return error.context(ErrorData::SandboxCommandFailed {
                 failure: "sandboxGone".to_string(),
@@ -420,9 +447,7 @@ impl GcpAgentPlatformSandbox {
                 }));
             };
             match sandbox_state(CREATE, sandbox.state.as_deref())? {
-                SandboxState::Running => {
-                    return self.probe_agent(CREATE, sandbox_id).await;
-                }
+                SandboxState::Running => return self.wait_until_servable(sandbox_id).await,
                 SandboxState::Terminated => {
                     return Err(AlienError::new(ErrorData::SandboxCommandFailed {
                         failure: "sandboxTerminated".to_string(),
@@ -445,6 +470,39 @@ impl GcpAgentPlatformSandbox {
                 SANDBOX_READY_ATTEMPTS as u64 * SANDBOX_READY_INTERVAL.as_secs()
             ),
         }))
+    }
+
+    /// Probes a RUNNING sandbox's agent until it answers or [`AGENT_READY_TIMEOUT`] passes, returning
+    /// the generation or the timeout over the last finished probe's cause. Every failure is retried,
+    /// a 404 included: the proxy answers a not-yet-listening container with a relayed 404.
+    async fn wait_until_servable(&self, sandbox_id: &str) -> Result<u64> {
+        let deadline = tokio::time::Instant::now() + AGENT_READY_TIMEOUT;
+        let mut last_error = None;
+        loop {
+            // Bounded by the deadline too, since one probe's own budget is as long as the wait.
+            match tokio::time::timeout_at(deadline, self.probe_agent(CREATE, sandbox_id)).await {
+                Ok(Ok(generation)) => return Ok(generation),
+                Ok(Err(error)) => {
+                    last_error = Some(error);
+                    if tokio::time::Instant::now() + AGENT_READY_POLL >= deadline {
+                        break;
+                    }
+                    tokio::time::sleep(AGENT_READY_POLL).await;
+                }
+                Err(_) => break,
+            }
+        }
+        let timed_out = ErrorData::SandboxUnreachable {
+            operation: CREATE.to_string(),
+            reason: format!(
+                "sandbox '{sandbox_id}' was running but its agent did not become servable within {}s",
+                AGENT_READY_TIMEOUT.as_secs()
+            ),
+        };
+        Err(match last_error {
+            Some(error) => error.context(timed_out),
+            None => AlienError::new(timed_out),
+        })
     }
 
     /// Runs a command inside the proxy's synchronous window, streaming the buffered NDJSON body.
@@ -637,38 +695,9 @@ impl Sandbox for GcpAgentPlatformSandbox {
                 Ok(Some(sandbox)) if sandbox.state == SandboxState::Running => {
                     return Ok(ResolvedSandbox::found(sandbox))
                 }
-                // The ordinary resting state for a reconnect: a suspended sandbox is woken and
-                // confirmed, and handed back if it comes up healthy. A wake this call made that
-                // cannot be confirmed is put back to sleep before a fresh sandbox is provisioned —
-                // the paused one may be another revision's, and a second live sandbox beside it is
-                // a leak the caller never receives an id for.
-                Ok(Some(sandbox)) if sandbox.state == SandboxState::Paused => {
-                    if self.resume(id).await.is_ok() {
-                        match self.get(id).await {
-                            Ok(Some(woken)) if woken.state == SandboxState::Running => {
-                                return Ok(ResolvedSandbox::found(woken))
-                            }
-                            _ => {
-                                // The wake could not be undone: leaving it live beside a fresh
-                                // sandbox is a leak the caller gets no id for. Fail so the woken
-                                // sandbox stays identifiable rather than provisioning a second one.
-                                if let Err(error) = self.pause(id).await {
-                                    return Err(error.context(ErrorData::SandboxCommandFailed {
-                                        failure: "resumeRollbackFailed".to_string(),
-                                        reason: format!(
-                                            "{GET_OR_CREATE}: woke sandbox '{id}' but could not \
-                                             confirm it healthy or put it back to sleep"
-                                        ),
-                                    }));
-                                }
-                            }
-                        }
-                    }
-                }
                 // Still coming up, or already being woken by someone else. Waited for rather than
-                // replaced: the sandbox keeps starting either way, and a second one beside it is
-                // the leak the arm above exists to avoid. A slow data plane is answered with the
-                // failure, never by provisioning more of it.
+                // replaced: the sandbox keeps starting either way, so a second one beside it would
+                // run with nobody holding its id. A slow data plane is answered with the failure.
                 Ok(Some(sandbox)) if sandbox.state == SandboxState::Starting => {
                     let generation = self.settle(id).await?;
                     return Ok(ResolvedSandbox::found(SandboxInstance {
@@ -883,26 +912,12 @@ impl Sandbox for GcpAgentPlatformSandbox {
 
     async fn pause(&self, sandbox_id: &str) -> Result<()> {
         Self::checked_sandbox_id("sandbox.pause", sandbox_id)?;
-        let started = self.client.pause(&self.engine, sandbox_id).await.context(
-            ErrorData::SandboxCommandFailed {
-                failure: "pauseFailed".to_string(),
-                reason: format!("sandbox.pause: sandbox '{sandbox_id}' could not be paused"),
-            },
-        )?;
-        self.await_operation("sandbox.pause", started).await?;
-        Ok(())
+        Err(self.pause_resume_unsupported())
     }
 
     async fn resume(&self, sandbox_id: &str) -> Result<()> {
         Self::checked_sandbox_id("sandbox.resume", sandbox_id)?;
-        let started = self.client.resume(&self.engine, sandbox_id).await.context(
-            ErrorData::SandboxCommandFailed {
-                failure: "resumeFailed".to_string(),
-                reason: format!("sandbox.resume: sandbox '{sandbox_id}' could not be resumed"),
-            },
-        )?;
-        self.await_operation("sandbox.resume", started).await?;
-        Ok(())
+        Err(self.pause_resume_unsupported())
     }
 
     async fn snapshot(&self, sandbox_id: &str) -> Result<String> {
@@ -1524,6 +1539,19 @@ fn finish_operation(operation: &str, name: &str, op: Operation) -> Result<serde_
             response_json: format!("operation '{name}' reported done without a result"),
         })),
     }
+}
+
+/// The agent's own refusal, when `:execute` relayed one. The proxy forwards the agent's status, so
+/// its `PATH_NOT_FOUND` is a 404 like a missing sandbox; only a relayed body carries the agent's
+/// error code after `Error Details:`. A relayed 5xx is not an answer: the command may have run.
+fn agent_answer(error: &AlienError<AgentPlatformErrorData>) -> Option<String> {
+    const RELAYED: &str = "Error Details: ";
+    let message = super::refusal::captured_refusal(error)?;
+    let details = message.split_once(RELAYED)?.1.trim();
+    let code = details.split(':').next()?;
+    let is_agent_code =
+        !code.is_empty() && code.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_');
+    is_agent_code.then(|| truncated(details.as_bytes()))
 }
 
 /// Whether a client error means the sandbox is already gone.

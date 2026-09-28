@@ -1075,7 +1075,22 @@ impl KubernetesDaemonController {
             }]
         });
 
+        let pool =
+            alien_core::kubernetes_daemon_pool(ctx.desired_stack, config).map_err(|message| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message,
+                })
+            })?;
+        let node_selector = alien_core::kubernetes_compute_node_selector(ctx.desired_stack, pool)
+            .map_err(|message| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message,
+            })
+        })?;
         let pod_spec = PodSpec {
+            node_selector,
             service_account_name: Some(service_account_name.to_string()),
             containers: vec![container],
             restart_policy: Some("Always".to_string()),

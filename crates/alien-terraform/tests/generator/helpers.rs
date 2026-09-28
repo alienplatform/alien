@@ -13,7 +13,7 @@ use indexmap::IndexMap;
 
 #[allow(dead_code)]
 #[path = "../../src/test_utils.rs"]
-mod test_utils;
+pub(super) mod test_utils;
 
 /// A boolean deployer input, the shape `.enabled(input)` gates on.
 pub fn gate_input(id: &str, label: &str, description: &str) -> StackInputDefinition {

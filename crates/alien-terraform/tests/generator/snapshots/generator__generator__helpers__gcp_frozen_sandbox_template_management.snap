@@ -11,6 +11,14 @@ terraform {
       source  = "hashicorp/google"
       version = ">= 5.0"
     }
+    google-beta = {
+      source  = "hashicorp/google-beta"
+      version = ">= 6.0"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = ">= 0.9"
+    }
     random = {
       source  = "hashicorp/random"
       version = ">= 3.6"
@@ -134,44 +142,13 @@ variable "gcp_custom_role_prefix" {
   default     = ""
 }
 
-variable "network_mode" {
-  type        = string
-  description = "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default."
-  default     = "create-new"
-}
-
-variable "network_cidr" {
-  type        = string
-  description = "CIDR for a newly-created network. Empty uses 10.44.0.0/16."
-  default     = ""
-}
-
-variable "availability_zones" {
-  type        = number
-  description = "Reserved for cross-cloud network-mode parity. GCP creates one regional subnet."
-  default     = 2
-}
-
-variable "network_name" {
-  type        = string
-  description = "Existing VPC network name. Required when network is use-existing."
-  default     = ""
-}
-
-variable "subnet_name" {
-  type        = string
-  description = "Existing subnet name. Required when network is use-existing."
-  default     = ""
-}
-
-variable "network_region" {
-  type        = string
-  description = "Existing subnet region. Empty uses gcp_region."
-  default     = ""
-}
-
 === providers.tf ===
 provider "google" {
+  project = var.gcp_project
+  region  = var.gcp_region
+}
+
+provider "google-beta" {
   project = var.gcp_project
   region  = var.gcp_region
 }
@@ -189,95 +166,152 @@ locals {
   deployment_platform          = "gcp"
   deployment_target            = "gcp"
   deployment_region            = var.gcp_region
-  deployment_management_config = null
+  deployment_management_config = var.deployment_model == "push" ? { platform = "gcp", projectId = var.gcp_project, serviceAccountEmail = var.managing_service_account_email } : null
   advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
-  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.network_cidr == "" ? null : var.network_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-gcp", networkName = var.network_name, subnetName = var.subnet_name, region = var.network_region == "" ? var.gcp_region : var.network_region }) : jsonencode({ type = "use-default" })) })
+  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode })
   deployment_resources = [
     {
-      id   = "default-network"
-      type = "network"
+      id   = "agents-engine"
+      type = "gcp_agent_platform_engine"
       importData = {
-        projectId       = var.gcp_project
-        vpcSelfLink     = var.network_mode == "create-new" ? google_compute_network.default_network[0].self_link : data.google_compute_network.default_network[0].self_link
-        vpcName         = var.network_mode == "create-new" ? google_compute_network.default_network[0].name : data.google_compute_network.default_network[0].name
-        subnetSelfLinks = var.network_mode == "create-new" ? [google_compute_subnetwork.default_network_workload[0].self_link] : [data.google_compute_subnetwork.default_network_existing_subnet[0].self_link]
-        cidrBlock       = var.network_mode == "create-new" ? google_compute_subnetwork.default_network_workload[0].ip_cidr_range : data.google_compute_subnetwork.default_network_existing_subnet[0].ip_cidr_range
-        routerSelfLink  = var.network_mode == "create-new" ? google_compute_router.default_network_router[0].self_link : null
-        natName         = var.network_mode == "create-new" ? google_compute_router_nat.default_network_nat[0].name : null
-        isByoVpc        = var.network_mode != "create-new"
+        engineId = google_vertex_ai_reasoning_engine.agents_engine.name
+      }
+    },
+    {
+      id   = "management"
+      type = "remote-stack-management"
+      importData = {
+        projectId                    = var.gcp_project
+        projectNumber                = data.google_project.current.number
+        serviceAccountEmail          = google_service_account.management.email
+        serviceAccountUniqueId       = google_service_account.management.unique_id
+        managementPermissionsApplied = true
+      }
+    },
+    {
+      id   = "agents"
+      type = "sandbox"
+      importData = {
+        region = var.gcp_region
       }
     }
   ]
 }
 
-=== default_network.tf ===
-data "google_compute_network" "default_network" {
-  count   = var.network_mode != "create-new" ? 1 : 0
-  name    = var.network_mode == "use-default" ? "default" : var.network_name
-  project = var.gcp_project
-}
-
-data "google_compute_subnetwork" "default_network_existing_subnet" {
-  count   = var.network_mode != "create-new" ? 1 : 0
-  name    = var.network_mode == "use-default" ? "default" : var.subnet_name
-  project = var.gcp_project
-  region  = var.network_mode == "use-default" || var.network_region == "" ? var.gcp_region : var.network_region
-}
-
-resource "google_compute_network" "default_network" {
-  count                   = var.network_mode == "create-new" ? 1 : 0
-  name                    = trim(substr("${local.resource_prefix}-default-network", 0, 63), "-")
-  project                 = var.gcp_project
-  auto_create_subnetworks = false
-  routing_mode            = "REGIONAL"
-}
-
-resource "google_compute_subnetwork" "default_network_workload" {
-  count                    = var.network_mode == "create-new" ? 1 : 0
-  name                     = trim(substr("${local.resource_prefix}-default-network-workload", 0, 63), "-")
-  project                  = var.gcp_project
-  region                   = var.gcp_region
-  ip_cidr_range            = "10.42.0.0/16"
-  network                  = google_compute_network.default_network[0].id
-  private_ip_google_access = true
-}
-
-resource "google_compute_router" "default_network_router" {
-  count   = var.network_mode == "create-new" ? 1 : 0
-  name    = trim(substr("${local.resource_prefix}-default-network-router", 0, 63), "-")
-  project = var.gcp_project
-  region  = var.gcp_region
-  network = google_compute_network.default_network[0].id
-}
-
-resource "google_compute_router_nat" "default_network_nat" {
-  count                              = var.network_mode == "create-new" ? 1 : 0
-  name                               = trim(substr("${local.resource_prefix}-default-network-nat", 0, 63), "-")
-  project                            = var.gcp_project
-  region                             = var.gcp_region
-  router                             = google_compute_router.default_network_router[0].name
-  nat_ip_allocate_option             = "AUTO_ONLY"
-  source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
-
-  log_config {
-    enable = true
-    filter = "ERRORS_ONLY"
+=== agents_engine.tf ===
+resource "google_vertex_ai_reasoning_engine" "agents_engine" {
+  provider     = google-beta
+  region       = var.gcp_region
+  display_name = "${local.resource_prefix}-agents-engine"
+  labels = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "agents-engine"
+    "resource-type" = "sandbox-engine"
   }
 }
 
-resource "google_compute_firewall" "default_network_internal" {
-  count     = var.network_mode == "create-new" ? 1 : 0
-  name      = trim(substr("${local.resource_prefix}-default-network-internal", 0, 63), "-")
-  project   = var.gcp_project
-  network   = google_compute_network.default_network[0].id
-  direction = "INGRESS"
-  source_ranges = [
-    "10.42.0.0/16"
+=== management.tf ===
+data "google_project" "current" {
+  project_id = var.gcp_project
+}
+
+resource "google_service_account" "management" {
+  project      = var.gcp_project
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-management", local.resource_prefix)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-management", local.resource_prefix)), "_", "-")), 0, 8))
+  display_name = "${local.deployment_name}: Management service account"
+  description  = "Management cloud identity for ${local.deployment_name}. Resource prefix: ${local.resource_prefix}."
+}
+
+resource "google_project_iam_custom_role" "gcp_role_sandbox_heartbeat" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_sandbox_heartbeat", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Sandbox heartbeat"
+  description = "Used by ${local.deployment_name}. Allows reading sandbox parent state. Resource prefix: ${local.resource_prefix}."
+  stage       = "GA"
+  permissions = [
+    "aiplatform.sandboxEnvironmentTemplates.get"
   ]
+}
 
-  allow {
-    protocol = "all"
-  }
+resource "google_project_iam_member" "gcp_role_sandbox_heartbeat_management_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_sandbox_heartbeat[0].name : format("projects/%s/roles/role_%s_sandbox_heartbeat", var.gcp_project, local.gcp_custom_role_prefix)
+  member  = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_project_iam_custom_role" "gcp_role_sandbox_management" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_sandbox_management", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Sandbox management"
+  description = "Used by ${local.deployment_name}. Allows creating and terminating sandboxes (no access to sandbox contents). Resource prefix: ${local.resource_prefix}."
+  stage       = "GA"
+  permissions = [
+    "aiplatform.sandboxEnvironments.create",
+    "aiplatform.sandboxEnvironments.delete",
+    "aiplatform.sandboxEnvironments.get",
+    "aiplatform.sandboxEnvironments.list",
+    "aiplatform.sandboxEnvironments.pause",
+    "aiplatform.sandboxEnvironments.resume",
+    "aiplatform.sandboxEnvironments.snapshot"
+  ]
+}
+
+resource "google_project_iam_member" "gcp_role_sandbox_management_management_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_sandbox_management[0].name : format("projects/%s/roles/role_%s_sandbox_management", var.gcp_project, local.gcp_custom_role_prefix)
+  member  = "serviceAccount:${google_service_account.management.email}"
+}
+
+resource "google_service_account_iam_member" "management_manager_token_creator" {
+  for_each           = toset(compact([var.managing_service_account_email]))
+  service_account_id = google_service_account.management.id
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${each.value}"
+}
+
+resource "google_service_account_iam_member" "management_manager_user" {
+  for_each           = toset(compact([var.managing_service_account_email]))
+  service_account_id = google_service_account.management.id
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${each.value}"
+}
+
+=== agents.tf ===
+resource "google_project_iam_custom_role" "gcp_role_sandbox_templates" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_sandbox_templates", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Sandbox templates"
+  description = "Used by ${local.deployment_name}. Allows creating, reading and deleting environment templates, which set a sandbox's image and internet access, under the selected reasoning engine. Resource prefix: ${local.resource_prefix}."
+  stage       = "GA"
+  permissions = [
+    "aiplatform.sandboxEnvironmentTemplates.create",
+    "aiplatform.sandboxEnvironmentTemplates.delete",
+    "aiplatform.sandboxEnvironmentTemplates.get",
+    "aiplatform.sandboxEnvironmentTemplates.list"
+  ]
+}
+
+resource "google_vertex_ai_reasoning_engine_iam_member" "gcp_role_sandbox_templates_agents_engine_templates_0" {
+  provider         = google-beta
+  reasoning_engine = google_vertex_ai_reasoning_engine.agents_engine.name
+  role             = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_sandbox_templates[0].name : format("projects/%s/roles/role_%s_sandbox_templates", var.gcp_project, local.gcp_custom_role_prefix)
+  member           = "serviceAccount:${google_service_account.management.email}"
+}
+
+=== iam_propagation.tf ===
+resource "time_sleep" "gcp_iam_propagation" {
+  create_duration = "120s"
+  depends_on = [
+    google_project_iam_member.gcp_role_sandbox_heartbeat_management_binding_0,
+    google_project_iam_member.gcp_role_sandbox_management_management_binding_0,
+    google_service_account_iam_member.management_manager_token_creator,
+    google_service_account_iam_member.management_manager_user,
+    google_vertex_ai_reasoning_engine_iam_member.gcp_role_sandbox_templates_agents_engine_templates_0
+  ]
 }
 
 === registration.tf ===
@@ -298,11 +332,17 @@ resource "terraform_data" "deployment_registration" {
     inputValues                 = {}
   }
   depends_on = [
-    google_compute_network.default_network,
-    google_compute_subnetwork.default_network_workload,
-    google_compute_router.default_network_router,
-    google_compute_router_nat.default_network_nat,
-    google_compute_firewall.default_network_internal
+    google_vertex_ai_reasoning_engine.agents_engine,
+    google_service_account.management,
+    google_project_iam_custom_role.gcp_role_sandbox_heartbeat,
+    google_project_iam_member.gcp_role_sandbox_heartbeat_management_binding_0,
+    google_project_iam_custom_role.gcp_role_sandbox_management,
+    google_project_iam_member.gcp_role_sandbox_management_management_binding_0,
+    google_service_account_iam_member.management_manager_token_creator,
+    google_service_account_iam_member.management_manager_user,
+    google_project_iam_custom_role.gcp_role_sandbox_templates,
+    google_vertex_ai_reasoning_engine_iam_member.gcp_role_sandbox_templates_agents_engine_templates_0,
+    time_sleep.gcp_iam_propagation
   ]
 }
 
@@ -364,7 +404,7 @@ output "deployment_resources" {
 }
 
 === README.md ===
-# Deployment setup - acme-net
+# Deployment setup - byo-sandbox
 
 Target: `gcp`.
 
@@ -396,18 +436,12 @@ GCP settings:
 - `gcp_manage_custom_roles`: whether this module creates project custom roles.
 - `gcp_custom_role_prefix`: custom role ID prefix when roles are managed outside this module.
 
-Network settings:
-
-- `network_mode`: `create-new`, `use-existing`, or `use-default`.
-- `network_cidr`, `availability_zones`: used with `create-new`.
-- `network_name`, `subnet_name`, `network_region`: required with `use-existing`.
-
 ## Run
 
 Use your organization's normal backend and approval workflow. A typical local review looks like:
 
 ```bash
-export TF_VAR_name="acme-net"
+export TF_VAR_name="byo-sandbox"
 export TF_VAR_token="..."
 terraform init
 terraform validate

@@ -22,7 +22,7 @@ pub mod kubernetes;
 #[cfg(feature = "local")]
 pub mod local;
 
-#[cfg(feature = "aws")]
+#[cfg(any(feature = "aws", feature = "gcp"))]
 mod refusal;
 
 #[cfg(all(

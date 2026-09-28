@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 
 use crate::core::ResourceController;
 use crate::error::{ErrorData, Result};
-#[cfg(feature = "local")]
+#[cfg(any(feature = "kubernetes", feature = "local"))]
 use alien_core::ComputeCluster;
 #[cfg(any(feature = "kubernetes", feature = "local"))]
 use alien_core::Container;
@@ -747,6 +747,15 @@ impl ResourceRegistry {
             Ai::RESOURCE_TYPE,
             Platform::Local,
             Box::new(DefaultControllerFactory::<crate::ai::LocalAiController>::new()),
+        );
+
+        #[cfg(feature = "kubernetes")]
+        registry.register_controller_factory(
+            ComputeCluster::RESOURCE_TYPE,
+            Platform::Kubernetes,
+            Box::new(DefaultControllerFactory::<
+                crate::compute_cluster::KubernetesComputeClusterController,
+            >::new()),
         );
 
         // Register Local ComputeCluster controller

@@ -1,5 +1,5 @@
 //! Verifies the dual-path `values.schema.json` accepts both bootstrap
-//! shapes — `registered setup` (default `values.yaml`) and
+//! shapes — a new deployment (default `values.yaml`) and
 //! `external-bindings initialize path` (`examples/onprem.yaml`).
 
 use super::{helpers::render, test_utils};
@@ -9,7 +9,7 @@ use alien_core::{
 };
 
 #[test]
-fn schema_accepts_registered_setup_default_values() {
+fn schema_accepts_new_deployment_default_values() {
     let stack = Stack::new("boot-mgr".to_string())
         .add(
             Storage::new("data".to_string()).build(),
@@ -18,7 +18,7 @@ fn schema_accepts_registered_setup_default_values() {
         .build();
     let chart = render(&stack, StackSettings::default());
     let files = chart.files;
-    test_utils::helm_template_and_validate(&files, None).assert_ok("registered setup");
+    test_utils::helm_template_and_validate(&files, None).assert_ok("new deployment");
 }
 
 #[test]
@@ -87,12 +87,75 @@ fn registered_setup_mounts_external_bindings() {
         .map(|line| format!("  {line}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let registered = files["values.yaml"].replacen(
-        "infrastructure: null",
-        &format!("infrastructure:\n{bindings}"),
-        1,
-    );
+    let registered = files["values.yaml"]
+        .replacen("  deploymentId: null", "  deploymentId: dep_existing", 1)
+        .replacen(
+            "infrastructure: null",
+            &format!("infrastructure:\n{bindings}"),
+            1,
+        );
 
     test_utils::helm_template_and_validate(&files, Some(&registered))
         .assert_ok("registered setup with external bindings");
+}
+
+#[test]
+fn bootstrap_uses_selected_endpoint_and_keeps_registered_deployments_explicit() {
+    let chart = render(
+        &Stack::new("sample-agent".to_string()).build(),
+        StackSettings::default(),
+    );
+    let values = "management:\n  token: ax_bootstrap\n  url: https://selected-manager.example.test\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+    let bootstrap = test_utils::helm_template(&chart.files, Some(values));
+    bootstrap.assert_ok("bootstrap with selected endpoint and credentials");
+    let env = operator_env(&bootstrap.stdout);
+    assert_eq!(
+        env.get("SYNC_URL").map(String::as_str),
+        Some("https://selected-manager.example.test")
+    );
+    assert_eq!(
+        env.get("OPERATOR_SETUP_ITEM").map(String::as_str),
+        Some("deployment")
+    );
+    assert!(!env.contains_key("DEPLOYMENT_ID"));
+
+    let registered_values = values.replace(
+        "  token: ax_bootstrap",
+        "  token: ax_existing\n  deploymentId: dep_existing\n  setupItem: custom-item",
+    );
+    let registered = test_utils::helm_template(&chart.files, Some(&registered_values));
+    registered.assert_ok("registered deployment with custom endpoint and setup item");
+    let env = operator_env(&registered.stdout);
+    assert_eq!(
+        env.get("DEPLOYMENT_ID").map(String::as_str),
+        Some("dep_existing")
+    );
+    assert_eq!(
+        env.get("SYNC_URL").map(String::as_str),
+        Some("https://selected-manager.example.test")
+    );
+    assert_eq!(
+        env.get("OPERATOR_SETUP_ITEM").map(String::as_str),
+        Some("custom-item")
+    );
+}
+
+fn operator_env(manifest: &str) -> std::collections::BTreeMap<String, String> {
+    let deployment = serde_yaml::Deserializer::from_str(manifest)
+        .map(|doc| {
+            <serde_yaml::Value as serde::Deserialize>::deserialize(doc).expect("Kubernetes YAML")
+        })
+        .find(|doc| doc["kind"] == "Deployment")
+        .expect("Operator Deployment");
+    deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_sequence()
+        .expect("Operator environment")
+        .iter()
+        .filter_map(|entry| {
+            Some((
+                entry["name"].as_str()?.to_string(),
+                entry["value"].as_str()?.to_string(),
+            ))
+        })
+        .collect()
 }

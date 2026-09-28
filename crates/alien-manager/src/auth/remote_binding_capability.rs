@@ -47,10 +47,10 @@ pub fn names_deployment(subject: &Subject, deployment: &DeploymentRecord) -> boo
         }
 }
 
-/// True when the subject's capability names a binding kind, so authorization can exclude a
-/// resource of its own deployment.
+/// True when authorization can exclude a resource of the subject's own deployment by kind: a
+/// resolver token names its kind, or names none and is a data token.
 pub fn is_kind_scoped(subject: &Subject) -> bool {
-    matches!(subject.scope, Scope::RemoteBindings { .. })
+    subject.role == Role::RemoteBindingResolver
 }
 
 /// Decide resolution for a subject that carries a remote-bindings capability.
@@ -78,24 +78,16 @@ pub fn resolve_decision(
                     .as_deref()
                     .is_none_or(|scoped| scoped == resource_id),
         ),
-        // A resolver token with no kind claim predates the claim and keeps every kind until
-        // all issuers send one; tokens last minutes, so this arm can then drop to data only.
+        // A resolver token without a kind claim is a data token: it never reaches a sandbox.
         Scope::Deployment {
             project_id,
             deployment_id,
-        } if subject.role == Role::RemoteBindingResolver => {
-            tracing::warn!(
-                event = "remote_binding_capability_missing",
-                deployment_id = %deployment.id,
-                resource_id = %resource_id,
-                "Remote bindings token names no binding kind; allowing it until issuers send one"
-            );
-            Some(
-                subject.workspace_id == deployment.workspace_id
-                    && project_id == &deployment.project_id
-                    && deployment_id == &deployment.id,
-            )
-        }
+        } if subject.role == Role::RemoteBindingResolver => Some(
+            subject.workspace_id == deployment.workspace_id
+                && project_id == &deployment.project_id
+                && deployment_id == &deployment.id
+                && write_authority_covers(kind),
+        ),
         _ if subject.role == Role::RemoteBindingResolver => Some(false),
         _ => None,
     }
@@ -245,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn a_resolver_token_without_a_kind_keeps_every_kind_for_its_own_deployment_only() {
+    fn a_resolver_token_without_a_kind_resolves_data_kinds_of_its_own_deployment_only() {
         let subject = resolver(Scope::Deployment {
             project_id: "p1".to_string(),
             deployment_id: "d1".to_string(),
@@ -253,19 +245,29 @@ mod tests {
         for kind in ALL_KINDS {
             assert_eq!(
                 resolve_decision(&subject, &deployment(), kind, "r1"),
-                Some(true),
+                Some(kind != RemoteBindingKind::Sandbox),
                 "{kind:?}"
             );
         }
-        let mut other = subject.clone();
-        other.scope = Scope::Deployment {
+        let mut other_workspace = subject.clone();
+        other_workspace.workspace_id = "w2".to_string();
+        let mut other_project = subject.clone();
+        other_project.scope = Scope::Deployment {
+            project_id: "p2".to_string(),
+            deployment_id: "d1".to_string(),
+        };
+        let mut other_deployment = subject.clone();
+        other_deployment.scope = Scope::Deployment {
             project_id: "p1".to_string(),
             deployment_id: "d2".to_string(),
         };
-        assert_eq!(
-            resolve_decision(&other, &deployment(), RemoteBindingKind::Sandbox, "r1"),
-            Some(false)
-        );
+        for other in [other_workspace, other_project, other_deployment] {
+            assert_eq!(
+                resolve_decision(&other, &deployment(), RemoteBindingKind::Storage, "r1"),
+                Some(false),
+                "{other:?}"
+            );
+        }
     }
 
     #[test]

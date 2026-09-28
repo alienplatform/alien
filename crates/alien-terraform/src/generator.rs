@@ -24,8 +24,8 @@ use crate::{
 };
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
-    ownership_policy_for_resource_type, DeploymentModel, ErrorData, HeartbeatsMode, Key,
-    KubernetesCertificateMode, KubernetesExposureSettings, KubernetesSettings, Network,
+    ownership_policy_for_resource_type, ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode,
+    Key, KubernetesCertificateMode, KubernetesExposureSettings, KubernetesSettings, Network,
     NetworkSettings, RemoteBindings, RemoteStackManagement, ResourceLifecycle, Result, Sandbox,
     SandboxEgress, Stack, StackInputDefaultValue, StackInputDefinition, StackInputKind,
     StackInputProvider, StackInputValidation, StackSettings, TelemetryMode, UpdatesMode,
@@ -204,6 +204,11 @@ fn generate_terraform_module_internal(
     let labels = resource_labels(stack)?;
     let platform = target.cloud_platform();
     let mut stack_settings = options.stack_settings.clone();
+    if target.is_kubernetes() {
+        // Logical compute pools use the cluster's existing nodes. Cloud fleet
+        // selections must not become Kubernetes setup inputs or import data.
+        stack_settings.compute = None;
+    }
     if target.is_kubernetes()
         && matches!(
             target.cloud_platform(),
@@ -238,7 +243,12 @@ fn generate_terraform_module_internal(
         // without this an EKS install would provision the MicroVM image, connector, security
         // group and roles of the AWS backend it never uses — and refuse `egress: allow`, which
         // Kubernetes supports, with advice about a platform the customer did not choose.
-        if target.is_kubernetes() && resource_type.as_ref() == Sandbox::RESOURCE_TYPE.as_ref() {
+        // ComputeCluster is also Kubernetes-native: the operator validates its
+        // logical pools without provisioning a second cloud machine fleet.
+        if target.is_kubernetes()
+            && (resource_type == Sandbox::RESOURCE_TYPE
+                || resource_type == ComputeCluster::RESOURCE_TYPE)
+        {
             continue;
         }
 
@@ -1029,6 +1039,13 @@ fn apply_resource_dependencies(stack: &Stack, per_resource: &mut IndexMap<String
                 continue;
             }
             upsert_depends_on(resource, &depends_on);
+        }
+        // Existing/default network lookups also need the provider API enabled.
+        // Defer those reads until setup completes the network's prerequisites.
+        if entry.config.resource_type() == Network::RESOURCE_TYPE {
+            for data in &mut fragment.data_blocks {
+                upsert_depends_on(data, &depends_on);
+            }
         }
     }
 }

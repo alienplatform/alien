@@ -386,8 +386,9 @@ impl SandboxCapabilities {
             jobs: true,
             // No method mints a port-scoped ingress capability; the only ingress is `:execute`.
             preview: false,
-            // `:pause` and `:resume` preserve the running container.
-            pause_resume: true,
+            // `:resume` can return a fresh container while reporting success, so a pause does not
+            // keep the sandbox's state.
+            pause_resume: false,
             // The create path never sends `sandbox_environment_snapshot`, so no sandbox state is
             // reachable through the trait; declared false until the client carries it.
             snapshot: false,
@@ -1596,8 +1597,8 @@ mod tests {
             "the only ingress is :execute; no port-scoped capability"
         );
         assert!(
-            row.pause_resume,
-            ":pause and :resume preserve the container"
+            !row.pause_resume,
+            ":resume can return a fresh container, so a pause keeps no state"
         );
         assert!(
             !row.snapshot,

@@ -1,0 +1,28 @@
+{
+  "id": "sandbox/templates",
+  "description": "Allows creating and replacing the template a sandbox launches from, which sets its image and internet access, under its setup-created parent (no access to sandbox contents)",
+  "platforms": {
+    "gcp": [
+      {
+        // After a Terraform setup the manager builds, replaces and deletes the template (image and
+        // internet access); a direct setup builds and replaces it with the deployer's credentials.
+        // No engine or session verb: the setup-owned engine stays setup's, no session is reachable.
+        "description": "Allows creating, reading and deleting environment templates, which set a sandbox's image and internet access, under the selected reasoning engine.",
+        "grant": {
+          "permissions": [
+            "aiplatform.sandboxEnvironmentTemplates.create",
+            "aiplatform.sandboxEnvironmentTemplates.delete",
+            "aiplatform.sandboxEnvironmentTemplates.get",
+            "aiplatform.sandboxEnvironmentTemplates.list"
+          ]
+        },
+        // The engine only: project scope would let the manager replace a sibling sandbox's image.
+        "binding": {
+          "resource": {
+            "scope": "projects/${projectName}/locations/${region}/reasoningEngines/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

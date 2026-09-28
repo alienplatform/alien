@@ -73,7 +73,7 @@ jobs:
               # The image contract tests read the Dockerfiles as text, so a change
               # to one of those is a change this job has to see.
               - 'docker/**'
-              # The smoke test qualifies the published image, and its own harness
+              # The smoke test qualifies the published images, and its own harness
               # is what proves it fails loudly. Both run in this job.
               - 'scripts/smoke-sandbox-agent*'
             product_lifecycle:
@@ -271,6 +271,23 @@ jobs:
         with:
           cluster_name: alien-product-lifecycle
 
+      - name: Kubernetes compute pool dynamic container lifecycle
+        if: needs.changes.outputs.product_lifecycle == 'true'
+        env:
+          ALIEN_DYNAMIC_KIND_CONTEXT: kind-alien-product-lifecycle
+          ALIEN_DYNAMIC_KIND_NAMESPACE: alien-dynamic-compute-ci
+        run: |
+          export KUBECONFIG="$RUNNER_TEMP/dynamic-compute.kubeconfig"
+          kind get kubeconfig --name alien-product-lifecycle > "$KUBECONFIG"
+          kubectl create namespace "$ALIEN_DYNAMIC_KIND_NAMESPACE"
+          trap 'kubectl delete namespace "$ALIEN_DYNAMIC_KIND_NAMESPACE" --ignore-not-found; rm -f "$KUBECONFIG"' EXIT
+          image=docker.io/library/memcached@sha256:9e4de012dc607573052061c0bcb38abc775e1dd59b24e7ac38d1892842094aaf
+          docker pull "$image"
+          docker tag "$image" docker.io/library/memcached:alien-kind-test
+          kind load docker-image docker.io/library/memcached:alien-kind-test --name alien-product-lifecycle
+          cargo test -p alien-operator --locked --test dynamic_containers_kind -- \
+            --ignored --nocapture --test-threads=1
+
       - name: Product Remote Operator Helm and Terraform lifecycle
         if: needs.changes.outputs.product_lifecycle == 'true'
         env:
@@ -293,7 +310,7 @@ jobs:
           sudo "$binary" --ignored
 
       - name: Sandbox agent image contract
-        # The committed GCP Dockerfile is generated from the contract, and this
+        # The committed GCP Dockerfiles are generated from the contract, and this
         # compares the two. Named here so a Dockerfile-only change still fails
         # visibly rather than inside the workspace run.
         run: |

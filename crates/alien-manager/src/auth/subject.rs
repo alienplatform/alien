@@ -345,8 +345,8 @@ pub enum Role {
     /// Exact capability for resolving remote bindings for one deployment.
     ///
     /// Paired with [`Scope::RemoteBindings`], or with [`Scope::Deployment`] for a
-    /// token that names no binding kind. Neither implies generic deployment read
-    /// or mutation access.
+    /// data token that names no binding kind. Neither implies generic deployment
+    /// read or mutation access.
     RemoteBindingResolver,
     /// Exact capability for ensuring one project's image repository exists.
     ///

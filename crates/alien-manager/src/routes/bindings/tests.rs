@@ -264,6 +264,7 @@ fn open_sandbox_binding_for(platform: Platform) -> SandboxBinding {
             format!("{GCP_ENGINE}/sandboxEnvironmentTemplates/7"),
             "us-central1",
             Some(1800),
+            true,
         ),
         _ => open_sandbox_binding(),
     }
@@ -295,6 +296,34 @@ fn remote_sandbox_validation_returns_the_topology_a_session_is_started_from() {
         binding.allow_egress,
         "an empty connector list means open egress, and the client re-checks the pair"
     );
+}
+
+/// The GCP binding reports the declared egress both ways: the template enforces it, and a client
+/// that never reads the template decides eligibility from this field alone.
+#[test]
+fn remote_gcp_sandbox_binding_reports_the_declared_egress() {
+    for allow_egress in [true, false] {
+        let binding = SandboxBinding::gcp_agent_platform(
+            GCP_ENGINE,
+            format!("{GCP_ENGINE}/sandboxEnvironmentTemplates/7"),
+            "us-central1",
+            None,
+            allow_egress,
+        );
+        let deployment =
+            deployment_on_platform(sandbox_stack_state(binding, Platform::Gcp), Platform::Gcp);
+
+        let Ok(RemoteSandboxBinding::Gcp(resolved)) = remote_sandbox_binding(&deployment, "agents")
+        else {
+            panic!("a GCP deployment's own binding resolves")
+        };
+        assert_eq!(resolved.allow_egress, allow_egress);
+        let json = serde_json::to_value(&resolved).expect("serializes");
+        // Deny is omitted, so a client whose schema predates the field still decodes it.
+        let sent = json.get("allowEgress").cloned();
+        let expected = allow_egress.then_some(serde_json::Value::Bool(true));
+        assert_eq!(sent, expected, "{json}");
+    }
 }
 
 /// A Live sandbox's binding is published by its runtime controller once the image build

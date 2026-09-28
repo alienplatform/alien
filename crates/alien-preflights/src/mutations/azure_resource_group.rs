@@ -39,7 +39,9 @@ impl StackMutation for AzureResourceGroupMutation {
             let resource_type = entry.config.resource_type();
             match resource_type.as_ref() {
                 "worker" | "build" => include_azure_workload_scaffolding,
-                "storage" | "vault" | "kv" | "artifact-registry" | "queue" => true,
+                "storage" | "vault" | "kv" | "artifact-registry" | "queue" | "postgres"
+                | "network" | "compute-cluster" | "kubernetes-cluster" => true,
+                "container" | "daemon" => include_azure_workload_scaffolding,
                 _ => false,
             }
         });

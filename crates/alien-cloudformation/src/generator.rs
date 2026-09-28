@@ -230,6 +230,10 @@ pub fn generate_cloudformation_template(
     validate_stack_settings(&options.stack_settings)?;
 
     let mut stack_settings = options.stack_settings.clone();
+    if options.target.is_kubernetes() {
+        // Kubernetes compute pools use existing nodes, not cloud fleet choices.
+        stack_settings.compute = None;
+    }
     // CloudFormation packages always register push deployments.
     stack_settings.deployment_model = DeploymentModel::Push;
     if options.target.is_kubernetes() && stack_settings.network.is_none() {
@@ -333,8 +337,11 @@ pub fn generate_cloudformation_template(
         // roles of the AWS backend it never uses, and register import data naming it. The
         // Terraform generator refuses the same way; the two formats have to install the same
         // thing from one declaration.
+        // Logical ComputeCluster pools belong to the Kubernetes operator too;
+        // they must not emit a second cloud fleet or cloud import payload.
         if options.target.is_kubernetes()
-            && resource_type.as_ref() == alien_core::Sandbox::RESOURCE_TYPE.as_ref()
+            && (resource_type == Sandbox::RESOURCE_TYPE
+                || resource_type == ComputeCluster::RESOURCE_TYPE)
         {
             continue;
         }
@@ -1006,7 +1013,9 @@ fn add_standard_parameters(
     );
 
     add_network_parameters(template, stack, settings.network.as_ref(), target);
-    add_compute_parameters(template, stack, settings.compute.as_ref())?;
+    if !target.is_kubernetes() {
+        add_compute_parameters(template, stack, settings.compute.as_ref())?;
+    }
 
     if supports_custom_domain {
         let domain_defaults = DomainParameterDefaults::from_settings(settings.domains.as_ref());

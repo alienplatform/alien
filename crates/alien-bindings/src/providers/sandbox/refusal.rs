@@ -4,17 +4,23 @@
 //! that refused it. The transport records a refused call's response body on the chain, so the
 //! sentence the service wrote is there to be lifted into the wrapper's `reason`.
 
-use alien_error::{AlienError, AlienErrorData, ContextError};
+#[cfg(feature = "aws")]
+use alien_error::ContextError;
+use alien_error::{AlienError, AlienErrorData};
 use serde::Serialize;
 
+#[cfg(feature = "aws")]
 use crate::error::{ErrorData, Result};
 
 /// Key the transport records a refused call's response body under. The error derive builds
 /// `context` from raw field names, so this tracks `HttpResponseError`'s own field name.
 const HTTP_RESPONSE_TEXT: &str = "http_response_text";
+#[cfg(feature = "gcp")]
+const HTTP_STATUS: &str = "http_status";
 
 /// The longest run of cloud text a `reason` carries. A response body has no limit of its own,
 /// and the operation this is appended to has already been named.
+#[cfg(feature = "aws")]
 const DETAIL_LIMIT: usize = 300;
 
 /// What the cloud refused with, as one line: the client's own classification followed by the
@@ -25,6 +31,7 @@ const DETAIL_LIMIT: usize = 300;
 /// layer the client marked internal is quoted only when `error` is internal too, so the wrapper
 /// a caller sees is never more public than what it now carries. A variant fixing
 /// `internal = "false"` would publish it.
+#[cfg(feature = "aws")]
 fn cloud_reason<E>(error: &AlienError<E>) -> String
 where
     E: AlienErrorData + Clone + std::fmt::Debug + Serialize,
@@ -40,6 +47,7 @@ where
 /// Wraps a client failure as `SandboxUnreachable`, carrying what the cloud refused with.
 ///
 /// `what` names the call in the binding's own terms; the cloud's own sentence follows it.
+#[cfg(feature = "aws")]
 pub(crate) fn unreachable<E>(
     error: AlienError<E>,
     operation: &str,
@@ -56,10 +64,12 @@ where
 }
 
 /// `.unreachable(…)` at a call site: wraps a client error as `SandboxUnreachable`.
+#[cfg(feature = "aws")]
 pub(crate) trait Unreachable<T> {
     fn unreachable(self, operation: &str, what: &str) -> Result<T>;
 }
 
+#[cfg(feature = "aws")]
 impl<T, E> Unreachable<T> for std::result::Result<T, AlienError<E>>
 where
     E: AlienErrorData + Clone + std::fmt::Debug + Serialize + Send + Sync + 'static,
@@ -70,6 +80,7 @@ where
 }
 
 /// The most specific thing any layer of the chain says, subject to the visibility rule above.
+#[cfg(feature = "aws")]
 fn cloud_detail<E>(error: &AlienError<E>) -> Option<String>
 where
     E: AlienErrorData + Clone + std::fmt::Debug + Serialize,
@@ -96,6 +107,31 @@ where
     service.or(innermost)
 }
 
+/// The service message of the first response body captured on `error`'s chain, when that response
+/// was a 4xx other than a timeout or rate limit: those and a 5xx are transient, not an answer. The
+/// text is unclipped; quote only a truncated part the sandbox's own agent wrote.
+#[cfg(feature = "gcp")]
+pub(crate) fn captured_refusal<E>(error: &AlienError<E>) -> Option<String>
+where
+    E: AlienErrorData + Clone + std::fmt::Debug + Serialize,
+{
+    let mut context = error.context.as_ref();
+    let mut layer = error.source.as_deref();
+    loop {
+        if let Some(message) = service_message(context) {
+            let status = context
+                .and_then(|context| context.get(HTTP_STATUS))
+                .and_then(serde_json::Value::as_u64);
+            return status
+                .is_some_and(|status| (400..500).contains(&status) && ![408, 429].contains(&status))
+                .then_some(message);
+        }
+        let current = layer?;
+        context = current.context.as_ref();
+        layer = current.source.as_deref();
+    }
+}
+
 /// The service's own sentence out of a captured JSON error body — AWS answers `{"message": …}`
 /// and GCP and Azure nest the same field under `error`. A body that is not JSON is left to the
 /// chain's innermost message instead: the first line of an HTML error page says less.
@@ -112,6 +148,7 @@ fn message_field(body: &serde_json::Value) -> Option<String> {
         .filter(|message| !message.is_empty())
 }
 
+#[cfg(feature = "aws")]
 fn clipped(text: &str) -> String {
     let text = text.trim();
     if text.len() <= DETAIL_LIMIT {
@@ -124,7 +161,7 @@ fn clipped(text: &str) -> String {
     format!("{}…", &text[..end])
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "aws"))]
 mod tests {
     use super::*;
     use alien_client_core::ErrorData as ClientErrorData;

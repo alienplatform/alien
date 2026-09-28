@@ -113,7 +113,7 @@ impl InfrastructureDependenciesMutation {
 
         // AWS and GCP consumers need network outputs before they provision.
         // On Azure, the Container Apps environment needs the network, while
-        // Postgres can be a dependency of the network's private endpoint setup.
+        // Postgres also requires the network's dedicated Private Endpoint subnet.
         let waits_for_network = match platform {
             Platform::Aws | Platform::Gcp => {
                 stack.resources.get(resource_id).is_some_and(|entry| {
@@ -122,11 +122,39 @@ impl InfrastructureDependenciesMutation {
             }
             Platform::Azure => {
                 resource_type == &alien_core::AzureContainerAppsEnvironment::RESOURCE_TYPE
+                    || resource_type == &alien_core::Postgres::RESOURCE_TYPE
             }
             _ => false,
         };
         if waits_for_network && stack.resources.contains_key("default-network") {
             dependencies.push(ResourceRef::new(Network::RESOURCE_TYPE, "default-network"));
+        }
+
+        if resource_type == &Network::RESOURCE_TYPE {
+            let activation = match platform {
+                Platform::Azure => Some("enable-network"),
+                Platform::Gcp => Some("enable-compute-engine"),
+                _ => None,
+            };
+            if let Some(id) = activation.filter(|id| stack.resources.contains_key(*id)) {
+                dependencies.push(ResourceRef::new(
+                    alien_core::ServiceActivation::RESOURCE_TYPE,
+                    id,
+                ));
+            }
+        }
+
+        if platform == Platform::Azure
+            && stack
+                .resources
+                .get(resource_id)
+                .is_some_and(super::secrets_vault::azure_resource_needs_vault)
+            && stack.resources.contains_key(alien_core::SECRETS_VAULT_ID)
+        {
+            dependencies.push(ResourceRef::new(
+                alien_core::Vault::RESOURCE_TYPE,
+                alien_core::SECRETS_VAULT_ID,
+            ));
         }
 
         if !is_infrastructure_resource {
@@ -269,7 +297,32 @@ impl InfrastructureDependenciesMutation {
                 ]
             }
 
+            (Platform::Azure, "postgres") => vec![
+                ResourceRef::new(
+                    alien_core::ServiceActivation::RESOURCE_TYPE,
+                    "enable-postgresql",
+                ),
+                ResourceRef::new(
+                    alien_core::ServiceActivation::RESOURCE_TYPE,
+                    "enable-network",
+                ),
+            ],
+
             // GCP dependencies
+            (Platform::Gcp, "postgres") => vec![
+                ResourceRef::new(
+                    alien_core::ServiceActivation::RESOURCE_TYPE,
+                    "enable-cloud-sql",
+                ),
+                ResourceRef::new(
+                    alien_core::ServiceActivation::RESOURCE_TYPE,
+                    "enable-compute-engine",
+                ),
+                ResourceRef::new(
+                    alien_core::ServiceActivation::RESOURCE_TYPE,
+                    "enable-secret-manager",
+                ),
+            ],
             (Platform::Gcp, "worker") => {
                 vec![ResourceRef::new(
                     alien_core::ServiceActivation::RESOURCE_TYPE,
@@ -469,8 +522,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn azure_private_endpoint_network_does_not_cycle_with_postgres() {
-        let mut stack = Stack::new("test".to_string())
+    async fn azure_postgres_and_container_environment_wait_for_network() {
+        let stack = Stack::new("test".to_string())
             .add(
                 Network::new("default-network".to_string())
                     .settings(NetworkSettings::ByoVnetAzure {
@@ -493,12 +546,6 @@ mod tests {
                 ResourceLifecycle::Frozen,
             )
             .build();
-        stack
-            .resources
-            .get_mut("default-network")
-            .unwrap()
-            .dependencies
-            .push(ResourceRef::new(Postgres::RESOURCE_TYPE, "database"));
         let config = DeploymentConfig::builder()
             .stack_settings(StackSettings::default())
             .environment_variables(empty_env_snapshot())
@@ -506,12 +553,12 @@ mod tests {
             .external_bindings(ExternalBindings::default())
             .build();
 
-        let result = InfrastructureDependenciesMutation
-            .mutate(stack, &StackState::new(Platform::Azure), &config)
+        let result = crate::runner::PreflightRunner::new()
+            .apply_mutations(stack, &StackState::new(Platform::Azure), &config)
             .await
             .unwrap();
         assert!(crate::compile_time::validate_stack_dependencies(&result).success);
-        assert!(!result.resources["database"]
+        assert!(result.resources["database"]
             .dependencies
             .contains(&ResourceRef::new(Network::RESOURCE_TYPE, "default-network")));
         assert!(result.resources["default-container-env"]
