@@ -344,6 +344,10 @@ fn generate_helm_chart_internal(
         "examples/onprem.yaml".to_string(),
         onprem_values_example(&analysis),
     );
+    files.insert(
+        "examples/bootstrap.yaml".to_string(),
+        bootstrap_values_example(),
+    );
     let mut readme = readme_md(&chart_name);
     if has_remote_operator {
         readme.push_str(
@@ -3854,9 +3858,11 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
     name: ""
     tokenKey: sync-token
   name: ""
-  url: ""
-  deploymentId: "dep_replace_me"
-  setupItem: ""
+  # Override for a self-hosted or custom management endpoint.
+  url: "https://manager.alien.dev"
+  # Leave unset to create a deployment from the bootstrap token.
+  deploymentId: null
+  setupItem: deployment
   updates: auto
   telemetry: auto
   healthChecks: "on"
@@ -3873,7 +3879,8 @@ runtime:
   podAnnotations: {}
   automountServiceAccountToken: true
   encryption:
-    # Set this explicitly, or reference an existing Secret below.
+    # Generate once with openssl rand -hex 32; retain across upgrades.
+    # Alternatively reference an existing Secret below.
     key: "replace-me-with-a-stable-64-character-encryption-secret"
     existingSecret:
       name: ""
@@ -5141,7 +5148,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
     if !required.is_empty() {
         // The shipped values.yaml is a reviewable template without credentials
         // or user inputs. Keep it lintable, and require unresolved inputs only
-        // on the initialization path with a real management URL. A registered
+        // on the initialization path with a management credential. A registered
         // deployment already has its inputs. Preserve the base schema's oneOf.
         schema["allOf"] = serde_json::json!([{
             "anyOf": [
@@ -5149,8 +5156,14 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
                     "required": ["management"],
                     "properties": {
                         "management": {
-                            "required": ["url"],
-                            "properties": { "url": { "enum": [""] } }
+                            "required": ["token", "existingSecret"],
+                            "properties": {
+                                "token": { "enum": [""] },
+                                "existingSecret": {
+                                    "required": ["name"],
+                                    "properties": { "name": { "enum": [""] } }
+                                }
+                            }
                         }
                     }
                 },
@@ -7219,22 +7232,73 @@ stackSettings:
     .to_string()
 }
 
+fn bootstrap_values_example() -> String {
+    r#"# Keep this file private. Do not commit installation credentials.
+management:
+  token: "replace-with-bootstrap-token"
+
+runtime:
+  encryption:
+    # Generate once: openssl rand -hex 32. Keep the same key across upgrades.
+    key: "replace-with-generated-64-character-hex-key"
+  data:
+    persistence:
+      enabled: true
+      # Set only if your cluster has no suitable default storage class.
+      # storageClassName: "your-storage-class"
+
+# Add the application inputs required by this chart.
+inputValues: {}
+"#
+    .to_string()
+}
+
 fn readme_md(chart_name: &str) -> String {
     format!(
         r#"# {chart_name}
 
-Set the required values and install in the chosen namespace (`default` shown here):
+## Install
+
+For a managed package, download its generated values file and use its install
+command. For a new deployment, `examples/bootstrap.yaml` shows the installer
+inputs: a bootstrap token and a stable encryption key, plus any application
+`inputValues` required by this chart. Generate the key once with
+`openssl rand -hex 32` and keep the resulting values file private.
 
 ```bash
-helm install {chart_name} . --namespace default --values values.yaml
+helm install {chart_name} . --namespace={chart_name} --create-namespace --values values.yaml --atomic --wait --timeout 10m
 ```
 
-For a managed package, use its generated install command and values. See
-`examples/<target>.yaml` for EKS, GKE, AKS, and on-premises values. `inputValues`
-register the deployment and cannot change through Helm upgrades; edit them in
-the deployment dashboard and retain the original Helm values. Preview upgrades
-with `helm upgrade --dry-run=server` so the chart can compare values with the
-installed Secret. Client-side `helm template --is-upgrade` cannot do that.
+The management endpoint and `deployment` setup item have defaults. Override
+`management.url` for a self-hosted or custom endpoint, and `management.setupItem`
+when your setup link selects another item. Leave `management.deploymentId`
+unset for a new installation. Set it only when connecting an already registered
+deployment; see `examples/<target>.yaml` for EKS, GKE, AKS, and on-premises
+bindings and service-account identities.
+
+## Credentials and storage
+
+The bootstrap token is exchanged for a deployment credential on first connection.
+Keep the same encryption key across upgrades: changing it makes stored encrypted
+data unreadable. Existing Secrets are supported through
+`management.existingSecret` and `runtime.encryption.existingSecret`.
+
+Enable `runtime.data.persistence.enabled` when the Operator's identity and log
+cursor must survive Pod replacement. The chart uses the cluster's default
+storage class; set `runtime.data.persistence.storageClassName` only when needed.
+The chart does not install a storage driver by default.
+
+## Auto-updates
+
+`management.updates: auto` follows the release channel selected by the setup
+link. Automatic workload updates do not require running Helm again. Helm owns
+the Operator installation and its permissions; upgrade the chart to change those.
+
+`inputValues` register the deployment and cannot change through Helm upgrades;
+edit them in the deployment dashboard and retain the original Helm values.
+Preview upgrades with `helm upgrade --dry-run=server` so the chart can compare
+values with the installed Secret. Client-side `helm template --is-upgrade`
+cannot do that.
 
 ## Logs
 
@@ -8390,8 +8454,13 @@ infrastructureExistingSecret: customer-bindings
             );
         crate::test_utils::helm_template(&chart.files, Some(&registered))
             .assert_ok("registered deployment keeps its stored inputs");
+        let missing_inputs = values.replace("  ingestUrl: https://ingest.example.test\n", "");
         for invalid in [
-            values.replace("  ingestUrl: https://ingest.example.test\n", ""),
+            missing_inputs.clone(),
+            missing_inputs.replace(
+                "  token: ax_test",
+                "  existingSecret:\n    name: installer-credentials",
+            ),
             values.replace("ingestUrl: https://ingest.example.test", "ingestUrl: 42"),
             values.replace(
                 "ingestUrl: https://ingest.example.test",
