@@ -32,9 +32,8 @@
 //! The agent image must be a prebuilt `alien-sandbox-agent` image in a registry the project can
 //! pull, with `git` on its PATH for the clone tests. Teardown deletes the engine on every exit
 //! path including a panic, which cascades its templates and sandboxes; `sweep_orphaned_engines`
-//! reaps engines that a hard-killed run recorded but could not delete. An engine killed in the
-//! window between create resolving and being recorded cannot be swept without an engine-list verb,
-//! which this backend does not expose.
+//! reaps engines a hard-killed run recorded, plus any engine still listed under this suite's
+//! display-name prefix, which covers one killed before it was recorded.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -630,23 +629,36 @@ async fn egress_deny_blocks_the_network_including_dns() {
         "RES_OPTIONS='timeout:2 attempts:1' timeout 10 git ls-remote https://github.com/git/git HEAD 2>&1; echo rc=$?",
     )
     .await;
-    assert_eq!(resolve.exit_code, 0, "the probe wrapper itself runs");
-    let stdout = String::from_utf8_lossy(&resolve.stdout);
-    let rc: i32 = stdout
+    let stdout = String::from_utf8_lossy(&resolve.stdout).to_string();
+    let rc: Option<i32> = stdout
         .trim()
         .rsplit_once("rc=")
-        .and_then(|(_, code)| code.trim().parse().ok())
-        .unwrap_or_else(|| panic!("the probe reported no exit code: {stdout}"));
-    assert_ne!(rc, 127, "git and timeout must exist in the image: {stdout}");
-    assert_ne!(
-        rc, 124,
-        "the probe hung past its bound instead of failing the lookup: {stdout}"
-    );
-    assert_ne!(rc, 0, "a closed sandbox cannot reach github.com: {stdout}");
-    assert!(
-        stdout.contains("Could not resolve host"),
-        "the failure must be the DNS lookup, not a refused connection: {stdout}"
-    );
+        .and_then(|(_, code)| code.trim().parse().ok());
+    let problem = match rc {
+        _ if resolve.exit_code != 0 => Some("the probe wrapper itself failed"),
+        None => Some("the probe reported no exit code"),
+        Some(127) => Some("git and timeout must exist in the image"),
+        Some(124) => Some("the probe hung past its bound instead of failing the lookup"),
+        Some(0) => Some("a closed sandbox reached github.com"),
+        Some(_) if !stdout.contains("Could not resolve host") => {
+            Some("the failure must be the DNS lookup, not a refused connection")
+        }
+        Some(_) => None,
+    };
+    if let Some(problem) = problem {
+        // The platform has once served a deny sandbox with the network open. The hostname names the
+        // template warm pool the pod came from, which is what a report to the vendor needs.
+        let facts = shell(
+            &provider,
+            &sid,
+            "timeout 5 sh -c 'echo hostname=$(hostname); echo boot_id=$(cat /proc/sys/kernel/random/boot_id); cat /proc/net/dev' 2>&1",
+        )
+        .await;
+        panic!(
+            "{problem}: {stdout}\nsandbox {sid}:\n{}",
+            String::from_utf8_lossy(&facts.stdout)
+        );
+    }
 
     provider
         .terminate(&sid)
@@ -711,7 +723,20 @@ async fn sweep_orphaned_engines() {
             failures.push(format!("{engine}: {error}"));
         }
     }
-    let _ = std::fs::remove_file(sweep_log());
+    // A failed delete stays in the log, so the next sweep still has its name.
+    if failures.is_empty() {
+        let _ = std::fs::remove_file(sweep_log());
+    } else {
+        let left: String = failures
+            .iter()
+            .filter_map(|failure| {
+                failure
+                    .split_once(':')
+                    .map(|(engine, _)| format!("{engine}\n"))
+            })
+            .collect();
+        let _ = std::fs::write(sweep_log(), left);
+    }
 
     assert!(
         failures.is_empty(),

@@ -49,10 +49,8 @@ const MAX_SANDBOX_ID: usize = 63;
 const SANDBOX_READY_ATTEMPTS: u32 = 150;
 const SANDBOX_READY_INTERVAL: Duration = Duration::from_secs(2);
 
-/// How long `create` keeps probing a RUNNING sandbox's agent before giving up, and how often.
-///
-/// The proxy answers `Bad Gateway: Unable to reach the sandbox environment` for a few seconds after
-/// RUNNING while the container starts listening; `create` promises a sandbox that can take work.
+/// How long `create` keeps probing a RUNNING sandbox's agent, and how often. The proxy answers
+/// `Bad Gateway` for a few seconds after RUNNING while the container starts listening.
 #[cfg(not(test))]
 const AGENT_READY_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(not(test))]
@@ -1533,11 +1531,9 @@ fn pause_resume_unsupported() -> AlienError<ErrorData> {
     })
 }
 
-/// The agent's own refusal, when `:execute` relayed one.
-///
-/// The proxy forwards the agent's status, so an agent's `PATH_NOT_FOUND` arrives as a 404 exactly
-/// like a missing sandbox; only the body tells them apart. A relayed answer carries the agent's
-/// error code after `Error Details:`, which a sandbox the API cannot find never does.
+/// The agent's own refusal, when `:execute` relayed one. The proxy forwards the agent's status, so
+/// its `PATH_NOT_FOUND` is a 404 like a missing sandbox; only a relayed body carries the agent's
+/// error code after `Error Details:`.
 fn agent_answer(error: &AlienError<AgentPlatformErrorData>) -> Option<String> {
     const RELAYED: &str = "Error Details: ";
     let message = super::refusal::captured_service_message(error)?;
