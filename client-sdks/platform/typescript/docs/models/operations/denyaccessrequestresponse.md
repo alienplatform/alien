@@ -28,7 +28,12 @@ let value: DenyAccessRequestResponse = {
   commands: [],
   operationPattern: "<value>",
   maxRisk: "read-only",
-  status: "customer-approved",
+  debugGrant: {
+    tool: "kubectl",
+    namespace: "braintrust",
+    cloudScope: "123456789012/prod-readonly",
+  },
+  status: "expired",
   approvedUntil: "<value>",
 };
 ```
@@ -49,5 +54,6 @@ let value: DenyAccessRequestResponse = {
 | `commands`                                                                                             | [operations.DenyAccessRequestCommand](../../models/operations/denyaccessrequestcommand.md)[]           | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
 | `operationPattern`                                                                                     | *string*                                                                                               | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
 | `maxRisk`                                                                                              | [operations.DenyAccessRequestMaxRisk](../../models/operations/denyaccessrequestmaxrisk.md)             | :heavy_check_mark:                                                                                     | How risky an operation is (declared by the plugin metadata).                                           |
+| `debugGrant`                                                                                           | [models.AccessRequestDebugGrant](../../models/accessrequestdebuggrant.md)                              | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
 | `status`                                                                                               | [models.AccessRequestStatus](../../models/accessrequeststatus.md)                                      | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
 | `approvedUntil`                                                                                        | *string*                                                                                               | :heavy_check_mark:                                                                                     | N/A                                                                                                    |

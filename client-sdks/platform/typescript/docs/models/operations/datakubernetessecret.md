@@ -13,13 +13,13 @@ let value: DataKubernetesSecret = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "info",
+        reason: "forbidden",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "deleting",
+    health: "unhealthy",
+    lifecycle: "stopped",
     partial: false,
     stale: false,
   },
@@ -29,10 +29,10 @@ let value: DataKubernetesSecret = {
 
 ## Fields
 
-| Field                                                              | Type                                                               | Required                                                           | Description                                                        |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
-| `namespace`                                                        | *string*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
-| `prefix`                                                           | *string*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
-| `secretMetadataListed`                                             | *boolean*                                                          | :heavy_check_mark:                                                 | N/A                                                                |
-| `status`                                                           | [operations.DataStatus40](../../models/operations/datastatus40.md) | :heavy_check_mark:                                                 | N/A                                                                |
-| `backend`                                                          | *"kubernetesSecret"*                                               | :heavy_check_mark:                                                 | N/A                                                                |
+| Field                                                                                                                    | Type                                                                                                                     | Required                                                                                                                 | Description                                                                                                              |
+| ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `namespace`                                                                                                              | *string*                                                                                                                 | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
+| `prefix`                                                                                                                 | *string*                                                                                                                 | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
+| `secretMetadataListed`                                                                                                   | *boolean*                                                                                                                | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
+| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus40](../../models/operations/getresourcedeploymentdetaildatastatus40.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
+| `backend`                                                                                                                | *"kubernetesSecret"*                                                                                                     | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |

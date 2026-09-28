@@ -24,6 +24,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use alien_operations_sdk::KubernetesOperationPermissions;
 use indexmap::IndexMap;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Generated Helm chart files.
@@ -303,7 +304,6 @@ fn generate_helm_chart_internal(
         runtime_cleanup_history_prune_tpl(),
     );
     files.insert("templates/cleanup-job.yaml".to_string(), cleanup_job_tpl());
-    files.insert("templates/app-service.yaml".to_string(), app_service_tpl());
     files.insert(
         "templates/cluster-bootstrap.yaml".to_string(),
         cluster_bootstrap_tpl(),
@@ -1869,6 +1869,18 @@ fn generate_operator_manifest_inner(
         ));
         docs.push(operator_rolebinding_doc(namespace, &operator_name, &labels));
     }
+    // Dynamic workloads need write access in this deployment namespace only.
+    // Keep it in a Role even when inventory observation uses a ClusterRole.
+    docs.push(dynamic_container_role_doc(
+        namespace,
+        &operator_name,
+        &labels,
+    ));
+    docs.push(dynamic_container_rolebinding_doc(
+        namespace,
+        &operator_name,
+        &labels,
+    ));
     if creates_credentials_secret {
         docs.push(operator_secret_doc(
             namespace,
@@ -2017,7 +2029,7 @@ pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -
     ));
 
     append_stack_settings(&mut yaml, options.stack_settings)?;
-    yaml.push_str("\ninfrastructure: null\n\n");
+    yaml.push_str("\ninfrastructure: null\ninfrastructureExistingSecret: \"\"\n\n");
 
     match options.base_platform {
         Some(platform) => yaml.push_str(&format!(
@@ -2339,6 +2351,76 @@ roleRef:
         yaml_string(operator_name)
     ));
     yaml
+}
+
+fn dynamic_container_role_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let role_name = dynamic_container_role_name(operator_name);
+    let mut yaml = operator_metadata_doc(
+        "rbac.authorization.k8s.io/v1",
+        "Role",
+        namespace,
+        &role_name,
+        labels,
+    );
+    yaml.push_str(
+        r#"rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "secrets"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+"#,
+    );
+    yaml
+}
+
+fn dynamic_container_rolebinding_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let role_name = dynamic_container_role_name(operator_name);
+    let mut yaml = operator_metadata_doc(
+        "rbac.authorization.k8s.io/v1",
+        "RoleBinding",
+        namespace,
+        &role_name,
+        labels,
+    );
+    yaml.push_str(&format!(
+        r#"subjects:
+  - kind: ServiceAccount
+    name: {}
+    namespace: {}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {}
+"#,
+        yaml_string(operator_name),
+        yaml_string(namespace),
+        yaml_string(&role_name),
+    ));
+    yaml
+}
+
+fn dynamic_container_role_name(operator_name: &str) -> String {
+    if operator_name.contains("{{") {
+        // Product charts resolve the Operator name at Helm render time. Hash
+        // the rendered release identity, not the literal template expression.
+        return "{{ printf \"alien-dc-%s\" (include \"deployment.remoteOperatorResourceName\" . | sha256sum | trunc 24) }}".to_string();
+    }
+    let digest = Sha256::digest(operator_name.as_bytes());
+    let hex = format!("{digest:x}");
+    format!("alien-dc-{}", &hex[..24])
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -3511,6 +3593,7 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
   name: ""
   url: ""
   deploymentId: "dep_replace_me"
+  setupItem: ""
   updates: auto
   telemetry: auto
   healthChecks: "on"
@@ -3685,7 +3768,7 @@ clusterBootstrap:
 
     append_service_accounts(&mut yaml, analysis);
     append_stack_settings(&mut yaml, stack_settings)?;
-    yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
+    yaml.push_str("\ninfrastructure: null\ninfrastructureExistingSecret: \"\"\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicEndpoints: {}\n");
 
@@ -3761,12 +3844,14 @@ fn append_registered_service_accounts(
 
     for name in &analysis.service_accounts {
         yaml.push_str(&format!("  {}:\n", yaml_key(name)));
-        match service_account_identity_for_profile(stack_state, name) {
-            Some(identity) => {
+        match base_platform.and_then(|base| {
+            service_account_identity_for_profile(stack_state, name).map(|identity| (base, identity))
+        }) {
+            Some((base_platform, identity)) => {
                 yaml.push_str("    annotations:\n");
                 yaml.push_str(&format!(
                     "      {}: {}\n",
-                    yaml_key(identity_annotation_key(base_platform)),
+                    yaml_key(identity_annotation_key(Some(base_platform))),
                     yaml_string(identity)
                 ));
             }
@@ -4200,6 +4285,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         "name": { "type": "string" },
         "url": { "type": "string" },
         "deploymentId": { "type": ["string", "null"] },
+        "setupItem": { "type": "string" },
         "updates": { "type": "string", "enum": ["auto", "approval-required"] },
         "telemetry": { "type": "string", "enum": ["auto", "approval-required", "off"] },
         "healthChecks": { "type": "string", "enum": ["on", "off"] }
@@ -4471,6 +4557,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
       "additionalProperties": true
     },
     "infrastructure": { "type": ["object", "null"] },
+    "infrastructureExistingSecret": { "type": "string" },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
     "basePlatformConfig": {
       "type": "object",
@@ -4675,7 +4762,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             "deploymentId": { "type": "string", "minLength": 1 }
           }
         },
-        "infrastructure": { "type": "null" }
+        "infrastructure": { "type": ["object", "null"] }
       }
     },
     {
@@ -5101,6 +5188,9 @@ fn secret_tpl() -> String {
   {{- if ne $currentInputs (toJson .Values.inputValues) -}}
     {{- fail "inputValues cannot change through Helm after installation; edit deployment inputs in the deployment dashboard and keep the original Helm values" -}}
   {{- end -}}
+{{- end -}}
+{{- if and .Values.infrastructure .Values.infrastructureExistingSecret -}}
+  {{- fail "Set either infrastructure or infrastructureExistingSecret, not both" -}}
 {{- end -}}
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
@@ -5810,6 +5900,10 @@ metadata:
     {{- include "deployment.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.runtime.replicas }}
+  # The operator holds an exclusive lock on its persistent state directory.
+  strategy:
+    type: Recreate
+    rollingUpdate: null
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "deployment.name" . }}
@@ -5904,6 +5998,10 @@ spec:
               value: {{ .Values.management.name | quote }}
             - name: OPERATOR_RESOURCE_PREFIX
               value: {{ include "deployment.serviceAccountPrefix" . | quote }}
+            {{- if .Values.management.setupItem }}
+            - name: OPERATOR_SETUP_ITEM
+              value: {{ .Values.management.setupItem | quote }}
+            {{- end }}
             {{- if .Values.management.deploymentId }}
             - name: DEPLOYMENT_ID
               value: {{ .Values.management.deploymentId | quote }}
@@ -5934,7 +6032,7 @@ spec:
             {{- end }}
             - name: PUBLIC_ENDPOINTS_FILE
               value: /etc/deployment/config/public-endpoints.json
-            {{- if .Values.infrastructure }}
+            {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
             - name: EXTERNAL_BINDINGS_FILE
               value: /etc/deployment/secrets/external-bindings.json
             {{- end }}
@@ -5988,7 +6086,7 @@ spec:
               mountPath: /etc/deployment/secrets/encryption-key
               subPath: {{ include "deployment.encryptionSecretKey" . }}
               readOnly: true
-            {{- if .Values.infrastructure }}
+            {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
             - name: external-bindings
               mountPath: /etc/deployment/secrets/external-bindings.json
               subPath: external-bindings.json
@@ -6032,10 +6130,10 @@ spec:
           secret:
             secretName: {{ include "deployment.encryptionSecretName" . }}
             defaultMode: 384
-        {{- if .Values.infrastructure }}
+        {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
         - name: external-bindings
           secret:
-            secretName: {{ include "deployment.fullname" . }}
+            secretName: {{ default (include "deployment.fullname" .) .Values.infrastructureExistingSecret }}
             items:
               - key: external-bindings.json
                 path: external-bindings.json
@@ -6381,31 +6479,6 @@ spec:
   egress:
     - {}
   {{- end }}
-{{- end }}
-"#
-    .to_string()
-}
-
-fn app_service_tpl() -> String {
-    r#"{{- range $id, $service := .Values.services }}
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "deployment.resourceName" (dict "root" $ "name" $id) }}
-  labels:
-    {{- include "deployment.labels" $ | nindent 4 }}
-    resource-id: {{ $id | quote }}
-spec:
-  type: {{ if eq $service.type "loadBalancer" }}LoadBalancer{{ else }}ClusterIP{{ end }}
-  selector:
-    app: {{ include "deployment.resourceName" (dict "root" $ "name" $id) }}
-    managed-by: runtime
-    component: {{ $service.component | quote }}
-  ports:
-    - name: http
-      port: {{ default 80 $service.port }}
-      targetPort: {{ default 8080 $service.targetPort }}
----
 {{- end }}
 "#
     .to_string()
@@ -7025,6 +7098,8 @@ mod tests {
                 "ServiceAccount",
                 "Role",
                 "RoleBinding",
+                "Role",
+                "RoleBinding",
                 "Secret",
                 "PersistentVolumeClaim",
                 "Deployment"
@@ -7526,12 +7601,12 @@ mod tests {
             None
         );
 
-        // Namespace scope grants a namespaced Role, no cluster-wide RBAC.
-        assert_eq!(docs_by_kind(&docs, "Role").len(), 1);
+        // Namespace scope grants inventory and dynamic-workload Roles.
+        assert_eq!(docs_by_kind(&docs, "Role").len(), 2);
         assert!(docs_by_kind(&docs, "ClusterRole").is_empty());
 
         // Label scope is cluster-wide: emits the selector env and ClusterRole/
-        // ClusterRoleBinding instead of a namespaced Role.
+        // ClusterRoleBinding. Dynamic workload writes remain namespace-scoped.
         let manifest = generate_operator_manifest(OperatorManifestOptions {
             custom_operation_permissions: &[],
             manager_url: "https://manager.example.com",
@@ -7561,10 +7636,15 @@ mod tests {
             Some("app.kubernetes.io/part-of=my-saas")
         );
 
-        assert!(
-            docs_by_kind(&docs, "Role").is_empty(),
-            "cluster-wide scope must not emit a namespaced Role"
+        let roles = docs_by_kind(&docs, "Role");
+        assert_eq!(
+            roles.len(),
+            1,
+            "only the dynamic workload Role is namespaced"
         );
+        assert!(yaml_path(&roles[0], &["metadata", "name"])
+            .and_then(YamlValue::as_str)
+            .is_some_and(|name| name.starts_with("alien-dc-")));
         let cluster_role = docs_by_kind(&docs, "ClusterRole")
             .into_iter()
             .next()
@@ -7928,6 +8008,52 @@ inputValues:
                     mount["name"] == "input-values"
                         && mount["mountPath"] == "/etc/deployment/input-values"
                         && mount["readOnly"].as_bool() == Some(true)
+                })
+            }));
+    }
+
+    #[test]
+    fn helm_mounts_precreated_external_bindings_secret() {
+        let chart = sample_product_chart();
+        let values = r#"
+management:
+  token: ax_dg_example
+  name: prod
+  url: https://manager.example.test
+runtime:
+  encryption:
+    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+infrastructureExistingSecret: customer-bindings
+"#;
+        let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
+        rendered.assert_ok("Helm existing bindings Secret render");
+        let documents = serde_yaml::Deserializer::from_str(&rendered.stdout)
+            .map(|document| YamlValue::deserialize(document).expect("valid Kubernetes YAML"))
+            .collect::<Vec<_>>();
+        let operator = documents
+            .iter()
+            .find(|document| document["kind"] == "Deployment")
+            .expect("Operator Deployment");
+        let pod = &operator["spec"]["template"]["spec"];
+        assert!(pod["volumes"].as_sequence().is_some_and(|volumes| {
+            volumes.iter().any(|volume| {
+                volume["name"] == "external-bindings"
+                    && volume["secret"]["secretName"] == "customer-bindings"
+            })
+        }));
+        let container = &pod["containers"][0];
+        assert!(container["env"].as_sequence().is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                entry["name"] == "EXTERNAL_BINDINGS_FILE"
+                    && entry["value"] == "/etc/deployment/secrets/external-bindings.json"
+            })
+        }));
+        assert!(container["volumeMounts"]
+            .as_sequence()
+            .is_some_and(|mounts| {
+                mounts.iter().any(|mount| {
+                    mount["name"] == "external-bindings"
+                        && mount["mountPath"] == "/etc/deployment/secrets/external-bindings.json"
                 })
             }));
     }
@@ -8861,6 +8987,36 @@ remoteOperator:
         assert_eq!(cleanup_name.len(), 55);
         assert!(cleanup_name.contains("-cleanup-"));
         assert_ne!(cleanup_name, operator_name);
+    }
+
+    #[test]
+    fn product_dynamic_role_name_follows_the_helm_release() {
+        let mut files = sample_product_chart().files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let values = r#"
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#;
+        let mut names = Vec::new();
+        for release in ["first-release", "second-release"] {
+            let rendered =
+                crate::test_utils::helm_template_for_release(&files, Some(values), release);
+            rendered.assert_ok("dynamic Role in a product chart");
+            let documents = parse_manifest_docs(&rendered.stdout);
+            let name = docs_by_kind(&documents, "Role")
+                .iter()
+                .filter_map(|doc| yaml_path(doc, &["metadata", "name"]).and_then(YamlValue::as_str))
+                .find(|name| name.starts_with("alien-dc-"))
+                .expect("dynamic Role")
+                .to_string();
+            names.push(name);
+        }
+        assert_ne!(names[0], names[1]);
     }
 
     #[test]

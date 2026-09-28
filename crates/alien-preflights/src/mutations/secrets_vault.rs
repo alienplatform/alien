@@ -342,6 +342,8 @@ mod tests {
 
     fn compute_cluster_stack() -> Stack {
         Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources: IndexMap::from([(
                 "compute".to_string(),
@@ -422,6 +424,8 @@ mod tests {
         profiles.insert("test-profile".to_string(), PermissionProfile::new());
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -568,6 +572,8 @@ mod tests {
         profiles.insert("test-profile".to_string(), PermissionProfile::new());
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -624,6 +630,8 @@ mod tests {
         profiles.insert("test-profile".to_string(), PermissionProfile::new());
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -680,6 +688,8 @@ mod tests {
         );
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -762,6 +772,8 @@ mod tests {
         profiles.insert("worker-profile".to_string(), PermissionProfile::new());
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -846,6 +858,8 @@ mod tests {
         profiles.insert("test-profile".to_string(), PermissionProfile::new());
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -914,6 +928,8 @@ mod tests {
         resources.insert("management".to_string(), remote_stack_management_entry());
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1006,6 +1022,8 @@ mod tests {
         let override_profile = PermissionProfile::new().global(["storage/management"]);
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1073,6 +1091,8 @@ mod tests {
         profiles.insert("test-profile".to_string(), PermissionProfile::new());
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {

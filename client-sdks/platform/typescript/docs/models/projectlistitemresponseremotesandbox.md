@@ -6,7 +6,7 @@
 import { ProjectListItemResponseRemoteSandbox } from "@alienplatform/platform-api/models";
 
 let value: ProjectListItemResponseRemoteSandbox = {
-  enabled: false,
+  enabled: true,
 };
 ```
 
@@ -14,7 +14,7 @@ let value: ProjectListItemResponseRemoteSandbox = {
 
 | Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      |
 | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `enabled`                                                                        | *boolean*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |
+| `enabled`                                                                        | *true*                                                                           | :heavy_check_mark:                                                               | N/A                                                                              |
 | `baseImage`                                                                      | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
 | `azure`                                                                          | [models.ProjectListItemResponseAzure](../models/projectlistitemresponseazure.md) | :heavy_minus_sign:                                                               | N/A                                                                              |
 | `maxLifetimeSeconds`                                                             | *number*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |

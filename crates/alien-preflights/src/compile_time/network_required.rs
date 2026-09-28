@@ -26,10 +26,14 @@ const RESOURCE_TYPES_REQUIRING_NETWORK: &[&str] = &[
 
 /// Check if any resource in the stack requires VPC networking.
 pub fn stack_requires_network(stack: &Stack) -> bool {
-    stack.resources().any(|(_, entry)| {
-        RESOURCE_TYPES_REQUIRING_NETWORK.contains(&entry.config.resource_type().as_ref())
-            || sandbox_denies_egress(entry)
-    })
+    stack
+        .resources()
+        .any(|(_, entry)| resource_requires_network(entry))
+}
+
+pub(crate) fn resource_requires_network(entry: &ResourceEntry) -> bool {
+    RESOURCE_TYPES_REQUIRING_NETWORK.contains(&entry.config.resource_type().as_ref())
+        || sandbox_denies_egress(entry)
 }
 
 /// A sandbox needs a VPC only to deny with.
@@ -265,6 +269,8 @@ mod tests {
 
     fn create_stack(resources: IndexMap<String, ResourceEntry>) -> Stack {
         Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig::default(),

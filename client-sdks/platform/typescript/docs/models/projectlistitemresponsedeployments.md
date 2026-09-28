@@ -6,7 +6,7 @@
 import { ProjectListItemResponseDeployments } from "@alienplatform/platform-api/models";
 
 let value: ProjectListItemResponseDeployments = {
-  enabled: false,
+  enabled: true,
 };
 ```
 
@@ -14,5 +14,5 @@ let value: ProjectListItemResponseDeployments = {
 
 | Field                                                                                | Type                                                                                 | Required                                                                             | Description                                                                          |
 | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| `enabled`                                                                            | *boolean*                                                                            | :heavy_check_mark:                                                                   | N/A                                                                                  |
+| `enabled`                                                                            | *true*                                                                               | :heavy_check_mark:                                                                   | N/A                                                                                  |
 | `methods`                                                                            | [models.ProjectListItemResponseMethod](../models/projectlistitemresponsemethod.md)[] | :heavy_minus_sign:                                                                   | N/A                                                                                  |

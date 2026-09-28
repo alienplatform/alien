@@ -5,7 +5,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 sdk_dir="$repo_root/client-sdks/platform/typescript"
 speakeasy_bin="${SPEAKEASY_BIN:-speakeasy}"
-expected_cli_version="1.680.11"
+expected_cli_version="1.799.0"
 
 actual_cli_version="$("$speakeasy_bin" --version | sed -n '1s/^speakeasy version \([^ ]*\).*/\1/p')"
 if [[ "$actual_cli_version" != "$expected_cli_version" ]]; then
@@ -35,3 +35,4 @@ done < <(git -C "$repo_root" ls-files -mo --exclude-standard -z -- "$sdk_dir")
 NODE_OPTIONS=--max-old-space-size=12288 pnpm -C "$sdk_dir" build
 pnpm -C "$repo_root" install --lockfile-only
 node --test "$repo_root/client-sdks/platform/scripts/typescript-sdk.test.mjs"
+node --test "$repo_root/client-sdks/platform/scripts/dynamic-containers-sdk.test.mjs"

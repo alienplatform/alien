@@ -253,6 +253,8 @@ mod tests {
         let mut profiles = IndexMap::new();
         profiles.insert("execution".to_string(), PermissionProfile::new());
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {

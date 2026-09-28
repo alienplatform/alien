@@ -16,7 +16,7 @@ use alien_helm::{generate_helm_chart, HelmOptions, HelmRegistry};
 use serde_json::{json, Value};
 
 #[test]
-fn pure_worker_chart_emits_service_for_public_ingress() {
+fn pure_worker_chart_leaves_runtime_service_to_operator() {
     let worker = Worker::new("api".to_string())
         .code(WorkerCode::Image {
             image: "registry.example.com/api:1".to_string(),
@@ -36,6 +36,12 @@ fn pure_worker_chart_emits_service_for_public_ingress() {
         .add(worker, ResourceLifecycle::Live)
         .build();
     let chart = render(&stack, StackSettings::default());
+    assert!(!chart.files.contains_key("templates/app-service.yaml"));
+    assert!(chart
+        .files
+        .get("values.yaml")
+        .unwrap()
+        .contains("services:\n  api:"));
     snapshot_chart("manager_only_pure_worker", &chart);
     assert_helm_valid(&chart, "manager_only_pure_worker");
 }

@@ -31,7 +31,7 @@ const value: models.DeploymentScope = {
   type: "deployment",
   deploymentId: "<id>",
   projectId: "<id>",
-  role: "deployment.viewer",
+  role: "deployment.manager",
 };
 ```
 

@@ -1,4 +1,4 @@
-speakeasyVersion: 1.680.11
+speakeasyVersion: 1.799.0
 sources:
     platform-api:
         sourceNamespace: platform-api
@@ -15,7 +15,7 @@ targets:
         sourceBlobDigest: sha256:faffeb71f365bc70e292f113cb1af3b9750c215760bc9ffc3c24b5f9776073eb
 workflow:
     workflowVersion: 1.0.0
-    speakeasyVersion: 1.680.11
+    speakeasyVersion: 1.799.0
     sources:
         platform-api:
             inputs:

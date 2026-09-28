@@ -6,7 +6,7 @@
 import { CreateProjectBuckets } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateProjectBuckets = {
-  enabled: false,
+  enabled: true,
   access: "read-write",
 };
 ```
@@ -15,5 +15,5 @@ let value: CreateProjectBuckets = {
 
 | Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      |
 | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `enabled`                                                                        | *boolean*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |
+| `enabled`                                                                        | *true*                                                                           | :heavy_check_mark:                                                               | N/A                                                                              |
 | `access`                                                                         | [operations.CreateProjectAccess](../../models/operations/createprojectaccess.md) | :heavy_check_mark:                                                               | N/A                                                                              |

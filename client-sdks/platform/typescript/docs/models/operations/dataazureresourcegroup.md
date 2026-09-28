@@ -18,10 +18,10 @@ let value: DataAzureResourceGroup = {
           source: "<value>",
         },
       ],
-      health: "unknown",
-      lifecycle: "running",
-      partial: true,
-      stale: false,
+      health: "healthy",
+      lifecycle: "unknown",
+      partial: false,
+      stale: true,
     },
   },
   resourceType: "azure_resource_group",
@@ -30,7 +30,7 @@ let value: DataAzureResourceGroup = {
 
 ## Fields
 
-| Field                                                | Type                                                 | Required                                             | Description                                          |
-| ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
-| `data`                                               | [operations.Data2](../../models/operations/data2.md) | :heavy_check_mark:                                   | N/A                                                  |
-| `resourceType`                                       | *"azure_resource_group"*                             | :heavy_check_mark:                                   | N/A                                                  |
+| Field                                                                                                      | Type                                                                                                       | Required                                                                                                   | Description                                                                                                |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `data`                                                                                                     | [operations.GetResourceDeploymentDetailData2](../../models/operations/getresourcedeploymentdetaildata2.md) | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
+| `resourceType`                                                                                             | *"azure_resource_group"*                                                                                   | :heavy_check_mark:                                                                                         | N/A                                                                                                        |

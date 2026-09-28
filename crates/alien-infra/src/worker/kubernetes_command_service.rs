@@ -19,16 +19,15 @@ pub(super) async fn reconcile_ready_command_service(
     namespace: &str,
     ctx: &ResourceControllerContext<'_>,
 ) -> Result<()> {
+    reconcile_command_service(config, service_name, namespace, ctx).await?;
     if !*commands_enabled {
         // A legacy pre-push controller must not advertise a capability that was
-        // never installed. A real create/update flow may promote it.
+        // never installed. The binding still needs its internal Service.
         return Ok(());
     }
-
-    reconcile_command_service(config, service_name, namespace, ctx).await?;
     if !config.commands_enabled {
-        // Disabling is safe immediately: the owned Service is gone and no
-        // output or heartbeat should continue advertising push support.
+        // The internal Service remains available to the Worker binding;
+        // only command push is disabled.
         *commands_enabled = false;
     }
     Ok(())
@@ -46,11 +45,7 @@ pub(super) async fn reconcile_command_service(
         .get_kubernetes_service_client(kubernetes_config)
         .await?;
     let deployment_labels = kubernetes_cleanup_resource_labels(ctx, &config.id);
-    let Some(mut service) =
-        build_command_service(config, service_name, namespace, &deployment_labels)
-    else {
-        return delete_command_service(namespace, service_name, &config.id, ctx, true).await;
-    };
+    let mut service = build_command_service(config, service_name, namespace, &deployment_labels);
 
     match service_client.create_service(namespace, &service).await {
         Ok(_) => Ok(()),
@@ -205,15 +200,12 @@ fn build_command_service(
     service_name: &str,
     namespace: &str,
     deployment_labels: &BTreeMap<String, String>,
-) -> Option<Service> {
-    if !config.commands_enabled {
-        return None;
-    }
+) -> Service {
     let selector = command_service_selector(service_name);
     let mut labels = selector.clone();
     labels.insert("resource-id".to_string(), config.id.clone());
     labels.extend(deployment_labels.clone());
-    Some(Service {
+    Service {
         metadata: ObjectMeta {
             name: Some(service_name.to_string()),
             namespace: Some(namespace.to_string()),
@@ -233,7 +225,7 @@ fn build_command_service(
             ..Default::default()
         }),
         ..Default::default()
-    })
+    }
 }
 
 fn command_service_selector(service_name: &str) -> BTreeMap<String, String> {
@@ -420,7 +412,7 @@ mod tests {
     }
 
     #[test]
-    fn internal_command_service_only_exists_when_commands_are_enabled() {
+    fn internal_service_exists_for_workers_without_commands() {
         let disabled = worker(false);
         let enabled = worker(true);
         let deployment_labels = BTreeMap::from([(
@@ -428,20 +420,19 @@ mod tests {
             "test-release".to_string(),
         )]);
 
-        assert!(build_command_service(
+        let disabled_service = build_command_service(
             &disabled,
             "test-worker",
             "test-namespace",
             &deployment_labels,
-        )
-        .is_none());
+        );
         let service = build_command_service(
             &enabled,
             "test-worker",
             "test-namespace",
             &deployment_labels,
-        )
-        .expect("commands-enabled Worker needs an internal push Service");
+        );
+        assert_eq!(disabled_service.spec, service.spec);
         let spec = service.spec.expect("Service spec");
         assert_eq!(spec.type_.as_deref(), Some("ClusterIP"));
         assert!(spec.health_check_node_port.is_none());
@@ -535,23 +526,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ready_disable_removes_service_and_stops_advertising_push() {
+    async fn ready_disable_keeps_service_and_stops_advertising_push() {
         let config = worker(false);
-        let owned = service(BTreeMap::from([
-            ("managed-by".to_string(), "runtime".to_string()),
-            ("component".to_string(), "worker".to_string()),
-            ("app".to_string(), "test-worker".to_string()),
-            ("resource-id".to_string(), "worker".to_string()),
-        ]));
         let mut services = MockServiceApi::new();
         services
-            .expect_get_service()
+            .expect_create_service()
             .times(1)
-            .return_once(move |_, _| Ok(owned));
-        services
-            .expect_delete_service()
-            .times(1)
-            .return_once(|_, _| Ok(()));
+            .return_once(|_, service| Ok(service.clone()));
+        services.expect_delete_service().times(0);
         let services: Arc<dyn ServiceApi> = Arc::new(services);
         let harness =
             KubernetesManifestTestHarness::new(alien_core::Resource::new(config.clone()), vec![])
@@ -746,8 +728,7 @@ mod tests {
         let config = worker(true);
         let deployment_labels = BTreeMap::new();
         let mut existing =
-            build_command_service(&config, "test-worker", "test-ns", &deployment_labels)
-                .expect("Service");
+            build_command_service(&config, "test-worker", "test-ns", &deployment_labels);
         existing.metadata.resource_version = Some("42".to_string());
         let spec = existing.spec.as_mut().expect("Service spec");
         spec.cluster_ip = Some("10.96.12.34".to_string());

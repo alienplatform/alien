@@ -29,11 +29,6 @@ let value: AgentSessionDetail = {
     "<value 3>",
   ],
   error: null,
-  pendingApproval: {
-    approvalId: "<id>",
-    toolCallId: "<id>",
-    toolName: "<value>",
-  },
 };
 ```
 
@@ -51,4 +46,3 @@ let value: AgentSessionDetail = {
 | `resultText`                                                   | *string*                                                       | :heavy_check_mark:                                             | N/A                                                            |
 | `toolNames`                                                    | *string*[]                                                     | :heavy_check_mark:                                             | N/A                                                            |
 | `error`                                                        | *string*                                                       | :heavy_check_mark:                                             | N/A                                                            |
-| `pendingApproval`                                              | [models.PendingApproval](../models/pendingapproval.md)         | :heavy_check_mark:                                             | N/A                                                            |
