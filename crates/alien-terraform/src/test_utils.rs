@@ -102,6 +102,26 @@ pub fn terraform_validate(files: &LinterFiles) -> LinterRun {
     })
 }
 
+/// Execute native Terraform tests, including mocked-provider plan assertions.
+pub fn terraform_test(files: &LinterFiles) -> LinterRun {
+    run_when_enabled("terraform test", || {
+        let dir = write_files_to_temp_dir(files)?;
+        let init = run_command(
+            "terraform",
+            [OsStr::new("init"), OsStr::new("-backend=false")],
+            Some(dir.path()),
+        )?;
+        if !matches!(init.status, LinterStatus::Passed) {
+            return Ok(init);
+        }
+        run_command(
+            "terraform",
+            [OsStr::new("test"), OsStr::new("-no-color")],
+            Some(dir.path()),
+        )
+    })
+}
+
 /// Run `terraform init -backend=false` and `terraform plan` with explicit
 /// variables. This is useful for input validation rules that `validate` parses
 /// but does not evaluate.

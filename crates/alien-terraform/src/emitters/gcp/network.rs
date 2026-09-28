@@ -2,8 +2,7 @@
 //!
 //! Three modes mirror the AWS network emitter:
 //!
-//! * `UseDefault` — emit nothing; controller falls back to the project's
-//!   `default` network at runtime.
+//! * `UseDefault` — look up the project's `default` VPC and regional subnet.
 //! * `ByoVpcGcp` — emit a `google_compute_network` data source so the
 //!   controller can resolve the BYO VPC's self-link without a cloud
 //!   API call.
@@ -29,7 +28,27 @@ impl TfEmitter for GcpNetworkEmitter {
         let label = required_label(ctx)?;
 
         match &network.settings {
-            NetworkSettings::UseDefault => Ok(TfFragment::empty()),
+            NetworkSettings::UseDefault => {
+                let mut fragment = TfFragment::default();
+                fragment.data_blocks.push(data_block(
+                    "google_compute_network",
+                    label,
+                    [
+                        attr("name", Expression::String("default".to_string())),
+                        attr("project", expr::raw("var.gcp_project")),
+                    ],
+                ));
+                fragment.data_blocks.push(data_block(
+                    "google_compute_subnetwork",
+                    &format!("{label}_subnet"),
+                    [
+                        attr("name", Expression::String("default".to_string())),
+                        attr("project", expr::raw("var.gcp_project")),
+                        attr("region", expr::raw("var.gcp_region")),
+                    ],
+                ));
+                Ok(fragment)
+            }
             NetworkSettings::ByoVpcGcp {
                 network_name,
                 subnet_name,
@@ -71,17 +90,7 @@ impl TfEmitter for GcpNetworkEmitter {
         let network = downcast::<Network>(ctx, Network::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
         Ok(match &network.settings {
-            NetworkSettings::UseDefault => expr::object([
-                ("projectId", expr::raw("var.gcp_project")),
-                ("vpcSelfLink", Expression::Null),
-                ("vpcName", Expression::Null),
-                ("subnetSelfLinks", Expression::Array(vec![])),
-                ("cidrBlock", Expression::Null),
-                ("routerSelfLink", Expression::Null),
-                ("natName", Expression::Null),
-                ("isByoVpc", Expression::Bool(true)),
-            ]),
-            NetworkSettings::ByoVpcGcp { .. } => {
+            NetworkSettings::UseDefault | NetworkSettings::ByoVpcGcp { .. } => {
                 let subnet_label = format!("{label}_subnet");
                 expr::object([
                     ("projectId", expr::raw("var.gcp_project")),
@@ -126,25 +135,25 @@ impl TfEmitter for GcpNetworkEmitter {
                     (
                         "vpcSelfLink",
                         expr::raw(format!(
-                            "var.network_mode == \"create-new\" ? google_compute_network.{label}[0].self_link : var.network_mode == \"use-existing\" ? data.google_compute_network.{label}[0].self_link : null"
+                            "var.network_mode == \"create-new\" ? google_compute_network.{label}[0].self_link : data.google_compute_network.{label}[0].self_link"
                         )),
                     ),
                     (
                         "vpcName",
                         expr::raw(format!(
-                            "var.network_mode == \"create-new\" ? google_compute_network.{label}[0].name : var.network_mode == \"use-existing\" ? data.google_compute_network.{label}[0].name : null"
+                            "var.network_mode == \"create-new\" ? google_compute_network.{label}[0].name : data.google_compute_network.{label}[0].name"
                         )),
                     ),
                     (
                         "subnetSelfLinks",
                         expr::raw(format!(
-                            "var.network_mode == \"create-new\" ? [google_compute_subnetwork.{subnet_label}[0].self_link] : var.network_mode == \"use-existing\" ? [data.google_compute_subnetwork.{existing_subnet_label}[0].self_link] : []"
+                            "var.network_mode == \"create-new\" ? [google_compute_subnetwork.{subnet_label}[0].self_link] : [data.google_compute_subnetwork.{existing_subnet_label}[0].self_link]"
                         )),
                     ),
                     (
                         "cidrBlock",
                         expr::raw(format!(
-                            "var.network_mode == \"create-new\" ? google_compute_subnetwork.{subnet_label}[0].ip_cidr_range : var.network_mode == \"use-existing\" ? data.google_compute_subnetwork.{existing_subnet_label}[0].ip_cidr_range : null"
+                            "var.network_mode == \"create-new\" ? google_compute_subnetwork.{subnet_label}[0].ip_cidr_range : data.google_compute_subnetwork.{existing_subnet_label}[0].ip_cidr_range"
                         )),
                     ),
                     (
@@ -188,9 +197,12 @@ fn dynamic_topology(label: &str, cidr: Option<String>) -> TfFragment {
         [
             attr(
                 "count",
-                expr::raw("var.network_mode == \"use-existing\" ? 1 : 0"),
+                expr::raw("var.network_mode != \"create-new\" ? 1 : 0"),
             ),
-            attr("name", expr::raw("var.network_name")),
+            attr(
+                "name",
+                expr::raw("var.network_mode == \"use-default\" ? \"default\" : var.network_name"),
+            ),
             attr("project", expr::raw("var.gcp_project")),
         ],
     ));
@@ -200,13 +212,13 @@ fn dynamic_topology(label: &str, cidr: Option<String>) -> TfFragment {
         [
             attr(
                 "count",
-                expr::raw("var.network_mode == \"use-existing\" ? 1 : 0"),
+                expr::raw("var.network_mode != \"create-new\" ? 1 : 0"),
             ),
-            attr("name", expr::raw("var.subnet_name")),
+            attr("name", expr::raw("var.network_mode == \"use-default\" ? \"default\" : var.subnet_name")),
             attr("project", expr::raw("var.gcp_project")),
             attr(
                 "region",
-                expr::raw("var.network_region == \"\" ? var.gcp_region : var.network_region"),
+                expr::raw("var.network_mode == \"use-default\" || var.network_region == \"\" ? var.gcp_region : var.network_region"),
             ),
         ],
     ));

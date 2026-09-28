@@ -1030,6 +1030,13 @@ fn apply_resource_dependencies(stack: &Stack, per_resource: &mut IndexMap<String
             }
             upsert_depends_on(resource, &depends_on);
         }
+        // Existing/default network lookups also need the provider API enabled.
+        // Defer those reads until setup completes the network's prerequisites.
+        if entry.config.resource_type() == Network::RESOURCE_TYPE {
+            for data in &mut fragment.data_blocks {
+                upsert_depends_on(data, &depends_on);
+            }
+        }
     }
 }
 

@@ -2013,9 +2013,9 @@ mod tests {
             .controller(AzureNetworkController::default())
             .platform(Platform::Azure)
             .stack_settings(StackSettings::default())
-            .with_dependency(
+            .with_stack_resource(
                 Postgres::new("db".to_string()).build(),
-                AzureNetworkController::mock_ready("db"),
+                alien_core::ResourceLifecycle::Live,
             )
             .build()
             .await
@@ -2064,9 +2064,9 @@ mod tests {
             .platform(Platform::Azure)
             .stack_settings(StackSettings::default())
             .service_provider(Arc::new(mock_provider))
-            .with_dependency(
+            .with_stack_resource(
                 Postgres::new("db".to_string()).build(),
-                AzureNetworkController::mock_ready("db"),
+                alien_core::ResourceLifecycle::Live,
             )
             .build()
             .await

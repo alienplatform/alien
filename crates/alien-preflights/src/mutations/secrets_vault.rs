@@ -5,15 +5,17 @@ use crate::error::Result;
 use crate::StackMutation;
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
 use alien_core::{
-    ComputeCluster, ComputeKind, DeploymentConfig, Platform, RemoteStackManagement, ResourceEntry,
-    ResourceLifecycle, ResourceRef, SecretDelivery, Stack, StackState, Vault, Worker,
+    ComputeCluster, ComputeKind, Container, Daemon, DeploymentConfig, ExposeProtocol, Platform,
+    Postgres, RemoteStackManagement, ResourceEntry, ResourceLifecycle, ResourceRef, SecretDelivery,
+    Stack, StackState, Vault, Worker,
 };
 use async_trait::async_trait;
 use tracing::{debug, info};
 
 /// Adds secrets vault for environment variable storage.
 ///
-/// Creates the "secrets" vault (if missing). Worker wrappers receive the vault
+/// Creates the "secrets" vault for Worker secrets, Azure database passwords, or
+/// Azure HTTP certificates (if missing). Worker wrappers receive the vault
 /// link/read permission only when needed for app or runtime-owned secrets.
 /// Runtime-less Containers and Daemons receive secrets from their hosting
 /// layer and must not get vault data-plane access.
@@ -22,7 +24,7 @@ use tracing::{debug, info};
 /// 1. Add "secrets" vault resource (if not present)
 /// 2. Link the vault to Worker runtimes that consume vault-backed secrets
 /// 3. Add vault/data-read to those Worker profiles
-/// 4. Add vault/data-read and vault/data-write to management profile for the secrets vault
+/// 4. Add scoped management writes, and reads only when secret delivery requires them
 pub struct SecretsVaultMutation;
 
 /// Resource id this mutation reserves for the deployment secrets vault.
@@ -58,7 +60,10 @@ impl StackMutation for SecretsVaultMutation {
                     || config.monitoring.is_some())
         });
 
-        explicitly_configured || worker_needs_vault
+        explicitly_configured
+            || worker_needs_vault
+            || (stack_state.platform == Platform::Azure
+                && stack.resources.values().any(azure_resource_needs_vault))
     }
 
     async fn mutate(
@@ -70,6 +75,14 @@ impl StackMutation for SecretsVaultMutation {
         info!("Adding deployment secrets vault and scoped runtime access");
 
         let secrets_vault_id = SECRETS_VAULT_ID;
+
+        let infrastructure_only = stack_state.platform == Platform::Azure
+            && stack.resources.values().any(azure_resource_needs_vault)
+            && !config.external_bindings.has(SECRETS_VAULT_ID)
+            && !stack
+                .resources
+                .values()
+                .any(|entry| entry.config.resource_type() == Worker::RESOURCE_TYPE);
 
         // Step 1: Add vault resource if it doesn't already exist
         if !stack.resources.contains_key(secrets_vault_id) {
@@ -111,10 +124,28 @@ impl StackMutation for SecretsVaultMutation {
         // Step 4: Add vault data permissions to management profile for the secrets vault.
         // This allows the control plane to sync secret environment variables without
         // granting access to user-declared vaults.
-        add_vault_permissions_to_management(&mut stack, secrets_vault_id)?;
+        add_vault_permissions_to_management(&mut stack, secrets_vault_id, !infrastructure_only)?;
 
         Ok(stack)
     }
+}
+
+/// Azure databases and HTTP endpoints store passwords or certificates in the shared vault.
+/// TCP passthrough and private workloads do not need certificate storage.
+pub(super) fn azure_resource_needs_vault(entry: &ResourceEntry) -> bool {
+    if entry.config.downcast_ref::<Postgres>().is_some() {
+        return true;
+    }
+    let endpoints = if let Some(container) = entry.config.downcast_ref::<Container>() {
+        &container.public_endpoints
+    } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
+        &daemon.public_endpoints
+    } else {
+        return false;
+    };
+    endpoints
+        .iter()
+        .any(|endpoint| endpoint.protocol == ExposeProtocol::Http)
 }
 
 /// Compute-cluster machine identities receive narrowly scoped read access to the
@@ -244,7 +275,11 @@ fn add_vault_read_permissions_to_worker_profiles(
 /// Author explicit vault data permissions into the management profile for this vault.
 /// The generator treats these like any other management grant; the preflight is
 /// the permission author.
-fn add_vault_permissions_to_management(stack: &mut Stack, vault_name: &str) -> Result<()> {
+fn add_vault_permissions_to_management(
+    stack: &mut Stack,
+    vault_name: &str,
+    needs_read: bool,
+) -> Result<()> {
     use alien_core::permissions::ManagementPermissions;
 
     if !stack
@@ -278,9 +313,10 @@ fn add_vault_permissions_to_management(stack: &mut Stack, vault_name: &str) -> R
                 .0
                 .entry(vault_name.to_string())
                 .or_default();
-            if !vault_permissions
-                .iter()
-                .any(|p| p.id() == "vault/data-read")
+            if needs_read
+                && !vault_permissions
+                    .iter()
+                    .any(|p| p.id() == "vault/data-read")
             {
                 vault_permissions.push(vault_read_permission);
                 debug!(
@@ -363,6 +399,171 @@ mod tests {
             },
             supported_platforms: None,
             inputs: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn postgres_preflights_prepare_cloud_dependencies_without_secret_read_access() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let stack = Stack::new("database-only".to_string())
+                .add(
+                    Postgres::new("database".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(empty_env_snapshot())
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build();
+            let state = StackState::new(platform);
+            let runner = crate::runner::PreflightRunner::new();
+            let prepared = runner
+                .apply_mutations(stack, &state, &config)
+                .await
+                .expect("prepare Postgres");
+            let repeated = runner
+                .apply_mutations(prepared.clone(), &state, &config)
+                .await
+                .expect("repeat preflights");
+            for stack in [prepared, repeated] {
+                let database = stack.resources.get("database").expect("database");
+                assert!(database.dependencies.contains(&ResourceRef::new(
+                    alien_core::Network::RESOURCE_TYPE,
+                    "default-network"
+                )));
+                if platform == Platform::Azure {
+                    assert!(stack.resources.contains_key("default-resource-group"));
+                    assert!(stack.resources.contains_key("enable-keyvault"));
+                    assert_eq!(
+                        stack.resources.get("secrets").expect("vault").lifecycle,
+                        ResourceLifecycle::Frozen
+                    );
+                    assert!(database
+                        .dependencies
+                        .contains(&ResourceRef::new(Vault::RESOURCE_TYPE, "secrets")));
+                    assert!(database.dependencies.contains(&ResourceRef::new(
+                        alien_core::ServiceActivation::RESOURCE_TYPE,
+                        "enable-postgresql"
+                    )));
+                    let ManagementPermissions::Extend(profile) = &stack.permissions.management
+                    else {
+                        panic!("expected explicit management permissions")
+                    };
+                    let permissions = &profile.0;
+                    let vault_permissions = permissions.get("secrets").expect("vault permissions");
+                    assert!(vault_permissions
+                        .iter()
+                        .any(|p| p.id() == "vault/data-write"));
+                    assert!(!vault_permissions
+                        .iter()
+                        .any(|p| p.id() == "vault/data-read"));
+                } else {
+                    assert!(!stack.resources.contains_key("secrets"));
+                    if platform == Platform::Gcp {
+                        for id in [
+                            "enable-cloud-sql",
+                            "enable-compute-engine",
+                            "enable-secret-manager",
+                        ] {
+                            assert!(database.dependencies.contains(&ResourceRef::new(
+                                alien_core::ServiceActivation::RESOURCE_TYPE,
+                                id
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn azure_http_endpoints_need_vault_but_tcp_and_private_workloads_do_not() {
+        for protocol in [None, Some(ExposeProtocol::Tcp), Some(ExposeProtocol::Http)] {
+            let endpoints = protocol
+                .map(|protocol| {
+                    vec![alien_core::PublicEndpoint {
+                        name: "web".to_string(),
+                        port: 8080,
+                        protocol,
+                        host_label: None,
+                        wildcard_subdomains: false,
+                    }]
+                })
+                .unwrap_or_default();
+            let mut container = Container::new("api".to_string())
+                .code(ContainerCode::Image {
+                    image: "example.com/api:latest".to_string(),
+                })
+                .cpu(ResourceSpec {
+                    min: "0.5".to_string(),
+                    desired: "0.5".to_string(),
+                })
+                .memory(ResourceSpec {
+                    min: "512Mi".to_string(),
+                    desired: "512Mi".to_string(),
+                })
+                .permissions("execution".to_string())
+                .build();
+            container.public_endpoints = endpoints.clone();
+            let mut daemon = Daemon::new("daemon".to_string())
+                .code(alien_core::DaemonCode::Image {
+                    image: "example.com/api:latest".to_string(),
+                })
+                .cpu(ResourceSpec {
+                    min: "0.5".to_string(),
+                    desired: "0.5".to_string(),
+                })
+                .memory(ResourceSpec {
+                    min: "512Mi".to_string(),
+                    desired: "512Mi".to_string(),
+                })
+                .permissions("execution".to_string())
+                .build();
+            daemon.public_endpoints = endpoints;
+            let stack = Stack::new("endpoints".to_string())
+                .add(container, ResourceLifecycle::Live)
+                .add(daemon, ResourceLifecycle::Live)
+                .build();
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(empty_env_snapshot())
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build();
+            for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+                let state = StackState::new(platform);
+                let needed = platform == Platform::Azure && protocol == Some(ExposeProtocol::Http);
+                assert_eq!(
+                    SecretsVaultMutation.should_run(&stack, &state, &config),
+                    needed
+                );
+                if needed {
+                    let prepared = SecretsVaultMutation
+                        .mutate(stack.clone(), &state, &config)
+                        .await
+                        .expect("inject endpoint Vault");
+                    assert_eq!(
+                        prepared.resources["secrets"].lifecycle,
+                        ResourceLifecycle::Frozen
+                    );
+                    let wired = super::super::infrastructure_dependencies::InfrastructureDependenciesMutation.mutate(prepared, &state, &config).await.expect("wire dependencies");
+                    for id in ["api", "daemon"] {
+                        assert!(wired.resources[id]
+                            .dependencies
+                            .contains(&ResourceRef::new(Vault::RESOURCE_TYPE, "secrets")));
+                    }
+                    assert!(
+                        wired.permissions.profiles.is_empty(),
+                        "certificate storage must not grant workloads Vault data access"
+                    );
+                }
+            }
         }
     }
 
