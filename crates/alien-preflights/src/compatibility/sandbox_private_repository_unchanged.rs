@@ -2,12 +2,8 @@ use crate::error::Result;
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::{ResourceLifecycle, Sandbox, Stack};
 
-/// Validates that a non-Frozen sandbox keeps its private base-image repository across an update.
-///
-/// Setup renders the sandbox build role, which grants pull on exactly one repository, so a new
-/// repository (or a private base appearing or going away) needs setup even though the runtime
-/// rolls the image itself. A new tag or digest in the same repository passes. Frozen sandboxes
-/// are left to the Frozen check, which already refuses any change to them.
+/// Setup grants pull on exactly one private base-image repository, so changing it on a non-Frozen
+/// sandbox needs setup; a new tag or digest does not. The Frozen check covers Frozen sandboxes.
 pub struct SandboxPrivateRepositoryUnchangedCheck;
 
 #[async_trait::async_trait]

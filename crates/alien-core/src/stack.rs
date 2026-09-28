@@ -97,14 +97,9 @@ pub struct Stack {
 }
 
 impl Stack {
-    /// Returns a deterministic digest of everything setup owns: every Frozen entry, plus the
-    /// private base-image repository of each Live sandbox, because setup renders the build role
-    /// that grants pull on exactly that repository. Resource and object-key ordering do not
-    /// affect the digest.
-    ///
-    /// A stack with no Live sandbox naming a private base image hashes the same bytes as the
-    /// Frozen entries alone, so authorizations stored before any such sandbox stay valid. Gated
-    /// entries a deployer declined are stripped before this runs, so they contribute nothing.
+    /// Digest of what setup owns: every Frozen entry plus each Live sandbox's private base-image
+    /// repository, which its setup-rendered build role grants. Without such a sandbox the bytes
+    /// equal the Frozen-only projection. Declined gated entries must be stripped by the caller.
     pub fn setup_owned_digest(&self) -> String {
         let mut resources = self
             .resources

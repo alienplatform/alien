@@ -29,9 +29,9 @@ pub enum InitialSetupAuthority {
 pub struct SetupUpdateAuthorization {
     /// Unique revision used by persistence layers for compare-and-swap updates.
     pub nonce: String,
-    /// Frozen resource projection from the last successful deployment.
+    /// Setup-owned digest (`Stack::setup_owned_digest`) of the last successful deployment.
     pub baseline_frozen_digest: String,
-    /// Frozen resource projection prepared by the setup re-import.
+    /// Setup-owned digest (`Stack::setup_owned_digest`) of the stack the setup re-import prepared.
     pub target_frozen_digest: String,
     /// Release whose stack was prepared by setup.
     pub release_id: String,
