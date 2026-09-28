@@ -219,11 +219,9 @@ fn generate_auto_management_profile(
                 .insert("sandbox/templates".to_string());
         }
 
-        // The manager builds an Azure sandbox's registry image into a disk image on the data
-        // plane, which neither `sandbox/provision` nor `sandbox/management` reaches. Granted for
-        // every lifecycle and image: setup creates the group either way, and a later switch from
-        // a catalog name to a registry image rolls without rerunning setup. Resource-scoped: the
-        // Azure emitter binds it on this sandbox's group.
+        // Disk images live on the data plane, which `provision` and `management` do not reach.
+        // Every lifecycle and image, so a later switch to a registry image rolls without rerunning
+        // setup; the Azure emitter binds it on this sandbox's group.
         if platform == Platform::Azure && resource_type == "sandbox" {
             resource_permission_set_ids
                 .entry(resource_id.clone())

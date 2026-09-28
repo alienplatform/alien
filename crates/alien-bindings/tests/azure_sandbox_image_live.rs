@@ -1,11 +1,12 @@
-//! Sessions started from the binding an Azure sandbox controller published, on a real group.
-//!
-//! `#[ignore]`: needs the binding JSON the controller live test wrote (`V43_BINDING`) and an
-//! identity holding the data-plane role the provider runs under.
+//! A session started from an Azure sandbox binding on a real group. Ignored: it needs the
+//! `AZURE_TARGET_*` identity holding the data-plane role on the group `AZURE_RESOURCE_GROUP` and
+//! `AZURE_SANDBOX_GROUP` name; `AZURE_SANDBOX_IMAGE` must already be built there if a reference.
 //!
 //! ```text
-//! V43_BINDING=/path/binding.json cargo test -p alien-bindings --test azure_sandbox_image_live -- --ignored --nocapture
+//! cargo test -p alien-bindings --features azure --test azure_sandbox_image_live -- --ignored --nocapture
 //! ```
+
+#![cfg(feature = "azure")]
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -21,13 +22,22 @@ fn env(name: &str) -> String {
 #[tokio::test]
 #[ignore = "needs a live Azure sandbox group and a published binding"]
 async fn live_session_from_published_binding() {
-    let binding: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(env("V43_BINDING")).unwrap()).unwrap();
-    eprintln!("binding: {binding}");
+    let region = std::env::var("AZURE_SANDBOX_REGION").unwrap_or_else(|_| "westus2".to_string());
+    let image = std::env::var("AZURE_SANDBOX_IMAGE")
+        .unwrap_or_else(|_| "docker.io/library/python:3.14-slim".to_string());
+    let binding = serde_json::json!({
+        "service": "sandbox-azure",
+        "sandboxGroup": env("AZURE_SANDBOX_GROUP"),
+        "dataPlaneEndpoint": format!("https://management.{region}.azuredevcompute.io"),
+        "region": region.clone(),
+        "resourceGroup": env("AZURE_RESOURCE_GROUP"),
+        "diskImage": image,
+        "egress": { "mode": "allow" },
+    });
     let config = ClientConfig::Azure(Box::new(AzureClientConfig {
         subscription_id: env("AZURE_TARGET_SUBSCRIPTION_ID"),
         tenant_id: env("AZURE_TARGET_TENANT_ID"),
-        region: Some("westus2".to_string()),
+        region: Some(region.clone()),
         credentials: AzureCredentials::ServicePrincipal {
             client_id: env("AZURE_TARGET_CLIENT_ID"),
             client_secret: env("AZURE_TARGET_CLIENT_SECRET"),
@@ -43,11 +53,7 @@ async fn live_session_from_published_binding() {
         .create(CreateSandboxRequest::default())
         .await
         .unwrap_or_else(|error| panic!("create failed: {error}"));
-    eprintln!(
-        "created {} in {:?}",
-        instance.sandbox_id,
-        started.elapsed()
-    );
+    eprintln!("created {} in {:?}", instance.sandbox_id, started.elapsed());
 
     let result = async {
         let mut stream = sandbox
@@ -64,7 +70,12 @@ async fn live_session_from_published_binding() {
             .await?;
         let mut stdout = Vec::new();
         while let Some(frame) = stream.next().await {
-            eprintln!("frame: {:?}", frame.as_ref().map(|f| format!("{f:?}").chars().take(200).collect::<String>()));
+            eprintln!(
+                "frame: {:?}",
+                frame
+                    .as_ref()
+                    .map(|f| format!("{f:?}").chars().take(200).collect::<String>())
+            );
             if let alien_bindings::traits::CommandOutput::Stdout { data, .. } = frame? {
                 stdout.extend(data);
             }
@@ -75,11 +86,11 @@ async fn live_session_from_published_binding() {
         sandbox
             .write_files(
                 &instance.sandbox_id,
-                BTreeMap::from([("/tmp/v43/round.txt".to_string(), b"round-trip-v43".to_vec())]),
+                BTreeMap::from([("/tmp/alien/round.txt".to_string(), b"round-trip".to_vec())]),
             )
             .await?;
         let back = sandbox
-            .read_file(&instance.sandbox_id, "/tmp/v43/round.txt")
+            .read_file(&instance.sandbox_id, "/tmp/alien/round.txt")
             .await?;
         eprintln!("file back: {:?}", String::from_utf8_lossy(&back));
         Ok::<_, alien_error::AlienError<alien_bindings::ErrorData>>((os, back))
@@ -92,8 +103,5 @@ async fn live_session_from_published_binding() {
         .expect("terminate");
     let (os, back) = result.unwrap_or_else(|error| panic!("session failed: {error}"));
     assert!(os.contains("ID="), "{os}");
-    if let Ok(expect) = std::env::var("V43_EXPECT_OS") {
-        assert!(os.contains(&expect), "expected {expect} in {os}");
-    }
-    assert_eq!(back, b"round-trip-v43");
+    assert_eq!(back, b"round-trip");
 }

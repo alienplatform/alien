@@ -12,10 +12,8 @@
 //! with its own credential (which lacks Data Owner by design); the execute grant that opens the
 //! data plane is authored on that resource's permission set by a preflight, not verified here.
 //!
-//! A registry image is the one data-plane object this controller owns: it builds the image into
-//! a disk image in the group after the group exists, as the AWS controller builds its MicroVM
-//! image after registration, and deletes the one a changed reference replaced. That takes the
-//! disk-image verbs of `sandbox/images` alone, which reach no sandbox.
+//! The one data-plane object it owns is the disk image a registry image is built into, and the one
+//! a changed reference replaced, which it deletes. `sandbox/images` grants exactly those verbs.
 
 use std::time::Duration;
 
@@ -400,11 +398,9 @@ impl AzureSandboxController {
             .then(|| reference.to_string())
     }
 
-    /// Finds or builds the disk image for the declared registry image, then publishes it.
-    ///
-    /// Looked up by label before any create, and on every poll: the id is server-minted, so a
-    /// create whose response was lost leaves an image only the label can find, and a second
-    /// create would build a duplicate. Extra images under the label are retired.
+    /// Looked up by label before any create and on every poll: the id is server-minted, so a lost
+    /// create response leaves an image only the label finds, and a second create would duplicate
+    /// it. Extra images under the label are retired.
     async fn build_disk_image(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
@@ -430,12 +426,12 @@ impl AzureSandboxController {
             .filter(|image| image.labels.get(AZURE_DISK_IMAGE_LABEL) == Some(&label))
             .collect();
 
+        // A Failed image is reported once, retired, and passed over from then on: the retry that
+        // follows builds afresh instead of finding the same failure under the label again.
+        let failed = |image: &&DiskImage| image.state() == Some("Failed");
         let image = match ours.iter().find(|image| image.state() == Some("Ready")) {
             Some(ready) => ready.clone(),
-            None if ours
-                .iter()
-                .any(|image| !matches!(image.state(), Some("Failed"))) =>
-            {
+            None if ours.iter().any(|image| !failed(&image)) => {
                 debug!(sandbox_id = %config.id, %reference, "disk image is still building");
                 return Ok(AzureSandboxHandlerAction::Stay {
                     max_times: Some(DISK_IMAGE_MAX_POLLS),
@@ -443,17 +439,19 @@ impl AzureSandboxController {
                 });
             }
             None => {
-                // Failed builds are retired so the retry that follows builds afresh rather than
-                // finding the same failure under the label again.
-                if let Some(failed) = ours.first() {
-                    let reason = failed
+                let unreported: Vec<&DiskImage> = ours
+                    .iter()
+                    .filter(|image| !self.retired_disk_images.contains(&image.id))
+                    .collect();
+                if let Some(first) = unreported.first() {
+                    let reason = first
                         .status
                         .as_ref()
                         .and_then(|status| status.error_message.clone())
                         .filter(|message| !message.is_empty())
                         .unwrap_or_else(|| "no reason given".to_string());
                     self.retired_disk_images
-                        .extend(ours.iter().map(|image| image.id.clone()));
+                        .extend(unreported.iter().map(|image| image.id.clone()));
                     return Err(AlienError::new(ErrorData::CloudPlatformError {
                         message: format!(
                             "the disk image built from '{reference}' failed: {reason}"
@@ -474,12 +472,12 @@ impl AzureSandboxController {
                     )
                     .await
                     .map_err(|error| {
-                        // Azure's own reason (an arm64-only image, a denied pull) is the one
-                        // worth reading, so it leads rather than sitting at the end of the chain.
+                        // Azure's reason (a missing tag, a denied pull, an arm64-only image) leads
+                        // rather than sitting at the end of the chain.
                         let reason = error.to_string();
                         error.context(ErrorData::CloudPlatformError {
                             message: format!(
-                                "Azure refused to build a disk image from '{reference}': {reason}"
+                                "the disk image build from '{reference}' failed: {reason}"
                             ),
                             resource_id: Some(config.id.clone()),
                         })
@@ -495,11 +493,11 @@ impl AzureSandboxController {
             }
         };
 
-        self.retired_disk_images.extend(
-            ours.iter()
-                .filter(|other| other.id != image.id)
-                .map(|other| other.id.clone()),
-        );
+        for other in ours.iter().filter(|other| other.id != image.id) {
+            if !self.retired_disk_images.contains(&other.id) {
+                self.retired_disk_images.push(other.id.clone());
+            }
+        }
         if let Some(replaced) = self.disk_image_id.replace(image.id.clone()) {
             if replaced != image.id {
                 self.retired_disk_images.push(replaced);
@@ -514,11 +512,9 @@ impl AzureSandboxController {
         })
     }
 
-    /// Deletes the disk images a changed image replaced, best-effort.
-    ///
-    /// Never fails the heartbeat it runs beside, unlike the AWS reaper: a sandbox that serves is
-    /// not unhealthy because an old image lingers. A 409 means a stopped sandbox's snapshot still
-    /// holds the image; it and any other failure keep the id for the next tick, so none is lost.
+    /// Best-effort, and never fails the heartbeat: a lingering old image does not make a serving
+    /// sandbox unhealthy. A 409 (a stopped sandbox's snapshot holds it) or any other failure keeps
+    /// the id for the next tick.
     async fn reap_retired_disk_images(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
@@ -617,11 +613,8 @@ impl AzureSandboxController {
     }
 }
 
-/// Basic credentials for an image pulled through the manager's registry proxy, as an Azure Worker
-/// pulls: `deployment` and the deployment token.
-///
-/// Only for a reference on the proxy's own host. A Worker's image always is; a sandbox's may be a
-/// public image elsewhere, where the deployment token is a credential that registry must not see.
+/// The proxy's `deployment` Basic credentials, only for a reference on the proxy's own host: a
+/// sandbox image may be public elsewhere, and that registry must not see the deployment token.
 fn registry_credentials(
     ctx: &ResourceControllerContext<'_>,
     reference: &str,

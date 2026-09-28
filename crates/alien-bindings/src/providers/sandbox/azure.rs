@@ -33,9 +33,10 @@ pub struct AzureSandbox {
     sandbox_group: String,
     /// Catalog name or registry image every sandbox is created from, from the declaration.
     disk_image: String,
-    /// Id of the disk image built from a registry `disk_image`, found once by label. A miss is
-    /// not cached: the controller may still be building it.
-    disk_image_id: tokio::sync::OnceCell<String>,
+    /// Id of the disk image built from a registry `disk_image`, found by label. A miss is not
+    /// cached (the controller may still be building it), and an id the data plane no longer has
+    /// is dropped so the next lookup finds its replacement.
+    disk_image_id: std::sync::Mutex<Option<String>>,
     /// Outbound policy every sandbox is created with, from the declaration.
     egress: SandboxEgress,
     /// Idle seconds after which a sandbox suspends itself, if the declaration asked for one.
@@ -63,7 +64,7 @@ impl AzureSandbox {
             client,
             sandbox_group,
             disk_image,
-            disk_image_id: tokio::sync::OnceCell::new(),
+            disk_image_id: std::sync::Mutex::new(None),
             egress,
             idle_pause_seconds,
             cpu,
@@ -72,53 +73,88 @@ impl AzureSandbox {
         }
     }
 
-    /// The built disk image a sandbox starts from, or `None` for a catalog name.
-    ///
-    /// A value neither shape classifies is sent as a catalog name: planning refuses such a
-    /// declaration, so only a hand-written binding carries one, and the data plane judges it.
+    /// The built disk image a sandbox starts from, or `None` to send the value as a catalog name,
+    /// which is also what an unclassifiable hand-written binding gets: the data plane judges it.
     async fn disk_image_id(&self) -> Result<Option<String>> {
         let Some(AzureSandboxImage::Registry(reference)) =
             classify_azure_sandbox_image(&self.disk_image)
         else {
             return Ok(None);
         };
-        let id = self
-            .disk_image_id
-            .get_or_try_init(|| async {
-                let label = azure_disk_image_label(reference);
-                let images = self
-                    .client
-                    .list_disk_images(&self.sandbox_group)
-                    .await
-                    .map_err(|error| {
-                        error.context(ErrorData::SandboxUnreachable {
-                            operation: CREATE.to_string(),
-                            reason: format!(
-                                "could not read the disk images of sandbox group '{}'",
-                                self.sandbox_group
-                            ),
-                        })
-                    })?;
-                images
-                    .into_iter()
-                    .find(|image| {
-                        image.labels.get(AZURE_DISK_IMAGE_LABEL) == Some(&label)
-                            && image.state() == Some("Ready")
-                    })
-                    .map(|image| image.id)
-                    .ok_or_else(|| {
-                        AlienError::new(ErrorData::SandboxUnreachable {
-                            operation: CREATE.to_string(),
-                            reason: format!(
-                                "no disk image built from '{reference}' is ready in sandbox \
-                                 group '{}' yet; the sandbox's controller builds it after setup",
-                                self.sandbox_group
-                            ),
-                        })
-                    })
+        if let Some(id) = self.cached_disk_image_id() {
+            return Ok(Some(id));
+        }
+        let label = azure_disk_image_label(reference);
+        let images = self
+            .client
+            .list_disk_images(&self.sandbox_group)
+            .await
+            .map_err(|error| {
+                error.context(ErrorData::SandboxUnreachable {
+                    operation: CREATE.to_string(),
+                    reason: format!(
+                        "could not read the disk images of sandbox group '{}'",
+                        self.sandbox_group
+                    ),
+                })
+            })?;
+        let id = images
+            .into_iter()
+            .find(|image| {
+                image.labels.get(AZURE_DISK_IMAGE_LABEL) == Some(&label)
+                    && image.state() == Some("Ready")
             })
-            .await?;
-        Ok(Some(id.clone()))
+            .map(|image| image.id)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: CREATE.to_string(),
+                    reason: format!(
+                        "no disk image built from '{reference}' is ready in sandbox group '{}' \
+                         yet; the sandbox's controller builds it after setup",
+                        self.sandbox_group
+                    ),
+                })
+            })?;
+        *self.disk_image_id.lock().expect("disk image id lock") = Some(id.clone());
+        Ok(Some(id))
+    }
+
+    fn cached_disk_image_id(&self) -> Option<String> {
+        self.disk_image_id
+            .lock()
+            .expect("disk image id lock")
+            .clone()
+    }
+
+    /// Starts a sandbox from the declared image. A cached disk image the data plane refuses as
+    /// gone (the controller retired it) is dropped and looked up once more: that refusal comes
+    /// back synchronously, so no sandbox was minted and the resend cannot duplicate one.
+    async fn create_from_image(
+        &self,
+        request: CreateSandbox,
+    ) -> alien_client_core::Result<alien_azure_clients::azure::sandbox_data_plane::Sandbox> {
+        let first = self
+            .client
+            .create_sandbox(&self.sandbox_group, request.clone())
+            .await;
+        match first {
+            Err(error) if request.disk_image_id.is_some() && disk_image_gone(&error) => {
+                *self.disk_image_id.lock().expect("disk image id lock") = None;
+                let Ok(Some(id)) = self.disk_image_id().await else {
+                    return Err(error);
+                };
+                self.client
+                    .create_sandbox(
+                        &self.sandbox_group,
+                        CreateSandbox {
+                            disk_image_id: Some(id),
+                            ..request
+                        },
+                    )
+                    .await
+            }
+            other => other,
+        }
     }
 
     /// The image sandboxes are created from. Exists so a test can prove the declaration
@@ -195,6 +231,17 @@ impl AzureSandbox {
 
 impl Binding for AzureSandbox {}
 
+/// The data plane answers a create naming a deleted disk image with a 400 `DiskImageNotFound`.
+fn disk_image_gone(error: &AlienError<ClientErrorData>) -> bool {
+    match &error.error {
+        Some(ClientErrorData::InvalidInput { message, .. }) => {
+            message.contains("DiskImageNotFound")
+        }
+        Some(ClientErrorData::RemoteResourceNotFound { .. }) => true,
+        _ => false,
+    }
+}
+
 /// Refused rather than dropped: the create body has nowhere to put a tenant key or a lifetime, so
 /// accepting either would report success while putting a caller's tenants in one shared sandbox,
 /// or leaving it running past the deadline it asked for. Azure does carry sandbox-level `env`.
@@ -233,20 +280,16 @@ impl Sandbox for AzureSandbox {
         let asked = egress_policy(&self.egress);
         let disk_image_id = self.disk_image_id().await?;
         let sandbox = self
-            .client
-            .create_sandbox(
-                &self.sandbox_group,
-                CreateSandbox {
-                    disk_image: self.disk_image.clone(),
-                    disk_image_id,
-                    cpu: self.cpu.clone(),
-                    memory: self.memory.clone(),
-                    disk: self.disk.clone(),
-                    environment: request.env,
-                    egress: asked.clone(),
-                    idle_pause_seconds: self.idle_pause_seconds,
-                },
-            )
+            .create_from_image(CreateSandbox {
+                disk_image: self.disk_image.clone(),
+                disk_image_id,
+                cpu: self.cpu.clone(),
+                memory: self.memory.clone(),
+                disk: self.disk.clone(),
+                environment: request.env,
+                egress: asked.clone(),
+                idle_pause_seconds: self.idle_pause_seconds,
+            })
             .await
             .map_err(|error| Self::failed(CREATE, error))?;
 
@@ -1569,6 +1612,56 @@ mod tests {
                 .await
                 .expect("create succeeds");
         }
+    }
+
+    /// A cached image the controller has since retired is refused as `DiskImageNotFound`. The
+    /// provider drops it, looks up the label once more, and starts from the replacement.
+    #[tokio::test]
+    async fn a_retired_cached_image_is_looked_up_again() {
+        let label = azure_disk_image_label("docker.io/library/python:3.14-slim");
+        let mut client = MockSandboxDataPlaneApi::new();
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = seen.clone();
+        client
+            .expect_list_disk_images()
+            .times(2)
+            .returning(move |_| {
+                let id = if counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    "old"
+                } else {
+                    "new"
+                };
+                Ok(vec![disk_image(id, &label, "Ready")])
+            });
+        client
+            .expect_create_sandbox()
+            .withf(|_, request| request.disk_image_id.as_deref() == Some("old"))
+            .times(1)
+            .returning(|_, _| {
+                Err(AlienError::new(ClientErrorData::InvalidInput {
+                    message: r#"Bad request for Resource 'grp': {"title":"DiskImageNotFound","status":400}"#
+                        .to_string(),
+                    field_name: None,
+                }))
+            });
+        client
+            .expect_create_sandbox()
+            .withf(|_, request| request.disk_image_id.as_deref() == Some("new"))
+            .times(1)
+            .returning(|_, _| {
+                Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    id: "s1".to_string(),
+                    egress_policy: None,
+                    state: Some("Running".to_string()),
+                })
+            });
+        settles_running(&mut client, None);
+
+        registry_sandbox(client)
+            .create(CreateSandboxRequest::default())
+            .await
+            .expect("the replacement image serves");
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     /// Before the controller has built the image there is nothing to start from, and the miss is

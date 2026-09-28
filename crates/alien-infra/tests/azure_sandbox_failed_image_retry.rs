@@ -1,8 +1,5 @@
-//! A disk image whose build ended `Failed` must not block the retry that follows it.
-//!
-//! The executor retries a failed handler state with the controller it left behind, so a retry
-//! of `EnsureDiskImage` lists the group again. The Failed image is still there: only the `Ready`
-//! heartbeat deletes retired images, and the sandbox never reaches `Ready` while the build fails.
+//! A disk image whose build ended `Failed` must not block the retry that follows it: the retry
+//! lists the group again and still finds that image, since only `Ready` deletes retired ones.
 
 #![cfg(all(feature = "azure", feature = "test-utils"))]
 
@@ -12,6 +9,7 @@ use std::sync::Arc;
 use alien_azure_clients::azure::sandbox_data_plane::{
     DiskImage, DiskImageStatus, MockSandboxDataPlaneApi, SandboxDataPlaneApi,
 };
+use alien_azure_clients::azure::sandbox_groups::MockSandboxGroupsApi;
 use alien_core::{
     azure_disk_image_label, Platform, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
     SandboxLifecyclePolicy, AZURE_DISK_IMAGE_LABEL,
@@ -46,7 +44,15 @@ async fn a_failed_build_is_rebuilt_on_retry() {
     client
         .expect_list_disk_images()
         .returning(|_| Ok(vec![failed_image()]));
-    client.expect_delete_disk_image().returning(|_, _| Ok(()));
+    let deletes = Arc::new(AtomicUsize::new(0));
+    let deleted = deletes.clone();
+    client
+        .expect_delete_disk_image()
+        .withf(|_, id| id == "failed-1")
+        .returning(move |_, _| {
+            deleted.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
     client.expect_create_disk_image().returning(move |_, _| {
         seen.fetch_add(1, Ordering::SeqCst);
         Ok(DiskImage {
@@ -67,6 +73,21 @@ async fn a_failed_build_is_rebuilt_on_retry() {
     provider
         .expect_get_azure_sandbox_data_plane_client()
         .returning(move |_, _, _| Ok(client.clone()));
+    // The rebuilt sandbox reaches `Ready`, whose heartbeat reads the group over ARM.
+    provider
+        .expect_get_azure_sandbox_groups_client()
+        .returning(|_| {
+            let mut arm = MockSandboxGroupsApi::new();
+            arm.expect_get_sandbox_group().returning(|_, name| {
+                Err(alien_error::AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceNotFound {
+                        resource_type: "SandboxGroup".to_string(),
+                        resource_name: name.to_string(),
+                    },
+                ))
+            });
+            Ok(Arc::new(arm))
+        });
 
     let controller: AzureSandboxController = serde_json::from_value(serde_json::json!({
         "state": "ready",
@@ -110,5 +131,10 @@ async fn a_failed_build_is_rebuilt_on_retry() {
         creates.load(Ordering::SeqCst),
         1,
         "a retry after a Failed build must build afresh rather than re-report the same failure"
+    );
+    assert_eq!(
+        deletes.load(Ordering::SeqCst),
+        1,
+        "the Failed image is reaped once the rebuilt sandbox is Ready"
     );
 }

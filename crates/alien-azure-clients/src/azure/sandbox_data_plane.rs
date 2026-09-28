@@ -12,7 +12,7 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
-use alien_error::{Context, IntoAlienError};
+use alien_error::{Context, ContextError, IntoAlienError};
 use async_trait::async_trait;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
@@ -364,6 +364,54 @@ pub trait SandboxDataPlaneApi: Send + Sync + std::fmt::Debug {
     /// Deletes a disk image. Sent once, so a 409 (a stopped sandbox's snapshot still holds the
     /// image) returns at once for the caller to retry later rather than spending a backoff here.
     async fn delete_disk_image(&self, group: &str, image_id: &str) -> Result<()>;
+}
+
+/// A 4xx with a `title` is the registry's answer about the image (`ImageNotFound`,
+/// `RegistryForbidden`, `ImagePlatformNotSupported`), which a retry does not change. Anything
+/// else, including this plane's bodiless RBAC 403, keeps the shared mapping about the group.
+fn disk_image_refusal(
+    status: reqwest::StatusCode,
+    base: &str,
+    group: &str,
+    body: &str,
+    url: &str,
+) -> alien_error::AlienError<ErrorData> {
+    #[derive(Deserialize)]
+    struct Problem {
+        title: String,
+        #[serde(default)]
+        detail: String,
+    }
+
+    match serde_json::from_str::<Problem>(body) {
+        Ok(problem)
+            if status.is_client_error() && status.as_u16() != 409 && status.as_u16() != 429 =>
+        {
+            alien_error::AlienError::new(ErrorData::HttpResponseError {
+                message: format!("Azure CreateDiskImage failed: HTTP {status}"),
+                url: url.to_string(),
+                http_status: status.as_u16(),
+                http_request_text: None,
+                http_response_text: Some(body.to_string()),
+            })
+            .context(ErrorData::InvalidInput {
+                message: format!(
+                    "Azure refused to build a disk image from '{base}' ({}): {}",
+                    problem.title, problem.detail
+                ),
+                field_name: None,
+            })
+        }
+        _ => crate::azure::common::create_azure_http_error_with_context(
+            status,
+            "CreateDiskImage",
+            "Resource",
+            group,
+            body,
+            url,
+            None,
+        ),
+    }
 }
 
 /// The `executeShellCommand` body, which is `command` plus an optional `workingDirectory` and
@@ -737,6 +785,7 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
             Some(vec![("api-version", API_VERSION.into())]),
         );
 
+        let base = request.base.clone();
         let body = disk_image_body(&request).to_string();
         let request = AzureRequestBuilder::new(Method::PUT, url)
             .content_type_json()
@@ -744,13 +793,30 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
             .body(body)
             .build()?;
         let signed = self.base.sign_request(request, &token).await?;
-        // The body can carry a registry token, and a failure echoes the request into the error.
-        let response = alien_client_core::redact_request_body(
-            self.base
-                .execute_request_once(signed, "CreateDiskImage", group)
-                .await,
-        )?;
-        Self::parse(response, "CreateDiskImage").await
+        let request_url = signed.url().to_string();
+        // Sent once and outside the shared executor: its error carries the request body, which
+        // can hold a registry token, and maps a 404 to "group not found" when Azure meant the tag.
+        let response = self
+            .base
+            .client
+            .execute(signed)
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                message: format!("Azure CreateDiskImage: HTTP error for '{base}'"),
+            })?;
+        let status = response.status();
+        if status.is_success() {
+            return Self::parse(response, "CreateDiskImage").await;
+        }
+        let body = response.text().await.unwrap_or_default();
+        Err(disk_image_refusal(
+            status,
+            &base,
+            group,
+            &body,
+            &request_url,
+        ))
     }
 
     async fn get_disk_image(&self, group: &str, image_id: &str) -> Result<DiskImage> {
@@ -1374,6 +1440,87 @@ mod tests {
         assert!(
             !serialized.contains("secret"),
             "the registry token must not reach the error chain: {serialized}"
+        );
+    }
+
+    /// A missing tag answers 404 and a denied pull 403, each with the reason in the body. Both
+    /// must name the registry's answer rather than the group, and neither is worth a retry.
+    #[tokio::test]
+    async fn a_registry_refusal_names_the_image_not_the_group() {
+        for (status, body, expected) in [
+            (
+                404,
+                r#"{"title":"ImageNotFound","status":404,"detail":"The image 'docker.io/library/python:0.0-nope' was not found in the registry."}"#,
+                "not found in the registry",
+            ),
+            (
+                403,
+                r#"{"title":"RegistryForbidden","status":403,"detail":"Pulling the image was forbidden. Provide 'registryCredentials' to authenticate."}"#,
+                "Provide 'registryCredentials'",
+            ),
+            (
+                401,
+                r#"{"title":"RegistryAuthFailed","status":401,"detail":"Authentication failed when pulling container image."}"#,
+                "Authentication failed when pulling",
+            ),
+        ] {
+            let server = MockServer::start_async().await;
+            let client = client_against(&server);
+            let create = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::PUT);
+                    then.status(status).body(body);
+                })
+                .await;
+
+            let error = client
+                .create_disk_image(
+                    "grp",
+                    CreateDiskImage {
+                        base: "docker.io/library/python:0.0-nope".to_string(),
+                        registry_credentials: Some((
+                            "deployment".to_string(),
+                            "secret".to_string(),
+                        )),
+                        ..CreateDiskImage::default()
+                    },
+                )
+                .await
+                .expect_err("a refused build fails");
+
+            assert_eq!(create.hits(), 1);
+            let rendered = error.to_string();
+            assert!(rendered.contains(expected), "{status}: {rendered}");
+            assert!(!rendered.contains("'grp'"), "{status}: {rendered}");
+            assert!(
+                !error.retryable,
+                "{status}: a registry refusal is not retried"
+            );
+            let serialized = serde_json::to_string(&error).expect("the error serializes");
+            assert!(!serialized.contains("secret"), "{serialized}");
+        }
+    }
+
+    /// A bodiless 403 is this plane's own RBAC refusing the caller, which is about the group.
+    #[tokio::test]
+    async fn a_bodiless_403_keeps_the_group_access_error() {
+        let server = MockServer::start_async().await;
+        let client = client_against(&server);
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PUT);
+                then.status(403);
+            })
+            .await;
+
+        let error = client
+            .create_disk_image("grp", CreateDiskImage::default())
+            .await
+            .expect_err("a denied caller fails");
+
+        assert!(
+            matches!(error.error, Some(ErrorData::RemoteAccessDenied { .. })),
+            "{error:?}"
         );
     }
 

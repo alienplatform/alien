@@ -1226,10 +1226,12 @@ async fn validate_pull_access(
                 )
             })?;
 
+        let proxy_host = state.config.base_url();
+        let proxy_host = alien_core::image_rewrite::strip_url_scheme(&proxy_host);
         let repos = release
             .stacks
             .values()
-            .flat_map(|stack| extract_repo_names(stack))
+            .flat_map(|stack| extract_repo_names(stack, proxy_host))
             .collect::<Vec<_>>();
 
         // Cache the result.
@@ -1254,8 +1256,9 @@ async fn validate_pull_access(
     Ok(())
 }
 
-/// Extract the set of repo names from a release's stack.
-fn extract_repo_names(stack: &alien_core::Stack) -> Vec<String> {
+/// Extract the set of repo names from a release's stack. `proxy_host` is this manager's own
+/// registry host, the only one a sandbox image is pulled through.
+fn extract_repo_names(stack: &alien_core::Stack, proxy_host: &str) -> Vec<String> {
     use alien_core::image_rewrite::strip_registry_host;
     use alien_core::{
         classify_azure_sandbox_image, AzureSandboxImage, Container, ContainerCode, Daemon,
@@ -1281,11 +1284,17 @@ fn extract_repo_names(stack: &alien_core::Stack) -> Vec<String> {
                 DaemonCode::Source { .. } => None,
             }
         } else if let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() {
-            // A registry image only: an Azure sandbox's disk image is built by pulling it through
-            // here. A catalog name or an AWS `s3://` bundle is never pulled, so it opens nothing.
+            // Only a registry image on this host, the rule the controller sends credentials by: a
+            // public image, catalog name or `s3://` bundle is never pulled here.
             match &sandbox.code {
                 SandboxCode::Image { image } => match classify_azure_sandbox_image(image) {
-                    Some(AzureSandboxImage::Registry(reference)) => Some(reference),
+                    Some(AzureSandboxImage::Registry(reference))
+                        if reference
+                            .split_once('/')
+                            .is_some_and(|(host, _)| host.eq_ignore_ascii_case(proxy_host)) =>
+                    {
+                        Some(reference)
+                    }
                     _ => None,
                 },
                 SandboxCode::Source { .. } => None,
@@ -1597,13 +1606,13 @@ mod tests {
             .build();
 
         assert_eq!(
-            extract_repo_names(&stack),
+            extract_repo_names(&stack, "manager.example.com"),
             vec!["artifacts/prj_test".to_string()]
         );
     }
 
-    /// An Azure sandbox's disk image is built by pulling its registry image through the proxy,
-    /// so that repo is in the release; a catalog name or an `s3://` bundle is never pulled.
+    /// A sandbox image on this host is pulled through the proxy, so its repo is in the release; a
+    /// public image elsewhere, a catalog name or an `s3://` bundle is never pulled here.
     #[test]
     fn extract_repo_names_includes_sandbox_registry_images_only() {
         let sandbox = |id: &str, image: &str| {
@@ -1628,13 +1637,17 @@ mod tests {
             )
             .add(sandbox("catalog", "ubuntu"), ResourceLifecycle::Frozen)
             .add(
+                sandbox("public", "docker.io/library/python:3.14-slim"),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
                 sandbox("bundle", "s3://bucket/sandbox/bundle.zip"),
                 ResourceLifecycle::Frozen,
             )
             .build();
 
         assert_eq!(
-            extract_repo_names(&stack),
+            extract_repo_names(&stack, "manager.example.com"),
             vec!["artifacts/prj_test".to_string()]
         );
     }

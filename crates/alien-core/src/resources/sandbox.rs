@@ -1098,11 +1098,9 @@ impl<'a> AzureSandboxImage<'a> {
 /// Label key the controller writes on every disk image it builds, and the provider finds it by.
 pub const AZURE_DISK_IMAGE_LABEL: &str = "alienImage";
 
-/// Classifies a declared `code.image` for Azure, or `None` when it is neither shape.
-///
-/// A bare `[A-Za-z0-9._-]+` is always a catalog name, checked first, so no reference rule can
-/// claim a value of that shape. Anything else must carry `/`, `:` or `@` and parse as an OCI
-/// reference.
+/// Classifies a declared `code.image` for Azure, or `None` when it is neither shape. A bare
+/// `[A-Za-z0-9._-]+` is checked first and always a catalog name; anything else must carry `/`,
+/// `:` or `@` and parse as an OCI reference.
 pub fn classify_azure_sandbox_image(image: &str) -> Option<AzureSandboxImage<'_>> {
     let image = image.trim();
     if image.is_empty() {
@@ -1118,10 +1116,8 @@ pub fn classify_azure_sandbox_image(image: &str) -> Option<AzureSandboxImage<'_>
         .then_some(AzureSandboxImage::Registry(image))
 }
 
-/// The label value naming the disk image built from `reference`.
-///
-/// A digest rather than the reference: a reference carries `/`, `:` and `@`, which a label
-/// value may not, and one derivation shared by the controller and the provider cannot drift.
+/// The label value naming the disk image built from `reference`: a digest, since a label value
+/// may not carry a reference's `/`, `:` and `@`.
 pub fn azure_disk_image_label(reference: &str) -> String {
     use sha2::{Digest, Sha256};
     let digest = format!("{:x}", Sha256::digest(reference.trim().as_bytes()));
