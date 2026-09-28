@@ -474,7 +474,7 @@ impl AzureSandboxController {
                     .map_err(|error| {
                         // Azure's reason (a missing tag, a denied pull, an arm64-only image) leads
                         // rather than sitting at the end of the chain.
-                        let reason = error.to_string();
+                        let reason = error.message.clone();
                         error.context(ErrorData::CloudPlatformError {
                             message: format!(
                                 "the disk image build from '{reference}' failed: {reason}"
@@ -1411,7 +1411,9 @@ mod tests {
                 .await
                 .expect_err("an arm64-only image is refused");
 
-            assert!(error.to_string().contains("linux/amd64"), "{error}");
+            let rendered = error.to_string();
+            assert!(rendered.contains("linux/amd64"), "{rendered}");
+            assert_eq!(rendered.matches("INVALID_INPUT").count(), 1, "{rendered}");
             assert!(state_of(&executor).get_binding_params().unwrap().is_none());
         }
 

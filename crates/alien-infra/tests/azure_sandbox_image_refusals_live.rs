@@ -2,7 +2,7 @@
 //! Ignored: same environment as `azure_sandbox_image_live`, plus `AZURE_PRIVATE_IMAGE`.
 //!
 //! ```text
-//! cargo test -p alien-infra --features azure,test-utils --test azure_sandbox_image_refusals_live -- --ignored --nocapture --test-threads=1
+//! cargo test -p alien-infra --features all-platforms,test-utils --test azure_sandbox_image_refusals_live -- --ignored --nocapture --test-threads=1
 //! ```
 
 #![cfg(feature = "azure")]

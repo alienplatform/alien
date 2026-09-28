@@ -25,11 +25,9 @@ pub enum SandboxCode {
     /// A prebuilt container image used as the sandbox root filesystem.
     #[serde(rename_all = "camelCase")]
     Image {
-        /// Image reference (e.g. `ubuntu:24.04`, `ghcr.io/myorg/sandbox:latest`).
-        ///
-        /// AWS wants an `s3://` bundle. Azure takes a bare catalog name such as `ubuntu` or a
-        /// registry image (amd64), told apart by syntax. Each refuses what it cannot take while
-        /// planning.
+        /// Image reference (e.g. `ubuntu:24.04`, `ghcr.io/myorg/sandbox:latest`). AWS wants an
+        /// `s3://` bundle; Azure takes a catalog name such as `ubuntu` or an amd64 registry
+        /// image, told apart by syntax. Each refuses what it cannot take while planning.
         image: String,
     },
     /// A Dockerfile `alien build` builds into the sandbox's base image.
@@ -664,9 +662,7 @@ impl Sandbox {
         self.validate_capabilities(&capabilities, platform)
     }
 
-    /// What Azure creates this sandbox from: a catalog name or a registry image.
-    ///
-    /// Told apart by syntax, as AWS tells an `s3://` bundle from a container reference; see
+    /// What Azure creates this sandbox from: a catalog name or a registry image, told apart by
     /// [`classify_azure_sandbox_image`]. Refused while planning, because a value the data plane
     /// rejects would otherwise surface at the first sandbox, long after the apply.
     pub fn azure_image(&self) -> Result<AzureSandboxImage<'_>> {

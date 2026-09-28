@@ -366,9 +366,9 @@ pub trait SandboxDataPlaneApi: Send + Sync + std::fmt::Debug {
     async fn delete_disk_image(&self, group: &str, image_id: &str) -> Result<()>;
 }
 
-/// A 4xx with a `title` is the registry's answer about the image (`ImageNotFound`,
-/// `RegistryForbidden`, `ImagePlatformNotSupported`), which a retry does not change. Anything
-/// else, including this plane's bodiless RBAC 403, keeps the shared mapping about the group.
+/// A 4xx with a `title` (`ImageNotFound`, `RegistryForbidden`, `ImagePlatformNotSupported`) or a
+/// 502 `DependencyError` (the pull failed, as for a helm chart) is Azure's answer about the image,
+/// which a retry does not change. Anything else, such as a bodiless RBAC 403, is about the group.
 fn disk_image_refusal(
     status: reqwest::StatusCode,
     base: &str,
@@ -385,7 +385,9 @@ fn disk_image_refusal(
 
     match serde_json::from_str::<Problem>(body) {
         Ok(problem)
-            if status.is_client_error() && status.as_u16() != 409 && status.as_u16() != 429 =>
+            if (status.is_client_error() && status.as_u16() != 409 && status.as_u16() != 429)
+                || (status == reqwest::StatusCode::BAD_GATEWAY
+                    && problem.title == "DependencyError") =>
         {
             alien_error::AlienError::new(ErrorData::HttpResponseError {
                 message: format!("Azure CreateDiskImage failed: HTTP {status}"),
@@ -1462,6 +1464,11 @@ mod tests {
                 401,
                 r#"{"title":"RegistryAuthFailed","status":401,"detail":"Authentication failed when pulling container image."}"#,
                 "Authentication failed when pulling",
+            ),
+            (
+                502,
+                r#"{"title":"DependencyError","status":502,"detail":"buildah pull failed with exit code 125."}"#,
+                "buildah pull failed",
             ),
         ] {
             let server = MockServer::start_async().await;

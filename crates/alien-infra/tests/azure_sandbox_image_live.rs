@@ -3,7 +3,7 @@
 //! `AZURE_RESOURCE_GROUP` and `AZURE_SANDBOX_GROUP` name, in `AZURE_SANDBOX_REGION` (westus2).
 //!
 //! ```text
-//! cargo test -p alien-infra --features azure,test-utils --test azure_sandbox_image_live -- --ignored --nocapture --test-threads=1
+//! cargo test -p alien-infra --features all-platforms,test-utils --test azure_sandbox_image_live -- --ignored --nocapture --test-threads=1
 //! ```
 
 #![cfg(feature = "azure")]
