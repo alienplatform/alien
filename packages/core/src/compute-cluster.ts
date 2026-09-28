@@ -23,6 +23,9 @@ export {
 
 /**
  * Hardware requirements for a compute pool.
+ * On Kubernetes, CPU, memory, and storage describe administrator-managed node
+ * capacity. Architecture constrains Pod placement. GPU and nested virtualization
+ * requirements are rejected because this resource cannot guarantee them there.
  */
 export type ComputePoolRequirements = {
   cpu: number | string
@@ -44,6 +47,7 @@ export type ComputeChoiceRange =
       default: number
     }
 
+/** Machine counts and node autoscaling apply to cloud fleets. Kubernetes uses existing node capacity. */
 export type ComputePoolScale =
   | {
       type: "fixed"
@@ -60,7 +64,7 @@ export type ComputePoolInput = {
   scale: ComputePoolScale
   /** Allow containers created after installation to use this pool. Only one pool may opt in. */
   dynamicContainers?: boolean
-  /** Number of provider failure domains across which the pool must be spread. */
+  /** Cloud fleet failure-domain spread. Advisory on existing Kubernetes clusters. */
   failureDomainSpread?: number
 }
 
@@ -74,6 +78,16 @@ export type ComputePoolInput = {
  *
  * Application source declares portable pool requirements. Provider machine
  * names are selected later through deployment settings.
+ *
+ * On Kubernetes, declare the same Frozen resource to describe logical pools in
+ * the deployment namespace. Alien verifies namespace access and pool references,
+ * then applies architecture constraints to static and dynamic container Pods.
+ * Source builds use one architecture per stack. Workers and pools without an
+ * explicit architecture inherit that build constraint for Pod scheduling.
+ * It creates no nodes. Hardware sizes, machine counts, autoscaling, and requested
+ * failure-domain spread remain the cluster administrator's responsibility.
+ * Provider instance types, selected zones, custom container CIDRs, GPU, and
+ * nested virtualization requirements are unsupported and fail validation.
  */
 export class ComputeCluster {
   private _config: Partial<ComputeClusterConfig> = {

@@ -111,13 +111,55 @@ async fn remove(
 }
 
 /// Converge one complete target set and report each requested generation.
+fn installed_compute_ready(
+    deployment: &alien_core::DeploymentState,
+    stack: &alien_core::Stack,
+) -> bool {
+    deployment.current_release.is_some()
+        && stack
+            .resources()
+            .filter(|(_, entry)| {
+                entry
+                    .config
+                    .downcast_ref::<alien_core::ComputeCluster>()
+                    .is_some()
+            })
+            .all(|(id, _)| {
+                deployment
+                    .stack_state
+                    .as_ref()
+                    .and_then(|state| state.resources.get(id))
+                    .is_some_and(|resource| resource.status == alien_core::ResourceStatus::Running)
+            })
+}
+
 pub async fn reconcile(
     client: &KubernetesClient,
     namespace: &str,
     deployment_id: &str,
     targets: &[TargetDynamicContainer],
     registry_auth: Option<(&str, &str)>,
+    stack: &alien_core::Stack,
 ) -> Result<Vec<DynamicContainerReport>> {
+    // Validate the installed release before touching Secrets or workloads.
+    let errors = if targets.iter().all(|target| target.deleted) {
+        Vec::new()
+    } else {
+        alien_core::validate_kubernetes_compute(stack)
+    };
+    if !errors.is_empty() {
+        return Err(failed(errors.join("; ")));
+    }
+    let pool = if targets.iter().all(|target| target.deleted) {
+        None
+    } else {
+        alien_core::kubernetes_dynamic_pool(stack).map_err(failed)?
+    };
+    let node_selector = if targets.iter().all(|target| target.deleted) {
+        None
+    } else {
+        alien_core::kubernetes_compute_node_selector(stack, pool).map_err(failed)?
+    };
     let selector = format!("{OWNER_LABEL}={deployment_id}");
     let existing = client
         .list_deployments(namespace, Some(selector), None)
@@ -169,8 +211,15 @@ pub async fn reconcile(
                     put_registry_secret(client, namespace, deployment_id, &desired, registry_auth)
                         .await?;
                 put_service(client, namespace, deployment_id, &desired).await?;
-                let deployment =
-                    put_deployment(client, namespace, deployment_id, &desired, pull_secret).await?;
+                let deployment = put_deployment(
+                    client,
+                    namespace,
+                    deployment_id,
+                    &desired,
+                    pull_secret,
+                    node_selector.clone(),
+                )
+                .await?;
                 if desired.secret_env.is_empty() {
                     let secret_name = format!("{}-env", backend_name(deployment_id, &target.name));
                     if let Some(secret) = read_secret(client, namespace, &secret_name).await? {
@@ -314,6 +363,30 @@ pub async fn reconcile_saved(
         };
         Some((host, sync.token.as_str()))
     });
+    let deployment = state.db.get_deployment_state().await?;
+    let installed_stack = deployment
+        .as_ref()
+        .and_then(|deployment| deployment.runtime_metadata.as_ref())
+        .and_then(|metadata| metadata.prepared_stack.as_ref());
+    if target.iter().any(|target| !target.deleted) {
+        let installed = deployment
+            .as_ref()
+            .zip(installed_stack)
+            .is_some_and(|(deployment, stack)| installed_compute_ready(deployment, stack));
+        if !installed {
+            return Err(failed("Dynamic containers are waiting for the installed release and compute pools to be ready"));
+        }
+    }
+    let cleanup_stack = alien_core::Stack::new("cleanup".to_string()).build();
+    let stack = match installed_stack {
+        Some(stack) => stack,
+        None if target.iter().all(|target| target.deleted) => &cleanup_stack,
+        None => {
+            return Err(failed(
+                "Dynamic containers require a prepared installed release",
+            ))
+        }
+    };
     reconcile(
         &client,
         namespace,
@@ -322,7 +395,71 @@ pub async fn reconcile_saved(
         registry_auth
             .as_ref()
             .map(|(host, token)| (host.as_str(), *token)),
+        stack,
     )
     .await
     .map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::installed_compute_ready;
+    use alien_core::{
+        ComputeCluster, DeploymentState, DeploymentStatus, Platform, ReleaseInfo, Resource,
+        ResourceLifecycle, ResourceStatus, Stack, StackResourceState, StackState,
+    };
+
+    #[test]
+    fn admission_waits_for_installation_and_keeps_the_installed_boundary_during_updates() {
+        let compute = ComputeCluster::new("compute".to_string()).build();
+        let stack = Stack::new("test".to_string())
+            .add(compute.clone(), ResourceLifecycle::Frozen)
+            .build();
+        let mut state = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::Provisioning,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(StackState::new(Platform::Kubernetes)),
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: 1,
+        };
+        assert!(!installed_compute_ready(&state, &stack));
+        state.current_release = Some(ReleaseInfo {
+            release_id: Some("release".to_string()),
+            version: None,
+            description: None,
+            stack: stack.clone(),
+        });
+        assert!(!installed_compute_ready(&state, &stack));
+        let mut resource = StackResourceState::new_pending(
+            "compute-cluster".to_string(),
+            Resource::new(compute),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        resource.status = ResourceStatus::Running;
+        state
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .insert("compute".to_string(), resource);
+        state.status = DeploymentStatus::Running;
+        assert!(installed_compute_ready(&state, &stack));
+        state.status = DeploymentStatus::Updating;
+        assert!(installed_compute_ready(&state, &stack));
+        state
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .get_mut("compute")
+            .unwrap()
+            .status = ResourceStatus::RefreshFailed;
+        assert!(!installed_compute_ready(&state, &stack));
+    }
 }

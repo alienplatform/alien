@@ -24,6 +24,35 @@ fn require_kind_context() {
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), expected);
 }
 
+fn compute_stack() -> alien_core::Stack {
+    let architecture = match std::env::consts::ARCH {
+        "aarch64" => alien_core::instance_catalog::Architecture::Arm64,
+        "x86_64" => alien_core::instance_catalog::Architecture::X86_64,
+        other => panic!("unsupported Kind host architecture {other}"),
+    };
+    let compute = alien_core::ComputeCluster::new("compute".to_string())
+        .capacity_group(alien_core::CapacityGroup {
+            group_id: "apps".to_string(),
+            instance_type: None,
+            profile: Some(alien_core::MachineProfile {
+                cpu: "2".to_string(),
+                memory_bytes: 4 << 30,
+                ephemeral_storage_bytes: 20 << 30,
+                architecture: Some(architecture),
+                gpu: None,
+            }),
+            min_size: 1,
+            max_size: 3,
+            scale_policy: None,
+            nested_virtualization: None,
+        })
+        .dynamic_container_pool("apps".to_string())
+        .build();
+    alien_core::Stack::new("portable".to_string())
+        .add(compute, alien_core::ResourceLifecycle::Frozen)
+        .build()
+}
+
 fn target(name: &str, generation: u64, replicas: u32) -> TargetDynamicContainer {
     TargetDynamicContainer {
         name: name.to_string(),
@@ -50,9 +79,16 @@ async fn until_running(
     targets: &[TargetDynamicContainer],
 ) {
     for _ in 0..60 {
-        let reports = reconcile(client, namespace, deployment_id, targets, None)
-            .await
-            .expect("reconcile");
+        let reports = reconcile(
+            client,
+            namespace,
+            deployment_id,
+            targets,
+            None,
+            &compute_stack(),
+        )
+        .await
+        .expect("reconcile");
         assert!(
             reports
                 .iter()
@@ -91,6 +127,56 @@ async fn two_independent_containers_update_and_delete() {
     let mut first = target("first", 1, 1);
     first.ports = vec![11211, 11212];
     let second = target("second", 1, 1);
+    let mut invalid_stack = compute_stack();
+    invalid_stack
+        .resources
+        .get_mut("compute")
+        .unwrap()
+        .config
+        .downcast_mut::<alien_core::ComputeCluster>()
+        .unwrap()
+        .dynamic_container_pool = Some("missing".to_string());
+    assert!(reconcile(
+        &client,
+        &namespace,
+        deployment_id,
+        &[first.clone()],
+        None,
+        &invalid_stack
+    )
+    .await
+    .is_err());
+    assert!(client
+        .list_secrets(
+            &namespace,
+            Some(format!("alien.dev/dynamic-deployment={deployment_id}")),
+            None
+        )
+        .await
+        .unwrap()
+        .items
+        .is_empty());
+    assert!(client
+        .list_services(
+            &namespace,
+            Some(format!("alien.dev/dynamic-deployment={deployment_id}")),
+            None
+        )
+        .await
+        .unwrap()
+        .items
+        .is_empty());
+    assert!(client
+        .list_deployments(
+            &namespace,
+            Some(format!("alien.dev/dynamic-deployment={deployment_id}")),
+            None
+        )
+        .await
+        .unwrap()
+        .items
+        .is_empty());
+
     until_running(
         &client,
         &namespace,
@@ -108,6 +194,29 @@ async fn two_independent_containers_update_and_delete() {
         .await
         .expect("owned Deployments");
     assert_eq!(owned.items.len(), 2);
+    let expected_architecture = if std::env::consts::ARCH == "aarch64" {
+        "arm64"
+    } else {
+        "amd64"
+    };
+    for workload in &owned.items {
+        let selector = workload
+            .spec
+            .as_ref()
+            .unwrap()
+            .template
+            .spec
+            .as_ref()
+            .unwrap()
+            .node_selector
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            selector.get("kubernetes.io/arch").map(String::as_str),
+            Some(expected_architecture)
+        );
+    }
+
     let services = client
         .list_services(
             &namespace,
@@ -153,6 +262,7 @@ async fn two_independent_containers_update_and_delete() {
         deployment_id,
         &[first.clone(), second.clone()],
         None,
+        &compute_stack(),
     )
     .await
     .expect("idempotent reconcile");
@@ -287,6 +397,7 @@ async fn two_independent_containers_update_and_delete() {
         deployment_id,
         &[rotated.clone(), second.clone()],
         Some(("docker.io", "synthetic-test-token")),
+        &compute_stack(),
     )
     .await
     .expect("add manager registry credential");
@@ -317,6 +428,7 @@ async fn two_independent_containers_update_and_delete() {
         deployment_id,
         &[rejected, second.clone()],
         Some(("docker.io", "synthetic-test-token")),
+        &compute_stack(),
     )
     .await
     .expect("report rejected Service update");
@@ -356,9 +468,16 @@ async fn two_independent_containers_update_and_delete() {
     }));
 
     for _ in 0..30 {
-        reconcile(&client, &namespace, deployment_id, &[], None)
-            .await
-            .expect("delete owned objects");
+        reconcile(
+            &client,
+            &namespace,
+            deployment_id,
+            &[],
+            None,
+            &compute_stack(),
+        )
+        .await
+        .expect("delete owned objects");
         let remaining = client
             .list_deployments(
                 &namespace,

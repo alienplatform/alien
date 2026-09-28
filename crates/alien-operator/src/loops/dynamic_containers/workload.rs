@@ -33,6 +33,7 @@ fn desired_deployment(
     deployment_id: &str,
     target: &TargetDynamicContainer,
     manager_pull_secret: bool,
+    node_selector: Option<BTreeMap<String, String>>,
 ) -> Deployment {
     let name = backend_name(deployment_id, &target.name);
     let scope = labels(deployment_id, &target.name);
@@ -172,6 +173,7 @@ fn desired_deployment(
                     ..Default::default()
                 }),
                 spec: Some(PodSpec {
+                    node_selector,
                     containers: vec![container],
                     automount_service_account_token: Some(false),
                     image_pull_secrets: manager_pull_secret.then(|| {
@@ -213,6 +215,7 @@ pub(super) async fn put_deployment(
     deployment_id: &str,
     target: &TargetDynamicContainer,
     manager_pull_secret: bool,
+    node_selector: Option<BTreeMap<String, String>>,
 ) -> Result<Deployment> {
     let name = backend_name(deployment_id, &target.name);
     let current = read_deployment(client, namespace, &name).await?;
@@ -223,7 +226,13 @@ pub(super) async fn put_deployment(
             )));
         }
     }
-    let mut desired = desired_deployment(namespace, deployment_id, target, manager_pull_secret);
+    let mut desired = desired_deployment(
+        namespace,
+        deployment_id,
+        target,
+        manager_pull_secret,
+        node_selector,
+    );
     if let Some(existing) = &current {
         if deployment_matches(existing, &desired) {
             return Ok(existing.clone());

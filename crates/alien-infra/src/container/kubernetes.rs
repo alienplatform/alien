@@ -2404,7 +2404,23 @@ impl KubernetesContainerController {
             });
         }
 
+        let pool = alien_core::kubernetes_container_pool(ctx.desired_stack, config).map_err(
+            |message| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message,
+                })
+            },
+        )?;
+        let node_selector = alien_core::kubernetes_compute_node_selector(ctx.desired_stack, pool)
+            .map_err(|message| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message,
+            })
+        })?;
         let pod_spec = PodSpec {
+            node_selector,
             service_account_name: Some(service_account_name.to_string()),
             security_context: security.map(|settings| PodSecurityContext {
                 run_as_non_root: Some(true),

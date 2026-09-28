@@ -89,3 +89,6 @@ pub use container::*;
 
 mod postgres;
 pub use postgres::*;
+
+mod kubernetes_compute;
+pub use kubernetes_compute::*;
