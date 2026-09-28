@@ -141,25 +141,47 @@ pub async fn reconcile(
     registry_auth: Option<(&str, &str)>,
     stack: &alien_core::Stack,
 ) -> Result<Vec<DynamicContainerReport>> {
-    // Validate the installed release before touching Secrets or workloads.
-    let errors = if targets.iter().all(|target| target.deleted) {
-        Vec::new()
+    reconcile_with_admission(
+        client,
+        namespace,
+        deployment_id,
+        targets,
+        registry_auth,
+        stack,
+        None,
+    )
+    .await
+}
+
+async fn reconcile_with_admission(
+    client: &KubernetesClient,
+    namespace: &str,
+    deployment_id: &str,
+    targets: &[TargetDynamicContainer],
+    registry_auth: Option<(&str, &str)>,
+    stack: &alien_core::Stack,
+    blocked: Option<(DynamicContainerStatus, String)>,
+) -> Result<Vec<DynamicContainerReport>> {
+    // Admission applies only to active targets. Deletions must still converge
+    // when an installed boundary is missing, invalid, or temporarily unavailable.
+    let placement = if targets.iter().all(|target| target.deleted) || blocked.is_some() {
+        Ok(None)
     } else {
-        alien_core::validate_kubernetes_compute(stack)
+        let errors = alien_core::validate_kubernetes_compute(stack);
+        if errors.is_empty() {
+            alien_core::kubernetes_dynamic_pool(stack)
+                .and_then(|pool| alien_core::kubernetes_compute_node_selector(stack, pool))
+        } else {
+            Err(errors.join("; "))
+        }
     };
-    if !errors.is_empty() {
-        return Err(failed(errors.join("; ")));
-    }
-    let pool = if targets.iter().all(|target| target.deleted) {
-        None
-    } else {
-        alien_core::kubernetes_dynamic_pool(stack).map_err(failed)?
-    };
-    let node_selector = if targets.iter().all(|target| target.deleted) {
-        None
-    } else {
-        alien_core::kubernetes_compute_node_selector(stack, pool).map_err(failed)?
-    };
+    let blocked = blocked.or_else(|| {
+        placement
+            .as_ref()
+            .err()
+            .map(|message| (DynamicContainerStatus::Failing, message.clone()))
+    });
+    let node_selector = placement.unwrap_or(None);
     let selector = format!("{OWNER_LABEL}={deployment_id}");
     let existing = client
         .list_deployments(namespace, Some(selector), None)
@@ -199,6 +221,8 @@ pub async fn reconcile(
                         None,
                     )
                 })
+        } else if let Some((status, message)) = &blocked {
+            Ok((*status, Some(message.clone())))
         } else {
             let mut desired = target.clone();
             if desired.suspended_reason.is_some() {
@@ -368,26 +392,20 @@ pub async fn reconcile_saved(
         .as_ref()
         .and_then(|deployment| deployment.runtime_metadata.as_ref())
         .and_then(|metadata| metadata.prepared_stack.as_ref());
-    if target.iter().any(|target| !target.deleted) {
-        let installed = deployment
-            .as_ref()
-            .zip(installed_stack)
-            .is_some_and(|(deployment, stack)| installed_compute_ready(deployment, stack));
-        if !installed {
-            return Err(failed("Dynamic containers are waiting for the installed release and compute pools to be ready"));
-        }
-    }
+    let installed = deployment
+        .as_ref()
+        .zip(installed_stack)
+        .is_some_and(|(deployment, stack)| installed_compute_ready(deployment, stack));
+    let blocked = (!installed).then(|| {
+        (
+            DynamicContainerStatus::Pending,
+            "Dynamic containers are waiting for the installed release and compute pools to be ready"
+                .to_string(),
+        )
+    });
     let cleanup_stack = alien_core::Stack::new("cleanup".to_string()).build();
-    let stack = match installed_stack {
-        Some(stack) => stack,
-        None if target.iter().all(|target| target.deleted) => &cleanup_stack,
-        None => {
-            return Err(failed(
-                "Dynamic containers require a prepared installed release",
-            ))
-        }
-    };
-    reconcile(
+    let stack = installed_stack.unwrap_or(&cleanup_stack);
+    reconcile_with_admission(
         &client,
         namespace,
         deployment_id,
@@ -396,6 +414,7 @@ pub async fn reconcile_saved(
             .as_ref()
             .map(|(host, token)| (host.as_str(), *token)),
         stack,
+        blocked,
     )
     .await
     .map(Some)

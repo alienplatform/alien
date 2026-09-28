@@ -113,9 +113,52 @@ async fn two_independent_containers_update_and_delete() {
     let namespace = std::env::var("ALIEN_DYNAMIC_KIND_NAMESPACE").expect("set Kind namespace");
     assert!(namespace.starts_with("alien-dynamic-"));
     let deployment_id = "dep_kind_dynamic_1040";
-    let config = alien_k8s_clients::KubernetesClientConfig::try_kubeconfig()
+    let mut config = alien_k8s_clients::KubernetesClientConfig::try_kubeconfig()
         .await
         .expect("Kind kubeconfig");
+    if let alien_core::KubernetesClientConfig::Kubeconfig {
+        namespace: configured_namespace,
+        ..
+    } = &mut config
+    {
+        *configured_namespace = Some(namespace.clone());
+    }
+    // Exercise setup handoff and the real namespaced API, not a mocked controller.
+    let stack = compute_stack();
+    let deployment_config = alien_core::DeploymentConfig::builder()
+        .stack_settings(alien_core::StackSettings::default())
+        .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+            variables: vec![],
+            hash: String::new(),
+            created_at: String::new(),
+        })
+        .external_bindings(alien_core::ExternalBindings::default())
+        .allow_frozen_changes(false)
+        .build();
+    let executor = alien_infra::StackExecutor::builder(
+        &stack,
+        alien_core::ClientConfig::Kubernetes(Box::new(config.clone())),
+    )
+    .deployment_config(&deployment_config)
+    .lifecycle_filter(vec![alien_core::ResourceLifecycle::Frozen])
+    .build()
+    .expect("build existing-node executor");
+    let mut imported = alien_core::StackState::new(alien_core::Platform::Kubernetes);
+    for _ in 0..5 {
+        imported = executor
+            .continue_imported(imported)
+            .await
+            .expect("continue existing-node compute handoff")
+            .next_state;
+        if imported.resources["compute"].status == alien_core::ResourceStatus::Running {
+            break;
+        }
+    }
+    assert_eq!(
+        imported.resources["compute"].status,
+        alien_core::ResourceStatus::Running
+    );
+    assert!(imported.resources["compute"].outputs.is_none());
     let client = KubernetesClient::new(
         alien_infra::resolve_kubeconfig(&config)
             .await
@@ -136,16 +179,17 @@ async fn two_independent_containers_update_and_delete() {
         .downcast_mut::<alien_core::ComputeCluster>()
         .unwrap()
         .dynamic_container_pool = Some("missing".to_string());
-    assert!(reconcile(
+    let rejected = reconcile(
         &client,
         &namespace,
         deployment_id,
         &[first.clone()],
         None,
-        &invalid_stack
+        &invalid_stack,
     )
     .await
-    .is_err());
+    .expect("invalid admission is reported per target");
+    assert_eq!(rejected[0].status, DynamicContainerStatus::Failing);
     assert!(client
         .list_secrets(
             &namespace,
@@ -449,7 +493,13 @@ async fn two_independent_containers_update_and_delete() {
             .unwrap()
             .ends_with("-registry")
     }));
-    until_running(&client, &namespace, deployment_id, &[rotated, second]).await;
+    until_running(
+        &client,
+        &namespace,
+        deployment_id,
+        &[rotated, second.clone()],
+    )
+    .await;
     let registry_secrets = client
         .list_secrets(
             &namespace,
@@ -466,6 +516,79 @@ async fn two_independent_containers_update_and_delete() {
             .unwrap()
             .ends_with("-registry")
     }));
+
+    // Invalid active placement must not strand a requested deletion or mutate
+    // the blocked application's existing workload.
+    let mut deleted = first.clone();
+    deleted.deleted = true;
+    let existing_second = client
+        .list_deployments(
+            &namespace,
+            Some(format!("alien.dev/dynamic-deployment={deployment_id}")),
+            None,
+        )
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|item| {
+            item.metadata.labels.as_ref().is_some_and(|labels| {
+                labels
+                    .get("alien.dev/dynamic-container")
+                    .is_some_and(|name| name == "second")
+            })
+        })
+        .expect("second workload exists");
+    let mut deletion_stopped = false;
+    for _ in 0..30 {
+        let reports = reconcile(
+            &client,
+            &namespace,
+            deployment_id,
+            &[deleted.clone(), second.clone()],
+            None,
+            &invalid_stack,
+        )
+        .await
+        .expect("mixed blocked active and deleted targets");
+        assert_eq!(reports[1].status, DynamicContainerStatus::Failing);
+        if reports[0].status == DynamicContainerStatus::Stopped {
+            deletion_stopped = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    assert!(
+        deletion_stopped,
+        "deleted target must finish removing all owned resources"
+    );
+    let deleted_selector =
+        format!("alien.dev/dynamic-deployment={deployment_id},alien.dev/dynamic-container=first");
+    assert!(client
+        .list_services(&namespace, Some(deleted_selector.clone()), None)
+        .await
+        .unwrap()
+        .items
+        .is_empty());
+    assert!(client
+        .list_secrets(&namespace, Some(deleted_selector), None)
+        .await
+        .unwrap()
+        .items
+        .is_empty());
+    let remaining = client
+        .list_deployments(
+            &namespace,
+            Some(format!("alien.dev/dynamic-deployment={deployment_id}")),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(remaining.items.len(), 1);
+    assert_eq!(
+        remaining.items[0].metadata.resource_version,
+        existing_second.metadata.resource_version
+    );
 
     for _ in 0..30 {
         reconcile(

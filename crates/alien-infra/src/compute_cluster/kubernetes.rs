@@ -113,7 +113,11 @@ async fn verify(ctx: &ResourceControllerContext<'_>) -> Result<()> {
     ctx.service_provider
         .get_kubernetes_deployment_client(config)
         .await?
-        .list_deployments(namespace, None, None)
+        .list_deployments(
+            namespace,
+            None,
+            Some("metadata.name=alien-compute-access-check".to_string()),
+        )
         .await
         .context(ErrorData::CloudPlatformError {
             resource_id: Some(cluster.id.clone()),
@@ -157,7 +161,9 @@ mod tests {
         deployments
             .expect_list_deployments()
             .withf(|namespace, label, field| {
-                namespace == "application" && label.is_none() && field.is_none()
+                namespace == "application"
+                    && label.is_none()
+                    && field.as_deref() == Some("metadata.name=alien-compute-access-check")
             })
             .times(3)
             .returning(|_, _, _| Ok(Default::default()));
