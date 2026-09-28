@@ -315,18 +315,6 @@ async fn shell(provider: &GcpAgentPlatformSandbox, session: &str, script: &str) 
     .await
 }
 
-async fn wait_until_running(provider: &GcpAgentPlatformSandbox, session: &str) -> u64 {
-    for _ in 0..60 {
-        if let Some(found) = provider.get(session).await.expect("get answers") {
-            if found.state == SandboxState::Running {
-                return found.generation;
-            }
-        }
-        tokio::time::sleep(Duration::from_secs(2)).await;
-    }
-    panic!("session {session} never reached Running");
-}
-
 // ---- The mandatory flow -----------------------------------------------------------------------
 
 /// create → exec → reconnect from a second process → private clone → terminate.
@@ -664,6 +652,25 @@ async fn egress_deny_blocks_the_network_including_dns() {
         .terminate(&sid)
         .await
         .expect("terminate confirms gone");
+}
+
+// ---- Orphan sweep -----------------------------------------------------------------------------
+
+fn sweep_log() -> PathBuf {
+    std::env::temp_dir().join("alien-sbx-live-engines.log")
+}
+
+/// Records an engine name the instant it exists, so a run killed before its guard runs still leaves
+/// a trail the sweep can reap.
+fn record_engine(engine: &str) {
+    use std::io::Write as _;
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(sweep_log())
+    {
+        let _ = writeln!(file, "{engine}");
+    }
 }
 
 /// Deletes every engine a prior live run recorded, tolerating not-found. This is the sweep for

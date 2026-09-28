@@ -678,9 +678,8 @@ impl Sandbox for GcpAgentPlatformSandbox {
                     return Ok(ResolvedSandbox::found(sandbox))
                 }
                 // Still coming up, or already being woken by someone else. Waited for rather than
-                // replaced: the sandbox keeps starting either way, and a second one beside it is
-                // the leak the arm above exists to avoid. A slow data plane is answered with the
-                // failure, never by provisioning more of it.
+                // replaced: the sandbox keeps starting either way, so a second one beside it would
+                // run with nobody holding its id. A slow data plane is answered with the failure.
                 Ok(Some(sandbox)) if sandbox.state == SandboxState::Starting => {
                     let generation = self.settle(id).await?;
                     return Ok(ResolvedSandbox::found(SandboxInstance {
@@ -895,12 +894,12 @@ impl Sandbox for GcpAgentPlatformSandbox {
 
     async fn pause(&self, sandbox_id: &str) -> Result<()> {
         Self::checked_sandbox_id("sandbox.pause", sandbox_id)?;
-        Err(pause_resume_unsupported("sandbox.pause"))
+        Err(pause_resume_unsupported())
     }
 
     async fn resume(&self, sandbox_id: &str) -> Result<()> {
         Self::checked_sandbox_id("sandbox.resume", sandbox_id)?;
-        Err(pause_resume_unsupported("sandbox.resume"))
+        Err(pause_resume_unsupported())
     }
 
     async fn snapshot(&self, sandbox_id: &str) -> Result<String> {
@@ -1526,9 +1525,9 @@ fn finish_operation(operation: &str, name: &str, op: Operation) -> Result<serde_
 
 /// Refused rather than forwarded: Agent Platform's `:resume` can return a fresh container while
 /// reporting success, so nothing the sandbox held is guaranteed to survive a pause.
-fn pause_resume_unsupported(operation: &str) -> AlienError<ErrorData> {
+fn pause_resume_unsupported() -> AlienError<ErrorData> {
     AlienError::new(ErrorData::OperationNotSupported {
-        operation: operation.to_string(),
+        operation: "pauseResume".to_string(),
         reason: "Agent Platform sandboxes cannot be paused and resumed with their state kept"
             .to_string(),
     })

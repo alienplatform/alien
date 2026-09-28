@@ -353,8 +353,8 @@ async fn get_or_create_replaces_a_stale_sandbox_without_deleting_it() {
 }
 
 /// A reconnect to a sandbox still coming up waits for it. Replacing it would leave the first one
-/// starting, reaching RUNNING and costing its owner, with nobody holding its id. Mutation check: delete the `Starting` arm and `create_sandbox().never()`
-/// fires.
+/// starting, reaching RUNNING and costing its owner, with nobody holding its id. Mutation check:
+/// delete the `Starting` arm and `create_sandbox().never()` fires.
 #[tokio::test]
 async fn get_or_create_waits_for_a_booting_sandbox_rather_than_creating_a_second() {
     let reads = Arc::new(AtomicUsize::new(0));
@@ -388,6 +388,40 @@ async fn get_or_create_waits_for_a_booting_sandbox_rather_than_creating_a_second
         !sandbox.created,
         "whoever started it created it, not this call"
     );
+}
+
+/// A paused record cannot be woken with its state kept, so a reconnect to one is served by a fresh
+/// sandbox, and the paused one, which may be another revision's, is left untouched.
+#[tokio::test]
+async fn get_or_create_replaces_a_paused_sandbox_without_touching_it() {
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_get_sandbox().returning(|_, id| {
+        if id == "paused" {
+            Ok(sandbox_in_state(id, "STATE_PAUSED"))
+        } else {
+            Ok(sandbox_in_state(id, "STATE_RUNNING"))
+        }
+    });
+    client.expect_create_sandbox().times(1).returning(|_, _| {
+        Ok(done_op(
+            serde_json::json!({ "name": sandbox_name("fresh") }),
+        ))
+    });
+    client
+        .expect_execute()
+        .withf(|_, sandbox, input| sandbox == "fresh" && op_of(input) == "health")
+        .returning(|_, _, _| Ok(health_reply()));
+    client.expect_delete_sandbox().never();
+
+    let resolved = provider(client)
+        .get_or_create(CreateSandboxRequest {
+            sandbox_id: Some("paused".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("a fresh sandbox serves the reconnect");
+    assert_eq!(resolved.sandbox.sandbox_id, "fresh");
+    assert!(resolved.created);
 }
 
 /// `STATE_RESUMING` reads as `Starting` too, and it is the reading two callers sharing one id
