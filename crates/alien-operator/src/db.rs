@@ -23,6 +23,15 @@ use crate::error::{ErrorData, Result};
 
 pub const MIN_SUPPORTED_OPERATOR_SCHEMA_VERSION: u32 = 1;
 pub const CURRENT_OPERATOR_SCHEMA_VERSION: u32 = 1;
+const MAX_QUEUED_POD_LOG_BYTES: i64 = 64 * 1024 * 1024;
+
+/// Last Pod-log line durably queued for forwarding. The ordinal distinguishes
+/// lines that share a Kubernetes log timestamp.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PodLogOffset {
+    pub timestamp: String,
+    pub ordinal: i64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -944,6 +953,265 @@ impl OperatorDb {
         Ok(())
     }
 
+    /// Return the cursor for one container incarnation. Pod UID prevents a
+    /// replacement Pod with the same name from inheriting an old cursor.
+    pub async fn get_pod_log_offset(
+        &self,
+        pod_uid: &str,
+        container: &str,
+        restart_count: i32,
+    ) -> Result<Option<PodLogOffset>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT timestamp, ordinal FROM pod_log_offsets WHERE pod_uid = ? AND container = ? AND restart_count = ?",
+                (pod_uid.to_string(), container.to_string(), i64::from(restart_count)),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read Pod log cursor".to_string(),
+            })?;
+        let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch Pod log cursor".to_string(),
+            })?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(PodLogOffset {
+            timestamp: row
+                .get(0)
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to decode Pod log cursor timestamp".to_string(),
+                })?,
+            ordinal: row
+                .get(1)
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to decode Pod log cursor ordinal".to_string(),
+                })?,
+        }))
+    }
+
+    /// Return the durable lower bound for a Pod-log handoff. A new installation
+    /// starts at Pod creation time; an observed legacy collector advances the
+    /// lower bound before it disappears. The marker survives Operator restarts.
+    pub async fn pod_log_cutover_at(&self, scope: &str, initial: &str) -> Result<String> {
+        let conn = self.conn.lock().await;
+        let key = format!("pod_log_cutover_at:{scope}");
+        conn.execute(
+            "INSERT OR IGNORE INTO state (key, value, updated_at) VALUES (?, ?, datetime('now'))",
+            (key.clone(), initial),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to record Pod log collector handoff".to_string(),
+        })?;
+        let mut rows = conn
+            .query("SELECT value FROM state WHERE key = ?", (key,))
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read Pod log collector handoff".to_string(),
+            })?;
+        let row = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch Pod log collector handoff".to_string(),
+            })?
+            .ok_or_else(|| {
+                alien_error::AlienError::new(ErrorData::DatabaseError {
+                    message: "Pod log collector handoff row is missing".to_string(),
+                })
+            })?;
+        row.get(0)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to decode Pod log collector handoff".to_string(),
+            })
+    }
+
+    /// Start a handoff at the first observation of a previous collector.
+    /// Further discovery passes and Operator restarts retain that earlier
+    /// timestamp, so shutdown latency cannot create a missing interval.
+    pub async fn observe_legacy_pod_log_collector(
+        &self,
+        scope: &str,
+        observed_at: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN IMMEDIATE", ())
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to begin Pod log collector handoff".to_string(),
+            })?;
+        let result = async {
+            let active_key = format!("pod_log_legacy_active:{scope}");
+            let mut rows = conn
+                .query("SELECT value FROM state WHERE key = ?", (active_key.clone(),))
+                .await
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to read previous Pod log collector state".to_string(),
+                })?;
+            let already_active = match rows.next().await.into_alien_error().context(
+                ErrorData::DatabaseError {
+                    message: "Failed to fetch previous Pod log collector state".to_string(),
+                },
+            )? {
+                Some(row) => {
+                    let value: String = row.get(0).into_alien_error().context(
+                        ErrorData::DatabaseError {
+                            message: "Failed to decode previous Pod log collector state".to_string(),
+                        },
+                    )?;
+                    value == "true"
+                }
+                None => false,
+            };
+            if !already_active {
+                let cutover_key = format!("pod_log_cutover_at:{scope}");
+                conn.execute(
+                    "INSERT INTO state (key, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    (cutover_key, observed_at),
+                )
+                .await
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to record Pod log collector handoff start".to_string(),
+                })?;
+                conn.execute(
+                    "INSERT INTO state (key, value, updated_at) VALUES (?, 'true', datetime('now')) ON CONFLICT(key) DO UPDATE SET value = 'true', updated_at = excluded.updated_at",
+                    (active_key,),
+                )
+                .await
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to mark previous Pod log collector active".to_string(),
+                })?;
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(error) = result {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(error);
+        }
+        conn.execute("COMMIT", ())
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to commit Pod log collector handoff".to_string(),
+            })?;
+        Ok(())
+    }
+
+    /// Allow a later rollback to start a new handoff when its old collector
+    /// returns. If this write is interrupted, replay starts earlier rather
+    /// than dropping lines.
+    pub async fn mark_legacy_pod_log_collector_gone(&self, scope: &str) -> Result<()> {
+        let conn = self.conn.lock().await;
+        let key = format!("pod_log_legacy_active:{scope}");
+        conn.execute(
+            "UPDATE state SET value = 'false', updated_at = datetime('now') WHERE key = ? AND value = 'true'",
+            (key,),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to finish Pod log collector handoff".to_string(),
+        })?;
+        Ok(())
+    }
+
+    /// Commit a telemetry batch and its cursor together. If the local queue is
+    /// full, the reader closes its API stream and resumes from this cursor
+    /// after forwarding drains the queue.
+    pub async fn store_pod_log_batch(
+        &self,
+        pod_uid: &str,
+        container: &str,
+        restart_count: i32,
+        offset: &PodLogOffset,
+        data: &[u8],
+    ) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN IMMEDIATE", ())
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to begin Pod log batch".to_string(),
+            })?;
+        let result = async {
+            let mut rows = conn
+                .query("SELECT COALESCE(SUM(length(data)), 0) FROM telemetry WHERE type = 'logs'", ())
+                .await
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to measure queued logs".to_string(),
+                })?;
+            let row = rows.next().await.into_alien_error().context(ErrorData::DatabaseError {
+                message: "Failed to fetch queued log size".to_string(),
+            })?.ok_or_else(|| alien_error::AlienError::new(ErrorData::DatabaseError {
+                message: "Queued log size query returned no row".to_string(),
+            }))?;
+            let queued_bytes: i64 = row.get(0).into_alien_error().context(ErrorData::DatabaseError {
+                message: "Failed to decode queued log size".to_string(),
+            })?;
+            if queued_bytes.saturating_add(data.len() as i64) > MAX_QUEUED_POD_LOG_BYTES {
+                return Err(alien_error::AlienError::new(ErrorData::PodLogBufferFull {
+                    limit_bytes: MAX_QUEUED_POD_LOG_BYTES,
+                }));
+            }
+            conn.execute(
+                "INSERT INTO telemetry (type, data, created_at) VALUES ('logs', ?, datetime('now'))",
+                (data.to_vec(),),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to queue Pod logs".to_string(),
+            })?;
+            conn.execute(
+                "INSERT INTO pod_log_offsets (pod_uid, container, restart_count, timestamp, ordinal) VALUES (?, ?, ?, ?, ?) ON CONFLICT(pod_uid, container, restart_count) DO UPDATE SET timestamp = excluded.timestamp, ordinal = excluded.ordinal",
+                (
+                    pod_uid.to_string(),
+                    container.to_string(),
+                    i64::from(restart_count),
+                    offset.timestamp.clone(),
+                    offset.ordinal,
+                ),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to save Pod log cursor".to_string(),
+            })?;
+            Ok(())
+        }
+        .await;
+        if let Err(error) = result {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(error);
+        }
+        conn.execute("COMMIT", ())
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to commit Pod log batch".to_string(),
+            })?;
+        Ok(())
+    }
+
     /// Get pending telemetry to push
     pub async fn get_pending_telemetry(&self, limit: u32) -> Result<Vec<(i64, String, Vec<u8>)>> {
         let conn = self.conn.lock().await;
@@ -1430,15 +1698,192 @@ impl OperatorDb {
 
         Ok(())
     }
+
+    /// Persist desired containers in the encrypted Operator database. `None`
+    /// means an older manager; an empty set is an authoritative deletion.
+    pub async fn get_target_dynamic_containers(
+        &self,
+    ) -> Result<Option<Vec<alien_core::sync::TargetDynamicContainer>>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT value FROM state WHERE key = 'target_dynamic_containers'",
+                (),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read dynamic container target".to_string(),
+            })?;
+        let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch dynamic container target".to_string(),
+            })?
+        else {
+            return Ok(None);
+        };
+        let value: String = row
+            .get(0)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to decode dynamic container target".to_string(),
+            })?;
+        let target =
+            serde_json::from_str(&value)
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to parse dynamic container target".to_string(),
+                })?;
+        Ok(Some(target))
+    }
+
+    pub async fn set_target_dynamic_containers(
+        &self,
+        target: &[alien_core::sync::TargetDynamicContainer],
+    ) -> Result<()> {
+        let value =
+            serde_json::to_string(target)
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to serialize dynamic container target".to_string(),
+                })?;
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('target_dynamic_containers', ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (value,),
+        ).await.into_alien_error().context(ErrorData::DatabaseError {
+            message: "Failed to persist dynamic container target".to_string(),
+        })?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::OperatorDb;
+    use super::{OperatorDb, PodLogOffset};
     use alien_core::sync::{SyncExecutionClaim, TargetDeployment};
 
     const TEST_ENCRYPTION_KEY: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[tokio::test]
+    async fn pod_log_handoff_survives_operator_restart() {
+        let data_dir = tempfile::tempdir().expect("create temp data directory");
+        let path = data_dir.path().to_str().unwrap();
+        let initial = "1970-01-01T00:00:00Z";
+        let observed = "2026-09-27T09:00:00Z";
+        let later = "2026-09-27T09:05:00Z";
+        let db = OperatorDb::new(path, TEST_ENCRYPTION_KEY)
+            .await
+            .expect("open encrypted operator db");
+        assert_eq!(
+            db.pod_log_cutover_at("app=release", initial).await.unwrap(),
+            initial
+        );
+        db.observe_legacy_pod_log_collector("app=release", observed)
+            .await
+            .expect("record old collector observation");
+        db.observe_legacy_pod_log_collector("app=release", later)
+            .await
+            .expect("repeat old collector observation");
+        drop(db);
+        let reopened = OperatorDb::new(path, TEST_ENCRYPTION_KEY)
+            .await
+            .expect("reopen encrypted operator db");
+        assert_eq!(
+            reopened
+                .pod_log_cutover_at("app=release", initial)
+                .await
+                .unwrap(),
+            observed
+        );
+        reopened
+            .observe_legacy_pod_log_collector("app=release", later)
+            .await
+            .expect("observation after restart");
+        assert_eq!(
+            reopened
+                .pod_log_cutover_at("app=release", initial)
+                .await
+                .unwrap(),
+            observed
+        );
+        reopened
+            .mark_legacy_pod_log_collector_gone("app=release")
+            .await
+            .expect("finish handoff");
+        reopened
+            .observe_legacy_pod_log_collector("app=release", later)
+            .await
+            .expect("new handoff after rollback");
+        assert_eq!(
+            reopened
+                .pod_log_cutover_at("app=release", initial)
+                .await
+                .unwrap(),
+            later
+        );
+    }
+
+    #[tokio::test]
+    async fn pod_log_cursor_and_queued_batch_commit_together() {
+        let data_dir = tempfile::tempdir().expect("create temp data directory");
+        let db = OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .expect("open encrypted operator db");
+        let offset = PodLogOffset {
+            timestamp: "2026-09-27T00:00:00.000000001Z".to_string(),
+            ordinal: 2,
+        };
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "CREATE TRIGGER reject_pod_log_cursor BEFORE INSERT ON pod_log_offsets BEGIN SELECT RAISE(ABORT, 'forced cursor failure'); END",
+                (),
+            )
+            .await
+            .expect("install forced failure trigger");
+        }
+        db.store_pod_log_batch("pod-uid", "api", 0, &offset, b"otlp")
+            .await
+            .expect_err("failed cursor write must abort queue transaction");
+        assert!(db
+            .get_pending_telemetry(10)
+            .await
+            .expect("read queue")
+            .is_empty());
+        assert!(db
+            .get_pod_log_offset("pod-uid", "api", 0)
+            .await
+            .expect("read cursor")
+            .is_none());
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("DROP TRIGGER reject_pod_log_cursor", ())
+                .await
+                .expect("remove forced failure trigger");
+        }
+        db.store_pod_log_batch("pod-uid", "api", 0, &offset, b"otlp")
+            .await
+            .expect("queue Pod logs and cursor");
+        assert_eq!(
+            db.get_pending_telemetry(10)
+                .await
+                .expect("read queue")
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.get_pod_log_offset("pod-uid", "api", 0)
+                .await
+                .expect("read cursor"),
+            Some(offset)
+        );
+    }
 
     #[tokio::test]
     async fn initial_identity_write_never_leaves_a_deployment_id_without_its_token() {

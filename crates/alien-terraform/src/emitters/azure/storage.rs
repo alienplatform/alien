@@ -525,11 +525,19 @@ fn sanitize_role_label(input: &str) -> String {
 }
 
 fn rule_block(storage_label: &str, index: usize, rule: &LifecycleRule) -> hcl::structure::Block {
-    let prefix_match = rule
-        .prefix
-        .clone()
-        .map(|p| Expression::Array(vec![Expression::String(p)]))
-        .unwrap_or_else(|| Expression::Array(vec![]));
+    // Azure lifecycle filters are account-wide and match `container/blob`.
+    // Even an unfiltered Storage rule must stay inside this Storage container.
+    let prefix_match = Expression::Array(vec![Expression::FuncCall(Box::new(
+        hcl::expr::FuncCall::builder(hcl::Identifier::sanitized("format"))
+            .arg(Expression::String("%s/%s".to_string()))
+            .arg(expr::traversal([
+                "azurerm_storage_container",
+                storage_label,
+                "name",
+            ]))
+            .arg(Expression::String(rule.prefix.clone().unwrap_or_default()))
+            .build(),
+    ))]);
 
     block(
         "rule",
@@ -577,6 +585,59 @@ mod tests {
         "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"";
     const STORAGE_CONTAINER_SCOPE: &str =
         "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}/providers/Microsoft.Storage/storageAccounts/${azurerm_storage_account.default_storage_account.name}/blobServices/default/containers/${replace(lower(\"${local.resource_prefix}-files\"), \"_\", \"-\")}\"";
+
+    #[test]
+    fn lifecycle_rules_target_only_the_generated_container() {
+        let storage = Storage::new("files".to_string())
+            .lifecycle_rules(vec![
+                LifecycleRule {
+                    days: 1,
+                    prefix: Some("scratch/".to_string()),
+                },
+                LifecycleRule {
+                    days: 7,
+                    prefix: None,
+                },
+            ])
+            .build();
+        let stack = Stack::new("azure-storage-lifecycle".to_string())
+            .add(
+                AzureResourceGroup::new("default-resource-group".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                AzureStorageAccount::new("default-storage-account".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(storage, ResourceLifecycle::Frozen)
+            .build();
+        let registry = TfRegistry::built_in();
+        let module = generate_terraform_module(
+            &stack,
+            TerraformTarget::Azure,
+            TerraformOptions {
+                display_name: None,
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                registration: None,
+                helm_install: None,
+                supported_aws_regions: Vec::new(),
+            },
+        )
+        .expect("Azure Terraform module should render");
+        let storage_module = module.get("files.tf").expect("storage resource module");
+
+        assert_eq!(
+            storage_module
+                .matches("azurerm_storage_container.files.name, ")
+                .count(),
+            2,
+            "both lifecycle rules must use the generated container name"
+        );
+        assert!(storage_module.contains("azurerm_storage_container.files.name, \"scratch/\""));
+        assert!(storage_module.contains("azurerm_storage_container.files.name, \"\""));
+        assert!(!storage_module.contains("prefix_match = []"));
+    }
 
     #[test]
     fn generated_storage_assignments_preserve_each_permission_binding_scope() {

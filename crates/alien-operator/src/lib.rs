@@ -28,6 +28,7 @@ pub mod error;
 pub mod lock;
 pub mod loops;
 pub mod otlp_server;
+pub mod pod_logs;
 pub mod readiness_server;
 
 pub use alien_core::{DeploymentState, DeploymentStatus, Platform, ReleaseInfo};
@@ -53,6 +54,7 @@ struct OperatorRuntimeOptions {
     readiness_server_port: Option<u16>,
     identity_initialized_config_map: Option<String>,
     runtime_deployment_scope: Option<(String, String)>,
+    pod_log_collection: Option<pod_logs::PodLogCollectionConfig>,
 }
 
 impl OperatorRuntimeOptions {
@@ -61,6 +63,7 @@ impl OperatorRuntimeOptions {
             readiness_server_port: readiness_server_port_from_env()?,
             identity_initialized_config_map: identity_initialized_config_map_from_env()?,
             runtime_deployment_scope: runtime_deployment_scope_from_env()?,
+            pod_log_collection: pod_logs::config_from_env()?,
         })
     }
 }
@@ -229,6 +232,26 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         "Starting operator"
     );
 
+    if runtime_options.pod_log_collection.is_some() {
+        if !matches!(config.platform, Platform::Kubernetes) || config.namespace.is_none() {
+            return Err(AlienError::new(error::ErrorData::ConfigurationError {
+                message: "Pod log collection requires a Kubernetes installation namespace"
+                    .to_string(),
+            }));
+        }
+        if !config.is_telemetry_enabled() {
+            return Err(AlienError::new(error::ErrorData::ConfigurationError {
+                message: "Pod log collection requires deployment telemetry to be enabled"
+                    .to_string(),
+            }));
+        }
+        if config.is_airgapped() {
+            return Err(AlienError::new(error::ErrorData::ConfigurationError {
+                message: "Pod log collection requires a configured telemetry forwarder".to_string(),
+            }));
+        }
+    }
+
     // Local runtimes are real child processes owned by LocalBindingsProvider.
     // Keep a shutdown handle before moving the service provider into shared
     // operator state so cancellation can drain those children before exit.
@@ -323,6 +346,15 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
             async move {
                 loops::kubernetes_heartbeats::run_kubernetes_heartbeat_loop(state).await;
             }
+        }))
+    } else {
+        None
+    };
+
+    let pod_log_handle = if let Some(pod_log_config) = runtime_options.pod_log_collection.clone() {
+        Some(tokio::spawn({
+            let state = state.clone();
+            async move { pod_logs::run_loop(state, pod_log_config).await }
         }))
     } else {
         None
@@ -486,6 +518,13 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
                 std::future::pending::<()>().await;
             }
         } => Ok(loop_exit(&cancel, "kubernetes-heartbeats")),
+        _ = async {
+            if let Some(h) = pod_log_handle {
+                h.await.ok();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => Ok(loop_exit(&cancel, "pod-logs")),
         _ = async {
             if let Some(h) = debug_session_handle {
                 h.await.ok();
@@ -826,6 +865,7 @@ mod tests {
                     readiness_server_port: Some(readiness_port),
                     identity_initialized_config_map: None,
                     runtime_deployment_scope: None,
+                    pod_log_collection: None,
                 },
             ),
         )

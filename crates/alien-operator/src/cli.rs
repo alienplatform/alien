@@ -91,6 +91,10 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_NAME")]
     pub operator_name: Option<String>,
 
+    /// Setup item selected by a deployment-group installation link.
+    #[arg(long, env = "OPERATOR_SETUP_ITEM")]
+    pub operator_setup_item: Option<String>,
+
     /// Stable prefix for resources created by this deployment.
     #[arg(long, env = "OPERATOR_RESOURCE_PREFIX")]
     pub operator_resource_prefix: Option<String>,
@@ -499,6 +503,7 @@ async fn run_operator_cli(
                             args.platform,
                             args.operator_name.as_deref(),
                             args.operator_resource_prefix.as_deref(),
+                            args.operator_setup_item.as_deref(),
                             operator_scope.as_deref(),
                             operator_permission.as_deref(),
                             operator_setup_method.as_deref(),
@@ -548,6 +553,7 @@ async fn run_operator_cli(
                         args.platform,
                         args.operator_name.as_deref(),
                         args.operator_resource_prefix.as_deref(),
+                        args.operator_setup_item.as_deref(),
                         operator_scope.as_deref(),
                         operator_permission.as_deref(),
                         operator_setup_method.as_deref(),
@@ -702,6 +708,7 @@ async fn run_operator_cli(
         readiness_server_port: crate::readiness_server_port_from_env()?,
         identity_initialized_config_map: crate::identity_initialized_config_map_from_env()?,
         runtime_deployment_scope: crate::runtime_deployment_scope_from_env()?,
+        pod_log_collection: crate::pod_logs::config_from_env()?,
     };
     run_operator_with_cancel_and_loops_and_runtime(
         operator_config,
@@ -988,6 +995,7 @@ async fn initialize_with_manager(
     platform: Platform,
     operator_name: Option<&str>,
     resource_prefix: Option<&str>,
+    setup_item: Option<&str>,
     operator_scope: Option<&str>,
     operator_permission: Option<&str>,
     operator_setup_method: Option<&str>,
@@ -1050,6 +1058,9 @@ async fn initialize_with_manager(
     }
     if let Some(resource_prefix) = resource_prefix {
         builder = builder.body_map(|b| b.resource_prefix(resource_prefix.to_string()));
+    }
+    if let Some(setup_item) = setup_item {
+        builder = builder.body_map(|b| b.setup_item(setup_item.to_string()));
     }
     if let Some(scope) = operator_scope {
         builder = builder.body_map(|b| b.scope(scope.to_string()));

@@ -181,6 +181,9 @@ struct AgentSyncWireRequest {
     /// Opaque to OSS beyond forwarding it to `reconcile_request()`.
     #[serde(default)]
     application: Option<ObservedApplicationReport>,
+    /// Absent for older Operators. This report has no secret values.
+    #[serde(default)]
+    dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -206,6 +209,9 @@ pub struct AgentSyncResponse {
     /// `DeploymentStore::reconcile`; `None` in OSS.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_operations_bundle_set: Option<TargetOperationsBundleSet>,
+    /// Complete release-independent target set. Older embedders omit it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_dynamic_containers: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -990,6 +996,7 @@ mod tests {
 
         assert!(should_return_current_state_for_agent_sync(
             false,
+            false,
             &deployment
         ));
     }
@@ -1000,6 +1007,7 @@ mod tests {
             deployment_record_with_state("running", Some(StackState::new(Platform::Local)));
 
         assert!(should_return_current_state_for_agent_sync(
+            true,
             true,
             &deployment
         ));
@@ -1035,7 +1043,30 @@ mod tests {
 
         assert!(should_return_current_state_for_agent_sync(
             false,
+            false,
             &deployment
+        ));
+    }
+
+    #[test]
+    fn returns_imported_state_before_an_unclaimed_initial_target() {
+        let deployment = deployment_record_with_state(
+            "pending",
+            Some(StackState::with_resource_prefix(
+                Platform::Kubernetes,
+                "helm-release".to_string(),
+            )),
+        );
+
+        assert!(should_return_current_state_for_agent_sync(
+            false,
+            true,
+            &deployment,
+        ));
+        assert!(!should_return_current_state_for_agent_sync(
+            false,
+            false,
+            &deployment,
         ));
     }
 
@@ -1375,8 +1406,9 @@ async fn reconcile_agent_report(
     data: ReconcileData,
     operator_image: Option<OperatorImageReport>,
     application: Option<ObservedApplicationReport>,
+    dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
 ) -> Result<crate::traits::ReconcileOutcome, AlienError> {
-    if operator_image.is_none() && application.is_none() {
+    if operator_image.is_none() && application.is_none() && dynamic_containers.is_none() {
         return store.reconcile(subject, data).await;
     }
     let mut request = ReconcileInput::builder(data);
@@ -1385,6 +1417,9 @@ async fn reconcile_agent_report(
     }
     if let Some(application) = application {
         request = request.application(application);
+    }
+    if let Some(reports) = dynamic_containers {
+        request = request.dynamic_containers(reports);
     }
     store.reconcile_request(subject, request.build()).await
 }
@@ -1411,6 +1446,7 @@ async fn agent_sync(
         request: req,
         operator_image,
         application,
+        dynamic_containers,
     }): Json<AgentSyncWireRequest>,
 ) -> Response {
     let subject = match auth::require_auth(&state, &headers).await {
@@ -1466,6 +1502,7 @@ async fn agent_sync(
     let mut ignored_agent_state_report = false;
     let mut reported_claim_is_terminal = false;
     let mut target_operations_bundle_set = None;
+    let mut target_dynamic_containers = None;
     // A target-bearing row without an echoed claim belongs to work the agent
     // has not accepted yet. Do not let its idle state acknowledge that target.
     if let Some(current_state_value) = req.current_state.as_ref().filter(|_| {
@@ -1515,6 +1552,7 @@ async fn agent_sync(
                         reconcile_data,
                         operator_image.clone(),
                         application.clone(),
+                        dynamic_containers.clone(),
                     )
                     .await;
 
@@ -1527,6 +1565,7 @@ async fn agent_sync(
                         }
                         Ok(outcome) => {
                             target_operations_bundle_set = outcome.target_operations_bundle_set;
+                            target_dynamic_containers = outcome.target_dynamic_containers;
                             if let Err(error) =
                                 crate::registry_access::cleanup_deleted_registry_access(
                                     state.deployment_store.as_ref(),
@@ -1759,16 +1798,21 @@ async fn agent_sync(
         None
     };
 
-    // An unclaimed agent report is withheld while a release target waits for
-    // its execution claim. The agent still needs the manager's seeded stack
-    // state before it accepts that target, including its resource prefix.
+    // Return the seeded state before an unclaimed first target starts, and
+    // restore authoritative state when an agent reports an empty snapshot.
     let unclaimed_initial_state = agent_needs_initial_state_hydration(
         &deployment,
         req.current_state.as_ref(),
         report_has_claim,
     );
+    let agent_state_uninitialized = req
+        .current_state
+        .as_ref()
+        .and_then(|value| serde_json::from_value::<DeploymentState>(value.clone()).ok())
+        .is_some_and(|state| agent_state_is_uninitialized(&state));
     let should_return_current_state = should_return_current_state_for_agent_sync(
         ignored_agent_state_report || unclaimed_initial_state,
+        agent_state_uninitialized,
         &deployment,
     );
     let current_state = if should_return_current_state {
@@ -1822,6 +1866,7 @@ async fn agent_sync(
                         reconcile_data,
                         operator_image.clone(),
                         application.clone(),
+                        dynamic_containers.clone(),
                     )
                     .await;
 
@@ -1835,6 +1880,7 @@ async fn agent_sync(
                         }
                         Ok(outcome) => {
                             target_operations_bundle_set = outcome.target_operations_bundle_set;
+                            target_dynamic_containers = outcome.target_dynamic_containers;
                         }
                     }
                 }
@@ -1867,6 +1913,7 @@ async fn agent_sync(
         },
         commands_url: Some(state.config.commands_base_url()),
         target_operations_bundle_set,
+        target_dynamic_containers,
     })
     .into_response()
 }
@@ -2034,9 +2081,13 @@ fn deployment_has_authoritative_state(deployment: &DeploymentRecord) -> bool {
 
 fn should_return_current_state_for_agent_sync(
     ignored_agent_state_report: bool,
+    agent_state_uninitialized: bool,
     deployment: &DeploymentRecord,
 ) -> bool {
-    ignored_agent_state_report || deployment.retry_requested || deployment_is_deleting(deployment)
+    ignored_agent_state_report
+        || (agent_state_uninitialized && deployment_has_authoritative_state(deployment))
+        || deployment.retry_requested
+        || deployment_is_deleting(deployment)
 }
 
 fn deployment_is_deleting(deployment: &DeploymentRecord) -> bool {
@@ -2421,6 +2472,10 @@ async fn initialize(
         }
         crate::auth::Scope::Commands { .. } => {
             ErrorData::forbidden("Command credentials cannot initialize deployments")
+                .into_response()
+        }
+        crate::auth::Scope::RemoteBindings { .. } => {
+            ErrorData::forbidden("Remote bindings credentials cannot initialize deployments")
                 .into_response()
         }
         crate::auth::Scope::Telemetry { .. } => {

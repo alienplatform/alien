@@ -1925,8 +1925,9 @@ impl AzureNetworkController {
 #[cfg(test)]
 mod tests {
     use super::AzureNetworkController;
-    use crate::core::controller_test::SingleControllerExecutor;
+    use crate::core::controller_test::{test_azure_resource_group, SingleControllerExecutor};
     use crate::core::MockPlatformServiceProvider;
+    use crate::infra_requirements::AzureResourceGroupController;
     use alien_azure_clients::azure::models::{
         nat_gateway::NatGateway,
         network_security_group::NetworkSecurityGroup,
@@ -2147,8 +2148,12 @@ mod tests {
             .platform(Platform::Azure)
             .stack_settings(StackSettings::default())
             .service_provider(Arc::new(mock_provider))
-            // The managed create path resolves its resource group from the stack state.
-            .with_test_dependencies()
+            // Network creation needs the resource group, not the Container Apps
+            // environment that must wait for this network.
+            .with_dependency(
+                test_azure_resource_group(),
+                AzureResourceGroupController::mock_ready("default-resource-group"),
+            )
             .build()
             .await
             .expect("executor should build");

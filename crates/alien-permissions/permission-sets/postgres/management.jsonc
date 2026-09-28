@@ -9,7 +9,6 @@
         "grant": {
           "actions": [
             "rds:DescribeDBClusters",
-            "rds:DescribeDBInstances",
             "rds:DescribeDBSubnetGroups",
             "rds:ModifyDBCluster",
             "rds:ModifyDBInstance",
@@ -28,6 +27,23 @@
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}",
               "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*"
             ]
+          }
+        }
+      },
+      {
+        // The controller lists instances by DB cluster filter without an instance ID.
+        // AWS evaluates that DescribeDBInstances request against "*".
+        "label": "describe-database-instances",
+        "description": "List the Aurora cluster's instances during management.",
+        "grant": {
+          "actions": ["rds:DescribeDBInstances"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
           }
         }
       }

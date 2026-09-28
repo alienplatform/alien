@@ -370,7 +370,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
+    
   } else {
     console.log("containerRegistryRevokeContainerRegistryCredential failed:", res.error);
   }

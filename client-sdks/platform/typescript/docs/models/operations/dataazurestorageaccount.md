@@ -12,10 +12,10 @@ let value: DataAzureStorageAccount = {
     secondaryEndpoints: {},
     status: {
       collectionIssues: [],
-      health: "unhealthy",
+      health: "unknown",
       lifecycle: "stopped",
-      partial: false,
-      stale: false,
+      partial: true,
+      stale: true,
     },
   },
   resourceType: "azure_storage_account",
@@ -24,7 +24,7 @@ let value: DataAzureStorageAccount = {
 
 ## Fields
 
-| Field                                                | Type                                                 | Required                                             | Description                                          |
-| ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
-| `data`                                               | [operations.Data3](../../models/operations/data3.md) | :heavy_check_mark:                                   | N/A                                                  |
-| `resourceType`                                       | *"azure_storage_account"*                            | :heavy_check_mark:                                   | N/A                                                  |
+| Field                                                                                                      | Type                                                                                                       | Required                                                                                                   | Description                                                                                                |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `data`                                                                                                     | [operations.GetResourceDeploymentDetailData3](../../models/operations/getresourcedeploymentdetaildata3.md) | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
+| `resourceType`                                                                                             | *"azure_storage_account"*                                                                                  | :heavy_check_mark:                                                                                         | N/A                                                                                                        |

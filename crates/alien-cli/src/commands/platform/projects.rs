@@ -102,7 +102,8 @@ pub enum CapabilityCommand {
         #[arg(long)]
         push: bool,
         /// Prebuilt container image the sandbox starts from, used as is. For a private image,
-        /// use --src.
+        /// use --src. Omit to keep the saved image, or to use the platform's default image when
+        /// none is saved.
         #[arg(long = "image", alias = "base-image", conflicts_with = "src")]
         image: Option<String>,
         /// Directory with a Dockerfile. The image is built locally with Docker and pushed to the
@@ -116,7 +117,8 @@ pub enum CapabilityCommand {
         /// sends as the build context, and the images in FROM by name only.
         #[arg(long, requires = "src", conflicts_with = "image")]
         rebuild: bool,
-        /// Ceiling on a single sandbox session, in seconds.
+        /// Ceiling on a single sandbox session, in seconds. Defaults to the saved value, else
+        /// 3600.
         #[arg(long)]
         max_session_lifetime_seconds: Option<NonZeroU64>,
     },
@@ -415,25 +417,30 @@ async fn capabilities_task(
                     let max_lifetime_seconds =
                         remote_sandbox_lifetime(max_session_lifetime_seconds)?;
                     let source = match (image, src) {
-                        (Some(image), _) => SandboxImageSource::Image(image),
-                        (None, Some(src)) => SandboxImageSource::Source(SandboxSource {
+                        (Some(image), _) => Some(SandboxImageSource::Image(image)),
+                        (None, Some(src)) => Some(SandboxImageSource::Source(SandboxSource {
                             src,
                             dockerfile,
                             rebuild,
-                        }),
-                        (None, None) => return Err(remote_sandbox_image_required()),
+                        })),
+                        (None, None) => None,
                     };
                     let base_image = match source {
-                        SandboxImageSource::Image(image) => image,
-                        SandboxImageSource::Source(source) => {
+                        Some(SandboxImageSource::Image(image)) => Some(image),
+                        Some(SandboxImageSource::Source(source)) => Some(
                             build_and_push_sandbox_base_image(
                                 ctx, http, workspace, project, &source, json,
                             )
-                            .await?
-                        }
+                            .await?,
+                        ),
+                        None => None,
                     };
                     let saved = saved_remote_sandbox_settings(http, workspace, project).await?;
-                    let body = remote_sandbox_request(&base_image, max_lifetime_seconds, saved)?;
+                    let body = remote_sandbox_request(
+                        base_image.as_deref(),
+                        max_lifetime_seconds,
+                        saved,
+                    )?;
                     let mut request = client
                         .configure_project_remote_sandbox()
                         .id_or_name(project)
@@ -516,31 +523,26 @@ impl SourceInputHash {
     }
 }
 
-fn remote_sandbox_image_required() -> AlienError<ErrorData> {
-    AlienError::new(ErrorData::ValidationError {
-        field: "image".to_string(),
-        message: "Remote Sandbox requires --image or --src.".to_string(),
-    })
-}
+const DEFAULT_REMOTE_SANDBOX_LIFETIME_SECONDS: NonZeroU64 = NonZeroU64::new(3600).unwrap();
 
-fn remote_sandbox_lifetime(max_session_lifetime_seconds: Option<NonZeroU64>) -> Result<NonZeroU64> {
-    let max_session_lifetime_seconds = max_session_lifetime_seconds.ok_or_else(|| {
-        AlienError::new(ErrorData::ValidationError {
-            field: "max-session-lifetime-seconds".to_string(),
-            message: "Remote Sandbox requires --max-session-lifetime-seconds.".to_string(),
-        })
-    })?;
+fn remote_sandbox_lifetime(
+    max_session_lifetime_seconds: Option<NonZeroU64>,
+) -> Result<Option<NonZeroU64>> {
+    let Some(max_session_lifetime_seconds) = max_session_lifetime_seconds else {
+        return Ok(None);
+    };
     if max_session_lifetime_seconds.get() > 28_800 {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "max-session-lifetime-seconds".to_string(),
             message: "Sandbox sessions must be at most 28800 seconds (8 hours).".to_string(),
         }));
     }
-    Ok(max_session_lifetime_seconds)
+    Ok(Some(max_session_lifetime_seconds))
 }
 
 /// The configure endpoint replaces the whole sandbox configuration, so an omitted `azure` turns
-/// Azure off. Returns the saved settings this command does not own, to configure alongside.
+/// Azure off. Returns the saved Azure source to configure alongside, and the saved lifetime to
+/// fall back on when no flag sets one.
 async fn saved_remote_sandbox_settings(
     http: &crate::auth::AuthHttp,
     workspace: Option<&str>,
@@ -550,7 +552,7 @@ async fn saved_remote_sandbox_settings(
     if let Some(workspace) = workspace {
         request = request.workspace(workspace);
     }
-    let azure = request
+    let sandbox = request
         .send()
         .await
         .into_sdk_error()
@@ -560,10 +562,13 @@ async fn saved_remote_sandbox_settings(
         })?
         .into_inner()
         .project_capabilities
-        .and_then(|capabilities| capabilities.capabilities.remote_sandbox)
-        .and_then(|sandbox| sandbox.azure);
+        .and_then(|capabilities| capabilities.capabilities.remote_sandbox);
+    let max_lifetime_seconds = sandbox
+        .as_ref()
+        .and_then(|sandbox| sandbox.max_lifetime_seconds);
     // The read and write schemas are generated as separate types; both are the same JSON object.
-    let azure = azure
+    let azure = sandbox
+        .and_then(|sandbox| sandbox.azure)
         .map(|azure| serde_json::to_value(azure).and_then(serde_json::from_value))
         .transpose()
         .into_alien_error()
@@ -573,25 +578,34 @@ async fn saved_remote_sandbox_settings(
         })?;
     Ok(ConfigureRemoteSandboxRequest {
         azure,
+        max_lifetime_seconds,
         ..Default::default()
     })
 }
 
+/// Always sends a lifetime, so AWS is enabled even with no image: the API then keeps the saved
+/// image or uses its default.
 fn remote_sandbox_request(
-    base_image: &str,
-    max_lifetime_seconds: NonZeroU64,
+    base_image: Option<&str>,
+    max_lifetime_seconds: Option<NonZeroU64>,
     saved: ConfigureRemoteSandboxRequest,
 ) -> Result<ConfigureRemoteSandboxRequest> {
-    let base_image = ConfigureRemoteSandboxRequestBaseImage::try_from(base_image)
+    let base_image = base_image
+        .map(ConfigureRemoteSandboxRequestBaseImage::try_from)
+        .transpose()
         .into_alien_error()
         .context(ErrorData::ValidationError {
             field: "image".to_string(),
             message: "Invalid image reference".to_string(),
         })?;
     Ok(ConfigureRemoteSandboxRequest {
-        base_image: Some(base_image),
+        base_image,
         azure: saved.azure,
-        max_lifetime_seconds: Some(max_lifetime_seconds),
+        max_lifetime_seconds: Some(
+            max_lifetime_seconds
+                .or(saved.max_lifetime_seconds)
+                .unwrap_or(DEFAULT_REMOTE_SANDBOX_LIFETIME_SECONDS),
+        ),
     })
 }
 
@@ -840,12 +854,9 @@ fn validate_capability_options(
         }));
     }
     if capability == CapabilityName::RemoteSandbox {
-        if sandbox.image.is_none() && sandbox.src.is_none() {
-            return Err(remote_sandbox_image_required());
-        }
         let max_lifetime_seconds = remote_sandbox_lifetime(sandbox.max_session_lifetime_seconds)?;
         if let Some(image) = sandbox.image {
-            remote_sandbox_request(image, max_lifetime_seconds, Default::default())?;
+            remote_sandbox_request(Some(image), max_lifetime_seconds, Default::default())?;
         }
         if let Some(src) = sandbox.src {
             let dockerfile = src.join(sandbox.dockerfile.unwrap_or("Dockerfile"));
@@ -1099,8 +1110,8 @@ mod tests {
         let saved = serde_json::from_value(serde_json::json!({ "azure": saved_azure }))
             .expect("the saved Azure configuration should parse");
         let request = remote_sandbox_request(
-            "public.ecr.aws/example/analysis:v1",
-            NonZeroU64::new(28_800).unwrap(),
+            Some("public.ecr.aws/example/analysis:v1"),
+            NonZeroU64::new(28_800),
             saved,
         )
         .expect("the maximum session lifetime should be accepted");
@@ -1117,8 +1128,8 @@ mod tests {
     #[test]
     fn remote_sandbox_request_omits_azure_when_none_is_saved() {
         let request = remote_sandbox_request(
-            "public.ecr.aws/example/analysis:v1",
-            NonZeroU64::new(3600).unwrap(),
+            Some("public.ecr.aws/example/analysis:v1"),
+            NonZeroU64::new(3600),
             Default::default(),
         )
         .expect("a valid image and lifetime should build a request");
@@ -1156,25 +1167,22 @@ mod tests {
 
     #[tokio::test]
     async fn remote_sandbox_validates_before_resolving_auth_or_project() {
-        let args = enable_remote_sandbox(&["--json"])
+        let args = enable_remote_sandbox(&["--max-session-lifetime-seconds", "28801", "--json"])
             .expect("the command should parse before capability validation");
         let error = project_task(args, ExecutionMode::Dev { port: 0 })
             .await
-            .expect_err("missing flags must fail before connecting to any API");
-        assert!(error.to_string().contains("--image or --src"), "{error}");
+            .expect_err("an invalid lifetime must fail before connecting to any API");
+        assert!(error.to_string().contains("28800"), "{error}");
     }
 
     #[tokio::test]
-    async fn remote_sandbox_source_still_needs_a_session_ceiling_before_building() {
+    async fn remote_sandbox_source_is_checked_before_building() {
         let args = enable_remote_sandbox(&["--src", "./does-not-exist", "--json"])
             .expect("--src alone should parse");
         let error = project_task(args, ExecutionMode::Dev { port: 0 })
             .await
-            .expect_err("a missing session ceiling must fail before any build");
-        assert!(
-            error.to_string().contains("--max-session-lifetime-seconds"),
-            "{error}"
-        );
+            .expect_err("a missing Dockerfile must fail before any build");
+        assert!(error.to_string().contains("--dockerfile"), "{error}");
     }
 
     #[test]
@@ -1296,18 +1304,144 @@ mod tests {
     }
 
     #[test]
-    fn remote_sandbox_requires_an_image_source() {
-        let error = sandbox_options(None, NonZeroU64::new(3600))
-            .expect_err("a missing image source must be refused");
-        assert!(
-            error.to_string().contains("--image or --src"),
-            "unexpected message: {error}"
-        );
+    fn remote_sandbox_needs_no_image_source_or_session_ceiling() {
+        sandbox_options(None, None).expect("bare enable uses the platform's defaults");
 
         let src = tempfile::tempdir().expect("temp dir");
         std::fs::write(src.path().join("Dockerfile"), "FROM alpine:3.20\n").unwrap();
-        source_options(None, Some(src.path()), None, NonZeroU64::new(3600))
-            .expect("--src is an image source");
+        source_options(None, Some(src.path()), None, None).expect("--src is an image source");
+    }
+
+    #[test]
+    fn remote_sandbox_request_without_an_image_still_enables_aws() {
+        let request = remote_sandbox_request(None, None, Default::default())
+            .expect("no image and no lifetime is a valid request");
+        assert_eq!(
+            serde_json::to_value(request).expect("request should serialize"),
+            serde_json::json!({ "maxLifetimeSeconds": 3600 }),
+        );
+    }
+
+    #[test]
+    fn remote_sandbox_request_falls_back_to_the_saved_lifetime_and_keeps_azure() {
+        let saved_azure = serde_json::json!({
+            "catalogImage": "ubuntu",
+            "idleSuspendSeconds": 1800,
+        });
+        let saved = || -> ConfigureRemoteSandboxRequest {
+            serde_json::from_value(serde_json::json!({
+                "azure": saved_azure,
+                "maxLifetimeSeconds": 1200,
+            }))
+            .expect("the saved configuration should parse")
+        };
+
+        let request = remote_sandbox_request(None, None, saved()).expect("valid request");
+        assert_eq!(
+            serde_json::to_value(request).expect("request should serialize"),
+            serde_json::json!({ "azure": saved_azure, "maxLifetimeSeconds": 1200 }),
+        );
+
+        let request =
+            remote_sandbox_request(None, NonZeroU64::new(7200), saved()).expect("valid request");
+        assert_eq!(
+            serde_json::to_value(request).expect("request should serialize"),
+            serde_json::json!({ "azure": saved_azure, "maxLifetimeSeconds": 7200 }),
+        );
+    }
+
+    #[tokio::test]
+    async fn bare_enable_resends_the_saved_settings_it_read_from_the_project() {
+        use axum::{
+            body::Bytes,
+            http::header::CONTENT_TYPE,
+            routing::{get, put},
+            Router,
+        };
+        use std::sync::{Arc, Mutex};
+
+        const PROJECT_ID: &str = "prj_mcytp6z3j91f7tn5ryqsfwtr0000";
+        let saved_azure = serde_json::json!({
+            "catalogImage": "python-3.12",
+            "idleSuspendSeconds": 900,
+        });
+        let project = serde_json::json!({
+            "id": PROJECT_ID,
+            "name": "my-app",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "workspaceId": "ws_It13CUaGEhLLAB87simX0abc",
+            "projectCapabilities": {
+                "schemaVersion": 1,
+                "capabilities": {
+                    "remoteSandbox": {
+                        "enabled": true,
+                        "baseImage": "public.ecr.aws/example/saved:v1",
+                        "azure": saved_azure,
+                        "maxLifetimeSeconds": 1200,
+                    },
+                },
+            },
+        });
+        let materialization = serde_json::json!({
+            "projectCapabilities": { "schemaVersion": 1, "capabilities": {} },
+            "source": {
+                "definitionId": "customer-sandbox",
+                "definitionVersion": "1",
+                "releaseId": "rel_1",
+            },
+            "packages": [],
+        });
+
+        let configured = Arc::new(Mutex::new(None::<serde_json::Value>));
+        let app =
+            Router::new()
+                .route(
+                    &format!("/v1/projects/{PROJECT_ID}"),
+                    get(move || async move {
+                        ([(CONTENT_TYPE, "application/json")], project.to_string())
+                    }),
+                )
+                .route(
+                    &format!("/v1/projects/{PROJECT_ID}/project-capabilities/remote-sandbox"),
+                    put({
+                        let configured = configured.clone();
+                        move |body: Bytes| async move {
+                            *configured.lock().unwrap() =
+                                Some(serde_json::from_slice(&body).unwrap());
+                            (
+                                [(CONTENT_TYPE, "application/json")],
+                                materialization.to_string(),
+                            )
+                        }
+                    }),
+                );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let ProjectCmd::Capabilities { command } = enable_remote_sandbox(&["--json"])
+            .expect("bare enable should parse")
+            .cmd
+        else {
+            unreachable!("the parsed command is a capabilities command");
+        };
+        capabilities_task(
+            &ExecutionMode::Dev { port: 0 },
+            &crate::auth::AuthHttp::new_unauthenticated(base_url),
+            None,
+            PROJECT_ID,
+            command,
+            true,
+        )
+        .await
+        .expect("bare enable should configure the sandbox");
+        server.abort();
+
+        // No baseImage, so the API keeps the saved image.
+        assert_eq!(
+            configured.lock().unwrap().take(),
+            Some(serde_json::json!({ "azure": saved_azure, "maxLifetimeSeconds": 1200 })),
+        );
     }
 
     #[test]
@@ -1326,16 +1460,6 @@ mod tests {
             NonZeroU64::new(3600),
         )
         .expect("the named Dockerfile exists");
-    }
-
-    #[test]
-    fn remote_sandbox_requires_a_session_ceiling() {
-        let error = sandbox_options(Some("public.ecr.aws/x/y:v1"), None)
-            .expect_err("a missing session ceiling must be refused");
-        assert!(
-            error.to_string().contains("--max-session-lifetime-seconds"),
-            "unexpected message: {error}"
-        );
     }
 
     #[test]
@@ -1389,12 +1513,9 @@ mod tests {
             format!("host.docker.internal:8090/acme-sandbox@{digest}")
         );
 
-        let request = remote_sandbox_request(
-            &base_image,
-            NonZeroU64::new(3600).unwrap(),
-            Default::default(),
-        )
-        .expect("the configured reference is a valid base image");
+        let request =
+            remote_sandbox_request(Some(&base_image), NonZeroU64::new(3600), Default::default())
+                .expect("the configured reference is a valid base image");
         assert_eq!(
             serde_json::to_value(request).expect("request should serialize")["baseImage"],
             serde_json::json!(base_image),

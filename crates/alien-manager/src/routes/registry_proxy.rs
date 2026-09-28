@@ -1129,6 +1129,13 @@ async fn validate_pull_access(
                 "Command credentials cannot access the registry proxy",
             ))
         }
+        Scope::RemoteBindings { .. } => {
+            return Err(oci_error(
+                StatusCode::FORBIDDEN,
+                "DENIED",
+                "Remote bindings credentials cannot access the registry proxy",
+            ))
+        }
         Scope::Telemetry { .. } => {
             return Err(oci_error(
                 StatusCode::FORBIDDEN,

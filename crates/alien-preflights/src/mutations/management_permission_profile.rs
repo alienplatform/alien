@@ -850,6 +850,8 @@ mod tests {
         );
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1251,6 +1253,8 @@ mod tests {
         let extend_profile = PermissionProfile::new().global(["storage/data-write"]);
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1315,6 +1319,8 @@ mod tests {
             PermissionProfile::new().global(["storage/management", "worker/management"]);
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1415,6 +1421,8 @@ mod tests {
         );
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1519,6 +1527,8 @@ mod tests {
         );
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1576,6 +1586,8 @@ mod tests {
         );
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1636,6 +1648,8 @@ mod tests {
         );
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1704,6 +1718,8 @@ mod tests {
         );
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1757,6 +1773,8 @@ mod tests {
             .external_bindings(ExternalBindings::default())
             .build();
         let stack_gcp = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack-gcp".to_string(),
             resources: {
                 let mut resources = IndexMap::new();
@@ -1838,6 +1856,8 @@ mod tests {
         );
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1904,6 +1924,8 @@ mod tests {
         );
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1971,6 +1993,8 @@ mod tests {
         );
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {

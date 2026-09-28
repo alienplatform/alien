@@ -14,6 +14,7 @@ use crate::traits::{
     TelemetrySignal,
 };
 use alien_commands::server::CommandAccessContext;
+use alien_core::remote_bindings::RemoteBindingKind;
 use alien_core::CommandTarget;
 
 /// Context for create operations. Carries the parent identifiers + workspace
@@ -40,13 +41,15 @@ pub trait Authz: Send + Sync {
     fn can_create_deployment(&self, subject: &Subject, ctx: DeploymentCreateCtx<'_>) -> bool;
     fn can_read_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
     fn can_update_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
-    /// Whether a caller may resolve a remote resource binding for a deployment.
-    /// This is deliberately separate from read access because the response
-    /// includes short-lived credentials for the deployment's Remote Bindings identity.
-    fn can_resolve_remote_bindings(
+    /// `kind` and `resource_id` come from the release current at use, not at token issue.
+    /// Implementations should apply `remote_binding_capability::resolve_decision`, then
+    /// `write_authority_covers`: write authority must never reach a sandbox.
+    fn can_resolve_remote_binding(
         &self,
         _subject: &Subject,
         _deployment: &DeploymentRecord,
+        _kind: RemoteBindingKind,
+        _resource_id: &str,
     ) -> bool {
         // Adding a credential-bearing endpoint must not silently grant access
         // in downstream Authz implementations that have not made an explicit

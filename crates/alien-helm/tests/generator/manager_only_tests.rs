@@ -16,7 +16,7 @@ use alien_helm::{generate_helm_chart, HelmOptions, HelmRegistry};
 use serde_json::{json, Value};
 
 #[test]
-fn pure_worker_chart_emits_service_for_public_ingress() {
+fn pure_worker_chart_leaves_runtime_service_to_operator() {
     let worker = Worker::new("api".to_string())
         .code(WorkerCode::Image {
             image: "registry.example.com/api:1".to_string(),
@@ -36,30 +36,38 @@ fn pure_worker_chart_emits_service_for_public_ingress() {
         .add(worker, ResourceLifecycle::Live)
         .build();
     let chart = render(&stack, StackSettings::default());
+    assert!(!chart.files.contains_key("templates/app-service.yaml"));
+    assert!(chart
+        .files
+        .get("values.yaml")
+        .unwrap()
+        .contains("services:\n  api:"));
     snapshot_chart("manager_only_pure_worker", &chart);
     assert_helm_valid(&chart, "manager_only_pure_worker");
 }
 
 #[test]
-fn log_collector_requires_a_scope_and_can_select_an_existing_pod_label() {
+fn pod_log_reader_requires_a_scope_and_can_select_an_existing_pod_label() {
     let chart = render(
         &Stack::new("logs".to_string()).build(),
         StackSettings::default(),
     );
-    let default_values = chart.files["values.yaml"].replacen(
-        "logCollector:\n  enabled: false",
-        "logCollector:\n  enabled: true",
-        1,
-    );
+    let default_values = chart.files["values.yaml"]
+        .replacen(
+            "logCollector:\n  enabled: false",
+            "logCollector:\n  enabled: true",
+            1,
+        )
+        .replacen("  mode: nodeAgent", "  mode: podApi", 1);
     let default_render = test_utils::helm_template(&chart.files, Some(&default_values));
-    default_render.assert_ok("collector with managed deployment scope");
+    default_render.assert_ok("Pod logs with managed deployment scope");
     assert!(default_render.stdout.contains(
-        "Regex               $kubernetes['labels']['alien.dev/deployment'] ^test-release$"
+        "name: OPERATOR_POD_LOG_LABEL_KEY\n              value: \"alien.dev/deployment\""
     ));
-    assert!(default_render.stdout.contains(
-        "Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$"
-    ));
-    assert!(!default_render.stdout.contains("Exclude_Path"));
+    assert!(default_render
+        .stdout
+        .contains("name: OPERATOR_POD_LOG_LABEL_VALUE\n              value: \"test-release\""));
+    assert!(!default_render.stdout.contains("kind: DaemonSet"));
     assert!(default_render
         .stdout
         .contains("alien.dev/log-collector-exclude: \"true\""));
@@ -72,13 +80,13 @@ fn log_collector_requires_a_scope_and_can_select_an_existing_pod_label() {
             1,
         );
     let selected_render = test_utils::helm_template(&chart.files, Some(&selected_values));
-    selected_render.assert_ok("collector with external pod scope");
+    selected_render.assert_ok("Pod logs with external pod scope");
     assert!(selected_render
         .stdout
-        .contains("Regex               $kubernetes['labels']['app'] ^external\\.agent$"));
-    assert!(!selected_render
+        .contains("name: OPERATOR_POD_LOG_LABEL_KEY\n              value: \"app\""));
+    assert!(selected_render
         .stdout
-        .contains("Regex               $kubernetes['labels']['alien.dev/deployment']"));
+        .contains("name: OPERATOR_POD_LOG_LABEL_VALUE\n              value: \"external.agent\""));
 
     let incomplete_values =
         default_values.replacen("    podLabelKey: \"\"", "    podLabelKey: app", 1);
@@ -319,7 +327,7 @@ fn manager_chart_uses_explicit_secrets_and_restricted_defaults() {
     assert!(secret.contains("sync-token: {{ .Values.management.token | quote }}"));
     assert!(secret
         .contains("runtime.encryption.key or runtime.encryption.existingSecret.name is required"));
-    assert!(secret.contains("$collectorToken = randAlphaNum 48"));
+    assert!(secret.contains("$collectorToken"));
     assert!(secret.contains(".Values.management.existingSecret.name"));
     assert!(secret.contains(".Values.runtime.encryption.existingSecret.name"));
 

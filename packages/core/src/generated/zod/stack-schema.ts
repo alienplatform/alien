@@ -13,7 +13,9 @@ import { StackInputDefinitionSchema } from "./stack-input-definition-schema.js";
  * @description A bag of resources, unaware of any cloud.
  */
 export const StackSchema = z.object({
-    "id": z.string().describe("Unique identifier for the stack"),
+    "dynamicContainerImageResources": z.optional(z.array(z.string()).describe("Released Container resources whose image repositories are approved for\ncontainers created after installation.")),
+"dynamicContainerRepositories": z.optional(z.array(z.string()).describe("Exact image repositories approved for containers created after installation.\nThe runtime API also requires an immutable SHA-256 digest.")),
+"id": z.string().describe("Unique identifier for the stack"),
 get "inputs"(){
                 return z.array(StackInputDefinitionSchema.describe("Stack input definition serialized into a release stack.")).describe("Input definitions required before setup or deployment can proceed.").optional()
               },

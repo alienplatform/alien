@@ -10,6 +10,19 @@ import {
 import { getStackInputDefinitions, type StackInputCollection } from "./input.js"
 import type { Resource } from "./resource.js"
 
+function isRepositoryName(repository: string): boolean {
+  const [authority = "", ...path] = repository.split("/")
+  if (path.length === 0 || path.some(part => !/^[a-z0-9]+(?:[._-]+[a-z0-9]+)*$/.test(part))) {
+    return false
+  }
+  const [host = "", port, ...extra] = authority.split(":")
+  return (
+    extra.length === 0 &&
+    (port === undefined || /^[0-9]+$/.test(port)) &&
+    host.split(".").every(label => /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label))
+  )
+}
+
 /**
  * Options for adding a resource to a stack.
  */
@@ -117,6 +130,31 @@ export class Stack {
     return this
   }
 
+  /** Approve exact OCI image repositories for containers created after installation. */
+  public dynamicContainerRepositories(repositories: string[]): this {
+    if (
+      repositories.length === 0 ||
+      repositories.length > 16 ||
+      new Set(repositories).size !== repositories.length ||
+      repositories.some(repository => !isRepositoryName(repository))
+    ) {
+      throw new Error(
+        "Dynamic container repositories must be 1–16 distinct, fully qualified OCI repositories",
+      )
+    }
+    this._config.dynamicContainerRepositories = repositories
+    return this
+  }
+
+  /** Approve the repositories of Container images shipped in this release. */
+  public dynamicContainerImageResources(resourceIds: string[]): this {
+    if (resourceIds.length === 0 || new Set(resourceIds).size !== resourceIds.length) {
+      throw new Error("Dynamic container image resource IDs must be distinct and non-empty")
+    }
+    this._config.dynamicContainerImageResources = resourceIds
+    return this
+  }
+
   /**
    * Gets the stack ID without building/validating the stack.
    * @returns The stack ID.
@@ -131,6 +169,13 @@ export class Stack {
    * @throws Error if the stack configuration is invalid.
    */
   public build(): StackConfig {
+    for (const resourceId of this._config.dynamicContainerImageResources ?? []) {
+      if (this._config.resources?.[resourceId]?.config.type !== "container") {
+        throw new Error(
+          `Dynamic container image resource '${resourceId}' must be a declared Container`,
+        )
+      }
+    }
     return StackSchema.parse(this._config)
   }
 }

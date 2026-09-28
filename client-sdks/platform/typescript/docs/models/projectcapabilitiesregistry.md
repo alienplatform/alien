@@ -6,8 +6,11 @@
 import { ProjectCapabilitiesRegistry } from "@alienplatform/platform-api/models";
 
 let value: ProjectCapabilitiesRegistry = {
-  enabled: false,
-  repositories: [],
+  enabled: true,
+  repositories: [
+    "<value 1>",
+    "<value 2>",
+  ],
   credentialPolicy: "pull-only",
 };
 ```
@@ -16,6 +19,6 @@ let value: ProjectCapabilitiesRegistry = {
 
 | Field                                                                                          | Type                                                                                           | Required                                                                                       | Description                                                                                    |
 | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `enabled`                                                                                      | *boolean*                                                                                      | :heavy_check_mark:                                                                             | N/A                                                                                            |
+| `enabled`                                                                                      | *true*                                                                                         | :heavy_check_mark:                                                                             | N/A                                                                                            |
 | `repositories`                                                                                 | *string*[]                                                                                     | :heavy_check_mark:                                                                             | N/A                                                                                            |
 | `credentialPolicy`                                                                             | [models.ProjectCapabilitiesCredentialPolicy](../models/projectcapabilitiescredentialpolicy.md) | :heavy_check_mark:                                                                             | N/A                                                                                            |

@@ -41,6 +41,37 @@
         }
       },
       {
+        // RDS creates this account-level role on the first cluster. The role is
+        // shared across stacks, so restrict both its exact ARN and service.
+        "label": "create-rds-service-linked-role",
+        "description": "Allow RDS to create its default service-linked role in a new account.",
+        "grant": {
+          "actions": ["iam:CreateServiceLinkedRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS"
+            ],
+            "condition": {
+              "StringEquals": {
+                "iam:AWSServiceName": "rds.amazonaws.com"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS"
+            ],
+            "condition": {
+              "StringEquals": {
+                "iam:AWSServiceName": "rds.amazonaws.com"
+              }
+            }
+          }
+        }
+      },
+      {
         "label": "manage-connection-secret",
         "description": "Create and delete the generated connection-password secret.",
         "grant": {

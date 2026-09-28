@@ -13,9 +13,10 @@ use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{
     parse_public_endpoint_assignment, validate_public_endpoint_urls, ClientConfig, ComputeSettings,
     Container, Daemon, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
-    EnvironmentInfo, ManagementConfig, NetworkSettings, Platform, PublicEndpointUrls, ReleaseInfo,
-    ResourceLifecycle, Stack, StackInputDefinition, StackInputKind, StackInputProvider,
-    StackSettings, TelemetryMode, UpdatesMode, Worker,
+    EnvironmentInfo, KubernetesClusterOwnership, KubernetesClusterSettings,
+    KubernetesExposureSettings, KubernetesSettings, ManagementConfig, NetworkSettings, Platform,
+    PublicEndpointUrls, ReleaseInfo, ResourceLifecycle, Stack, StackInputDefinition,
+    StackInputKind, StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker,
 };
 use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
@@ -36,6 +37,7 @@ use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResult
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeSet, HashMap},
     io::{IsTerminal, Write},
@@ -154,6 +156,11 @@ pub struct UpArgs {
     /// alien-operator image for Kubernetes Helm installs.
     #[arg(long, env = "ALIEN_OPERATOR_IMAGE")]
     pub operator_image: Option<String>,
+
+    /// Kubernetes Secret containing external-bindings.json for existing services.
+    /// The Secret must exist in the install namespace before deployment.
+    #[arg(long)]
+    pub external_bindings_secret: Option<String>,
 
     /// TOML file containing deployment settings.
     #[arg(long)]
@@ -291,6 +298,21 @@ mod tests {
     use clap::Parser;
     use httpmock::{Method::PATCH, MockServer};
     use std::io::Write;
+
+    #[test]
+    fn kubernetes_install_retry_reuses_resource_prefix() {
+        let first = kubernetes_resource_prefix("setup-token", "production");
+        assert_eq!(
+            first,
+            kubernetes_resource_prefix("setup-token", "production")
+        );
+        assert!(alien_core::is_valid_resource_prefix(&first));
+        assert_ne!(
+            first,
+            kubernetes_resource_prefix("another-token", "production")
+        );
+        assert_ne!(first, kubernetes_resource_prefix("setup-token", "preview"));
+    }
 
     #[test]
     fn cloud_push_platforms_require_install_context() {
@@ -866,6 +888,63 @@ mod tests {
     }
 
     #[test]
+    fn kubernetes_cli_declares_cluster_ownership() {
+        let existing = UpArgs::parse_from([
+            "alien-deploy",
+            "--platform",
+            "kubernetes",
+            "--namespace",
+            "customer-app",
+        ]);
+        let settings =
+            load_stack_settings(&existing, Platform::Kubernetes, Platform::Kubernetes, None)
+                .expect("existing-cluster settings should load");
+        let cluster = settings.kubernetes.unwrap().cluster.unwrap();
+        assert_eq!(cluster.ownership, KubernetesClusterOwnership::External);
+        assert_eq!(cluster.namespace.as_deref(), Some("customer-app"));
+
+        let managed = UpArgs::parse_from([
+            "alien-deploy",
+            "--platform",
+            "kubernetes",
+            "--base-platform",
+            "aws",
+        ]);
+        let settings = load_stack_settings(&managed, Platform::Kubernetes, Platform::Aws, None)
+            .expect("managed-cluster settings should load");
+        let cluster = settings.kubernetes.unwrap().cluster.unwrap();
+        assert_eq!(cluster.ownership, KubernetesClusterOwnership::Managed);
+
+        // A TOML base platform reaches this function through network_platform
+        // even when the CLI flag is absent.
+        let settings = load_stack_settings(&existing, Platform::Kubernetes, Platform::Aws, None)
+            .expect("configured base platform should manage the cluster");
+        assert_eq!(
+            settings.kubernetes.unwrap().cluster.unwrap().ownership,
+            KubernetesClusterOwnership::Managed
+        );
+
+        let external_endpoint = UpArgs::parse_from([
+            "alien-deploy",
+            "--platform",
+            "kubernetes",
+            "--public-endpoint",
+            "gateway.web=https://example.com",
+        ]);
+        let settings = load_stack_settings(
+            &external_endpoint,
+            Platform::Kubernetes,
+            Platform::Kubernetes,
+            None,
+        )
+        .expect("external ingress settings should load");
+        assert_eq!(
+            settings.kubernetes.unwrap().exposure,
+            Some(KubernetesExposureSettings::Disabled)
+        );
+    }
+
+    #[test]
     fn sdk_stack_settings_serializes_explicit_deployment_model() {
         let settings = StackSettings {
             deployment_model: DeploymentModel::Pull,
@@ -1078,6 +1157,29 @@ api = "https://old.example.test"
     }
 
     #[test]
+    fn public_endpoint_flag_accepts_kubernetes_platform() {
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--platform",
+            "kubernetes",
+            "--public-endpoint",
+            "gateway.web=https://gateway.example.test",
+        ]);
+
+        let public_endpoints = load_public_endpoints(&args, Platform::Kubernetes, None)
+            .expect("kubernetes should accept external public endpoints")
+            .expect("public endpoints should exist");
+
+        assert_eq!(
+            public_endpoints
+                .get("gateway")
+                .and_then(|endpoints| endpoints.get("web"))
+                .map(String::as_str),
+            Some("https://gateway.example.test")
+        );
+    }
+
+    #[test]
     fn public_endpoint_names_must_be_declared() {
         let daemon = alien_core::Daemon::new("gateway".to_string())
             .code(alien_core::DaemonCode::Image {
@@ -1103,7 +1205,8 @@ api = "https://old.example.test"
                 "https://gateway.example.test".to_string(),
             )]),
         )]);
-        validate_public_endpoint_names(&valid, &stack).expect("gateway exposes a public endpoint");
+        validate_public_endpoint_names(&valid, &stack, true)
+            .expect("gateway exposes a public endpoint");
 
         let invalid = HashMap::from([(
             "gateway".to_string(),
@@ -1112,9 +1215,50 @@ api = "https://old.example.test"
                 "https://missing.example.test".to_string(),
             )]),
         )]);
-        let error = validate_public_endpoint_names(&invalid, &stack)
+        let error = validate_public_endpoint_names(&invalid, &stack, true)
             .expect_err("missing endpoint should fail");
         assert_eq!(error.code, "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn external_kubernetes_ingress_requires_all_declared_endpoints() {
+        let daemon = alien_core::Daemon::new("gateway".to_string())
+            .code(alien_core::DaemonCode::Image {
+                image: "gateway:latest".to_string(),
+            })
+            .permissions("default".to_string())
+            .public_endpoint(alien_core::PublicEndpoint {
+                name: "api".to_string(),
+                port: 8080,
+                protocol: alien_core::ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .public_endpoint(alien_core::PublicEndpoint {
+                name: "admin".to_string(),
+                port: 8081,
+                protocol: alien_core::ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .build();
+        let stack = Stack::new("test".to_string())
+            .add(daemon, alien_core::ResourceLifecycle::Live)
+            .build();
+        let partial = HashMap::from([(
+            "gateway".to_string(),
+            HashMap::from([(
+                "api".to_string(),
+                "https://gateway.example.test".to_string(),
+            )]),
+        )]);
+
+        let error = validate_public_endpoint_names(&partial, &stack, true)
+            .expect_err("external ingress would leave admin unreachable");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(error.to_string().contains("gateway.admin"));
+        validate_public_endpoint_names(&partial, &stack, false)
+            .expect("other platforms allow partial mappings");
     }
 
     #[test]
@@ -1908,7 +2052,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 })
             })?;
         let stack = fetch_release_stack_by_id(&client, release_id, platform).await?;
-        validate_public_endpoint_names(public_endpoints, &stack)?;
+        validate_public_endpoint_names(public_endpoints, &stack, platform == Platform::Kubernetes)?;
     }
 
     if current_deployment.status == "running"
@@ -2295,6 +2439,7 @@ async fn fetch_release_stack_by_id(
 fn validate_public_endpoint_names(
     public_endpoints: &PublicEndpointUrls,
     stack: &Stack,
+    require_complete: bool,
 ) -> Result<()> {
     let valid_endpoints = public_endpoint_names(stack);
     for (resource_id, endpoints) in public_endpoints {
@@ -2317,6 +2462,29 @@ fn validate_public_endpoint_names(
                 field: "public-endpoint".to_string(),
                 message: format!(
                     "Endpoint '{key}' is not declared by the stack. Available public endpoints: {available}"
+                ),
+            }));
+        }
+    }
+    // Supplying an external URL disables chart-owned ingress for the whole
+    // Kubernetes stack. Reject a partial mapping before installing Helm: the
+    // remaining endpoints would otherwise have no public route.
+    if require_complete {
+        let supplied: BTreeSet<String> = public_endpoints
+            .iter()
+            .flat_map(|(resource_id, endpoints)| {
+                endpoints
+                    .keys()
+                    .map(move |name| format!("{resource_id}.{name}"))
+            })
+            .collect();
+        let missing: Vec<_> = valid_endpoints.difference(&supplied).cloned().collect();
+        if !missing.is_empty() {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "public-endpoint".to_string(),
+                message: format!(
+                    "External Kubernetes ingress requires a URL for every public endpoint. Missing: {}",
+                    missing.join(", ")
                 ),
             }));
         }
@@ -2495,12 +2663,12 @@ fn load_public_endpoints(
     }
 
     match platform {
-        Platform::Local | Platform::Machines => Ok(Some(public_endpoints)),
-        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Kubernetes | Platform::Test => {
+        Platform::Local | Platform::Machines | Platform::Kubernetes => Ok(Some(public_endpoints)),
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Test => {
             Err(AlienError::new(ErrorData::ValidationError {
                 field: "public-endpoint".to_string(),
                 message: format!(
-                    "--public-endpoint is currently supported only for local or machines deployments, got '{}'",
+                    "--public-endpoint is currently supported only for local, machines, or kubernetes deployments, got '{}'",
                     platform.as_str()
                 ),
             }))
@@ -2686,6 +2854,14 @@ fn load_stack_settings(
     network_platform: Platform,
     deploy_config: Option<&DeployConfigFile>,
 ) -> Result<StackSettings> {
+    if let Some(secret) = args.external_bindings_secret.as_deref() {
+        if platform != Platform::Kubernetes || secret.trim().is_empty() {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "external-bindings-secret".to_string(),
+                message: "A nonempty external bindings Secret name is supported only for Kubernetes deployments".to_string(),
+            }));
+        }
+    }
     let mut settings = StackSettings::default();
 
     // The manager owns the deployment model for cloud platforms (push) and
@@ -2696,6 +2872,27 @@ fn load_stack_settings(
     // initial setup has no local platform services.
     if platform == Platform::Local {
         settings.deployment_model = DeploymentModel::Pull;
+    }
+    if platform == Platform::Kubernetes {
+        // A CLI install without a base cloud uses the cluster named by the
+        // selected kubeconfig context. With a base cloud, setup creates one.
+        let external_public_endpoints = !args.public_endpoints.is_empty()
+            || deploy_config
+                .and_then(|config| config.public_endpoints.as_ref())
+                .is_some_and(|endpoints| !endpoints.is_empty());
+        settings.kubernetes = Some(KubernetesSettings {
+            cluster: Some(KubernetesClusterSettings {
+                ownership: if network_platform != Platform::Kubernetes {
+                    KubernetesClusterOwnership::Managed
+                } else {
+                    KubernetesClusterOwnership::External
+                },
+                namespace: args.namespace.clone(),
+                cloud: None,
+            }),
+            // The supplied URL already has customer-owned ingress and TLS.
+            exposure: external_public_endpoints.then_some(KubernetesExposureSettings::Disabled),
+        });
     }
 
     if let Some(config) = deploy_config {
@@ -3548,9 +3745,18 @@ struct InitResult {
     deployment_token: Option<String>,
 }
 
+fn kubernetes_resource_prefix(token: &str, name: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"alien-kubernetes-setup-prefix-v1\0");
+    hash.update(token.as_bytes());
+    hash.update([0]);
+    hash.update(name.as_bytes());
+    format!("k{}", hex::encode(&hash.finalize()[..12]))
+}
+
 async fn initialize_deployment(
     client: &ServerClient,
-    _token: &str,
+    token: &str,
     platform: Platform,
     base_platform: Option<Platform>,
     name: &str,
@@ -3560,7 +3766,14 @@ async fn initialize_deployment(
 ) -> Result<InitResult> {
     let body = alien_manager_api::types::InitializeRequest {
         name: Some(name.to_string()),
-        resource_prefix: None,
+        // Helm needs the runtime prefix before it creates workload identities.
+        // Register the same prefix with the manager so its StackState and the
+        // chart agree even before the Operator's first sync.
+        // A setup link may be retried after registration but before Helm
+        // finishes. Reuse the same prefix so Manager can resume the existing
+        // deployment and its chart-owned ServiceAccounts keep their names.
+        resource_prefix: (platform == Platform::Kubernetes)
+            .then(|| kubernetes_resource_prefix(token, name)),
         platform: Some(sdk_platform(platform)),
         base_platform: base_platform.map(sdk_platform),
         initial_desired_release: alien_manager_api::types::InitialDesiredRelease::Active,
@@ -3569,7 +3782,9 @@ async fn initialize_deployment(
         input_values: input_values.into_iter().collect(),
         scope: None,
         permission: None,
-        setup_method: None,
+        // The Kubernetes CLI installs the Operator with Helm. Runtime work
+        // starts inside that Operator, so this must use Helm's setup handoff.
+        setup_method: (platform == Platform::Kubernetes).then(|| "helm".to_string()),
     };
 
     let response = match client.initialize().body(body).send().await {
@@ -3663,6 +3878,7 @@ async fn run_pull_model(
                 deployment_id,
                 deployment_name,
                 stack_settings,
+                public_endpoints,
             )
             .await
         }
@@ -3928,9 +4144,10 @@ async fn run_kubernetes_pull_model(
     deployment_id: &str,
     deployment_name: &str,
     stack_settings: &StackSettings,
+    public_endpoints: Option<&PublicEndpointUrls>,
 ) -> Result<()> {
     output::info("Kubernetes platform detected — installing alien-operator with Helm.");
-    let stack = fetch_kubernetes_release_stack(client, deployment_id).await?;
+    let (stack, resource_prefix) = fetch_kubernetes_release_stack(client, deployment_id).await?;
     let namespace = args
         .namespace
         .clone()
@@ -3951,8 +4168,11 @@ async fn run_kubernetes_pull_model(
         token,
         deployment_id,
         deployment_name,
+        &resource_prefix,
         stack_settings,
         &operator_image,
+        args.external_bindings_secret.as_deref(),
+        public_endpoints,
     )?;
 
     helm_upgrade_install(
@@ -3977,7 +4197,7 @@ async fn run_kubernetes_pull_model(
 async fn fetch_kubernetes_release_stack(
     client: &ServerClient,
     deployment_id: &str,
-) -> Result<Stack> {
+) -> Result<(Stack, String)> {
     let deployment = client
         .get_deployment()
         .id(deployment_id)
@@ -3988,6 +4208,22 @@ async fn fetch_kubernetes_release_stack(
             message: "Failed to get deployment from manager".to_string(),
         })?
         .into_inner();
+
+    // Helm creates workload identities before the Operator starts. Their names
+    // must use the prefix assigned to this deployment, not the Helm release name.
+    let resource_prefix = deployment
+        .stack_state
+        .as_ref()
+        .and_then(|state| state.get("resourcePrefix"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|prefix| !prefix.is_empty())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: "Deployment has no resource prefix for Kubernetes ServiceAccounts"
+                    .to_string(),
+            })
+        })?
+        .to_string();
 
     let release_id = deployment
         .desired_release_id
@@ -4015,11 +4251,12 @@ async fn fetch_kubernetes_release_stack(
         })
     })?;
 
-    serde_json::from_value(stack_value)
+    let stack = serde_json::from_value(stack_value)
         .into_alien_error()
         .context(ErrorData::ConfigurationError {
             message: format!("Failed to parse Kubernetes stack from release '{release_id}'"),
-        })
+        })?;
+    Ok((stack, resource_prefix))
 }
 
 fn render_kubernetes_helm_chart(
@@ -4080,8 +4317,11 @@ fn write_kubernetes_helm_values(
     token: &str,
     deployment_id: &str,
     deployment_name: &str,
+    resource_prefix: &str,
     stack_settings: &StackSettings,
     operator_image: &str,
+    external_bindings_secret: Option<&str>,
+    public_endpoints: Option<&PublicEndpointUrls>,
 ) -> Result<PathBuf> {
     let (repository, tag) = split_image_tag(operator_image)?;
     let mut helm_settings = stack_settings.clone();
@@ -4108,7 +4348,10 @@ fn write_kubernetes_helm_values(
             }
         },
         "stackSettings": helm_settings,
+        "serviceAccountPrefix": resource_prefix,
+        "publicEndpoints": public_endpoints.cloned().unwrap_or_default(),
         "infrastructure": null,
+        "infrastructureExistingSecret": external_bindings_secret.unwrap_or(""),
     });
     let values_path = chart_dir.join("alien-deploy-values.json");
     let contents = serde_json::to_string_pretty(&values)

@@ -136,6 +136,45 @@ fn compute_cluster_bootstraps_only_the_default_autoscaling_service_role() {
 }
 
 #[test]
+fn postgres_bootstraps_only_the_default_rds_service_role() {
+    // RDS creates this role on the first cluster in an account. The runtime
+    // must not be able to create service-linked roles for other services.
+    // https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAM.ServiceLinkedRoles.html
+    for target in [BindingTarget::Stack, BindingTarget::Resource] {
+        let policy = AwsRuntimePermissionsGenerator::new()
+            .generate_policy(
+                get_permission_set("postgres/provision").expect("permission set exists"),
+                target,
+                &create_test_context(),
+            )
+            .expect("Postgres permissions should render");
+        let grants = policy
+            .statement
+            .iter()
+            .filter(|statement| {
+                statement
+                    .action
+                    .iter()
+                    .any(|action| action == "iam:CreateServiceLinkedRole")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(grants.len(), 1, "{target}");
+        assert_eq!(grants[0].effect, "Allow");
+        assert_eq!(grants[0].action, ["iam:CreateServiceLinkedRole"]);
+        assert_eq!(
+            grants[0].resource,
+            ["arn:aws:iam::123456789012:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS"]
+        );
+        assert_eq!(
+            serde_json::to_value(&grants[0].condition).unwrap(),
+            serde_json::json!({
+                "StringEquals": { "iam:AWSServiceName": "rds.amazonaws.com" }
+            })
+        );
+    }
+}
+
+#[test]
 fn compute_cluster_execute_does_not_read_workload_secrets() {
     let generator = AwsRuntimePermissionsGenerator::new();
     let permission_set =

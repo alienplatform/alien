@@ -498,6 +498,8 @@ mod setup_update_authorization_tests {
 
     fn empty_stack() -> Stack {
         Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "stack".to_string(),
             resources: IndexMap::new(),
             inputs: vec![],

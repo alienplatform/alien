@@ -16,7 +16,7 @@ const TEST_ENCRYPTION_KEY: &str =
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 #[test]
-fn standalone_log_collector_filters_to_the_selected_pods() {
+fn standalone_pod_logs_select_only_labeled_pods() {
     let render = |key, value| {
         generate_operator_manifest(OperatorManifestOptions {
             custom_operation_permissions: &[],
@@ -42,49 +42,57 @@ fn standalone_log_collector_filters_to_the_selected_pods() {
             format: OperatorOutputFormat::RawManifest,
         })
     };
-    let config = |manifest: &str| {
+    let log_scope = |manifest: &str| {
         let docs = parse_manifest(manifest);
-        let collector = docs
+        assert!(docs.iter().all(|doc| doc["kind"] != "DaemonSet"));
+        let operator = docs
             .iter()
-            .find(|doc| {
-                doc["kind"] == "ConfigMap"
-                    && doc["metadata"]["name"]
-                        .as_str()
-                        .is_some_and(|name| name.contains("log-collector"))
-            })
-            .expect("collector ConfigMap");
-        collector["data"]["collector.conf"]
-            .as_str()
-            .expect("collector config")
-            .to_string()
+            .find(|doc| doc["kind"] == "Deployment")
+            .expect("operator Deployment");
+        let env = operator["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_sequence()
+            .expect("operator environment");
+        let get = |name: &str| {
+            env.iter()
+                .find(|item| item["name"] == name)
+                .expect("Pod log scope environment")["value"]
+                .as_str()
+                .expect("scope value")
+                .to_string()
+        };
+        (
+            get("OPERATOR_POD_LOG_LABEL_KEY"),
+            get("OPERATOR_POD_LOG_LABEL_VALUE"),
+        )
     };
 
-    let default_manifest = render(None, None).expect("safe default collector");
-    let default_config = config(&default_manifest);
-    assert!(default_config.contains(
-        "Regex               $kubernetes['labels']['alien.dev/deployment'] ^my-saas-operator$"
-    ));
-    assert!(!default_config.contains("Exclude_Path"));
-    assert!(default_config.contains(
-        "Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$"
-    ));
+    let default_manifest = render(None, None).expect("safe default Pod log scope");
+    assert_eq!(
+        log_scope(&default_manifest),
+        (
+            "alien.dev/deployment".to_string(),
+            "my-saas-operator".to_string()
+        )
+    );
 
-    let selected_manifest =
-        render(Some("app"), Some("external.agent")).expect("selected collector");
-    let selected_config = config(&selected_manifest);
-    assert!(selected_config
-        .contains("Regex               $kubernetes['labels']['app'] ^external\\.agent$"));
+    let selected_manifest = render(Some("app"), Some("external.agent")).expect("selected Pod logs");
+    assert_eq!(
+        log_scope(&selected_manifest),
+        ("app".to_string(), "external.agent".to_string())
+    );
     let docs = parse_manifest(&selected_manifest);
-    for kind in ["Deployment", "DaemonSet"] {
-        let pod = docs
-            .iter()
-            .find(|doc| doc["kind"] == kind)
-            .expect("pod workload");
-        assert_eq!(
-            pod["spec"]["template"]["metadata"]["labels"]["alien.dev/log-collector-exclude"],
-            "true"
-        );
-    }
+    let operator = docs.iter().find(|doc| doc["kind"] == "Deployment").unwrap();
+    assert_eq!(
+        operator["spec"]["template"]["metadata"]["labels"]["alien.dev/log-collector-exclude"],
+        "true"
+    );
+    let log_role = docs.iter().find(|doc| {
+        doc["kind"] == "Role"
+            && doc["rules"]
+                .as_sequence()
+                .is_some_and(|rules| rules.iter().any(|rule| rule["resources"][0] == "pods/log"))
+    });
+    assert!(log_role.is_some(), "Pod log reader needs a namespaced Role");
 
     assert!(render(Some("app"), None).is_err());
     assert!(render(Some("bad/key/extra"), Some("agent")).is_err());
@@ -352,6 +360,51 @@ fn parse_manifest(manifest: &str) -> Vec<YamlValue> {
         .map(|doc| YamlValue::deserialize(doc).expect("manifest document should be valid YAML"))
         .filter(|doc| !doc.is_null())
         .collect()
+}
+
+#[test]
+fn dynamic_workload_permissions_stay_in_the_install_namespace() {
+    for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
+        let docs = parse_manifest(&rendered_manifest(
+            scope,
+            OperatorPermission::Diagnostics,
+            false,
+        ));
+        let role = docs
+            .iter()
+            .find(|doc| {
+                doc["kind"] == "Role"
+                    && doc["metadata"]["name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("alien-dc-"))
+            })
+            .expect("dynamic workload Role");
+        let name = role["metadata"]["name"].as_str().unwrap();
+        assert_eq!(role["metadata"]["namespace"], "demo");
+        for (resource, verbs) in [
+            (
+                "deployments",
+                &["get", "list", "create", "update", "delete"][..],
+            ),
+            ("services", &["get", "list", "create", "update", "delete"]),
+            ("secrets", &["get", "list", "create", "update", "delete"]),
+            ("pods", &["list"]),
+        ] {
+            for verb in verbs {
+                assert!(
+                    rule_allows(role, resource, verb),
+                    "missing {verb} {resource}"
+                );
+            }
+        }
+        let binding = docs
+            .iter()
+            .find(|doc| doc["kind"] == "RoleBinding" && doc["metadata"]["name"] == name)
+            .expect("dynamic workload RoleBinding");
+        assert_eq!(binding["metadata"]["namespace"], "demo");
+        assert_eq!(binding["roleRef"]["name"], name);
+        assert_eq!(binding["subjects"][0]["name"], "my-saas-operator");
+    }
 }
 
 fn permission_grants(manifest: &str) -> BTreeSet<(String, String, String, Vec<String>)> {
@@ -673,7 +726,7 @@ fn operator_template_can_reference_setup_owned_credentials() {
             ),
             (
                 "values.yaml".to_string(),
-                "remoteOperator:\n  existingSecret:\n    name: setup-owned\n".to_string(),
+                "remoteOperator:\n  existingSecret:\n    name: setup-owned\nlogCollector:\n  enabled: true\n  mode: podApi\n  scope:\n    deploymentLabelKey: alien.dev/deployment\n    deploymentLabelValue: my-saas-operator\n".to_string(),
             ),
             ("templates/byoc-operator.yaml".to_string(), template),
         ]),
@@ -705,15 +758,15 @@ fn operator_template_can_reference_setup_owned_credentials() {
         .find(|volume| volume["name"] == "credentials")
         .expect("credential volume");
     assert_eq!(credential_volume["secret"]["secretName"], "setup-owned");
-    let collector = documents
+    assert!(documents
         .iter()
-        .find(|document| document["kind"] == "DaemonSet")
-        .expect("log collector DaemonSet");
-    assert_eq!(
-        collector["spec"]["template"]["spec"]["containers"][0]["env"][0]["valueFrom"]
-            ["secretKeyRef"]["name"],
-        "setup-owned"
-    );
+        .all(|document| document["kind"] != "DaemonSet"));
+    let env = deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_sequence()
+        .expect("operator environment");
+    assert!(env.iter().any(|item| {
+        item["name"] == "OPERATOR_POD_LOG_LABEL_KEY" && item["value"] == "alien.dev/deployment"
+    }));
 }
 
 #[test]

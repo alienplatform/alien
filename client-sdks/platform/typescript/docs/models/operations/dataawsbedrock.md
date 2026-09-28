@@ -16,13 +16,13 @@ let value: DataAwsBedrock = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
+        reason: "collection-failed",
         severity: "warning",
         source: "<value>",
       },
     ],
     health: "unhealthy",
-    lifecycle: "deleting",
+    lifecycle: "running",
     partial: false,
     stale: false,
   },
@@ -32,9 +32,9 @@ let value: DataAwsBedrock = {
 
 ## Fields
 
-| Field                                                                | Type                                                                 | Required                                                             | Description                                                          |
-| -------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `availability`                                                       | [operations.Availability1](../../models/operations/availability1.md) | :heavy_check_mark:                                                   | N/A                                                                  |
-| `region`                                                             | *string*                                                             | :heavy_check_mark:                                                   | N/A                                                                  |
-| `status`                                                             | [operations.DataStatus66](../../models/operations/datastatus66.md)   | :heavy_check_mark:                                                   | N/A                                                                  |
-| `backend`                                                            | *"awsBedrock"*                                                       | :heavy_check_mark:                                                   | N/A                                                                  |
+| Field                                                                                                                    | Type                                                                                                                     | Required                                                                                                                 | Description                                                                                                              |
+| ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `availability`                                                                                                           | [operations.Availability1](../../models/operations/availability1.md)                                                     | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
+| `region`                                                                                                                 | *string*                                                                                                                 | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
+| `status`                                                                                                                 | [operations.GetResourceDeploymentDetailDataStatus66](../../models/operations/getresourcedeploymentdetaildatastatus66.md) | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
+| `backend`                                                                                                                | *"awsBedrock"*                                                                                                           | :heavy_check_mark:                                                                                                       | N/A                                                                                                                      |
