@@ -70,16 +70,22 @@ impl PreflightRunner {
         Ok(PreflightSummary::from_results(results))
     }
 
-    /// Run stack compatibility checks between two stacks
+    /// Run stack compatibility checks between two stacks.
+    ///
+    /// The Frozen check runs on every call rather than from the registry, because it needs the
+    /// installed stack's platform, which a registered check cannot be given.
     pub async fn run_compatibility_checks(
         &self,
         old_stack: &Stack,
         new_stack: &Stack,
         config: &DeploymentConfig,
+        platform: Platform,
     ) -> Result<PreflightSummary> {
         info!("Running stack compatibility checks");
 
-        let checks = self.registry.get_compatibility_checks();
+        let frozen_check = crate::compatibility::FrozenResourcesUnchangedCheck { platform };
+        let mut checks = self.registry.get_compatibility_checks();
+        checks.push(&frozen_check);
         let mut results = Vec::new();
 
         for check in checks {
@@ -415,7 +421,7 @@ impl PreflightRunner {
         if let Some(old_stack) = old_stack {
             if !setup_update_authorized {
                 let compatibility_summary = self
-                    .run_compatibility_checks(old_stack, &mutated_stack, config)
+                    .run_compatibility_checks(old_stack, &mutated_stack, config, platform)
                     .await?;
                 // These checks compare the prepared target with installed resources,
                 // including runtime-owned capacity changes. Do not duplicate that
@@ -480,8 +486,8 @@ fn setup_update_authorization_matches(
     authorization: &alien_core::SetupUpdateAuthorization,
 ) -> bool {
     old_stack.is_some_and(|old_stack| {
-        old_stack.frozen_resources_digest() == authorization.baseline_frozen_digest
-    }) && target_stack.frozen_resources_digest() == authorization.target_frozen_digest
+        old_stack.setup_owned_digest() == authorization.baseline_frozen_digest
+    }) && target_stack.setup_owned_digest() == authorization.target_frozen_digest
 }
 
 impl Default for PreflightRunner {
@@ -511,8 +517,8 @@ mod setup_update_authorization_tests {
     fn authorization(stack: &Stack) -> SetupUpdateAuthorization {
         SetupUpdateAuthorization {
             nonce: "revision".to_string(),
-            baseline_frozen_digest: stack.frozen_resources_digest(),
-            target_frozen_digest: stack.frozen_resources_digest(),
+            baseline_frozen_digest: stack.setup_owned_digest(),
+            target_frozen_digest: stack.setup_owned_digest(),
             release_id: "release".to_string(),
             setup_target: "target".to_string(),
             setup_fingerprint: "fingerprint".to_string(),
@@ -540,11 +546,7 @@ mod setup_update_authorization_tests {
             .allow_frozen_changes(false)
             .external_bindings(alien_core::ExternalBindings::default())
             .build();
-        let mut registry = crate::PreflightRegistry::new();
-        registry.add_compatibility_check(Box::new(
-            crate::compatibility::FrozenResourcesUnchangedCheck,
-        ));
-        let runner = PreflightRunner::with_registry(registry);
+        let runner = PreflightRunner::with_registry(crate::PreflightRegistry::new());
         let state = StackState::new(Platform::Local);
         let client = ClientConfig::Local {
             state_directory: "/unused".to_string(),
@@ -619,5 +621,166 @@ mod setup_update_authorization_tests {
         assert!(!setup_update_authorization_matches(
             None, &stack, &authority
         ));
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    fn sandbox_stack(
+        lifecycle: alien_core::ResourceLifecycle,
+        image: &str,
+        private_base_image: Option<&str>,
+    ) -> Stack {
+        let sandbox = alien_core::Sandbox::new("agents".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: image.to_string(),
+            })
+            .maybe_private_base_image(private_base_image.map(str::to_string))
+            .egress(alien_core::SandboxEgress::Deny)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        Stack::new("stack".to_string())
+            .add(sandbox, lifecycle)
+            .build()
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    fn deployment_config() -> DeploymentConfig {
+        DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(alien_core::ExternalBindings::default())
+            .build()
+    }
+
+    /// A blocked repository change must clear on the setup rerun: the rerun's authorization is
+    /// minted from the digests of the installed and target stacks, so those must differ.
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn a_live_sandbox_repository_change_blocks_until_setup_reruns() {
+        let old = sandbox_stack(
+            alien_core::ResourceLifecycle::Live,
+            "s3://bucket/one.zip",
+            Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:1"),
+        );
+        let target = sandbox_stack(
+            alien_core::ResourceLifecycle::Live,
+            "s3://bucket/two.zip",
+            Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-b:1"),
+        );
+        let runner = PreflightRunner::with_registry({
+            let mut registry = crate::PreflightRegistry::new();
+            registry.add_compatibility_check(Box::new(
+                crate::compatibility::SandboxPrivateRepositoryUnchangedCheck,
+            ));
+            registry
+        });
+        let config = deployment_config();
+        let state = StackState::new(Platform::Local);
+        let client = ClientConfig::Local {
+            state_directory: "/unused".to_string(),
+        };
+
+        let error = runner
+            .run_deployment_time_preflights(
+                target.clone(),
+                &state,
+                &config,
+                &client,
+                Some(&old),
+                None,
+                None,
+            )
+            .await
+            .expect_err("a new repository needs setup");
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+        assert!(error.message.contains("agents"));
+
+        let tag_only = sandbox_stack(
+            alien_core::ResourceLifecycle::Live,
+            "s3://bucket/two.zip",
+            Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:2"),
+        );
+        runner
+            .run_deployment_time_preflights(
+                tag_only,
+                &state,
+                &config,
+                &client,
+                Some(&old),
+                None,
+                None,
+            )
+            .await
+            .expect("a new tag rolls without setup");
+
+        let rerun = SetupUpdateAuthorization {
+            nonce: "revision".to_string(),
+            baseline_frozen_digest: old.setup_owned_digest(),
+            target_frozen_digest: target.setup_owned_digest(),
+            release_id: "release".to_string(),
+            setup_target: "target".to_string(),
+            setup_fingerprint: "fingerprint".to_string(),
+            setup_fingerprint_version: 1,
+        };
+        assert_ne!(rerun.baseline_frozen_digest, rerun.target_frozen_digest);
+        let (_, _, authorized) = runner
+            .run_deployment_time_preflights(
+                target,
+                &state,
+                &config,
+                &client,
+                Some(&old),
+                Some(&rerun),
+                None,
+            )
+            .await
+            .expect("the setup rerun applies the blocked update");
+        assert!(authorized);
+    }
+
+    /// The Frozen check is built from the installed stack's platform, so only an Azure install
+    /// may roll a Frozen sandbox's image without setup.
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn only_an_azure_frozen_sandbox_rolls_its_image_without_setup() {
+        let old = sandbox_stack(alien_core::ResourceLifecycle::Frozen, "ubuntu", None);
+        let target = sandbox_stack(alien_core::ResourceLifecycle::Frozen, "debian", None);
+        let runner = PreflightRunner::with_registry(crate::PreflightRegistry::new());
+        let config = deployment_config();
+        let client = ClientConfig::Local {
+            state_directory: "/unused".to_string(),
+        };
+
+        runner
+            .run_compatibility_checks(&old, &target, &config, Platform::Azure)
+            .await
+            .map(|summary| assert!(summary.success, "{:?}", summary.results))
+            .expect("checks run");
+        let on_aws = runner
+            .run_compatibility_checks(&old, &target, &config, Platform::Aws)
+            .await
+            .expect("checks run");
+        assert!(!on_aws.success, "an AWS Frozen image change needs setup");
+
+        let error = runner
+            .run_deployment_time_preflights(
+                target,
+                &StackState::new(Platform::Local),
+                &config,
+                &client,
+                Some(&old),
+                None,
+                None,
+            )
+            .await
+            .expect_err("the installed platform decides, not the target");
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
     }
 }

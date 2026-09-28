@@ -937,14 +937,61 @@ mod tests {
             stack
         };
 
-        let digest_before = with_frozen(Some(true)).frozen_resources_digest();
+        let digest_before = with_frozen(Some(true)).setup_owned_digest();
         let stripped = strip_live(with_frozen(Some(true)), false);
 
         assert!(!stripped.resources.contains_key("cache"));
         assert_eq!(
             digest_before,
-            stripped.frozen_resources_digest(),
+            stripped.setup_owned_digest(),
             "a live decline must not rewrite any frozen entry"
+        );
+    }
+
+    /// A private base image on a Live sandbox is setup-owned, but a deployer who declined the
+    /// sandbox never got its build role, so the stripped stack must hash as if it were absent.
+    #[test]
+    fn a_declined_live_private_sandbox_leaves_the_setup_owned_digest_untouched() {
+        let with_sandbox = |gated: bool| {
+            let mut stack = live_gated_stack_with_linking_worker(Some(true));
+            let sandbox = alien_core::Sandbox::new("agents".to_string())
+                .code(alien_core::SandboxCode::Image {
+                    image: "s3://bucket/bundle.zip".to_string(),
+                })
+                .private_base_image(
+                    "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base:1".to_string(),
+                )
+                .egress(alien_core::SandboxEgress::Deny)
+                .lifecycle(alien_core::SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            stack.resources.insert(
+                "agents".to_string(),
+                alien_core::ResourceEntry {
+                    config: alien_core::Resource::new(sandbox),
+                    lifecycle: ResourceLifecycle::Live,
+                    dependencies: Vec::new(),
+                    remote_access: false,
+                    enabled_when: gated.then(|| "cacheEnabled".to_string()),
+                },
+            );
+            stack
+        };
+        let without_sandbox = strip_live(live_gated_stack_with_linking_worker(Some(true)), false);
+
+        let declined = strip_live(with_sandbox(true), false);
+        assert!(!declined.resources.contains_key("agents"));
+        assert_eq!(
+            declined.setup_owned_digest(),
+            without_sandbox.setup_owned_digest(),
+            "a declined sandbox must not add setup-owned state"
+        );
+        assert_ne!(
+            strip_live(with_sandbox(false), false).setup_owned_digest(),
+            without_sandbox.setup_owned_digest(),
+            "the control: an ungated sandbox's repository is setup-owned"
         );
     }
 

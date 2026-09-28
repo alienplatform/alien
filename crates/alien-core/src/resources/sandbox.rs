@@ -1196,6 +1196,22 @@ impl EcrImageRepository<'_> {
     }
 }
 
+impl Sandbox {
+    /// The part of `privateBaseImage` the build role's grant covers: registry host and
+    /// repository, never the tag or digest. A reference the parser refuses comes back whole, so
+    /// any change to it still counts; setup refuses it before any grant is rendered.
+    pub fn private_base_image_repository(&self) -> Option<String> {
+        let image = self.private_base_image.as_deref()?;
+        Some(match parse_ecr_image_repository(image) {
+            Ok(parsed) => {
+                let host = image.split_once('/').map_or(image, |(host, _)| host);
+                format!("{host}/{}", parsed.repository)
+            }
+            Err(_) => image.to_string(),
+        })
+    }
+}
+
 /// Reads `privateBaseImage` as the one repository a build role may pull from.
 ///
 /// The name is interpolated into an IAM ARN, so it is held to ECR's own repository grammar: that

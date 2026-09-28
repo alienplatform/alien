@@ -97,9 +97,15 @@ pub struct Stack {
 }
 
 impl Stack {
-    /// Returns a deterministic digest of the complete Frozen resource set.
-    /// Resource and object-key ordering do not affect the digest.
-    pub fn frozen_resources_digest(&self) -> String {
+    /// Returns a deterministic digest of everything setup owns: every Frozen entry, plus the
+    /// private base-image repository of each Live sandbox, because setup renders the build role
+    /// that grants pull on exactly that repository. Resource and object-key ordering do not
+    /// affect the digest.
+    ///
+    /// A stack with no Live sandbox naming a private base image hashes the same bytes as the
+    /// Frozen entries alone, so authorizations stored before any such sandbox stay valid. Gated
+    /// entries a deployer declined are stripped before this runs, so they contribute nothing.
+    pub fn setup_owned_digest(&self) -> String {
         let mut resources = self
             .resources
             .iter()
@@ -113,10 +119,26 @@ impl Stack {
             .collect::<Vec<_>>();
         resources.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
 
-        let encoded = serde_json::to_vec(&resources)
-            .expect("canonical Frozen resource projection always serializes");
+        let mut live_sandbox_repositories = self
+            .resources
+            .iter()
+            .filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Live)
+            .filter_map(|(id, entry)| {
+                let sandbox = entry.config.downcast_ref::<crate::Sandbox>()?;
+                Some((id, sandbox.private_base_image_repository()?))
+            })
+            .collect::<Vec<_>>();
+        live_sandbox_repositories.sort_unstable_by_key(|(id, _)| *id);
+
+        let encoded = if live_sandbox_repositories.is_empty() {
+            serde_json::to_vec(&resources)
+        } else {
+            serde_json::to_vec(&(&resources, &live_sandbox_repositories))
+        }
+        .expect("canonical setup-owned projection always serializes");
         format!("{:x}", Sha256::digest(encoded))
     }
+
     /// Returns an iterator over the resources in the stack, including their lifecycle state.
     pub fn resources(&self) -> impl Iterator<Item = (&String, &ResourceEntry)> {
         self.resources.iter()
@@ -688,6 +710,99 @@ mod tests {
         assert_eq!(stack_extend, deserialized);
     }
 
+    fn digest_sandbox(id: &str, image: &str, private_base_image: Option<&str>) -> crate::Sandbox {
+        crate::Sandbox::new(id.to_string())
+            .code(crate::SandboxCode::Image {
+                image: image.to_string(),
+            })
+            .maybe_private_base_image(private_base_image.map(str::to_string))
+            .egress(crate::SandboxEgress::Deny)
+            .lifecycle(crate::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build()
+    }
+
+    /// Stored setup authorizations carry this digest, so its bytes must not move for any stack
+    /// without a Live sandbox that names a private base image.
+    #[test]
+    fn setup_owned_digest_is_stable_without_a_live_private_sandbox() {
+        let stack = Stack::new("golden".to_string())
+            .add(
+                Storage::new("ledger".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                digest_sandbox(
+                    "frozen-agents",
+                    "s3://bucket/frozen.zip",
+                    Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base:1"),
+                ),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                digest_sandbox("live-agents", "s3://bucket/live.zip", None),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                Storage::new("scratch".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        assert_eq!(
+            stack.setup_owned_digest(),
+            "aacf34583a0bb9e3d48dd08be0bdd1da0f1d1e3666f93b844ecb0e1506ca537e"
+        );
+    }
+
+    #[test]
+    fn setup_owned_digest_follows_a_live_sandbox_repository_but_not_its_tag() {
+        let with_base = |private_base_image: Option<&str>, image: &str| {
+            Stack::new("stack".to_string())
+                .add(
+                    Storage::new("ledger".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    digest_sandbox("agents", image, private_base_image),
+                    ResourceLifecycle::Live,
+                )
+                .build()
+                .setup_owned_digest()
+        };
+        let repo_a = "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:1";
+
+        assert_eq!(
+            with_base(Some(repo_a), "s3://bucket/one.zip"),
+            with_base(
+                Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:2"),
+                "s3://bucket/two.zip"
+            ),
+            "a new tag or bundle is the runtime's to roll"
+        );
+        assert_eq!(
+            with_base(Some(repo_a), "s3://bucket/one.zip"),
+            with_base(
+                Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a@sha256:abc"),
+                "s3://bucket/one.zip"
+            ),
+        );
+        for changed in [
+            None,
+            Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-b:1"),
+            Some("210987654321.dkr.ecr.us-east-1.amazonaws.com/team/base-a:1"),
+            Some("123456789012.dkr.ecr.{region}.amazonaws.com/team/base-a:1"),
+        ] {
+            assert_ne!(
+                with_base(Some(repo_a), "s3://bucket/one.zip"),
+                with_base(changed, "s3://bucket/one.zip"),
+                "{changed:?} changes what the build role grants"
+            );
+        }
+    }
+
     #[test]
     fn frozen_resource_digest_is_order_independent_and_ignores_live_resources() {
         let first = Stack::new("first".to_string())
@@ -719,9 +834,6 @@ mod tests {
             )
             .build();
 
-        assert_eq!(
-            first.frozen_resources_digest(),
-            second.frozen_resources_digest()
-        );
+        assert_eq!(first.setup_owned_digest(), second.setup_owned_digest());
     }
 }

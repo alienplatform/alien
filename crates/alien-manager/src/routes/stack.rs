@@ -1160,8 +1160,8 @@ fn reimport_runtime_metadata(
             ),
         })
     })?;
-    let baseline_frozen_digest = baseline_stack.frozen_resources_digest();
-    let target_frozen_digest = prepared_stack.frozen_resources_digest();
+    let baseline_frozen_digest = baseline_stack.setup_owned_digest();
+    let target_frozen_digest = prepared_stack.setup_owned_digest();
 
     metadata.setup_update_authorization =
         (baseline_frozen_digest != target_frozen_digest).then(|| SetupUpdateAuthorization {
@@ -1857,11 +1857,11 @@ mod setup_update_authorization_tests {
 
         assert_eq!(
             authorization.baseline_frozen_digest,
-            baseline.frozen_resources_digest()
+            baseline.setup_owned_digest()
         );
         assert_eq!(
             authorization.target_frozen_digest,
-            target.frozen_resources_digest()
+            target.setup_owned_digest()
         );
         assert_eq!(authorization.release_id, "release");
         assert_eq!(
@@ -1869,6 +1869,58 @@ mod setup_update_authorization_tests {
             Some("env-hash")
         );
         assert!(metadata.registry_access_granted);
+    }
+
+    /// The Live sandbox's image belongs to the runtime, so only its private repository may
+    /// mint setup authority: a rerun after a repository change must carry one, a tag change none.
+    #[test]
+    fn a_live_sandbox_repository_change_mints_setup_authority() {
+        let with_base = |private_base_image: &str| {
+            let sandbox = alien_core::Sandbox::new("agents".to_string())
+                .code(alien_core::SandboxCode::Image {
+                    image: "s3://bucket/bundle.zip".to_string(),
+                })
+                .private_base_image(private_base_image.to_string())
+                .egress(alien_core::SandboxEgress::Deny)
+                .lifecycle(alien_core::SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            let mut stack = stack("live", "frozen");
+            stack.resources.insert(
+                "agents".to_string(),
+                alien_core::ResourceEntry {
+                    config: alien_core::Resource::new(sandbox),
+                    lifecycle: ResourceLifecycle::Live,
+                    dependencies: Vec::new(),
+                    remote_access: false,
+                    enabled_when: None,
+                },
+            );
+            stack
+        };
+        let baseline = with_base("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:1");
+
+        let repository_change = reimport_runtime_metadata(
+            &record(baseline.clone()),
+            &with_base("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-b:1"),
+            "release",
+            &request(),
+            Default::default(),
+        )
+        .expect("setup-owned update should succeed");
+        assert!(repository_change.setup_update_authorization.is_some());
+
+        let tag_change = reimport_runtime_metadata(
+            &record(baseline),
+            &with_base("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:2"),
+            "release",
+            &request(),
+            Default::default(),
+        )
+        .expect("runtime-owned update should succeed");
+        assert!(tag_change.setup_update_authorization.is_none());
     }
 
     #[test]
