@@ -1456,9 +1456,8 @@ fn remote_sandbox_binding(
             }))
         }
         (Platform::Gcp, SandboxBinding::GcpAgentPlatform(binding)) => {
-            // No egress check here, unlike the two arms above: the binding carries no policy to
-            // re-check, because Agent Platform holds it on the environment template and
-            // `sandbox/remote-execute` grants no template verb to create or replace one.
+            // No egress check here, unlike the two arms above: the template enforces deny, and
+            // `sandbox/remote-execute` grants no template verb, so a remote lease cannot bypass it.
             Ok(RemoteSandboxBinding::Gcp(RemoteGcpSandboxBinding {
                 engine: concrete_binding_value(&binding.engine, "GCP sandbox engine")?,
                 template: concrete_binding_value(&binding.template, "GCP sandbox template")?,

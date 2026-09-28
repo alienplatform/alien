@@ -100,6 +100,7 @@ where
 /// The service message of the first response body captured on `error`'s chain, when that response
 /// was a 4xx other than a timeout or rate limit: those and a 5xx are transient, not an answer. The
 /// text is unclipped; quote only a truncated part the sandbox's own agent wrote.
+#[cfg(feature = "gcp")]
 pub(crate) fn captured_refusal<E>(error: &AlienError<E>) -> Option<String>
 where
     E: AlienErrorData + Clone + std::fmt::Debug + Serialize,

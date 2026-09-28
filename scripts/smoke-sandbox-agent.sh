@@ -11,8 +11,8 @@ set -euo pipefail
 image="${1:?usage: scripts/smoke-sandbox-agent.sh <image-reference>}"
 
 for platform in linux/amd64 linux/arm64; do
-  # This image is wolfi-base plus git's 24 transitive packages plus the agent, and the
-  # amd64 half arrives under emulation. Inside a probe's own budget, the pull expires.
+  # The wolfi agent image is wolfi-base plus git's 24 transitive packages plus the agent, and the
+  # buildpack-deps GCP default is larger still; the amd64 half arrives under emulation. Inside a probe's own budget, the pull expires.
   status=0
   pull=$(timeout -k 5 300 docker pull --platform "$platform" "$image" 2>&1) || status=$?
   case "$status" in
