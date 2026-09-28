@@ -108,7 +108,7 @@ async fn request_settings(
             message: "API base URL must support path segments".to_string(),
         })
     })?;
-    segments.clear().extend(["v1", "projects", project]);
+    segments.pop_if_empty().extend(["v1", "projects", project]);
     drop(segments);
     if let Some(workspace) = workspace {
         url.query_pairs_mut().append_pair("workspace", workspace);
@@ -158,6 +158,7 @@ async fn request_settings(
 
 #[cfg(test)]
 mod tests {
+    use super::super::projects::{project_task, ProjectArgs};
     use super::*;
     use crate::auth::{build_auth_http, client_with_header};
     use axum::{
@@ -194,9 +195,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn command_rejects_invalid_files_before_authentication() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("settings.json");
+        std::fs::write(&file, "[]").unwrap();
+        let args = ProjectArgs::try_parse_from([
+            "projects",
+            "packages",
+            "update",
+            "sample",
+            "--file",
+            file.to_str().unwrap(),
+            "--json",
+        ])
+        .unwrap();
+        let mode = ExecutionMode::Platform {
+            base_url: "not-an-api-url".to_string(),
+            api_key: None,
+            no_browser: true,
+            workspace: Some("sample-workspace".to_string()),
+            project: Some("sample".to_string()),
+        };
+        let error = project_task(args, mode)
+            .await
+            .expect_err("file validation must run before trying to authenticate");
+        assert!(
+            error.to_string().contains("Provide a JSON object"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
     async fn authenticates_scoped_reads_and_sends_only_the_patch() {
         let captured = Arc::new(Mutex::new(None::<Value>));
-        let app = Router::new().route("/v1/projects/sample", get(|headers: HeaderMap, Query(query): Query<HashMap<String, String>>| async move {
+        let app = Router::new().route("/alien/api/v1/projects/sample", get(|headers: HeaderMap, Query(query): Query<HashMap<String, String>>| async move {
             assert_eq!(query.get("workspace").map(String::as_str), Some("sample-workspace"));
             assert_eq!(headers["authorization"], "Bearer test-key");
             Json(serde_json::json!({ "packagesConfig": { "helm": { "futureSetting": true } } }))
@@ -207,7 +239,7 @@ mod tests {
             Json(serde_json::json!({ "packagesConfig": { "helm": { "enabled": false } } }))
         })).with_state(captured.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let base_url = format!("http://{}/alien/api/", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let auth = build_auth_http(
             client_with_header("Bearer test-key").unwrap(),
@@ -231,6 +263,18 @@ mod tests {
             *captured.lock().unwrap(),
             Some(serde_json::json!({ "packagesConfigPatch": patch }))
         );
+        for patch in [
+            serde_json::json!({ "helm": { "logCollector": { "mode": "podApi" } } }),
+            serde_json::json!({ "helm": null }),
+        ] {
+            request_settings(&auth, Some("sample-workspace"), "sample", Some(&patch))
+                .await
+                .expect("forward partial and null settings");
+            assert_eq!(
+                *captured.lock().unwrap(),
+                Some(serde_json::json!({ "packagesConfigPatch": patch }))
+            );
+        }
         server.abort();
     }
 }
