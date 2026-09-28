@@ -78,6 +78,8 @@ pub(crate) enum KubernetesEndpointAction {
 
 #[derive(Debug, Clone)]
 struct EndpointPlan {
+    // Generated metadata already includes endpoint aliases and wildcard names.
+    managed_hostnames: Option<Vec<String>>,
     hostname: Option<String>,
     public_url: Option<String>,
     route: KubernetesRouteProfile,
@@ -1184,7 +1186,11 @@ pub(crate) fn daemon_public_endpoint_target<'a>(
         target_port: http_port.unwrap_or(80),
         health_check_path: health_check_path.map(ToString::to_string),
         public: http_port.is_some(),
-        wildcard_subdomains: http_endpoint.is_some_and(|endpoint| endpoint.wildcard_subdomains),
+        wildcard_subdomains: public_endpoints.iter().any(|endpoint| {
+            endpoint.protocol == alien_core::ExposeProtocol::Http
+                && Some(endpoint.port) == http_port
+                && endpoint.wildcard_subdomains
+        }),
         deployment_labels: BTreeMap::new(),
     })
 }
@@ -1212,7 +1218,11 @@ pub(crate) fn container_public_endpoint_target<'a>(
         target_port: http_port.unwrap_or(80),
         health_check_path: health_check_path.map(ToString::to_string),
         public: http_port.is_some(),
-        wildcard_subdomains: http_endpoint.is_some_and(|endpoint| endpoint.wildcard_subdomains),
+        wildcard_subdomains: public_endpoints.iter().any(|endpoint| {
+            endpoint.protocol == alien_core::ExposeProtocol::Http
+                && Some(endpoint.port) == http_port
+                && endpoint.wildcard_subdomains
+        }),
         deployment_labels: BTreeMap::new(),
     })
 }
@@ -1252,6 +1262,7 @@ fn resolve_endpoint_plan(
             let Some(domain) = domain else {
                 if matches!(certificate, KubernetesCertificateMode::None) {
                     return Ok(EndpointPlanResolution::Ready(EndpointPlan {
+                        managed_hostnames: None,
                         hostname: None,
                         public_url: None,
                         route: route.clone(),
@@ -1282,6 +1293,11 @@ fn resolve_endpoint_plan(
                 && matches!(certificate, KubernetesCertificateMode::None)
             {
                 return Ok(EndpointPlanResolution::Ready(EndpointPlan {
+                    managed_hostnames: Some(
+                        std::iter::once(domain.fqdn.clone())
+                            .chain(domain.aliases.iter().map(|alias| alias.fqdn.clone()))
+                            .collect(),
+                    ),
                     hostname: Some(domain.fqdn.clone()),
                     public_url: Some(format!("http://{}", domain.fqdn)),
                     route: route.clone(),
@@ -1368,6 +1384,11 @@ fn resolve_endpoint_plan(
             };
 
             Ok(EndpointPlanResolution::Ready(EndpointPlan {
+                managed_hostnames: Some(
+                    std::iter::once(domain.fqdn.clone())
+                        .chain(domain.aliases.iter().map(|alias| alias.fqdn.clone()))
+                        .collect(),
+                ),
                 hostname: Some(domain.fqdn.clone()),
                 public_url: Some(public_url),
                 route: route.clone(),
@@ -1401,6 +1422,7 @@ fn resolve_endpoint_plan(
                 format!("https://{}", domain)
             };
             Ok(EndpointPlanResolution::Ready(EndpointPlan {
+                managed_hostnames: None,
                 hostname: Some(domain.clone()),
                 public_url: Some(public_url),
                 route: route.clone(),
@@ -1439,11 +1461,14 @@ fn endpoint_hostnames(
     target: &KubernetesPublicEndpointTarget<'_>,
     plan: &EndpointPlan,
 ) -> Vec<String> {
+    if let Some(hostnames) = &plan.managed_hostnames {
+        return hostnames.clone();
+    }
     let Some(hostname) = &plan.hostname else {
         return Vec::new();
     };
     let mut hostnames = vec![hostname.clone()];
-    if target.wildcard_subdomains {
+    if target.wildcard_subdomains && !hostname.starts_with("*.") {
         hostnames.push(format!("*.{hostname}"));
     }
     hostnames
@@ -1620,17 +1645,18 @@ fn build_gateway(
     }
 
     let mut listeners = vec![listener];
-    if target.wildcard_subdomains {
-        if let Some(hostname) = &plan.hostname {
-            let mut wildcard_listener = listeners[0].clone();
-            wildcard_listener["name"] = json!(if uses_tls {
-                "https-wildcard"
-            } else {
-                "http-wildcard"
-            });
-            wildcard_listener["hostname"] = json!(format!("*.{hostname}"));
-            listeners.push(wildcard_listener);
-        }
+    for (index, hostname) in endpoint_hostnames(target, plan)
+        .into_iter()
+        .enumerate()
+        .skip(1)
+    {
+        let mut additional_listener = listeners[0].clone();
+        additional_listener["name"] = json!(format!(
+            "{}-{index}",
+            if uses_tls { "https" } else { "http" }
+        ));
+        additional_listener["hostname"] = json!(hostname);
+        listeners.push(additional_listener);
     }
 
     Ok(json!({
@@ -2631,6 +2657,84 @@ mod tests {
     }
 
     #[test]
+    fn wildcard_hosts_preserve_custom_wildcards_and_managed_aliases() {
+        let endpoints = [
+            PublicEndpoint {
+                name: "web".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: Some("web".to_string()),
+                wildcard_subdomains: false,
+            },
+            PublicEndpoint {
+                name: "apps".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: Some("apps".to_string()),
+                wildcard_subdomains: true,
+            },
+        ];
+        let target = container_public_endpoint_target(
+            "api",
+            "api",
+            "app",
+            BTreeMap::new(),
+            &endpoints,
+            None,
+        )
+        .expect("target");
+        let daemon =
+            daemon_public_endpoint_target("api", "api", "app", BTreeMap::new(), &endpoints, None)
+                .expect("daemon");
+        assert!(target.wildcard_subdomains);
+        assert!(daemon.wildcard_subdomains);
+        let mut plan = EndpointPlan {
+            managed_hostnames: None,
+            hostname: Some("*.example.com".to_string()),
+            public_url: None,
+            route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile::default()),
+            certificate: EndpointCertificate::None,
+        };
+        assert_eq!(endpoint_hostnames(&target, &plan), vec!["*.example.com"]);
+        plan.hostname = Some("web.example.com".to_string());
+        let managed = vec![
+            "web.example.com".to_string(),
+            "apps.example.com".to_string(),
+            "*.apps.example.com".to_string(),
+        ];
+        plan.managed_hostnames = Some(managed.clone());
+        assert_eq!(endpoint_hostnames(&target, &plan), managed);
+        let gateway_profile = KubernetesGatewayRouteProfile {
+            gateway_class_name: "shared-gateway".to_string(),
+            listener_port: 80,
+            ..Default::default()
+        };
+        let gateway =
+            build_gateway(&target, &plan, &gateway_profile, "api-gateway", None).expect("gateway");
+        let listeners = gateway["spec"]["listeners"].as_array().expect("listeners");
+        assert_eq!(
+            listeners
+                .iter()
+                .map(|listener| listener["hostname"].as_str().expect("hostname"))
+                .collect::<Vec<_>>(),
+            managed
+        );
+        assert_eq!(
+            listeners
+                .iter()
+                .map(|listener| listener["name"].as_str().expect("name"))
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            3
+        );
+        assert_eq!(
+            build_http_route(&target, &plan, "api-public", "api-gateway", "api-route")["spec"]
+                ["hostnames"],
+            json!(managed)
+        );
+    }
+
+    #[test]
     fn wildcard_endpoint_keeps_ingress_tls_and_gateway_routes_aligned() {
         for wildcard_subdomains in [false, true] {
             let endpoints = [PublicEndpoint {
@@ -2672,6 +2776,7 @@ mod tests {
                 ..Default::default()
             };
             let plan = EndpointPlan {
+                managed_hostnames: None,
                 hostname: Some("api.example.com".to_string()),
                 public_url: Some("https://api.example.com".to_string()),
                 route: KubernetesRouteProfile::Ingress(ingress_profile.clone()),
@@ -2750,6 +2855,7 @@ mod tests {
         );
         profile_labels.insert("custom".to_string(), "kept".to_string());
         let plan = EndpointPlan {
+            managed_hostnames: None,
             hostname: Some("api.example.com".to_string()),
             public_url: Some("https://api.example.com".to_string()),
             route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
@@ -2796,6 +2902,7 @@ mod tests {
         let mut target = endpoint_target();
         target.health_check_path = Some("/ready".to_string());
         let plan = EndpointPlan {
+            managed_hostnames: None,
             hostname: None,
             public_url: None,
             route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
@@ -2836,6 +2943,7 @@ mod tests {
         let mut target = endpoint_target();
         target.health_check_path = Some("/ready".to_string());
         let plan = EndpointPlan {
+            managed_hostnames: None,
             hostname: None,
             public_url: None,
             route: KubernetesRouteProfile::Gateway(KubernetesGatewayRouteProfile {
@@ -2868,6 +2976,7 @@ mod tests {
     fn azure_gateway_provider_sets_alb_reference_annotations() {
         let target = endpoint_target();
         let plan = EndpointPlan {
+            managed_hostnames: None,
             hostname: None,
             public_url: None,
             route: KubernetesRouteProfile::Gateway(KubernetesGatewayRouteProfile {
@@ -2906,6 +3015,7 @@ mod tests {
         let mut target = endpoint_target();
         target.health_check_path = Some("/ready".to_string());
         let plan = EndpointPlan {
+            managed_hostnames: None,
             hostname: None,
             public_url: None,
             route: KubernetesRouteProfile::Gateway(KubernetesGatewayRouteProfile {
@@ -2950,6 +3060,7 @@ mod tests {
     fn gke_gateway_without_declared_health_check_does_not_invent_policy() {
         let target = endpoint_target();
         let plan = EndpointPlan {
+            managed_hostnames: None,
             hostname: None,
             public_url: None,
             route: KubernetesRouteProfile::Gateway(KubernetesGatewayRouteProfile {
@@ -2973,6 +3084,7 @@ mod tests {
     fn aws_alb_ingress_without_declared_health_check_does_not_invent_path() {
         let target = endpoint_target();
         let plan = EndpointPlan {
+            managed_hostnames: None,
             hostname: None,
             public_url: None,
             route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
@@ -3081,6 +3193,7 @@ mod tests {
         let mut target = endpoint_target();
         target.health_check_path = Some("/ready".to_string());
         let plan = EndpointPlan {
+            managed_hostnames: None,
             hostname: None,
             public_url: None,
             route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
@@ -3127,6 +3240,7 @@ mod tests {
     fn ingress_without_hostname_omits_host_rule_and_tls() {
         let target = endpoint_target();
         let plan = EndpointPlan {
+            managed_hostnames: None,
             hostname: None,
             public_url: None,
             route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
@@ -3152,6 +3266,7 @@ mod tests {
     fn gateway_with_byo_tls_secret_uses_same_namespace_certificate_ref() {
         let target = endpoint_target();
         let plan = EndpointPlan {
+            managed_hostnames: None,
             hostname: Some("api.example.com".to_string()),
             public_url: Some("https://api.example.com".to_string()),
             route: KubernetesRouteProfile::Gateway(KubernetesGatewayRouteProfile {
