@@ -402,14 +402,20 @@ impl PreflightRunner {
         // Apply mutations BEFORE compatibility checks
         // This ensures compatibility checks compare mutated stacks (old mutated vs new mutated)
         let mutated_stack = self.apply_mutations(stack, stack_state, config).await?;
-        let setup_update_authorized = setup_authority
-            == Some(alien_core::InitialSetupAuthority::DirectSetup)
-            || setup_update_authorization.is_some_and(|authorization| {
-                setup_update_authorization_matches(
-                    old_stack,
-                    &without_declined_live_resources(&mutated_stack, &config.input_values),
-                    authorization,
-                )
+        let direct_setup = setup_authority == Some(alien_core::InitialSetupAuthority::DirectSetup);
+        let hashed_target = match old_stack {
+            Some(_) if !direct_setup => Some(without_declined_live_resources(
+                &mutated_stack,
+                &config.input_values,
+                platform,
+            )?),
+            _ => None,
+        };
+        let setup_update_authorized = direct_setup
+            || hashed_target.as_ref().is_some_and(|target| {
+                setup_update_authorization.is_some_and(|authorization| {
+                    setup_update_authorization_matches(old_stack, target, authorization)
+                })
             });
 
         let prerequisite_summary = self
@@ -484,23 +490,28 @@ impl PreflightRunner {
     }
 }
 
-/// The target as the setup re-import hashed it, which strips declined Live resources before
-/// hashing; an update strips them only after these preflights. An unresolvable gate keeps its
-/// resource, so the digests differ and setup is required.
+/// The target as the setup re-import hashed it: without the declined Live resources an update
+/// strips only after these preflights. The compatibility checks keep the unstripped target, whose
+/// gated resources carry the exemptions those checks read.
+#[cfg(feature = "runtime-checks")]
 fn without_declined_live_resources(
     stack: &Stack,
     input_values: &std::collections::HashMap<String, serde_json::Value>,
-) -> Stack {
+    platform: Platform,
+) -> Result<Stack> {
     let (answers, still_frozen_gating) = alien_core::surviving_frozen_gate_answers(stack);
-    let mut projected = stack.clone();
-    if let Ok(declined) =
+    let declined =
         alien_core::declined_live_resources(stack, input_values, &answers, &still_frozen_gating)
-    {
-        projected
-            .resources
-            .retain(|resource_id, _| !declined.contains(resource_id));
-    }
-    projected
+            .map_err(|message| {
+                AlienError::new(ErrorData::DeploymentPrerequisiteCheckFailed {
+                    check_name: "Every runtime gate resolves to a boolean".to_string(),
+                    message,
+                    platform: Some(platform.to_string()),
+                })
+            })?;
+    let mut projected = stack.clone();
+    alien_core::remove_declined_resources(&mut projected, &declined);
+    Ok(projected)
 }
 
 fn setup_update_authorization_matches(
@@ -803,7 +814,7 @@ mod setup_update_authorization_tests {
                 None,
             )
             .await
-            .expect_err("the installed platform decides, not the target");
+            .expect_err("the deployment's own platform is not Azure");
         assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
     }
 }

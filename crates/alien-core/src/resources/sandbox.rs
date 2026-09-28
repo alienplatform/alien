@@ -1307,7 +1307,7 @@ mod tests {
         let vectors: serde_json::Value = serde_json::from_str(include_str!(
             "../../tests/fixtures/ecr-image-repository-parity.json"
         ))
-        .expect("shared parity vectors must be JSON");
+        .expect("the ECR repository vectors must be JSON");
         let sandbox_with = |image: &str| {
             let mut sandbox = Sandbox::new("agents".to_string())
                 .code(SandboxCode::Image {

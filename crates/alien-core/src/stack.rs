@@ -799,7 +799,7 @@ mod tests {
     }
 
     #[test]
-    fn frozen_resource_digest_is_order_independent_and_ignores_live_resources() {
+    fn setup_owned_digest_is_order_independent() {
         let first = Stack::new("first".to_string())
             .add(
                 Storage::new("alpha".to_string()).build(),

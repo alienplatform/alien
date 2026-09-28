@@ -1,36 +1,32 @@
-use crate::error::Result;
+use crate::error::{ErrorData, Result};
 use crate::{CheckResult, StackCompatibilityCheck};
-use alien_core::{ResourceLifecycle, Sandbox, Stack};
+use alien_core::{
+    declined_live_resources, surviving_frozen_gate_answers, DeploymentConfig, ResourceLifecycle,
+    Sandbox, Stack,
+};
+use alien_error::AlienError;
 
 /// Setup grants pull on exactly one private base-image repository, so changing it on a non-Frozen
-/// sandbox needs setup; a new tag or digest does not. The Frozen check covers Frozen sandboxes.
+/// sandbox needs setup; a new tag or digest does not. A sandbox the installed stack lacks counts as
+/// having none, and a declined one needs none. The Frozen check covers Frozen sandboxes.
 pub struct SandboxPrivateRepositoryUnchangedCheck;
 
-#[async_trait::async_trait]
-impl StackCompatibilityCheck for SandboxPrivateRepositoryUnchangedCheck {
-    fn description(&self) -> &'static str {
-        "A sandbox's private base-image repository shouldn't change during updates"
-    }
-
-    async fn check(&self, old_stack: &Stack, new_stack: &Stack) -> Result<CheckResult> {
+impl SandboxPrivateRepositoryUnchangedCheck {
+    fn compare(old_stack: &Stack, new_stack: &Stack, declined: &[String]) -> CheckResult {
         let mut errors = Vec::new();
 
         for (id, new_entry) in new_stack.resources() {
-            if new_entry.lifecycle == ResourceLifecycle::Frozen {
+            if new_entry.lifecycle == ResourceLifecycle::Frozen || declined.contains(id) {
                 continue;
             }
             let Some(new_sandbox) = new_entry.config.downcast_ref::<Sandbox>() else {
                 continue;
             };
-            let Some(old_sandbox) = old_stack
+            let old_repository = old_stack
                 .resources
                 .get(id)
                 .and_then(|entry| entry.config.downcast_ref::<Sandbox>())
-            else {
-                continue;
-            };
-
-            let old_repository = old_sandbox.private_base_image_repository();
+                .and_then(Sandbox::private_base_image_repository);
             let new_repository = new_sandbox.private_base_image_repository();
             if old_repository != new_repository {
                 errors.push(format!(
@@ -44,10 +40,45 @@ impl StackCompatibilityCheck for SandboxPrivateRepositoryUnchangedCheck {
         }
 
         if errors.is_empty() {
-            Ok(CheckResult::success())
+            CheckResult::success()
         } else {
-            Ok(CheckResult::failed(errors))
+            CheckResult::failed(errors)
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl StackCompatibilityCheck for SandboxPrivateRepositoryUnchangedCheck {
+    fn description(&self) -> &'static str {
+        "A sandbox's private base-image repository shouldn't change during updates"
+    }
+
+    async fn check(&self, old_stack: &Stack, new_stack: &Stack) -> Result<CheckResult> {
+        Ok(Self::compare(old_stack, new_stack, &[]))
+    }
+
+    async fn check_with_config(
+        &self,
+        old_stack: &Stack,
+        new_stack: &Stack,
+        config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        let (answers, still_frozen_gating) = surviving_frozen_gate_answers(new_stack);
+        let declined = declined_live_resources(
+            new_stack,
+            &config.input_values,
+            &answers,
+            &still_frozen_gating,
+        )
+        .map_err(|message| {
+            AlienError::new(ErrorData::StackCompatibilityCheckFailed {
+                check_name: self.description().to_string(),
+                message,
+                old_resource_id: None,
+                new_resource_id: None,
+            })
+        })?;
+        Ok(Self::compare(old_stack, new_stack, &declined))
     }
 }
 
@@ -93,6 +124,24 @@ mod tests {
         )
         .await;
         assert!(result.success, "{:?}", result.errors);
+    }
+
+    #[tokio::test]
+    async fn a_sandbox_new_to_the_installed_stack_needs_setup_only_for_a_private_base() {
+        let installed = Stack::new("stack".to_string()).build();
+
+        let private = run(
+            installed.clone(),
+            stack(Some(REPO_A), "s3://bucket/one.zip"),
+        )
+        .await;
+        assert!(
+            !private.success,
+            "no grant was rendered for this repository"
+        );
+
+        let public = run(installed, stack(None, "s3://bucket/one.zip")).await;
+        assert!(public.success, "{:?}", public.errors);
     }
 
     #[tokio::test]

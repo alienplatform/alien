@@ -188,7 +188,7 @@ fn strip_declined_frozen_resources(mut stack: Stack, answers: &alien_core::GateA
         .filter(|(_, input_id)| answers.get(*input_id) == Some(&false))
         .map(|(resource_id, _)| resource_id.clone())
         .collect();
-    remove_declined(&mut stack, &declined);
+    alien_core::remove_declined_resources(&mut stack, &declined);
     stack
 }
 
@@ -234,7 +234,7 @@ fn strip_frozen_dominated_live_resources(
         })
         .map(|(resource_id, _)| resource_id.clone())
         .collect();
-    remove_declined(&mut stack, &declined);
+    alien_core::remove_declined_resources(&mut stack, &declined);
     stack
 }
 
@@ -265,7 +265,7 @@ pub fn strip_declined_live_resources(
         still_frozen_gating,
     )
     .map_err(|message| AlienError::new(ErrorData::MissingConfiguration { message }))?;
-    remove_declined(&mut stack, &declined);
+    alien_core::remove_declined_resources(&mut stack, &declined);
     Ok(stack)
 }
 
@@ -429,86 +429,6 @@ pub fn audit_live_gate_transitions(
             "A live gate transition was requested; the executor's status \
              transitions for this resource complete or fail it"
         );
-    }
-}
-
-fn remove_declined(stack: &mut Stack, declined: &[String]) {
-    if declined.is_empty() {
-        return;
-    }
-
-    for resource_id in declined {
-        info!(
-            resource_id = %resource_id,
-            "The deployer declined this gated resource; it leaves the desired stack"
-        );
-        stack.resources.shift_remove(resource_id);
-    }
-
-    // Removing the resource without its inbound links would leave a survivor pointing at
-    // something that was never created, which the executor and binding resolution both
-    // reject. Scrubbing here is what lets an ungated resource link a gated one.
-    for (resource_id, entry) in stack.resources.iter_mut() {
-        let dropped = match alien_core::resource_links_mut(&mut entry.config) {
-            Some(owner) => {
-                let before = owner.links().len();
-                owner
-                    .links_mut()
-                    .retain(|link| !declined.contains(&link.id));
-                before - owner.links().len()
-            }
-            None => 0,
-        };
-        if dropped > 0 {
-            info!(
-                resource_id = %resource_id,
-                dropped,
-                declined = ?declined,
-                "Dropped links to declined resources; this resource keeps its own lifecycle"
-            );
-        }
-
-        let ordering_before = entry.dependencies.len();
-        entry
-            .dependencies
-            .retain(|dependency| !declined.contains(&dependency.id));
-        // The release-time preflight refuses authored ordering edges onto gated resources,
-        // so one reaching here predates the rule; dropping it keeps the stack coherent.
-        if ordering_before > entry.dependencies.len() {
-            info!(
-                resource_id = %resource_id,
-                dropped = ordering_before - entry.dependencies.len(),
-                "Dropped ordering edges to declined resources"
-            );
-        }
-    }
-
-    scrub_declined_grants(stack, declined);
-}
-
-/// Drop grants naming a declined resource from every permission profile.
-///
-/// Not inert: GCP applies every non-`"*"` entry without consulting the desired resources.
-/// Nothing is lost, because the mutations re-derive them whenever the gate is accepted.
-fn scrub_declined_grants(stack: &mut Stack, declined: &[String]) {
-    let scrub = |profile: &mut alien_core::permissions::PermissionProfile| {
-        for resource_id in declined {
-            if profile.0.shift_remove(resource_id).is_some() {
-                info!(
-                    resource_id = %resource_id,
-                    "Dropped the grant for a declined resource"
-                );
-            }
-        }
-    };
-
-    for profile in stack.permissions.profiles.values_mut() {
-        scrub(profile);
-    }
-    match &mut stack.permissions.management {
-        alien_core::permissions::ManagementPermissions::Extend(profile)
-        | alien_core::permissions::ManagementPermissions::Override(profile) => scrub(profile),
-        alien_core::permissions::ManagementPermissions::Auto => {}
     }
 }
 
