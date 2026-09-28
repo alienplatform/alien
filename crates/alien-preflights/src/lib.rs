@@ -364,6 +364,9 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::ResourceNameLengthCheck));
         registry.add_compile_time_check(Box::new(compile_time::ResourceIdPatternCheck));
         registry.add_compile_time_check(Box::new(compile_time::WorkerMemoryCheck));
+        registry.add_compile_time_check(Box::new(
+            compile_time::kubernetes_compute::KubernetesComputeCheck,
+        ));
         registry.add_compile_time_check(Box::new(compile_time::StackInputsDefinitionCheck));
 
         // Add deployment prerequisite checks. These validate the concrete

@@ -57,3 +57,5 @@ pub use valid_resource_dependencies::{
     validate_stack_dependencies, ValidResourceDependenciesCheck,
 };
 pub use worker_memory::WorkerMemoryCheck;
+
+pub mod kubernetes_compute;

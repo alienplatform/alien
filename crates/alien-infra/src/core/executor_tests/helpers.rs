@@ -116,7 +116,7 @@ pub fn new_executor_with_filter(
     StackExecutor::new(stack, ClientConfig::Test, Some(filter))
 }
 
-fn default_deployment_config() -> alien_core::DeploymentConfig {
+pub(super) fn default_deployment_config() -> alien_core::DeploymentConfig {
     alien_core::DeploymentConfig::builder()
         .stack_settings(alien_core::StackSettings::default())
         .environment_variables(alien_core::EnvironmentVariablesSnapshot {

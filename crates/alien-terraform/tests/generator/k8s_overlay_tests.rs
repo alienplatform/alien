@@ -13,7 +13,8 @@ use super::helpers::{
     snapshot_module,
 };
 use alien_core::{
-    AzureResourceGroup, Container, ContainerCode, KubernetesCertificateMode, KubernetesCluster,
+    AzureResourceGroup, CapacityGroup, ComputeCluster, ComputePoolSelection, ComputeSettings,
+    Container, ContainerCode, KubernetesCertificateMode, KubernetesCluster,
     KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesExposureSettings,
     KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
     KubernetesSettings, ManagementPermissions, Network, NetworkSettings, PermissionProfile,
@@ -33,6 +34,58 @@ fn storage_data_read_service_account() -> ServiceAccount {
                 .clone(),
         )
         .build()
+}
+
+#[test]
+fn kubernetes_compute_pools_do_not_emit_cloud_fleets_or_choices() {
+    let baseline = Stack::new("portable".to_string()).build();
+    let stack = Stack::new("portable".to_string())
+        .add(
+            ComputeCluster::new("compute".to_string())
+                .capacity_group(CapacityGroup {
+                    group_id: "apps".to_string(),
+                    instance_type: None,
+                    profile: None,
+                    min_size: 1,
+                    max_size: 3,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                })
+                .dynamic_container_pool("apps".to_string())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let settings = StackSettings {
+        compute: Some(ComputeSettings {
+            pools: [(
+                "apps".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 2,
+                    machine: Some("provider-machine".to_string()),
+                    failure_domains: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }),
+        ..Default::default()
+    };
+    // Compare the complete install artifact, including registration and advanced
+    // settings. No cloud emitter exists for this resource in the built-in registry:
+    // accidentally dispatching it to a cloud backend fails before comparison.
+    for target in [
+        TerraformTarget::Eks,
+        TerraformTarget::Gke,
+        TerraformTarget::Aks,
+    ] {
+        let expected = render(&baseline, target, StackSettings::default());
+        let actual = render(&stack, target, settings.clone());
+        assert_eq!(
+            actual.files, expected.files,
+            "logical pools changed {target:?} infrastructure"
+        );
+    }
 }
 
 #[test]

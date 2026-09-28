@@ -1,14 +1,79 @@
 //! EKS CloudFormation target coverage.
 
-use super::helpers::render_built_ins_target;
+use super::helpers::{render_built_ins_target, render_built_ins_template};
 use alien_cloudformation::{CloudFormationTarget, RegistrationMode};
 use alien_core::{
+    CapacityGroup, ComputeCluster, ComputePoolSelection, ComputeSettings,
     KubernetesCertificateMode, KubernetesCluster, KubernetesClusterOwnership,
     KubernetesClusterProvider, KubernetesExposureSettings, KubernetesHeartbeatMode,
     KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
     KubernetesSettings, PermissionProfile, RemoteStackManagement, ResourceLifecycle,
     ServiceAccount, Stack, StackSettings, Storage,
 };
+
+#[test]
+fn eks_compute_pools_do_not_emit_cloud_fleets_or_choices() {
+    let baseline = Stack::new("portable".to_string())
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let stack = Stack::new("portable".to_string())
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ComputeCluster::new("compute".to_string())
+                .capacity_group(CapacityGroup {
+                    group_id: "apps".to_string(),
+                    instance_type: None,
+                    profile: None,
+                    min_size: 1,
+                    max_size: 3,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                })
+                .dynamic_container_pool("apps".to_string())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let settings = StackSettings {
+        compute: Some(ComputeSettings {
+            pools: [(
+                "apps".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 2,
+                    machine: Some("provider-machine".to_string()),
+                    failure_domains: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }),
+        ..Default::default()
+    };
+    let render = |stack: &Stack, settings| {
+        render_built_ins_template(
+            stack,
+            settings,
+            RegistrationMode::OutputsFallback,
+            CloudFormationTarget::Eks,
+            "kubernetes",
+            "portable compute pools",
+        )
+        .0
+    };
+    // Full template equality proves the pool adds neither fleet infrastructure,
+    // machine-choice parameters nor cloud registration entries. Both templates
+    // also pass the normal CloudFormation linter in the render helper.
+    assert_eq!(
+        serde_json::to_value(render(&stack, settings)).unwrap(),
+        serde_json::to_value(render(&baseline, StackSettings::default())).unwrap(),
+    );
+}
 
 #[test]
 fn eks_target_renders_managed_cluster_and_kubernetes_import_payload() {

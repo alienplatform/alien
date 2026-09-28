@@ -177,6 +177,18 @@ fn controller_platform_for_entry(
         return Platform::Kubernetes;
     }
 
+    // Compute pools describe placement in the existing Kubernetes namespace,
+    // even when other Frozen resources use an underlying cloud provider.
+    if stack_platform == Platform::Kubernetes
+        && resource.is_some_and(|resource| {
+            resource
+                .downcast_ref::<alien_core::ComputeCluster>()
+                .is_some()
+        })
+    {
+        return Platform::Kubernetes;
+    }
+
     if stack_platform == Platform::Kubernetes && lifecycle == ResourceLifecycle::Frozen {
         base_platform.unwrap_or(stack_platform)
     } else {
@@ -199,6 +211,40 @@ fn controller_platform_for_state(stack_platform: Platform, state: &StackResource
 mod controller_platform_tests {
     use super::*;
     use alien_core::{KubernetesClusterProvider, KubernetesHeartbeatMode, Storage};
+
+    #[test]
+    fn kubernetes_compute_never_uses_the_underlying_cloud_controller() {
+        let compute = Resource::new(alien_core::ComputeCluster::new("compute".to_string()).build());
+        for base_platform in [
+            None,
+            Some(Platform::Aws),
+            Some(Platform::Gcp),
+            Some(Platform::Azure),
+        ] {
+            for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+                assert_eq!(
+                    controller_platform_for_entry(
+                        Platform::Kubernetes,
+                        base_platform,
+                        lifecycle,
+                        Some(&compute),
+                    ),
+                    Platform::Kubernetes,
+                    "Kubernetes pools must not create a cloud machine fleet"
+                );
+            }
+        }
+        assert_eq!(
+            controller_platform_for_entry(
+                Platform::Gcp,
+                None,
+                ResourceLifecycle::Frozen,
+                Some(&compute),
+            ),
+            Platform::Gcp,
+            "a cloud deployment must retain cloud capacity provisioning"
+        );
+    }
 
     #[test]
     fn existing_cloud_cluster_is_verified_by_the_kubernetes_operator() {
@@ -1293,8 +1339,9 @@ impl StackExecutor {
     }
 
     /// Continues controller states registered by an external setup engine
-    /// without planning structural changes or initializing new controllers.
-    pub async fn continue_imported(&self, state: StackState) -> Result<StepResult> {
+    /// without planning structural changes. Logical Kubernetes compute pools are
+    /// initialized here because cloud setup engines do not provision them.
+    pub async fn continue_imported(&self, mut state: StackState) -> Result<StepResult> {
         if let Some(resource_id) = state
             .resources
             .keys()
@@ -1309,7 +1356,27 @@ impl StackExecutor {
             }));
         }
 
+        let mut logical_compute = Vec::new();
         for (resource_id, desired) in &self.resources {
+            if !state.resources.contains_key(resource_id)
+                && state.platform == Platform::Kubernetes
+                && desired
+                    .resource
+                    .downcast_ref::<alien_core::ComputeCluster>()
+                    .is_some()
+            {
+                // This controller verifies namespace access. It never provisions
+                // cloud capacity, so no external setup state exists to import.
+                let mut pending = StackResourceState::new_pending(
+                    desired.resource.resource_type().to_string(),
+                    desired.resource.clone(),
+                    Some(desired.lifecycle),
+                    desired.dependencies.clone(),
+                );
+                pending.controller_platform = Some(Platform::Kubernetes);
+                logical_compute.push((resource_id.clone(), pending));
+                continue;
+            }
             let resource = state.resources.get(resource_id).ok_or_else(|| {
                 AlienError::new(ErrorData::ImportedSetupStateInvalid {
                     message: format!(
@@ -1333,6 +1400,13 @@ impl StackExecutor {
 
             match resource.status {
                 ResourceStatus::Running => {}
+                ResourceStatus::Pending
+                    if state.platform == Platform::Kubernetes
+                        && desired
+                            .resource
+                            .downcast_ref::<alien_core::ComputeCluster>()
+                            .is_some()
+                        && resource.controller_platform == Some(Platform::Kubernetes) => {}
                 ResourceStatus::Provisioning if resource.has_internal_state() => {}
                 status => {
                     return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
@@ -1346,6 +1420,7 @@ impl StackExecutor {
             }
         }
 
+        state.resources.extend(logical_compute);
         self.step_inner(state, false).await
     }
 
