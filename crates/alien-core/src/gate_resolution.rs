@@ -148,8 +148,8 @@ pub fn declined_live_resources(
 }
 
 /// Frozen-gate answers read off a stack whose Frozen declines were already stripped: a surviving
-/// gated setup-created resource reads as yes, including one whose gate was never answered. That
-/// can keep a resource the real strip drops, so callers may only use it to require setup.
+/// gated setup-created resource reads as yes, even when its gate was never answered. So a strip
+/// built on it never drops what the real strip keeps: a digest can miss a match, never fake one.
 pub fn surviving_frozen_gate_answers(stack: &Stack) -> (GateAnswers, HashSet<String>) {
     let still_frozen_gating: HashSet<String> = frozen_gated(stack)
         .map(|(_, input_id)| input_id.to_string())

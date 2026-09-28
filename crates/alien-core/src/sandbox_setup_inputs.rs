@@ -4,7 +4,9 @@
 use alien_error::AlienError;
 use serde_json::Value;
 
-use crate::remote_bindings::{remote_binding_for_entry, remote_binding_is_deliverable};
+use crate::remote_bindings::{
+    remote_binding_for_entry, remote_binding_is_deliverable, RemoteBindingDefinition,
+};
 use crate::sandbox_build_role::SandboxBuildRole;
 use crate::sandbox_egress::sandbox_egress_network;
 use crate::{
@@ -28,7 +30,7 @@ pub const SETUP_INPUTS_COMPARISON_ACCOUNT: SetupAccount<'static> = SetupAccount 
 };
 
 /// The id of the network an AWS sandbox's egress connector attaches to, `None` for `allow`.
-/// The refusal is the reason, for the caller to wrap.
+/// The error is the refusal message, for the caller to wrap in its own error.
 pub fn aws_sandbox_egress_network_id<'a>(
     stack: &'a Stack,
     sandbox: &Sandbox,
@@ -46,6 +48,36 @@ pub fn aws_sandbox_egress_network_id<'a>(
         );
     }
     Ok(Some(network.id))
+}
+
+/// The build role setup renders for this sandbox from its bundle.
+pub fn aws_sandbox_build_role<'a>(
+    sandbox: &'a Sandbox,
+    bundle_uri: &'a str,
+    lifecycle: ResourceLifecycle,
+    account: SetupAccount<'a>,
+) -> SandboxBuildRole<'a> {
+    SandboxBuildRole::builder()
+        .sandbox_id(&sandbox.id)
+        .partition(account.partition)
+        .account_id(account.account_id)
+        .region(account.region)
+        .bundle_uri(bundle_uri)
+        .runtime_built(lifecycle == ResourceLifecycle::Live)
+        .maybe_private_base_image(sandbox.private_base_image.as_deref())
+        .build()
+}
+
+/// The Remote Bindings grant setup renders for this sandbox, `None` when it publishes none.
+pub fn aws_sandbox_remote_grant(
+    stack: &Stack,
+    sandbox: &Sandbox,
+) -> Option<&'static RemoteBindingDefinition> {
+    stack
+        .resources
+        .get(&sandbox.id)
+        .filter(|entry| remote_binding_is_deliverable(entry))
+        .and_then(remote_binding_for_entry)
 }
 
 /// Each setup input with the name a refused update reports it by. A new bundle under the same
@@ -67,25 +99,12 @@ pub fn aws_sandbox_setup_inputs(
             "an AWS sandbox is built from a prebuilt s3:// bundle, not from source".to_string(),
         ));
     };
-    let policy = SandboxBuildRole::builder()
-        .sandbox_id(&sandbox.id)
-        .partition(account.partition)
-        .account_id(account.account_id)
-        .region(account.region)
-        .bundle_uri(image)
-        .runtime_built(lifecycle == ResourceLifecycle::Live)
-        .maybe_private_base_image(sandbox.private_base_image.as_deref())
-        .build()
-        .policy()?;
+    let policy = aws_sandbox_build_role(sandbox, image, lifecycle, account).policy()?;
     let network = aws_sandbox_egress_network_id(stack, sandbox).map_err(refuse)?;
     // An update that stops publishing keeps the setup-owned Remote Bindings role, so without
     // this the grant would outlive the declaration.
-    let grant = stack
-        .resources
-        .get(&sandbox.id)
-        .filter(|entry| remote_binding_is_deliverable(entry))
-        .and_then(remote_binding_for_entry)
-        .map(|definition| definition.permission_set);
+    let grant =
+        aws_sandbox_remote_grant(stack, sandbox).map(|definition| definition.permission_set);
     Ok(vec![
         (
             "egress",

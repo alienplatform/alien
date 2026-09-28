@@ -758,7 +758,7 @@ mod tests {
                 .private_base_image(
                     "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base:1".to_string(),
                 )
-                .egress(alien_core::SandboxEgress::Deny)
+                .egress(alien_core::SandboxEgress::Allow)
                 .lifecycle(alien_core::SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -785,10 +785,21 @@ mod tests {
             without_sandbox.setup_owned_digest(),
             "a declined sandbox must not add setup-owned state"
         );
+        let kept = strip_live(with_sandbox(false), false);
+        let entry = &kept.resources["agents"];
+        let inputs = alien_core::sandbox_setup_inputs::comparable_aws_sandbox_setup_inputs(
+            &kept,
+            entry.config.downcast_ref().expect("a sandbox"),
+            entry.lifecycle,
+        );
+        assert_eq!(
+            inputs[0].0, "egress",
+            "the control resolves its setup inputs"
+        );
         assert_ne!(
-            strip_live(with_sandbox(false), false).setup_owned_digest(),
+            kept.setup_owned_digest(),
             without_sandbox.setup_owned_digest(),
-            "the control: an ungated sandbox's repository is setup-owned"
+            "the control: an ungated sandbox's setup inputs are setup-owned"
         );
     }
 

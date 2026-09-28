@@ -855,6 +855,18 @@ mod setup_update_authorization_tests {
             .expect("checks run");
         assert!(!on_aws.success, "an AWS Frozen image change needs setup");
 
+        runner
+            .run_deployment_time_preflights(
+                target.clone(),
+                &StackState::new(Platform::Azure),
+                &config,
+                &client,
+                Some(&old),
+                None,
+                None,
+            )
+            .await
+            .expect("an Azure deployment rolls the image");
         let error = runner
             .run_deployment_time_preflights(
                 target,

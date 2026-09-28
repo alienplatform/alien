@@ -14,7 +14,7 @@ use std::collections::HashMap;
 fn sandbox() -> Sandbox {
     Sandbox::new("agents".to_string())
         .code(SandboxCode::Image {
-            image: "s3://bucket/bundle.zip".to_string(),
+            image: "s3://bucket/sandbox-bundle/v1/bundle.zip".to_string(),
         })
         .private_base_image("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base:1".to_string())
         .egress(SandboxEgress::Deny)
@@ -146,6 +146,19 @@ fn authorization(installed: &Stack, reimported: &Stack) -> SetupUpdateAuthorizat
     }
 }
 
+/// The kept sandbox must hash through its real setup inputs, not the whole-configuration fallback
+/// a sandbox whose inputs do not resolve takes.
+fn assert_resolved_setup_inputs(stack: &Stack) {
+    let entry = &stack.resources["agents"];
+    let sandbox = entry.config.downcast_ref::<Sandbox>().expect("a sandbox");
+    let inputs = alien_core::sandbox_setup_inputs::comparable_aws_sandbox_setup_inputs(
+        stack,
+        sandbox,
+        entry.lifecycle,
+    );
+    assert_eq!(inputs[0].0, "egress", "{inputs:?}");
+}
+
 struct Case {
     default: Option<bool>,
     shares_frozen_gate: bool,
@@ -165,6 +178,9 @@ async fn rerun(case: Case) -> (bool, Result<bool, String>) {
     let installed = prepared(release(false), &config, &answers).await;
     let reimported = prepared(release(true), &config, &answers).await;
     let sandbox_kept = reimported.resources().any(|(id, _)| id == "agents");
+    if sandbox_kept {
+        assert_resolved_setup_inputs(&reimported);
+    }
     let authorization = authorization(&installed, &reimported);
 
     let authorized = update(
