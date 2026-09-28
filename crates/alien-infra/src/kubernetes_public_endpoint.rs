@@ -1377,6 +1377,14 @@ fn resolve_endpoint_plan(
                 }
             };
 
+            if matches!(
+                certificate,
+                EndpointCertificate::ManagedTlsSecret { .. }
+                    | EndpointCertificate::ManagedAcmImport { .. }
+            ) {
+                validate_managed_alias_certificates(target.resource_id, domain)?;
+            }
+
             let public_url = if matches!(certificate, EndpointCertificate::None) {
                 format!("http://{}", domain.fqdn)
             } else {
@@ -1454,6 +1462,25 @@ fn build_service(target: &KubernetesPublicEndpointTarget<'_>, service_name: &str
         }),
         ..Default::default()
     }
+}
+
+/// The runtime publishes one managed certificate per resource. Reject aliases
+/// that need separate certificate material before creating any Kubernetes objects.
+fn validate_managed_alias_certificates(
+    resource_id: &str,
+    domain: &alien_core::ResourceDomainInfo,
+) -> Result<()> {
+    if let Some(alias) = domain
+        .aliases
+        .iter()
+        .find(|alias| alias.certificate_id != domain.certificate_id)
+    {
+        return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+            resource_id: resource_id.to_string(),
+            message: format!("Generated Kubernetes alias '{}' requires a separate certificate; all aliases must share the primary managed certificate", alias.fqdn),
+        }));
+    }
+    Ok(())
 }
 
 /// Keep routing and TLS names aligned. A wildcard does not include its base host.
@@ -2654,6 +2681,23 @@ mod tests {
         assert!(target.public);
         assert_eq!(target.service_port, 8080);
         assert_eq!(target.target_port, 8080);
+    }
+
+    #[test]
+    fn managed_alias_with_separate_certificate_fails_before_route_creation() {
+        let mut domain: alien_core::ResourceDomainInfo = serde_json::from_value(json!({
+            "fqdn": "api.example.com", "certificateId": "primary-cert",
+            "certificateStatus": "issued", "dnsStatus": "active",
+            "aliases": [{"fqdn": "*.api.example.com", "certificateId": "primary-cert",
+                "certificateStatus": "issued", "dnsStatus": "active"}]
+        }))
+        .expect("domain metadata");
+        validate_managed_alias_certificates("api", &domain).expect("shared certificate");
+        domain.aliases[0].certificate_id = "another-cert".to_string();
+        let error = validate_managed_alias_certificates("api", &domain)
+            .expect_err("separate certificate must not be served with primary material");
+        assert!(error.message.contains("requires a separate certificate"));
+        assert!(error.message.contains("*.api.example.com"));
     }
 
     #[test]
