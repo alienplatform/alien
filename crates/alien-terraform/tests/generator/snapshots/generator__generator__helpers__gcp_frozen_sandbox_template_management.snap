@@ -284,8 +284,8 @@ resource "google_project_iam_custom_role" "gcp_role_sandbox_templates" {
   count       = var.gcp_manage_custom_roles ? 1 : 0
   project     = var.gcp_project
   role_id     = format("role_%s_sandbox_templates", local.gcp_custom_role_prefix)
-  title       = "${local.deployment_name}: Sandbox Templates"
-  description = "Used by ${local.deployment_name}. Create, read and delete environment templates under the selected reasoning engine. Resource prefix: ${local.resource_prefix}."
+  title       = "${local.deployment_name}: Sandbox templates"
+  description = "Used by ${local.deployment_name}. Allows creating, reading and deleting environment templates, which set a sandbox's image and internet access, under the selected reasoning engine. Resource prefix: ${local.resource_prefix}."
   stage       = "GA"
   permissions = [
     "aiplatform.sandboxEnvironmentTemplates.create",

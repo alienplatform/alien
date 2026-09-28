@@ -1,13 +1,13 @@
 //! What a sandbox image must carry for the agent to serve, and the Dockerfile text carrying it.
 //!
-//! Two images exist and neither is built the way the other is. AWS renders one per deployment onto
-//! a customer-supplied base image; GCP builds one static image in CI. Nothing at build time reads
-//! the other side, and a value that disagrees is invisible until a session fails: an agent
-//! listening on a port no caller dials, or an exec into a uid the image never created.
+//! Two kinds of image exist and neither is built the way the other is. AWS renders one per
+//! deployment onto a customer-supplied base image; GCP builds static images in CI. Nothing at build
+//! time reads the other side, and a value that disagrees is invisible until a session fails: an
+//! agent listening on a port no caller dials, or an exec into a uid the image never created.
 //!
-//! So the values live here once and both images render the block that carries them from this
-//! module. The GCP image is committed as generated text because the release workflow builds it
-//! with `docker build`, which cannot call a Rust function.
+//! So the values live here once and both kinds render the block that carries them from this
+//! module. The GCP Dockerfiles are committed as generated text because the release workflow builds
+//! them with `docker build`, which cannot call a Rust function.
 
 /// Path the agent binary is installed at inside every sandbox image.
 ///
@@ -165,7 +165,7 @@ pub fn entrypoint(image: &SandboxImage) -> String {
     )
 }
 
-/// Path of the committed GCP Dockerfile, relative to the repository root.
+/// Path of the committed minimal wolfi GCP Dockerfile, relative to the repository root.
 #[cfg(test)]
 const GCP_DOCKERFILE: &str = "docker/Dockerfile.alien-sandbox-agent";
 
@@ -189,19 +189,20 @@ RUN apk add --no-cache git",
     )
 }
 
-/// Renders [`GCP_DEFAULT_DOCKERFILE`], the default base remote sandboxes get on GCP, which is the
-/// same `buildpack-deps` the AWS default renders onto.
+/// Renders [`GCP_DEFAULT_DOCKERFILE`], the published default GCP sandbox image: the agent on
+/// `buildpack-deps`, a full Ubuntu build toolchain.
 #[cfg(test)]
 fn gcp_default_sandbox_dockerfile() -> String {
+    assert_eq!(
+        GCP_AGENT_PLATFORM.exec_uid, 1000,
+        "the userdel below exists only because Ubuntu's own user holds the exec uid"
+    );
     gcp_dockerfile(
         "Multi-arch build for the default GCP sandbox image: buildpack-deps plus the agent",
         "docker.io/library/buildpack-deps:26.04",
-        &format!(
-            "# Ubuntu ships `ubuntu` at uid {uid}. Appending a second entry for that uid leaves `id` and every
+        "# Ubuntu ships `ubuntu` at uid 1000. Appending a second entry for that uid leaves `id` and every
 # tool resolving it to `ubuntu`, so the exec user would not be `sandbox`.
 RUN userdel --remove ubuntu",
-            uid = GCP_AGENT_PLATFORM.exec_uid
-        ),
     )
 }
 

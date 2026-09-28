@@ -417,10 +417,11 @@ mod tests {
             assert!(fragment.resource_blocks.is_empty(), "{fragment:?}");
         }
 
-        /// The management identity's template verbs land on this sandbox's engine, never at project
-        /// scope, where they would let it replace a sibling sandbox's image.
+        /// The engine grant follows the profile: one member when `sandbox/templates` is granted on
+        /// this sandbox, none without it. Where the member lands is pinned by the generator test
+        /// `a_frozen_gcp_sandbox_manager_gets_template_verbs_on_its_engine_only`.
         #[test]
-        fn template_management_is_bound_on_the_engine() {
+        fn template_management_is_bound_only_when_granted() {
             let granted = |with_profile: bool| {
                 let sandbox = Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
@@ -476,21 +477,6 @@ mod tests {
                 })
                 .collect();
             assert_eq!(members.len(), 1, "{fragment:?}");
-            assert_eq!(
-                attribute(members[0], "reasoning_engine"),
-                format!("{ENGINE_RESOURCE}.agents_engine.name")
-            );
-            assert_eq!(
-                attribute(members[0], "member"),
-                "\"serviceAccount:${google_service_account.manager.email}\""
-            );
-            assert!(
-                !fragment.resource_blocks.iter().any(|block| block
-                    .labels
-                    .first()
-                    .is_some_and(|label| label.as_str() == "google_project_iam_member")),
-                "{fragment:?}"
-            );
             assert!(granted(false).resource_blocks.is_empty());
         }
 
@@ -541,6 +527,32 @@ mod tests {
                 type_keys,
                 "emitted keys must track the binding type"
             );
+        }
+
+        /// The binding is where a workload reads whether the sandbox is isolated, so each mode must
+        /// render its own value, not only a key of the right name.
+        #[test]
+        fn allow_egress_renders_the_declared_mode() {
+            for (egress, expected) in [(SandboxEgress::Deny, false), (SandboxEgress::Allow, true)] {
+                let emitted = emit_binding(egress.clone(), None)
+                    .expect("the binding renders")
+                    .expect("an Agent Platform sandbox has a binding");
+                let Expression::Object(map) = &emitted else {
+                    panic!("expected an object, got {emitted:?}");
+                };
+                let value = map
+                    .iter()
+                    .find_map(|(key, value)| {
+                        let name = match key {
+                            hcl::expr::ObjectKey::Identifier(id) => id.as_str(),
+                            hcl::expr::ObjectKey::Expression(Expression::String(s)) => s.as_str(),
+                            _ => return None,
+                        };
+                        (name == "allowEgress").then_some(value)
+                    })
+                    .expect("allowEgress is emitted");
+                assert_eq!(value, &Expression::Bool(expected), "{egress:?}");
+            }
         }
 
         /// A hostname list has no representation in the single internet-access switch, so it is

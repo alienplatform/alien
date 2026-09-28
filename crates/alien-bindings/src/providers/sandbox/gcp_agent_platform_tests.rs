@@ -194,7 +194,7 @@ async fn create_waits_for_the_agent_and_deletes_the_sandbox_when_it_never_answer
     assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
     let rendered = format!("{error:?}");
     assert!(
-        rendered.contains("Bad Gateway") && rendered.contains("did not answer within"),
+        rendered.contains("Bad Gateway") && rendered.contains("did not become servable within"),
         "the timeout sits over the last probe's cause: {rendered}"
     );
 }
@@ -552,18 +552,42 @@ async fn get_refuses_an_agent_whose_health_omits_the_boot_id() {
 /// then panics the test — red either way.
 #[tokio::test(start_paused = true)]
 async fn get_does_not_hang_on_a_wedged_agent() {
-    let error = provider_from(Arc::new(WedgedAgent))
+    let error = provider_from(Arc::new(WedgedAgent::default()))
         .get("s1")
         .await
         .expect_err("a wedged agent is unreachable, not a hang");
     assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
 }
 
+/// The first readiness probe after create wedges, so the wait's own deadline cuts it off with no
+/// finished probe to report, and the sandbox the caller never received is still deleted.
+#[tokio::test(start_paused = true)]
+async fn create_gives_up_on_a_wedged_first_probe_and_deletes_the_sandbox() {
+    let client = Arc::new(WedgedAgent::default());
+    let started = tokio::time::Instant::now();
+    let error = provider_from(client.clone())
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect_err("a wedged agent fails create, not hangs it");
+    assert!(
+        started.elapsed() < AGENT_PROBE_BUDGET,
+        "the wait's deadline, not the probe's own budget, ended the wait"
+    );
+    assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+    assert!(
+        error.to_string().contains("did not become servable within"),
+        "{error}"
+    );
+    assert_eq!(client.deletes.load(Ordering::SeqCst), 1);
+}
+
 /// A client whose sandbox reads RUNNING but whose `execute` never answers, standing in for an agent
-/// that accepts the health probe and then wedges. Only the two methods `get` reaches are real; the
-/// rest are unreachable in this test.
-#[derive(Debug)]
-struct WedgedAgent;
+/// that accepts the health probe and then wedges. Only the methods `get` and `create` reach are
+/// real; the rest are unreachable in these tests.
+#[derive(Debug, Default)]
+struct WedgedAgent {
+    deletes: AtomicUsize,
+}
 
 #[async_trait]
 impl AgentPlatformApi for WedgedAgent {
@@ -611,13 +635,14 @@ impl AgentPlatformApi for WedgedAgent {
         _engine: &str,
         _request: SandboxCreateRequest,
     ) -> ClientResult<Operation> {
-        unimplemented!()
+        Ok(done_op(serde_json::json!({ "name": sandbox_name("s1") })))
     }
     async fn list_sandboxes(&self, _engine: &str) -> ClientResult<Vec<SandboxEnvironment>> {
         unimplemented!()
     }
     async fn delete_sandbox(&self, _engine: &str, _sandbox: &str) -> ClientResult<()> {
-        unimplemented!()
+        self.deletes.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
     async fn snapshot(
         &self,

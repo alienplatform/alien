@@ -1,7 +1,7 @@
-//! Refuses the two GCP management profiles that leave a Frozen sandbox unable to publish its image.
+//! Refuses the GCP management profiles whose `sandbox/templates` grant would bind nothing.
 //!
-//! `sandbox/templates` binds on one sandbox's engine, so at `*` it renders nothing, and an override
-//! that leaves it off a Frozen sandbox binds nothing either. Both surface only as a later 403.
+//! The grant binds only on a Frozen sandbox's engine, so at `*`, under any other resource id, or
+//! left off a Frozen sandbox by an override, it renders nothing. Each surfaces only as a later 403.
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
@@ -39,12 +39,28 @@ impl CompileTimeCheck for SandboxTemplatePermissionsCheck {
                 .is_some_and(|refs| refs.iter().any(|reference| reference.id() == TEMPLATES))
         };
 
+        let is_frozen_sandbox = |resource_id: &str| {
+            stack.resources().any(|(id, entry)| {
+                id == resource_id
+                    && entry.config.downcast_ref::<Sandbox>().is_some()
+                    && entry.lifecycle == ResourceLifecycle::Frozen
+            })
+        };
+
         let mut errors = Vec::new();
         if grants("*") {
             errors.push(format!(
                 "'{TEMPLATES}' cannot be granted at '*': it binds on one sandbox's engine. Grant it \
                  under each Frozen sandbox's id instead."
             ));
+        }
+        for scope in profile.0.keys() {
+            if scope != "*" && grants(scope) && !is_frozen_sandbox(scope) {
+                errors.push(format!(
+                    "'{TEMPLATES}' is granted under '{scope}', which is not a Frozen sandbox. Only a \
+                     Frozen sandbox's engine takes this grant; remove it from '{scope}'."
+                ));
+            }
         }
         if matches!(stack.management(), ManagementPermissions::Override(_)) {
             for (resource_id, entry) in stack.resources() {
@@ -135,6 +151,23 @@ mod tests {
             assert!(found[0].contains("'*'"), "{found:?}");
         }
         assert!(errors(ManagementPermissions::Auto).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn templates_under_anything_but_a_frozen_sandbox_are_refused() {
+        for scope in ["live-box", "no-such-resource"] {
+            let found = errors(ManagementPermissions::Extend(
+                PermissionProfile::new().resource(scope, [TEMPLATES]),
+            ))
+            .await;
+            assert_eq!(found.len(), 1, "{found:?}");
+            assert!(found[0].contains(&format!("'{scope}'")), "{found:?}");
+        }
+        let frozen = errors(ManagementPermissions::Extend(
+            PermissionProfile::new().resource("frozen-box", [TEMPLATES]),
+        ))
+        .await;
+        assert!(frozen.is_empty(), "{frozen:?}");
     }
 
     #[tokio::test]

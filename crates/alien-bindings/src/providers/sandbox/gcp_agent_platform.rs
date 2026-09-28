@@ -190,6 +190,15 @@ impl GcpAgentPlatformSandbox {
         })
     }
 
+    /// Refused rather than forwarded: Agent Platform's `:resume` can return a fresh container while
+    /// reporting success, so nothing the sandbox held is guaranteed to survive a pause.
+    fn pause_resume_unsupported(&self) -> AlienError<ErrorData> {
+        self.unsupported(
+            alien_core::SandboxCapability::PauseResume.as_str(),
+            "Agent Platform sandboxes cannot be paused and resumed with their state kept",
+        )
+    }
+
     /// A sandbox id that stays a single path segment.
     ///
     /// The id is interpolated into the proxy URL, so one carrying `/`, `..`, `?` or `#` would
@@ -486,7 +495,7 @@ impl GcpAgentPlatformSandbox {
         let timed_out = ErrorData::SandboxUnreachable {
             operation: CREATE.to_string(),
             reason: format!(
-                "sandbox '{sandbox_id}' was running but its agent did not answer within {}s",
+                "sandbox '{sandbox_id}' was running but its agent did not become servable within {}s",
                 AGENT_READY_TIMEOUT.as_secs()
             ),
         };
@@ -903,12 +912,12 @@ impl Sandbox for GcpAgentPlatformSandbox {
 
     async fn pause(&self, sandbox_id: &str) -> Result<()> {
         Self::checked_sandbox_id("sandbox.pause", sandbox_id)?;
-        Err(pause_resume_unsupported())
+        Err(self.pause_resume_unsupported())
     }
 
     async fn resume(&self, sandbox_id: &str) -> Result<()> {
         Self::checked_sandbox_id("sandbox.resume", sandbox_id)?;
-        Err(pause_resume_unsupported())
+        Err(self.pause_resume_unsupported())
     }
 
     async fn snapshot(&self, sandbox_id: &str) -> Result<String> {
@@ -1530,16 +1539,6 @@ fn finish_operation(operation: &str, name: &str, op: Operation) -> Result<serde_
             response_json: format!("operation '{name}' reported done without a result"),
         })),
     }
-}
-
-/// Refused rather than forwarded: Agent Platform's `:resume` can return a fresh container while
-/// reporting success, so nothing the sandbox held is guaranteed to survive a pause.
-fn pause_resume_unsupported() -> AlienError<ErrorData> {
-    AlienError::new(ErrorData::OperationNotSupported {
-        operation: "pauseResume".to_string(),
-        reason: "Agent Platform sandboxes cannot be paused and resumed with their state kept"
-            .to_string(),
-    })
 }
 
 /// The agent's own refusal, when `:execute` relayed one. The proxy forwards the agent's status, so
