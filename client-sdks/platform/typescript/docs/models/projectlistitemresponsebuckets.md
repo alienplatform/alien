@@ -6,7 +6,7 @@
 import { ProjectListItemResponseBuckets } from "@alienplatform/platform-api/models";
 
 let value: ProjectListItemResponseBuckets = {
-  enabled: false,
+  enabled: true,
   access: "read-write",
 };
 ```
@@ -15,5 +15,5 @@ let value: ProjectListItemResponseBuckets = {
 
 | Field                                                                              | Type                                                                               | Required                                                                           | Description                                                                        |
 | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `enabled`                                                                          | *boolean*                                                                          | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `enabled`                                                                          | *true*                                                                             | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `access`                                                                           | [models.ProjectListItemResponseAccess](../models/projectlistitemresponseaccess.md) | :heavy_check_mark:                                                                 | N/A                                                                                |

@@ -9,6 +9,13 @@ let value: CreateSetupLinkRequest = {
   externalId: "ext_example_01",
   name: "prod-us-east-1",
   project: "<value>",
+  deploymentSetupConfig: {
+    validatedReleaseSelection: {
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      releaseChannel: "<value>",
+      platform: "aws",
+    },
+  },
   recoveryDeploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
 };
 ```

@@ -1108,6 +1108,7 @@ dependencies = [
  "rustls 0.23.43",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "temp-env",
  "tempfile",
  "tokio",

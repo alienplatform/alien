@@ -101,6 +101,8 @@ mod tests {
             permissions: Default::default(),
             supported_platforms: None,
             inputs: vec![],
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
         };
 
         assert!(!KubernetesWorkloadSettingsCheck.should_run(&stack, Platform::Kubernetes));
@@ -159,6 +161,8 @@ mod tests {
             permissions: Default::default(),
             supported_platforms: None,
             inputs: vec![],
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
         };
 
         assert!(!KubernetesWorkloadSettingsCheck.should_run(&stack, Platform::Kubernetes));

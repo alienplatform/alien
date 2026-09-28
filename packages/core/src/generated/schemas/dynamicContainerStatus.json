@@ -1,0 +1,1 @@
+{"type":"string","enum":["pending","running","failing","stopped"],"x-readme-ref-name":"DynamicContainerStatus"}

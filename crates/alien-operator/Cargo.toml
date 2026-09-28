@@ -26,6 +26,7 @@ alien-commands = { workspace = true, default-features = false, features = ["disp
 alien-manager-api = { path = "../../client-sdks/manager/rust" }
 alien-k8s-clients = { workspace = true }
 k8s-openapi = { workspace = true }
+sha2 = { workspace = true }
 
 # Async & HTTP
 tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt-multi-thread", "time", "net", "fs", "signal"] }

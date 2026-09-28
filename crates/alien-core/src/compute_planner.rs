@@ -749,6 +749,8 @@ mod tests {
             permissions: crate::permissions::PermissionsConfig::default(),
             supported_platforms: None,
             inputs: vec![],
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
         }
     }
 
@@ -1100,6 +1102,8 @@ mod tests {
             permissions: crate::permissions::PermissionsConfig::default(),
             supported_platforms: None,
             inputs: vec![],
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
         };
 
         let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");

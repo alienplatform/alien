@@ -226,6 +226,11 @@ pub struct ComputeCluster {
     #[builder(field)]
     pub capacity_groups: Vec<CapacityGroup>,
 
+    /// Pool reserved for containers created after a deployment is installed.
+    /// If absent, the runtime uses the `general` pool when it exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamic_container_pool: Option<String>,
+
     /// Concrete provider failure domains selected during setup, keyed by capacity group.
     /// Empty preserves the existing aggregate layout when no spread policy is configured.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

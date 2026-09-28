@@ -1198,7 +1198,10 @@ rules:
         &good_chart_dir,
         true,
         0,
-        "30s",
+        // Recreate terminates the old PVC holder before the rollback Pod can
+        // start. Give Helm time to finish that second rollout after the
+        // deliberately unready upgrade has timed out.
+        "2m",
     );
     failed_enable.push("--set=runtime.probes.readiness.enabled=true".to_string());
     run_fails(

@@ -14,6 +14,7 @@ export const ComputeClusterSchema = z.object({
                 return z.array(CapacityGroupSchema.describe("Capacity group definition.\n\nA capacity group represents machines with identical hardware profiles.\nEach group becomes a separate Auto Scaling Group (AWS), Managed Instance Group (GCP),\nor VM Scale Set (Azure).")).describe("Capacity groups defining the machine pools for this cluster.\nEach group becomes a separate ASG/MIG/VMSS.")
               },
 "containerCidr": z.string().describe("Container CIDR block for internal container networking.\nAuto-generated as \"10.244.0.0/16\" if not specified.\nEach machine gets a /24 subnet from this range.").nullish(),
+"dynamicContainerPool": z.string().describe("Pool reserved for containers created after a deployment is installed.\nIf absent, the runtime uses the `general` pool when it exists.").nullish(),
 "failureDomainSpread": z.optional(z.object({
     
     }).catchall(z.int().min(0)).describe("Requested failure-domain spread keyed by capacity group.\nEmpty preserves the existing aggregate layout.")),

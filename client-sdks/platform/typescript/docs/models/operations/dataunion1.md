@@ -33,8 +33,8 @@ const value: operations.DataGcpCloudStorage = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
-        severity: "error",
+        reason: "forbidden",
+        severity: "info",
         source: "<value>",
       },
     ],

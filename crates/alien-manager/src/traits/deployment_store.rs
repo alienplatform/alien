@@ -303,6 +303,7 @@ pub struct ReconcileInput {
     data: ReconcileData,
     operator_image: Option<OperatorImageReport>,
     application: Option<ObservedApplicationReport>,
+    dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
 }
 
 impl ReconcileInput {
@@ -311,6 +312,7 @@ impl ReconcileInput {
             data,
             operator_image: None,
             application: None,
+            dynamic_containers: None,
         }
     }
 
@@ -318,6 +320,10 @@ impl ReconcileInput {
     /// to OSS beyond forwarding it. Read it before [`Self::into_parts`].
     pub fn application(&self) -> Option<&ObservedApplicationReport> {
         self.application.as_ref()
+    }
+
+    pub fn dynamic_containers(&self) -> Option<&[alien_core::sync::DynamicContainerReport]> {
+        self.dynamic_containers.as_deref()
     }
 
     pub fn into_parts(self) -> (ReconcileData, Option<OperatorImageReport>) {
@@ -331,6 +337,7 @@ pub struct ReconcileInputBuilder {
     data: ReconcileData,
     operator_image: Option<OperatorImageReport>,
     application: Option<ObservedApplicationReport>,
+    dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
 }
 
 impl ReconcileInputBuilder {
@@ -344,11 +351,20 @@ impl ReconcileInputBuilder {
         self
     }
 
+    pub fn dynamic_containers(
+        mut self,
+        reports: Vec<alien_core::sync::DynamicContainerReport>,
+    ) -> Self {
+        self.dynamic_containers = Some(reports);
+        self
+    }
+
     pub fn build(self) -> ReconcileInput {
         ReconcileInput {
             data: self.data,
             operator_image: self.operator_image,
             application: self.application,
+            dynamic_containers: self.dynamic_containers,
         }
     }
 }
@@ -360,6 +376,8 @@ pub struct ReconcileOutcome {
     /// enabled-plugin-set hash, opaque to OSS beyond forwarding it back to the
     /// Operator's next sync response.
     pub target_operations_bundle_set: Option<alien_core::sync::TargetOperationsBundleSet>,
+    /// Complete container target set supplied by a multi-tenant embedder.
+    pub target_dynamic_containers: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
 }
 
 /// Persistence for deployments and deployment groups.

@@ -10,9 +10,68 @@
 
 Selects a connected external resource by Project and external ID, then returns a short-lived deployment-scoped Manager capability. The caller never receives the external cloud credentials from Platform.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="createRemoteBindingsExternalAccess" method="post" path="/v1/projects/{idOrName}/remote-bindings/access" -->
+<!-- UsageSnippet language="typescript" operationID="createRemoteBindingsExternalAccess" method="post" path="/v1/projects/{idOrName}/remote-bindings/access" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.remoteBindings.createExternalAccess({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    remoteBindingsExternalAccessRequest: {
+      externalId: "ext_example_01",
+      capability: "storage",
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { remoteBindingsCreateExternalAccess } from "@alienplatform/platform-api/funcs/remoteBindingsCreateExternalAccess.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await remoteBindingsCreateExternalAccess(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    remoteBindingsExternalAccessRequest: {
+      externalId: "ext_example_01",
+      capability: "storage",
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("remoteBindingsCreateExternalAccess failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="createRemoteBindingsExternalAccess" method="post" path="/v1/projects/{idOrName}/remote-bindings/access" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 

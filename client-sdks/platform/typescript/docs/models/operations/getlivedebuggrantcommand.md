@@ -1,0 +1,26 @@
+# GetLiveDebugGrantCommand
+
+## Example Usage
+
+```typescript
+import { GetLiveDebugGrantCommand } from "@alienplatform/platform-api/models/operations";
+
+let value: GetLiveDebugGrantCommand = {
+  command: "kubernetes/get-pods",
+  summary: "List pods in the ingestion namespace",
+  params: {
+    "pod": "ingester-p4kwm",
+  },
+};
+```
+
+## Fields
+
+| Field                                                                                | Type                                                                                 | Required                                                                             | Description                                                                          | Example                                                                              |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `command`                                                                            | *string*                                                                             | :heavy_check_mark:                                                                   | N/A                                                                                  | kubernetes/get-pods                                                                  |
+| `summary`                                                                            | *string*                                                                             | :heavy_check_mark:                                                                   | N/A                                                                                  | List pods in the ingestion namespace                                                 |
+| `params`                                                                             | *any*                                                                                | :heavy_minus_sign:                                                                   | N/A                                                                                  | {<br/>"pod": "ingester-p4kwm"<br/>}                                                  |
+| `tier`                                                                               | [operations.GetLiveDebugGrantTier](../../models/operations/getlivedebuggranttier.md) | :heavy_minus_sign:                                                                   | How risky an operation is (declared by the plugin metadata).                         |                                                                                      |
+| `pluginVersion`                                                                      | *string*                                                                             | :heavy_minus_sign:                                                                   | N/A                                                                                  |                                                                                      |
+| `operationContractHash`                                                              | *string*                                                                             | :heavy_minus_sign:                                                                   | N/A                                                                                  |                                                                                      |
