@@ -554,9 +554,9 @@ fn remote_sandbox_lifetime(
     Ok(Some(max_session_lifetime_seconds))
 }
 
-/// The configure endpoint replaces the whole sandbox configuration, so an omitted `customImage`
-/// returns every cloud to the default image. Returns the saved image and lifetime, which a
-/// command without `--image`, `--src` or `--max-session-lifetime-seconds` keeps.
+/// The configure endpoint replaces the whole sandbox configuration, so an omitted value returns
+/// to its default. Returns the saved image, lifetime and Azure idle time, which a command keeps
+/// unless a flag replaces them.
 async fn saved_remote_sandbox_settings(
     http: &crate::auth::AuthHttp,
     workspace: Option<&str>,
@@ -592,11 +592,12 @@ async fn saved_remote_sandbox_settings(
     Ok(ConfigureRemoteSandboxRequest {
         custom_image,
         max_lifetime_seconds: sandbox.max_lifetime_seconds,
-        ..Default::default()
+        azure_idle_suspend_seconds: sandbox.azure.map(|azure| azure.idle_suspend_seconds),
     })
 }
 
-/// A flag replaces the saved value; without either the API applies its defaults.
+/// A flag replaces the saved value; without either the API applies its defaults. A custom image
+/// runs on no Azure sandbox, and the API refuses an Azure idle time beside one.
 fn remote_sandbox_request(
     custom_image: Option<&str>,
     max_lifetime_seconds: Option<NonZeroU64>,
@@ -610,14 +611,18 @@ fn remote_sandbox_request(
             field: "image".to_string(),
             message: "Invalid image reference".to_string(),
         })?;
+    let custom_image = custom_image.or(saved.custom_image);
+    let azure_idle_suspend_seconds = saved
+        .azure_idle_suspend_seconds
+        .filter(|_| custom_image.is_none());
     Ok(ConfigureRemoteSandboxRequest {
-        custom_image: custom_image.or(saved.custom_image),
+        custom_image,
         max_lifetime_seconds: Some(
             max_lifetime_seconds
                 .or(saved.max_lifetime_seconds)
                 .unwrap_or(DEFAULT_REMOTE_SANDBOX_LIFETIME_SECONDS),
         ),
-        azure_idle_suspend_seconds: None,
+        azure_idle_suspend_seconds,
     })
 }
 
@@ -1349,8 +1354,68 @@ mod tests {
         }
     }
 
+    #[test]
+    fn remote_sandbox_request_keeps_the_saved_azure_idle_time_only_without_a_custom_image() {
+        let saved_defaults = || -> ConfigureRemoteSandboxRequest {
+            serde_json::from_value(serde_json::json!({
+                "maxLifetimeSeconds": 1200,
+                "azureIdleSuspendSeconds": 900,
+            }))
+            .expect("the saved configuration should parse")
+        };
+        let request =
+            remote_sandbox_request(None, NonZeroU64::new(7200), saved_defaults()).expect("valid");
+        assert_eq!(
+            serde_json::to_value(request).expect("request should serialize"),
+            serde_json::json!({ "maxLifetimeSeconds": 7200, "azureIdleSuspendSeconds": 900 }),
+        );
+
+        let request = remote_sandbox_request(
+            Some("public.ecr.aws/example/analysis:v1"),
+            None,
+            saved_defaults(),
+        )
+        .expect("valid");
+        assert_eq!(
+            serde_json::to_value(request).expect("request should serialize"),
+            serde_json::json!({
+                "customImage": "public.ecr.aws/example/analysis:v1",
+                "maxLifetimeSeconds": 1200,
+            }),
+        );
+
+        let saved_custom = serde_json::from_value(serde_json::json!({
+            "customImage": "registry.example.com/acme-sandbox@sha256:abc",
+            "azureIdleSuspendSeconds": 900,
+        }))
+        .expect("the saved configuration should parse");
+        let request = remote_sandbox_request(None, None, saved_custom).expect("valid");
+        assert_eq!(
+            serde_json::to_value(request).expect("request should serialize"),
+            serde_json::json!({
+                "customImage": "registry.example.com/acme-sandbox@sha256:abc",
+                "maxLifetimeSeconds": 3600,
+            }),
+        );
+    }
+
     #[tokio::test]
-    async fn bare_enable_resends_the_saved_settings_it_read_from_the_project() {
+    async fn bare_enable_on_default_images_resends_the_saved_azure_idle_time() {
+        let saved = serde_json::json!({
+            "enabled": true,
+            "baseImage": "public.ecr.aws/lambda/microvms:al2023-minimal",
+            "azure": { "catalogImage": "python-3.12", "idleSuspendSeconds": 900 },
+            "maxLifetimeSeconds": 1200,
+        });
+        assert_eq!(
+            configure_with_saved_sandbox(saved).await,
+            serde_json::json!({ "maxLifetimeSeconds": 1200, "azureIdleSuspendSeconds": 900 }),
+        );
+    }
+
+    /// Runs a bare `enable remote-sandbox` against a mock API whose project has `saved` as its
+    /// sandbox configuration, and returns the body the command configured.
+    async fn configure_with_saved_sandbox(saved: serde_json::Value) -> serde_json::Value {
         use axum::{
             body::Bytes,
             http::header::CONTENT_TYPE,
@@ -1360,7 +1425,6 @@ mod tests {
         use std::sync::{Arc, Mutex};
 
         const PROJECT_ID: &str = "prj_mcytp6z3j91f7tn5ryqsfwtr0000";
-        const SAVED_IMAGE: &str = "registry.example.com/acme-sandbox@sha256:abc";
         let project = serde_json::json!({
             "id": PROJECT_ID,
             "name": "my-app",
@@ -1369,13 +1433,7 @@ mod tests {
             "projectCapabilities": {
                 "schemaVersion": 1,
                 "capabilities": {
-                    "remoteSandbox": {
-                        "enabled": true,
-                        "customImage": SAVED_IMAGE,
-                        "baseImage": "registry.example.com/acme-sandbox@sha256:def",
-                        "azure": { "catalogImage": "python-3.12", "idleSuspendSeconds": 900 },
-                        "maxLifetimeSeconds": 1200,
-                    },
+                    "remoteSandbox": saved,
                 },
             },
         });
@@ -1434,9 +1492,23 @@ mod tests {
         .expect("bare enable should configure the sandbox");
         server.abort();
 
+        let configured = configured.lock().unwrap().take();
+        configured.expect("the command should configure the sandbox")
+    }
+
+    #[tokio::test]
+    async fn bare_enable_resends_the_saved_settings_it_read_from_the_project() {
+        const SAVED_IMAGE: &str = "registry.example.com/acme-sandbox@sha256:abc";
+        let saved = serde_json::json!({
+            "enabled": true,
+            "customImage": SAVED_IMAGE,
+            "baseImage": "registry.example.com/acme-sandbox@sha256:def",
+            "azure": { "catalogImage": "python-3.12", "idleSuspendSeconds": 900 },
+            "maxLifetimeSeconds": 1200,
+        });
         assert_eq!(
-            configured.lock().unwrap().take(),
-            Some(serde_json::json!({ "customImage": SAVED_IMAGE, "maxLifetimeSeconds": 1200 })),
+            configure_with_saved_sandbox(saved).await,
+            serde_json::json!({ "customImage": SAVED_IMAGE, "maxLifetimeSeconds": 1200 }),
         );
     }
 
