@@ -1,3 +1,4 @@
+use super::project_packages::{packages_task, PackageCommand};
 use crate::commands::release::{auto_build_settings_for_platform, manager_proxy_push_settings};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -37,6 +38,8 @@ use std::path::{Path, PathBuf};
     alien projects list
     alien projects ls --json
     alien --workspace my-workspace projects ls
+    alien projects packages get my-project --workspace my-workspace --json
+    alien projects packages update my-project --workspace my-workspace --file settings.json
     alien projects capabilities status
     alien projects capabilities enable ai --model byo/claude-opus-5
     alien projects capabilities enable encryption
@@ -69,6 +72,11 @@ pub enum ProjectCmd {
     Get {
         /// Project ID or name (defaults to the linked project)
         project: Option<String>,
+    },
+    /// Inspect or update installation package settings
+    Packages {
+        #[command(subcommand)]
+        command: PackageCommand,
     },
     /// Inspect and enable project capabilities
     Capabilities {
@@ -149,6 +157,9 @@ pub enum AiProvider {
 }
 
 pub async fn project_task(args: ProjectArgs, ctx: ExecutionMode) -> Result<()> {
+    if let ProjectCmd::Packages { command } = &args.cmd {
+        return packages_task(command, &ctx, args.json).await;
+    }
     if let ProjectCmd::Capabilities {
         command:
             CapabilityCommand::Enable {
@@ -194,6 +205,9 @@ pub async fn project_task(args: ProjectArgs, ctx: ExecutionMode) -> Result<()> {
         ProjectCmd::Get { project } => {
             let (project_id, _) = ctx.resolve_project(project.as_deref(), !args.json).await?;
             get_project_task(&http, workspace_name.as_deref(), &project_id, args.json).await?
+        }
+        ProjectCmd::Packages { .. } => {
+            unreachable!("package commands are handled before authentication")
         }
         ProjectCmd::Capabilities { command } => {
             let (project_id, _) = ctx.resolve_project(None, !args.json).await?;
