@@ -2162,12 +2162,42 @@ jobs:
           SANDBOX_AGENT: ghcr.io/alienplatform/alien-sandbox-agent@${{ steps.publish_sandbox_agent.outputs.digest }}
         run: ./scripts/smoke-sandbox-agent.sh "$SANDBOX_AGENT"
 
+      # The default GCP sandbox, rendered from the same contract as alien-sandbox-agent onto the
+      # buildpack-deps base the AWS default uses. Its own repository, as every other image has, so
+      # promotion gives it v<version> and latest; published digests are never deleted.
+      - name: Metadata (alien-sandbox-gcp)
+        id: meta_sandbox_gcp
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/alienplatform/alien-sandbox-gcp
+          tags: |
+            type=raw,value=qualification-${{ inputs.source_ref }}
+
+      - name: Publish alien-sandbox-gcp
+        id: publish_sandbox_gcp
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-sandbox-gcp
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_sandbox_gcp.outputs.tags }}
+          labels: ${{ steps.meta_sandbox_gcp.outputs.labels }}
+          provenance: true
+          sbom: true
+
+      - name: Smoke-test alien-sandbox-gcp
+        env:
+          SANDBOX_GCP: ghcr.io/alienplatform/alien-sandbox-gcp@${{ steps.publish_sandbox_gcp.outputs.digest }}
+        run: ./scripts/smoke-sandbox-agent.sh "$SANDBOX_GCP"
+
       - name: Record qualified image digests
         env:
           RELEASE_COMMIT: ${{ inputs.source_ref }}
         run: |
           DIGESTS='{}'
-          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-manager alien-sandbox-agent; do
+          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-manager alien-sandbox-agent alien-sandbox-gcp; do
             qualified="ghcr.io/alienplatform/${name}:qualification-${RELEASE_COMMIT}"
             digest=$(docker buildx imagetools inspect "$qualified" |
               sed -n 's/^Digest:[[:space:]]*//p' | head -n1)
