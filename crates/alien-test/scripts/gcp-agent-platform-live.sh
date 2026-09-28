@@ -20,7 +20,7 @@ repo="${ALIEN_TEST_GCP_AGENT_REPO:-alien-sandbox-live}"
 tag="${ALIEN_TEST_GCP_AGENT_TAG:-live-$(git rev-parse --short HEAD)}"
 image="${region}-docker.pkg.dev/${project}/${repo}/alien-sandbox-agent:${tag}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-state_dir="${ALIEN_TEST_GCP_STATE_DIR:-${TMPDIR:-/tmp}/alien-gcp-agent-platform-live}"
+state_dir="${ALIEN_TEST_GCP_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/alien-gcp-agent-platform-live}"
 host="https://${region}-aiplatform.googleapis.com/v1"
 parent="projects/${project}/locations/${region}"
 holder_id="alien-sbx-templates-probe"
@@ -29,18 +29,36 @@ holder="${holder_id}@${project}.iam.gserviceaccount.com"
 # run creates its own and records it for teardown.
 role_prefix="alienSandboxTemplatesProbe"
 mkdir -p "$state_dir"
+# API responses are written under this directory, so a directory someone else owns (or a symlink
+# to one) could redirect those writes.
+if [[ -L "$state_dir" || ! -O "$state_dir" ]]; then
+  echo "state directory ${state_dir} is a symlink or not owned by you" >&2
+  exit 1
+fi
+chmod 700 "$state_dir"
+
+# teardown deletes every engine the state records and the shared holder account, so it must not
+# run while an iam-check on the same state is still using them.
+lock_state() {
+  if ! mkdir "$state_dir/lock" 2>/dev/null; then
+    echo "another iam-check or teardown holds ${state_dir}/lock; remove it if none is running" >&2
+    exit 1
+  fi
+  trap 'rmdir "$state_dir/lock"' EXIT
+}
 
 project_number() {
   gcloud projects describe "$project" --format='value(projectNumber)'
 }
 
 # Calls the regional API as `$1` (an access token) and prints the HTTP status, keeping the body in
-# $state_dir/last.json.
+# $state_dir/last.json. The token goes in on stdin so it never shows in the process list.
 call() {
   local token="$1" method="$2" path="$3" body="${4:-}"
-  curl -sS -o "$state_dir/last.json" -w '%{http_code}' -X "$method" \
-    -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' \
-    ${body:+--data "$body"} "${host}/${path}"
+  printf 'Authorization: Bearer %s\n' "$token" |
+    curl -sS -o "$state_dir/last.json" -w '%{http_code}' -X "$method" \
+      -H @- -H 'Content-Type: application/json' \
+      ${body:+--data "$body"} "${host}/${path}"
 }
 
 # Polls a long-running operation to completion and prints the created resource name.
@@ -270,7 +288,7 @@ cmd_teardown() {
 case "${1:-}" in
   image) cmd_image ;;
   suite) cmd_suite ;;
-  iam-check) cmd_iam_check ;;
-  teardown) cmd_teardown ;;
+  iam-check) lock_state; cmd_iam_check ;;
+  teardown) lock_state; cmd_teardown ;;
   *) echo "usage: $0 image|suite|iam-check|teardown" >&2; exit 2 ;;
 esac
