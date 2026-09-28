@@ -384,6 +384,8 @@ mod tests {
             "gpu",
             "--zone",
             "rack-1",
+            "--public-ip",
+            "10.0.1.12",
             "--bundle-url",
             "https://packages.example.com/machines/manifest.json",
             "--control-plane-url",
@@ -400,6 +402,7 @@ mod tests {
         assert_eq!(args.token.as_deref(), Some("jt_secret"));
         assert_eq!(args.capacity_group, "gpu");
         assert_eq!(args.zone.as_deref(), Some("rack-1"));
+        assert_eq!(args.public_ip.as_deref(), Some("10.0.1.12"));
         assert_eq!(
             args.control_plane_url.as_deref(),
             Some("https://control.example.com")
