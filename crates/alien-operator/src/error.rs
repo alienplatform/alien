@@ -93,6 +93,26 @@ pub enum ErrorData {
     )]
     CollectorTelemetryInvalid { message: String },
 
+    /// The bounded local Pod-log queue must drain before reading more logs.
+    #[error(
+        code = "POD_LOG_BUFFER_FULL",
+        message = "Pod log buffer reached its {limit_bytes}-byte limit",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    PodLogBufferFull { limit_bytes: i64 },
+
+    /// A selected Pod's Kubernetes log stream failed; the reader reconnects.
+    #[error(
+        code = "POD_LOG_READ_FAILED",
+        message = "Failed to read Kubernetes Pod logs: {message}",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 502
+    )]
+    PodLogReadFailed { message: String },
+
     #[error(
         code = "ENCRYPTION_ERROR",
         message = "Encryption error: {message}",

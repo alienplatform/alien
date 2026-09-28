@@ -40,6 +40,17 @@ CREATE TABLE IF NOT EXISTS telemetry (
     created_at TEXT NOT NULL
 );
 
+-- Cursor committed with each Pod-log telemetry batch so reconnects and
+-- Operator restarts resume from the last durably queued line.
+CREATE TABLE IF NOT EXISTS pod_log_offsets (
+    pod_uid TEXT NOT NULL,
+    container TEXT NOT NULL,
+    restart_count INTEGER NOT NULL,
+    timestamp TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    PRIMARY KEY (pod_uid, container, restart_count)
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_telemetry_created_at ON telemetry(created_at);
 CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);

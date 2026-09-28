@@ -1118,6 +1118,7 @@ dependencies = [
  "tracing-subscriber",
  "turso",
  "url",
+ "urlencoding",
  "uuid",
  "windows-service",
 ]

@@ -15,7 +15,17 @@ use serde_json::Value;
 
 use crate::error::{ErrorData, Result};
 
-const COLLECTOR_SOURCE: &str = "node-fluentbit";
+const NODE_COLLECTOR_SOURCE: &str = "node-fluentbit";
+const POD_API_SOURCE: &str = "kubernetes-api";
+
+/// One timestamped line read from a selected Pod's log subresource.
+pub struct PodLogRecord {
+    pub namespace: String,
+    pub pod: String,
+    pub container: String,
+    pub timestamp_unix_nanos: u64,
+    pub body: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedLogSource {
@@ -86,7 +96,7 @@ pub fn collector_records_to_otlp(
         }));
     }
 
-    let request = otlp_request(records, deployment_id);
+    let request = otlp_request(records, deployment_id, NODE_COLLECTOR_SOURCE);
     let mut encoded = Vec::new();
     request.encode(&mut encoded).into_alien_error().context(
         ErrorData::CollectorTelemetryInvalid {
@@ -102,6 +112,32 @@ pub fn collector_records_to_otlp(
         .sum();
 
     Ok((count, encoded))
+}
+
+/// Convert selected Kubernetes Pod-log lines through the same readable-message
+/// and original-record path used by the existing node collector.
+pub fn pod_log_records_to_otlp(records: Vec<PodLogRecord>, deployment_id: &str) -> Result<Vec<u8>> {
+    let records = records
+        .into_iter()
+        .map(|record| CollectorLogRecord {
+            namespace: record.namespace,
+            pod: record.pod,
+            container: record.container,
+            // The Pod log API combines stdout and stderr for one container.
+            stream: "combined".to_string(),
+            timestamp_unix_nanos: record.timestamp_unix_nanos,
+            body: record.body,
+            filename: None,
+        })
+        .collect();
+    let request = otlp_request(records, deployment_id, POD_API_SOURCE);
+    let mut encoded = Vec::new();
+    request.encode(&mut encoded).into_alien_error().context(
+        ErrorData::CollectorTelemetryInvalid {
+            message: "failed to encode Kubernetes Pod logs".to_string(),
+        },
+    )?;
+    Ok(encoded)
 }
 
 fn parse_collector_records(body: &[u8]) -> Result<Vec<Value>> {
@@ -253,7 +289,11 @@ fn nanos(timestamp: DateTime<Utc>) -> u64 {
     timestamp.timestamp_nanos_opt().unwrap_or_default().max(0) as u64
 }
 
-fn otlp_request(records: Vec<CollectorLogRecord>, deployment_id: &str) -> ExportLogsServiceRequest {
+fn otlp_request(
+    records: Vec<CollectorLogRecord>,
+    deployment_id: &str,
+    source: &str,
+) -> ExportLogsServiceRequest {
     let mut grouped: BTreeMap<(String, String, String), Vec<CollectorLogRecord>> = BTreeMap::new();
     for record in records {
         grouped
@@ -275,7 +315,7 @@ fn otlp_request(records: Vec<CollectorLogRecord>, deployment_id: &str) -> Export
                     let (severity_text, severity_number) = collector_log_severity(&record);
 
                     let mut attributes = vec![
-                        kv("alien.log.source", COLLECTOR_SOURCE),
+                        kv("alien.log.source", source),
                         kv("stream", &record.stream),
                         kv("k8s.namespace.name", &record.namespace),
                         kv("k8s.pod.name", &record.pod),
@@ -495,7 +535,9 @@ mod tests {
                     .value
                     .as_ref()
                     .and_then(|value| value.value.as_ref())
-                    == Some(&any_value::Value::StringValue(COLLECTOR_SOURCE.to_string()))
+                    == Some(&any_value::Value::StringValue(
+                        NODE_COLLECTOR_SOURCE.to_string(),
+                    ))
         }));
     }
 
@@ -551,6 +593,45 @@ mod tests {
                     .as_ref()
                     .and_then(|value| value.value.as_ref())
                     == Some(&any_value::Value::StringValue(application_log.to_string()))
+        }));
+    }
+
+    #[test]
+    fn pod_api_logs_keep_readable_message_and_original_record() {
+        let original = r#"{"time":"2026-09-26T12:12:02Z","level":"INFO","msg":"service ready","requestId":"request-1"}"#;
+        let encoded = pod_log_records_to_otlp(
+            vec![PodLogRecord {
+                namespace: "demo".to_string(),
+                pod: "api-123".to_string(),
+                container: "api".to_string(),
+                timestamp_unix_nanos: 1_782_090_000_123_456_789,
+                body: original.to_string(),
+            }],
+            "dep_test",
+        )
+        .expect("Pod log should convert");
+        let request =
+            ExportLogsServiceRequest::decode(encoded.as_slice()).expect("OTLP should decode");
+        let record = &request.resource_logs[0].scope_logs[0].log_records[0];
+        assert_eq!(
+            record.body.as_ref().and_then(|body| body.value.as_ref()),
+            Some(&any_value::Value::StringValue("service ready".to_string()))
+        );
+        assert!(record.attributes.iter().any(|attribute| {
+            attribute.key == "log.record.original"
+                && attribute
+                    .value
+                    .as_ref()
+                    .and_then(|value| value.value.as_ref())
+                    == Some(&any_value::Value::StringValue(original.to_string()))
+        }));
+        assert!(record.attributes.iter().any(|attribute| {
+            attribute.key == "alien.log.source"
+                && attribute
+                    .value
+                    .as_ref()
+                    .and_then(|value| value.value.as_ref())
+                    == Some(&any_value::Value::StringValue(POD_API_SOURCE.to_string()))
         }));
     }
 

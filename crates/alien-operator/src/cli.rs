@@ -708,6 +708,7 @@ async fn run_operator_cli(
         readiness_server_port: crate::readiness_server_port_from_env()?,
         identity_initialized_config_map: crate::identity_initialized_config_map_from_env()?,
         runtime_deployment_scope: crate::runtime_deployment_scope_from_env()?,
+        pod_log_collection: crate::pod_logs::config_from_env()?,
     };
     run_operator_with_cancel_and_loops_and_runtime(
         operator_config,
