@@ -26,9 +26,19 @@ impl StackMutation for ServiceAccountDependenciesMutation {
     fn should_run(
         &self,
         stack: &Stack,
-        _stack_state: &StackState,
+        stack_state: &StackState,
         _config: &DeploymentConfig,
     ) -> bool {
+        // These platforms do not create ServiceAccount resources in the runtime
+        // stack. Kubernetes installs them with Helm; Machines use their runtime
+        // identity. A dependency on a missing resource makes execution fail.
+        if matches!(
+            stack_state.platform,
+            Platform::Kubernetes | Platform::Machines
+        ) {
+            return false;
+        }
+
         // Run if stack has permission profiles with resource-scoped permissions
         for (_profile_name, profile) in &stack.permissions.profiles {
             for (resource_id, _permission_set_ids) in &profile.0 {
@@ -299,26 +309,38 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn plain_kubernetes_keeps_management_sa_dependencies() {
+    #[test]
+    fn plain_kubernetes_does_not_add_missing_service_account_dependencies() {
         let stack = stack_with_management_scoped_vault();
-        let result = ServiceAccountDependenciesMutation
-            .mutate(
-                stack,
-                &StackState::new(Platform::Kubernetes),
-                &empty_config(None),
-            )
-            .await
-            .unwrap();
+        let stack_state = StackState::new(Platform::Kubernetes);
+        assert!(!ServiceAccountDependenciesMutation.should_run(
+            &stack,
+            &stack_state,
+            &empty_config(None),
+        ));
+    }
 
-        let secrets = result.resources.get("secrets").unwrap();
-        assert!(
-            secrets
-                .dependencies
-                .iter()
-                .any(|dependency| dependency.id() == "management-sa"),
-            "plain Kubernetes management still depends on a stack-local management-sa"
-        );
+    #[test]
+    fn runtime_identity_platforms_skip_workload_service_account_dependencies() {
+        let stack = Stack::new("daemon-stack".to_string())
+            .add(
+                Daemon::new("agent".to_string())
+                    .code(DaemonCode::Image {
+                        image: "agent:latest".to_string(),
+                    })
+                    .permissions("execution".to_string())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        for platform in [Platform::Kubernetes, Platform::Machines] {
+            assert!(!ServiceAccountDependenciesMutation.should_run(
+                &stack,
+                &StackState::new(platform),
+                &empty_config(None),
+            ));
+        }
     }
 
     #[tokio::test]

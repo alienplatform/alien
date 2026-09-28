@@ -19,6 +19,7 @@ management:
   name: ""
   url: ""
   deploymentId: "dep_replace_me"
+  setupItem: ""
   updates: auto
   telemetry: auto
   healthChecks: "on"
@@ -198,6 +199,7 @@ serviceAccounts:
 stackSettings: null
 
 infrastructure: null
+infrastructureExistingSecret: ""
 
 basePlatform: null
 basePlatformConfig:
@@ -262,6 +264,7 @@ ephemeralStorage:
         "name": { "type": "string" },
         "url": { "type": "string" },
         "deploymentId": { "type": ["string", "null"] },
+        "setupItem": { "type": "string" },
         "updates": { "type": "string", "enum": ["auto", "approval-required"] },
         "telemetry": { "type": "string", "enum": ["auto", "approval-required", "off"] },
         "healthChecks": { "type": "string", "enum": ["on", "off"] }
@@ -540,6 +543,7 @@ ephemeralStorage:
       "additionalProperties": true
     },
     "infrastructure": { "type": ["object", "null"] },
+    "infrastructureExistingSecret": { "type": "string" },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
     "basePlatformConfig": {
       "type": "object",
@@ -1027,6 +1031,9 @@ roleRef:
     {{- fail "inputValues cannot change through Helm after installation; edit deployment inputs in the deployment dashboard and keep the original Helm values" -}}
   {{- end -}}
 {{- end -}}
+{{- if and .Values.infrastructure .Values.infrastructureExistingSecret -}}
+  {{- fail "Set either infrastructure or infrastructureExistingSecret, not both" -}}
+{{- end -}}
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
 {{- $nodeCollector := and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) -}}
@@ -1204,6 +1211,10 @@ spec:
               value: {{ .Values.management.name | quote }}
             - name: OPERATOR_RESOURCE_PREFIX
               value: {{ include "deployment.serviceAccountPrefix" . | quote }}
+            {{- if .Values.management.setupItem }}
+            - name: OPERATOR_SETUP_ITEM
+              value: {{ .Values.management.setupItem | quote }}
+            {{- end }}
             {{- if .Values.management.deploymentId }}
             - name: DEPLOYMENT_ID
               value: {{ .Values.management.deploymentId | quote }}
@@ -1234,7 +1245,7 @@ spec:
             {{- end }}
             - name: PUBLIC_ENDPOINTS_FILE
               value: /etc/deployment/config/public-endpoints.json
-            {{- if .Values.infrastructure }}
+            {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
             - name: EXTERNAL_BINDINGS_FILE
               value: /etc/deployment/secrets/external-bindings.json
             {{- end }}
@@ -1303,7 +1314,7 @@ spec:
               mountPath: /etc/deployment/secrets/encryption-key
               subPath: {{ include "deployment.encryptionSecretKey" . }}
               readOnly: true
-            {{- if .Values.infrastructure }}
+            {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
             - name: external-bindings
               mountPath: /etc/deployment/secrets/external-bindings.json
               subPath: external-bindings.json
@@ -1347,10 +1358,10 @@ spec:
           secret:
             secretName: {{ include "deployment.encryptionSecretName" . }}
             defaultMode: 384
-        {{- if .Values.infrastructure }}
+        {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
         - name: external-bindings
           secret:
-            secretName: {{ include "deployment.fullname" . }}
+            secretName: {{ default (include "deployment.fullname" .) .Values.infrastructureExistingSecret }}
             items:
               - key: external-bindings.json
                 path: external-bindings.json
