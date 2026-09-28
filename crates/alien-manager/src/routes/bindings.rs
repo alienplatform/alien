@@ -232,8 +232,8 @@ pub struct RemoteAzureSandboxBinding {
 
 /// Concrete Agent Platform topology returned to remote clients.
 ///
-/// No egress field, unlike the other two clouds: the policy lives on the environment template
-/// named below, so it travels with the template rather than as a flag the client must read.
+/// The egress policy itself lives on the environment template named below; `allow_egress` reports
+/// it so a client can decide without reading the template.
 #[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -247,6 +247,11 @@ pub struct RemoteGcpSandboxBinding {
     /// Seconds a sandbox may live, where the declaration asked for one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_lifetime_seconds: Option<u32>,
+    /// Whether the declaration asked for open egress, as the template enforces it. Sent only when
+    /// true: released clients reject unknown fields, so a deny binding must stay byte-identical.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(feature = "openapi", schema(required = false))]
+    pub allow_egress: bool,
 }
 
 #[derive(Serialize)]
@@ -1577,14 +1582,14 @@ fn remote_sandbox_binding(
             }))
         }
         (Platform::Gcp, SandboxBinding::GcpAgentPlatform(binding)) => {
-            // No egress check here, unlike the two arms above: the binding carries no policy to
-            // re-check, because Agent Platform holds it on the environment template and
-            // `sandbox/remote-execute` grants no template verb to create or replace one.
+            // No egress check here, unlike the two arms above: the template enforces deny, and
+            // `sandbox/remote-execute` grants no template verb, so a remote lease cannot bypass it.
             Ok(RemoteSandboxBinding::Gcp(RemoteGcpSandboxBinding {
                 engine: concrete_binding_value(&binding.engine, "GCP sandbox engine")?,
                 template: concrete_binding_value(&binding.template, "GCP sandbox template")?,
                 region: concrete_binding_value(&binding.region, "GCP sandbox region")?,
                 max_lifetime_seconds: binding.max_lifetime_seconds,
+                allow_egress: binding.allow_egress,
             }))
         }
         _ => Err(ErrorData::bad_request(format!(

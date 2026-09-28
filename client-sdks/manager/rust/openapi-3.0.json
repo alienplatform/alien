@@ -13696,13 +13696,17 @@
       },
       "RemoteGcpSandboxBinding": {
         "type": "object",
-        "description": "Concrete Agent Platform topology returned to remote clients.\n\nNo egress field, unlike the other two clouds: the policy lives on the environment template\nnamed below, so it travels with the template rather than as a flag the client must read.",
+        "description": "Concrete Agent Platform topology returned to remote clients.\n\nThe egress policy itself lives on the environment template named below; `allow_egress` reports\nit so a client can decide without reading the template.",
         "required": [
           "engine",
           "template",
           "region"
         ],
         "properties": {
+          "allowEgress": {
+            "type": "boolean",
+            "description": "Whether the declaration asked for open egress, as the template enforces it. Sent only when\ntrue: released clients reject unknown fields, so a deny binding must stay byte-identical."
+          },
           "engine": {
             "type": "string",
             "description": "Reasoning engine the credential lease authorizes sandboxes under."

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Qualify a published alien-sandbox-agent image on both platforms it ships for:
-# the architecture it actually contains, the identity and filesystem it grants
-# the supervised command, its rejection of an invalid config, and a real run
-# that reaches its listener and stays up.
+# Qualify a published GCP sandbox image (alien-sandbox-agent or alien-sandbox-gcp)
+# on both platforms it ships for: the architecture it actually contains, the
+# identity and filesystem it grants the supervised command, its rejection of an
+# invalid config, and a real run that reaches its listener and stays up.
 #
 # Usage: scripts/smoke-sandbox-agent.sh <image-reference>
 set -euo pipefail
@@ -11,8 +11,8 @@ set -euo pipefail
 image="${1:?usage: scripts/smoke-sandbox-agent.sh <image-reference>}"
 
 for platform in linux/amd64 linux/arm64; do
-  # This image is wolfi-base plus git's 24 transitive packages plus the agent, and the
-  # amd64 half arrives under emulation. Inside a probe's own budget, the pull expires.
+  # Both images are large (wolfi-base plus git's 24 packages, or all of buildpack-deps) and
+  # the amd64 half arrives under emulation. Inside a probe's own budget, the pull expires.
   status=0
   pull=$(timeout -k 5 300 docker pull --platform "$platform" "$image" 2>&1) || status=$?
   case "$status" in

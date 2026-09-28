@@ -1,0 +1,294 @@
+#!/usr/bin/env bash
+# Live checks for the GCP Agent Platform sandbox, run by hand against a test project.
+#
+#   image     Build alien-sandbox-agent (plus git), push it to an Artifact Registry repo in the
+#             project, and grant the project's Agent Sandbox service agent Reader on that repo.
+#   suite     Run tests/gcp_agent_platform_sandbox_live.rs against that image.
+#   iam-check Prove a role bound on one engine's IAM policy (what
+#             `google_vertex_ai_reasoning_engine_iam_member` writes) grants template verbs on that
+#             engine only: no engine create or delete, no other engine's templates.
+#   teardown  Delete every engine, service account and role this script created.
+#
+# Required: GOOGLE_TARGET_PROJECT_ID, GOOGLE_TARGET_REGION, and gcloud logged in as a principal
+# that can administer the project. `suite` also needs GOOGLE_TARGET_SERVICE_ACCOUNT_KEY,
+# ALIEN_TEST_GIT_TOKEN and ALIEN_TEST_PRIVATE_REPO (see the suite's module docs).
+set -euo pipefail
+
+project="${GOOGLE_TARGET_PROJECT_ID:?set GOOGLE_TARGET_PROJECT_ID}"
+region="${GOOGLE_TARGET_REGION:?set GOOGLE_TARGET_REGION}"
+repo="${ALIEN_TEST_GCP_AGENT_REPO:-alien-sandbox-live}"
+tag="${ALIEN_TEST_GCP_AGENT_TAG:-live-$(git rev-parse --short HEAD)}"
+image="${region}-docker.pkg.dev/${project}/${repo}/alien-sandbox-agent:${tag}"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+state_dir="${ALIEN_TEST_GCP_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/alien-gcp-agent-platform-live}"
+host="https://${region}-aiplatform.googleapis.com/v1"
+parent="projects/${project}/locations/${region}"
+holder_id="alien-sbx-templates-probe"
+holder="${holder_id}@${project}.iam.gserviceaccount.com"
+# A deleted custom role lingers for 7 days, still describable, and its id cannot be reused, so each
+# run creates its own and records it for teardown.
+role_prefix="alienSandboxTemplatesProbe"
+mkdir -p "$state_dir"
+# API responses are written under this directory, so a directory someone else owns (or a symlink
+# to one) could redirect those writes.
+if [[ -L "$state_dir" || ! -O "$state_dir" ]]; then
+  echo "state directory ${state_dir} is a symlink or not owned by you" >&2
+  exit 1
+fi
+chmod 700 "$state_dir"
+
+# teardown deletes every engine the state records and the shared holder account, so it must not
+# run while an iam-check on the same state is still using them.
+lock_state() {
+  if ! mkdir "$state_dir/lock" 2>/dev/null; then
+    echo "another iam-check or teardown holds ${state_dir}/lock; remove it if none is running" >&2
+    exit 1
+  fi
+  trap 'rmdir "$state_dir/lock"' EXIT
+}
+
+project_number() {
+  gcloud projects describe "$project" --format='value(projectNumber)'
+}
+
+# Calls the regional API as `$1` (an access token) and prints the HTTP status, keeping the body in
+# $state_dir/last.json. The token goes in on stdin so it never shows in the process list.
+call() {
+  local token="$1" method="$2" path="$3" body="${4:-}"
+  printf 'Authorization: Bearer %s\n' "$token" |
+    curl -sS -o "$state_dir/last.json" -w '%{http_code}' -X "$method" \
+      -H @- -H 'Content-Type: application/json' \
+      ${body:+--data "$body"} "${host}/${path}"
+}
+
+# Polls a long-running operation to completion and prints the created resource name.
+await_operation() {
+  local token="$1" operation="$2"
+  for _ in $(seq 1 150); do
+    call "$token" GET "$operation" >/dev/null
+    if [[ "$(jq -r '.done // false' "$state_dir/last.json")" == "true" ]]; then
+      jq -e '.error == null' "$state_dir/last.json" >/dev/null || {
+        cat "$state_dir/last.json" >&2
+        return 1
+      }
+      jq -r '.response.name' "$state_dir/last.json"
+      return 0
+    fi
+    sleep 4
+  done
+  echo "operation ${operation} did not finish" >&2
+  return 1
+}
+
+create_engine() {
+  local token="$1" status operation
+  status="$(call "$token" POST "${parent}/reasoningEngines" \
+    "{\"displayName\":\"alien-sbx-live-iam-$(date +%s)\"}")"
+  [[ "$status" == 200 ]] || { echo "engine create returned $status" >&2; cat "$state_dir/last.json" >&2; return 1; }
+  operation="$(jq -r '.name' "$state_dir/last.json")"
+  # Recorded before the wait, so an engine whose create outlives this run is still torn down.
+  echo "${operation%/operations/*}" >>"$state_dir/engines"
+  await_operation "$token" "$operation"
+}
+
+template_body() {
+  jq -nc --arg image "${ALIEN_TEST_GCP_AGENT_IMAGE:-$image}" --arg name "alien-sbx-live-iam-$(uuidgen | tr -d - | tr '[:upper:]' '[:lower:]' | cut -c1-12)" '{
+    displayName: $name,
+    customContainerEnvironment: {
+      customContainerSpec: {imageUri: $image},
+      resources: {limits: {cpu: "2", memory: "4Gi"}}
+    },
+    egressControlConfig: {internetAccess: false}
+  }'
+}
+
+expect_status() {
+  local want="$1" got="$2" what="$3"
+  if [[ "$got" == "$want" ]]; then
+    echo "PASS  ${what} -> ${got}"
+  else
+    echo "FAIL  ${what} -> ${got}, expected ${want}" >&2
+    cat "$state_dir/last.json" >&2
+    return 1
+  fi
+}
+
+# The gcloud caller as an IAM member: a service account needs `serviceAccount:`, a person `user:`.
+caller_member() {
+  local account
+  account="$(gcloud config get-value account 2>/dev/null)"
+  if [[ "$account" == *.gserviceaccount.com ]]; then
+    echo "serviceAccount:${account}"
+  else
+    echo "user:${account}"
+  fi
+}
+
+# Fails fast when the image was never pushed: a template on a missing image sits in PROVISIONING
+# until the operation wait gives up, with nothing naming the cause.
+require_image() {
+  local want="${ALIEN_TEST_GCP_AGENT_IMAGE:-$image}" path tag found
+  # A digest pins an immutable manifest the pull itself reports on, so only tags are checked.
+  if [[ "$want" == *@sha256:* ]]; then
+    return 0
+  fi
+  path="${want%:*}"
+  tag="${want##*:}"
+  if ! found="$(gcloud artifacts docker tags list "$path" --project "$project" \
+    --filter="tag~${tag}\$" --format='value(tag)' 2>"$state_dir/tags.err")"; then
+    echo "could not look up tags of ${path}:" >&2
+    cat "$state_dir/tags.err" >&2
+    exit 1
+  fi
+  if ! grep -qE "(^|/)${tag//./\\.}$" <<<"$found"; then
+    echo "agent image ${want} is not in Artifact Registry." >&2
+    echo "Push it with '$0 image', or set ALIEN_TEST_GCP_AGENT_TAG (or ALIEN_TEST_GCP_AGENT_IMAGE) to a pushed one." >&2
+    exit 1
+  fi
+}
+
+cmd_image() {
+  gcloud services enable artifactregistry.googleapis.com aiplatform.googleapis.com --project "$project"
+  gcloud artifacts repositories describe "$repo" --location "$region" --project "$project" >/dev/null 2>&1 \
+    || gcloud artifacts repositories create "$repo" --repository-format docker \
+      --location "$region" --project "$project"
+
+  # The Dockerfile copies both musl binaries; Agent Platform runs amd64.
+  (cd "$repo_root" && cargo zigbuild --release -p alien-sandbox-agent --target x86_64-unknown-linux-musl \
+    && cargo zigbuild --release -p alien-sandbox-agent --target aarch64-unknown-linux-musl)
+  gcloud auth configure-docker "${region}-docker.pkg.dev" --quiet
+  docker buildx build --platform linux/amd64 -f "$repo_root/docker/Dockerfile.alien-sandbox-agent" \
+    -t "$image" --push "$repo_root"
+
+  # Created on first use of the Agent Sandbox API; `services identity create` forces it now.
+  gcloud beta services identity create --service aiplatform.googleapis.com --project "$project" >/dev/null
+  gcloud artifacts repositories add-iam-policy-binding "$repo" --location "$region" --project "$project" \
+    --member "serviceAccount:service-$(project_number)@gcp-sa-vertex-sandbox.iam.gserviceaccount.com" \
+    --role roles/artifactregistry.reader
+  echo "ALIEN_TEST_GCP_AGENT_IMAGE=${image}"
+}
+
+cmd_suite() {
+  : "${GOOGLE_TARGET_SERVICE_ACCOUNT_KEY:?set GOOGLE_TARGET_SERVICE_ACCOUNT_KEY}"
+  : "${ALIEN_TEST_GIT_TOKEN:?set ALIEN_TEST_GIT_TOKEN}"
+  : "${ALIEN_TEST_PRIVATE_REPO:?set ALIEN_TEST_PRIVATE_REPO}"
+  require_image
+  cd "$repo_root"
+  ALIEN_TEST_GCP_AGENT_IMAGE="${ALIEN_TEST_GCP_AGENT_IMAGE:-$image}" \
+    cargo test -p alien-test --test gcp_agent_platform_sandbox_live -- --ignored --test-threads=1
+}
+
+cmd_iam_check() {
+  require_image
+  local admin_token own other role_name holder_token status operation template
+  admin_token="$(gcloud auth print-access-token)"
+
+  own="$(create_engine "$admin_token")"
+  other="$(create_engine "$admin_token")"
+  echo "own engine:   $own"
+  echo "other engine: $other"
+
+  # The same verbs as permission-sets/sandbox/templates.jsonc, as a project custom role that is
+  # bound only on the engine, never on the project.
+  local role_id
+  role_id="${role_prefix}_$(date +%s)"
+  echo "$role_id" >>"$state_dir/roles"
+  gcloud iam roles create "$role_id" --project "$project" --title "Alien sandbox templates probe" \
+      --permissions aiplatform.sandboxEnvironmentTemplates.create,aiplatform.sandboxEnvironmentTemplates.delete,aiplatform.sandboxEnvironmentTemplates.get,aiplatform.sandboxEnvironmentTemplates.list
+  role_name="projects/${project}/roles/${role_id}"
+  gcloud iam service-accounts describe "$holder" --project "$project" >/dev/null 2>&1 \
+    || gcloud iam service-accounts create "$holder_id" --project "$project"
+  # The holder is impersonated rather than keyed, so the caller needs Token Creator on it.
+  gcloud iam service-accounts add-iam-policy-binding "$holder" --project "$project" \
+    --member "$(caller_member)" --role roles/iam.serviceAccountTokenCreator >/dev/null
+
+  # Engine IAM is served on v1beta1, the API version the google-beta IAM member resource calls.
+  status="$(host="https://${region}-aiplatform.googleapis.com/v1beta1" call "$admin_token" POST "${own}:setIamPolicy" \
+    "{\"policy\":{\"bindings\":[{\"role\":\"${role_name}\",\"members\":[\"serviceAccount:${holder}\"]}]}}")"
+  expect_status 200 "$status" "bind the role on the own engine"
+
+  echo "waiting 90s for IAM propagation"
+  sleep 90
+  holder_token="$(gcloud auth print-access-token --impersonate-service-account "$holder")"
+
+  status="$(call "$holder_token" POST "${own}/sandboxEnvironmentTemplates" "$(template_body)")"
+  expect_status 200 "$status" "create a template on the own engine"
+  operation="$(jq -r '.name' "$state_dir/last.json")"
+  template="$(await_operation "$holder_token" "$operation")"
+
+  status="$(call "$holder_token" POST "${own}/sandboxEnvironmentTemplates" "$(template_body)")"
+  expect_status 200 "$status" "create a replacement template on the own engine"
+  await_operation "$holder_token" "$(jq -r '.name' "$state_dir/last.json")" >/dev/null
+  status="$(call "$holder_token" DELETE "$template")"
+  expect_status 200 "$status" "delete the replaced template on the own engine"
+
+  status="$(call "$holder_token" POST "${parent}/reasoningEngines" '{"displayName":"alien-sbx-live-iam-denied"}')"
+  # A regressed grant creates the engine; record it before the failing check exits the script.
+  if [[ "$status" == 200 ]]; then
+    jq -r '.name | sub("/operations/.*"; "")' "$state_dir/last.json" >>"$state_dir/engines"
+  fi
+  expect_status 403 "$status" "create an engine"
+  status="$(call "$holder_token" DELETE "$own")"
+  expect_status 403 "$status" "delete the own engine"
+
+  status="$(call "$holder_token" POST "${other}/sandboxEnvironmentTemplates" "$(template_body)")"
+  expect_status 403 "$status" "create a template on another engine"
+  status="$(call "$holder_token" GET "${other}/sandboxEnvironmentTemplates")"
+  expect_status 403 "$status" "list templates on another engine"
+  status="$(call "$admin_token" POST "${other}/sandboxEnvironmentTemplates" "$(template_body)")"
+  expect_status 200 "$status" "admin creates a template on another engine"
+  local other_template
+  other_template="$(await_operation "$admin_token" "$(jq -r '.name' "$state_dir/last.json")")"
+  status="$(call "$holder_token" GET "$other_template")"
+  expect_status 403 "$status" "get another engine's template"
+  status="$(call "$holder_token" DELETE "$other_template")"
+  expect_status 403 "$status" "delete another engine's template"
+
+  # Sessions are sandbox contents: template verbs must not reach them, even on the own engine.
+  status="$(call "$holder_token" POST "${own}/sandboxEnvironments" '{}')"
+  expect_status 403 "$status" "create a session on the own engine"
+  status="$(call "$holder_token" GET "${own}/sandboxEnvironments")"
+  expect_status 403 "$status" "list sessions on the own engine"
+}
+
+cmd_teardown() {
+  local admin_token engine status left=()
+  admin_token="$(gcloud auth print-access-token)"
+  if [[ -f "$state_dir/engines" ]]; then
+    while read -r engine; do
+      [[ -n "$engine" ]] || continue
+      status="$(call "$admin_token" DELETE "${engine}?force=true" || echo "curl failed")"
+      echo "delete $engine -> $status"
+      # A 200 only accepts the delete; the engine is gone once its operation finishes clean.
+      if [[ "$status" == 200 ]]; then
+        await_operation "$admin_token" "$(jq -r '.name' "$state_dir/last.json")" >/dev/null \
+          || left+=("$engine")
+      elif [[ "$status" != 404 ]]; then
+        left+=("$engine")
+      fi
+    done <"$state_dir/engines"
+    if ((${#left[@]})); then
+      printf '%s\n' "${left[@]}" >"$state_dir/engines"
+      echo "${#left[@]} engine(s) could not be deleted and stay recorded; rerun teardown" >&2
+    else
+      rm -f "$state_dir/engines"
+    fi
+  fi
+  gcloud iam service-accounts delete "$holder" --project "$project" --quiet 2>/dev/null || true
+  if [[ -f "$state_dir/roles" ]]; then
+    while read -r role; do
+      [[ -n "$role" ]] || continue
+      gcloud iam roles delete "$role" --project "$project" --quiet 2>/dev/null || true
+    done <"$state_dir/roles"
+    rm -f "$state_dir/roles"
+  fi
+  ((${#left[@]} == 0))
+}
+
+case "${1:-}" in
+  image) cmd_image ;;
+  suite) cmd_suite ;;
+  iam-check) lock_state; cmd_iam_check ;;
+  teardown) lock_state; cmd_teardown ;;
+  *) echo "usage: $0 image|suite|iam-check|teardown" >&2; exit 2 ;;
+esac

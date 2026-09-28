@@ -84,6 +84,16 @@ fn internet_access_or_refuse(sandbox: &Sandbox) -> Result<bool> {
     })
 }
 
+/// The egress switch a template reports. The API omits a false `internetAccess`, answering `{}`
+/// for a deny template and `{"internetAccess": true}` for an open one, so absence reads as deny.
+fn served_internet_access(template: &SandboxEnvironmentTemplate) -> bool {
+    template
+        .egress_control_config
+        .as_ref()
+        .and_then(|egress| egress.internet_access)
+        .unwrap_or(false)
+}
+
 /// Builds the immutable template body from the declaration.
 fn build_template_body(
     sandbox: &Sandbox,
@@ -149,6 +159,10 @@ pub struct GcpAgentPlatformTemplateController {
     pub(crate) region: Option<String>,
     /// Session lifetime from the declaration, carried into the binding.
     pub(crate) max_lifetime_seconds: Option<u32>,
+    /// Egress switch the serving template reports, carried into the binding and re-read on every
+    /// Ready. `None` is state saved before the field existed; the binding reads it as deny.
+    #[serde(default)]
+    pub(crate) allow_egress: Option<bool>,
 }
 
 #[controller]
@@ -312,10 +326,14 @@ impl GcpAgentPlatformTemplateController {
             });
         }
 
+        // Read off the template rather than the config: desired config can change while this
+        // template is being built, and the binding must describe the one that serves.
+        let allow_egress = served_internet_access(&template);
         // The new template is live; only now does it become the serving one, so the reap that
         // follows can delete the old without a window where sessions point at a deleted template.
         self.template_id = Some(pending);
         self.pending_template_id = None;
+        self.allow_egress = Some(allow_egress);
 
         Ok(HandlerAction::Continue {
             state: ReapingOldTemplates,
@@ -409,6 +427,7 @@ impl GcpAgentPlatformTemplateController {
                 ),
             }));
         }
+        self.allow_egress = Some(served_internet_access(&template));
 
         ctx.emit_heartbeat(alien_core::ResourceHeartbeat {
             deployment_id: None,
@@ -572,6 +591,7 @@ impl GcpAgentPlatformTemplateController {
             BindingValue::value(template_name),
             BindingValue::value(region.clone()),
             self.max_lifetime_seconds,
+            self.allow_egress.unwrap_or(false),
         );
         Ok(Some(
             serde_json::to_value(binding).into_alien_error().context(
@@ -603,6 +623,7 @@ impl GcpAgentPlatformTemplateController {
         self.project_id = None;
         self.region = None;
         self.max_lifetime_seconds = None;
+        self.allow_egress = None;
     }
 
     fn engine_and_template(&self, resource_id: &str) -> Result<(String, String)> {
@@ -641,6 +662,7 @@ impl GcpAgentPlatformTemplateController {
             project_id: Some("test-project-123".to_string()),
             region: Some("us-central1".to_string()),
             max_lifetime_seconds: None,
+            allow_egress: None,
             _internal_stay_count: None,
         }
     }
@@ -725,14 +747,33 @@ mod tests {
         }
     }
 
+    /// Serves every template ACTIVE with the egress of the last create body, as the API reports it:
+    /// a false `internetAccess` is omitted.
+    fn serve_created_egress(m: &mut MockAgentPlatformApi) {
+        let created = Arc::new(std::sync::Mutex::new(None));
+        let recorded = created.clone();
+        m.expect_create_template().returning(move |_, body| {
+            *recorded.lock().expect("unpoisoned") =
+                body.egress_control_config
+                    .map(|egress| EgressControlConfig {
+                        internet_access: egress.internet_access.filter(|open| *open),
+                        ..egress
+                    });
+            Ok(pending_op())
+        });
+        m.expect_get_template().returning(move |_, id| {
+            Ok(SandboxEnvironmentTemplate {
+                egress_control_config: created.lock().expect("unpoisoned").clone(),
+                ..active_template(id)
+            })
+        });
+    }
+
     /// A mock that carries one sandbox from create through a heartbeat and a clean delete.
     fn happy_client() -> Arc<MockAgentPlatformApi> {
         let mut m = MockAgentPlatformApi::new();
-        m.expect_create_template()
-            .returning(|_, _| Ok(pending_op()));
+        serve_created_egress(&mut m);
         m.expect_get_operation().returning(|_| Ok(done_op("tpl1")));
-        m.expect_get_template()
-            .returning(|_, id| Ok(active_template(id)));
         m.expect_list_templates()
             .returning(|_| Ok(vec![active_template("tpl1")]));
         m.expect_delete_template().returning(|_, _| Ok(()));
@@ -988,6 +1029,105 @@ mod tests {
                 );
             }
             other => panic!("expected a GCP Agent Platform binding, got {other:?}"),
+        }
+    }
+
+    /// The binding reports the egress of the template that is serving: the declared mode after
+    /// create, the new mode once a replacement that flips the switch goes ACTIVE, and on Ready what
+    /// the template itself says, whatever the desired config asks for.
+    #[tokio::test]
+    async fn the_binding_reports_the_serving_templates_egress() {
+        use crate::core::ResourceController;
+        let allow_egress = |executor: &SingleControllerExecutor| {
+            let params = executor
+                .internal_state::<GcpAgentPlatformTemplateController>()
+                .expect("downcasts")
+                .get_binding_params()
+                .expect("binding serializes")
+                .expect("a running template has a binding");
+            match serde_json::from_value(params).expect("binding parses") {
+                alien_core::bindings::SandboxBinding::GcpAgentPlatform(b) => b.allow_egress,
+                other => panic!("expected a GCP Agent Platform binding, got {other:?}"),
+            }
+        };
+
+        for egress in [SandboxEgress::Allow, SandboxEgress::Deny] {
+            let mut executor = build_executor(
+                sandbox_with(egress.clone(), "ubuntu:24.04", None, None),
+                provider_with(happy_client()),
+            )
+            .await;
+            executor.run_until_terminal().await.expect("create runs");
+            assert_eq!(
+                allow_egress(&executor),
+                egress == SandboxEgress::Allow,
+                "{egress:?}"
+            );
+        }
+
+        let mut m = MockAgentPlatformApi::new();
+        serve_created_egress(&mut m);
+        m.expect_get_operation().returning(|_| Ok(done_op("tpl2")));
+        m.expect_list_templates()
+            .returning(|_| Ok(vec![active_template("tpl1"), active_template("tpl2")]));
+        m.expect_delete_template().returning(|_, _| Ok(()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox_with(
+                SandboxEgress::Deny,
+                "ubuntu:24.04",
+                None,
+                None,
+            ))
+            .controller(GcpAgentPlatformTemplateController::mock_ready(
+                "eng", "tpl1",
+            ))
+            .platform(Platform::Gcp)
+            .service_provider(provider_with(Arc::new(m)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .expect("executor builds");
+        executor
+            .update(sandbox_with(
+                SandboxEgress::Allow,
+                "ubuntu:24.04",
+                None,
+                None,
+            ))
+            .expect("update accepted");
+        executor.run_until_terminal().await.expect("replace runs");
+        assert!(allow_egress(&executor), "the replacement opened egress");
+
+        // Desired config is the opposite of what serves in both cases, and state saved before the
+        // field existed reads as deny until the first Ready.
+        for (served, desired) in [(true, SandboxEgress::Deny), (false, SandboxEgress::Allow)] {
+            let mut m = MockAgentPlatformApi::new();
+            m.expect_get_template().returning(move |_, id| {
+                Ok(SandboxEnvironmentTemplate {
+                    egress_control_config: Some(EgressControlConfig {
+                        internet_access: served.then_some(true),
+                        extra: Default::default(),
+                    }),
+                    ..active_template(id)
+                })
+            });
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(sandbox_with(desired, "ubuntu:24.04", None, None))
+                .controller(GcpAgentPlatformTemplateController::mock_ready(
+                    "eng", "tpl1",
+                ))
+                .platform(Platform::Gcp)
+                .service_provider(provider_with(Arc::new(m)))
+                .with_test_dependencies()
+                .build()
+                .await
+                .expect("executor builds");
+            assert!(
+                !allow_egress(&executor),
+                "state saved without the field reads as deny"
+            );
+            executor.step().await.expect("a Ready reconcile succeeds");
+            assert_eq!(allow_egress(&executor), served, "served {served}");
         }
     }
 

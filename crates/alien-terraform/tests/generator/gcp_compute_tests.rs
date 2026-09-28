@@ -411,6 +411,102 @@ fn a_gcp_remote_sandbox_grants_the_access_identity_its_own_engine_and_nothing_wi
     snapshot_module("gcp_remote_sandbox", &module);
 }
 
+/// A Frozen sandbox's manager creates and replaces its templates, so the preflight hands it
+/// `sandbox/templates` scoped to that sandbox. It must land on the engine setup creates: at project
+/// scope it would let the manager replace any sibling sandbox's image.
+#[test]
+fn a_frozen_gcp_sandbox_manager_gets_template_verbs_on_its_engine_only() {
+    let stack = Stack::new("byo-sandbox".to_string())
+        .management(alien_core::permissions::ManagementPermissions::extend(
+            alien_core::PermissionProfile::new()
+                .global(["sandbox/heartbeat", "sandbox/management"])
+                .resource("agents", ["sandbox/templates"]),
+        ))
+        .add(
+            GcpAgentPlatformEngine::new("agents-engine".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            alien_core::RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: "python:3.12".to_string(),
+                })
+                .egress(SandboxEgress::Deny)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let member = rendered
+        .split(r#"resource "google_vertex_ai_reasoning_engine_iam_member""#)
+        .nth(1)
+        .expect("the template grant renders an engine-scoped IAM member")
+        .split("\nresource ")
+        .next()
+        .expect("block ends");
+    assert!(
+        member.contains("google_vertex_ai_reasoning_engine.agents_engine.name"),
+        "{member}"
+    );
+    assert!(
+        member.contains("google_service_account.management.email"),
+        "{member}"
+    );
+
+    let custom_roles: Vec<&str> = rendered
+        .split(r#"resource "google_project_iam_custom_role""#)
+        .skip(1)
+        .map(|block| block.split("\nresource ").next().expect("block ends"))
+        .collect();
+    let templates_role = custom_roles
+        .iter()
+        .find(|role| role.contains("aiplatform.sandboxEnvironmentTemplates.create"))
+        .expect("the template verbs render as a custom role");
+    assert!(
+        !templates_role.contains("aiplatform.reasoningEngines.")
+            && !templates_role.contains("aiplatform.sandboxEnvironments."),
+        "the template role may not reach the engine or a session:\n{templates_role}"
+    );
+    let templates_role_ref = format!(
+        "google_project_iam_custom_role.{}",
+        templates_role
+            .trim_start()
+            .split('"')
+            .nth(1)
+            .expect("the role block is labelled")
+    );
+    for block in rendered
+        .split(r#"resource "google_project_iam_member""#)
+        .skip(1)
+    {
+        let block = block.split("\nresource ").next().expect("block ends");
+        assert!(
+            !block.contains(&templates_role_ref),
+            "the template role is bound at project scope:\n{block}"
+        );
+    }
+    assert!(member.contains(&templates_role_ref), "{member}");
+
+    assert_terraform_valid(&module, "gcp frozen sandbox template management");
+    snapshot_module("gcp_frozen_sandbox_template_management", &module);
+}
+
 /// The management identity reports on a remotely published sandbox without reaching its sessions.
 /// GCP is where this is load-bearing: `sandbox/management` binds at `projects/${projectName}`, so a
 /// grant left there would reach the published engine's sessions from anywhere in the project — the

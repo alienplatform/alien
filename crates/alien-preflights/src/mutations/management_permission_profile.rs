@@ -206,6 +206,19 @@ fn generate_auto_management_profile(
             }
         }
 
+        // After a Terraform setup the manager builds and replaces a Frozen GCP sandbox's template;
+        // a direct setup does it with the deployer's credentials. Resource-scoped: the GCP emitter
+        // binds it on this sandbox's engine once setup has created it.
+        if platform == Platform::Gcp
+            && resource_type == "sandbox"
+            && resource_entry.lifecycle == ResourceLifecycle::Frozen
+        {
+            resource_permission_set_ids
+                .entry(resource_id.clone())
+                .or_default()
+                .insert("sandbox/templates".to_string());
+        }
+
         // Add heartbeat permissions if heartbeat is enabled (Auto or RequiresApproval)
         // Disabled means no infrastructure/IAM permissions at all
         if config.stack_settings.heartbeats.is_enabled() {
@@ -674,6 +687,56 @@ mod tests {
             !granted.contains(&"sandbox/execute") && !granted.contains(&"sandbox/remote-execute"),
             "heartbeat must not drag session execution onto the management identity: {granted:?}"
         );
+    }
+
+    /// Only a Frozen GCP sandbox gets template verbs, and only scoped to itself: at `*` they would
+    /// bind at project scope and reach every sibling sandbox's template.
+    #[tokio::test]
+    async fn frozen_gcp_sandbox_gets_template_verbs_scoped_to_itself() {
+        let sandbox = |id: &str| {
+            Sandbox::new(id.to_string())
+                .code(SandboxCode::Image {
+                    image: "us-central1-docker.pkg.dev/p/r/agent:1".to_string(),
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build()
+        };
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let stack = Stack::new("test-stack".to_string())
+                .add(sandbox("frozen-box"), ResourceLifecycle::Frozen)
+                .add(sandbox("live-box"), ResourceLifecycle::Live)
+                .build();
+            let result_stack = ManagementPermissionProfileMutation
+                .mutate(
+                    stack,
+                    &StackState::new(platform),
+                    &deployment_config_for_management_permission_test(),
+                )
+                .await
+                .expect("management permission mutation should succeed");
+            let profile = result_stack
+                .management()
+                .profile()
+                .expect("auto management profile should be generated");
+            let has_templates = |scope: &str| {
+                profile.0.get(scope).is_some_and(|refs| {
+                    refs.iter()
+                        .any(|permission| permission.id() == "sandbox/templates")
+                })
+            };
+
+            assert_eq!(
+                has_templates("frozen-box"),
+                platform == Platform::Gcp,
+                "{platform:?}: {profile:?}"
+            );
+            assert!(!has_templates("*"), "{platform:?}: {profile:?}");
+            assert!(!has_templates("live-box"), "{platform:?}: {profile:?}");
+        }
     }
 
     #[tokio::test]

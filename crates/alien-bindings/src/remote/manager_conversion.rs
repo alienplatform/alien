@@ -365,6 +365,8 @@ impl ResolvedRemoteBinding {
                                 narrow_manager_number(seconds, "maxLifetimeSeconds", resource_id)
                             })
                             .transpose()?,
+                        // Absent from a manager older than the field: fail closed.
+                        allow_egress: binding.allow_egress.unwrap_or(false),
                     }),
                     client_config: Box::new(alien_core::GcpClientConfig {
                         project_id: client_config.project_id,
