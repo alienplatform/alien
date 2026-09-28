@@ -206,9 +206,9 @@ fn generate_auto_management_profile(
             }
         }
 
-        // A Frozen GCP sandbox's engine is setup-owned but its template is release-owned, so the
-        // manager creates and replaces templates. Resource-scoped: the GCP emitter binds it on
-        // this sandbox's engine once setup has created it.
+        // After a Terraform setup the manager builds and replaces a Frozen GCP sandbox's template;
+        // a direct setup does it with the deployer's credentials. Resource-scoped: the GCP emitter
+        // binds it on this sandbox's engine once setup has created it.
         if platform == Platform::Gcp
             && resource_type == "sandbox"
             && resource_entry.lifecycle == ResourceLifecycle::Frozen

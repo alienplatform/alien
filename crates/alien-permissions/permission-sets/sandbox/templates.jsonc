@@ -4,9 +4,9 @@
   "platforms": {
     "gcp": [
       {
-        // A Frozen sandbox's engine is setup-owned but its template (image and internet access) is
-        // release-owned. No reasoningEngines verb, so the engine stays setup's; no
-        // sandboxEnvironments verb, so no live session is reachable.
+        // After a Terraform setup the manager builds, replaces and deletes the template (image and
+        // internet access); a direct setup builds and replaces it with the deployer's credentials.
+        // No engine or session verb: the setup-owned engine stays setup's, no session is reachable.
         "description": "Allows creating, reading and deleting environment templates, which set a sandbox's image and internet access, under the selected reasoning engine.",
         "grant": {
           "permissions": [
