@@ -180,6 +180,13 @@ pub const GCP_AGENT_PLATFORM: SandboxImage = SandboxImage {
     isolation: Isolation::Platform,
 };
 
+/// Every variable a GCP Agent Platform image sets: the contract, then `RUST_LOG`.
+pub fn gcp_agent_platform_env() -> Vec<(&'static str, String)> {
+    let mut env = GCP_AGENT_PLATFORM.contract_env_vars().to_vec();
+    env.push(("RUST_LOG", GCP_AGENT_LOG_FILTER.to_string()));
+    env
+}
+
 /// The `RUN` step creating the exec identity and the session root it owns.
 pub fn identity_setup(image: &SandboxImage) -> String {
     format!(
@@ -218,7 +225,7 @@ pub fn entrypoint(image: &SandboxImage) -> String {
     };
     format!(
         "EXPOSE {port}\n{ending}ENTRYPOINT [\"{AGENT_PATH}\"]",
-        port = image.port
+        port = image.exposed_port()
     )
 }
 
@@ -375,6 +382,33 @@ mod tests {
                 first_difference(&committed, &rendered)
             );
         }
+    }
+
+    /// An image built without a Dockerfile carries what the CI images carry, so the env the
+    /// accessor hands out is read back from the committed file rather than restated.
+    #[test]
+    fn the_gcp_env_accessor_is_every_env_the_committed_dockerfile_sets() {
+        let committed = std::fs::read_to_string(committed_path(GCP_DEFAULT_DOCKERFILE)).unwrap();
+        let mut set = Vec::new();
+        let mut in_env = false;
+        for line in committed.lines() {
+            let line = line.trim();
+            let rest = match line.strip_prefix("ENV ") {
+                Some(rest) => rest,
+                None if in_env => line,
+                None => continue,
+            };
+            in_env = rest.ends_with('\\');
+            for pair in rest.trim_end_matches('\\').split_whitespace() {
+                let (name, value) = pair.split_once('=').expect("ENV name=value");
+                set.push((name.to_string(), value.to_string()));
+            }
+        }
+        let accessor: Vec<(String, String)> = gcp_agent_platform_env()
+            .into_iter()
+            .map(|(name, value)| (name.to_string(), value))
+            .collect();
+        assert_eq!(accessor, set);
     }
 
     /// The ending an image declares and the isolation it claims come off one value, so they
