@@ -19,6 +19,7 @@ pub mod resource_name_length;
 pub mod resource_references_exist;
 pub mod sandbox_build_role_name;
 pub mod sandbox_platform_support;
+pub mod sandbox_template_permissions;
 pub mod service_account_impersonate_validation;
 pub mod single_exposed_port_check;
 pub mod single_queue_trigger;

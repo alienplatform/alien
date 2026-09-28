@@ -150,7 +150,7 @@ async fn create_awaits_running_probes_the_agent_and_pins_its_arguments() {
 
 /// `create` resolves only once the agent answers: a probe the proxy refuses while the container is
 /// still coming up is retried, and one that never answers within the budget deletes the sandbox.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn create_waits_for_the_agent_and_deletes_the_sandbox_when_it_never_answers() {
     fn bad_gateway() -> AlienError<AgentPlatformErrorData> {
         AlienError::new(AgentPlatformErrorData::ExecuteFailed {
@@ -192,6 +192,11 @@ async fn create_waits_for_the_agent_and_deletes_the_sandbox_when_it_never_answer
         .await
         .expect_err("an agent that never answers fails create");
     assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Bad Gateway") && rendered.contains("did not answer within"),
+        "the timeout sits over the last probe's cause: {rendered}"
+    );
 }
 
 /// Pins the unit as well as the value: `timeoutMs` is milliseconds and Agent Platform's `ttl` is
@@ -1409,33 +1414,40 @@ async fn read_file_decodes_the_agent_reply() {
 }
 
 /// The `:execute` proxy relays an agent's 404 as its own, so a file the agent cannot find must not
-/// read as a gone sandbox, while a 404 without an agent code still does.
+/// read as a gone sandbox, while a 404 without an agent code still does. A relayed 5xx carries the
+/// same shape but proves nothing about a command, so it stays outcome-unknown.
 #[tokio::test]
 async fn a_relayed_agent_404_is_a_refusal_not_a_gone_sandbox() {
-    fn relayed_404(details: &'static str) -> AlienError<AgentPlatformErrorData> {
+    fn relayed(status: u16, details: &'static str) -> AlienError<AgentPlatformErrorData> {
         let body = serde_json::json!({
             "error": {
-                "code": 404,
+                "code": status,
                 "message": format!("Execution Failed. URL not found `https://x.sandbox.vertexai.goog`. Error Details: {details}"),
-                "status": "NOT_FOUND"
             }
         })
         .to_string();
-        AlienError::new(alien_client_core::ErrorData::HttpResponseError {
-            message: "Request failed with HTTP 404: Not Found".to_string(),
+        let http = AlienError::new(alien_client_core::ErrorData::HttpResponseError {
+            message: format!("Request failed with HTTP {status}"),
             url: "https://example.invalid/:execute".to_string(),
-            http_status: 404,
+            http_status: status,
             http_request_text: None,
             http_response_text: Some(body),
-        })
-        .context(alien_client_core::ErrorData::RemoteResourceNotFound {
-            resource_type: "Vertex AI Agent Platform".to_string(),
-            resource_name: "s1".to_string(),
-        })
-        .context(AgentPlatformErrorData::ExecuteFailed {
+        });
+        let http = if status == 404 {
+            http.context(alien_client_core::ErrorData::RemoteResourceNotFound {
+                resource_type: "Vertex AI Agent Platform".to_string(),
+                resource_name: "s1".to_string(),
+            })
+        } else {
+            http
+        };
+        http.context(AgentPlatformErrorData::ExecuteFailed {
             sandbox: "s1".to_string(),
             message: "the API rejected or cut short the request".to_string(),
         })
+    }
+    fn relayed_404(details: &'static str) -> AlienError<AgentPlatformErrorData> {
+        relayed(404, details)
     }
 
     let mut client = MockAgentPlatformApi::new();
@@ -1457,6 +1469,27 @@ async fn a_relayed_agent_404_is_a_refusal_not_a_gone_sandbox() {
         "Bad Gateway: Unable to reach the sandbox environment."
     ))
     .is_none());
+
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_execute()
+        .returning(move |_, _, _| Err(relayed(500, "INTERNAL_SERVER_ERROR: stream reset")));
+    let Err(command) = provider(client)
+        .run_command(
+            "s1",
+            RunCommandRequest {
+                command: "/bin/true".to_string(),
+                args: Vec::new(),
+                cwd: None,
+                env: BTreeMap::new(),
+                timeout: Duration::from_secs(5),
+            },
+        )
+        .await
+    else {
+        panic!("a relayed 5xx fails the command");
+    };
+    assert_eq!(command.code, "SANDBOX_OUTCOME_UNKNOWN", "{command}");
 }
 
 // ---- pause / resume / snapshot ----------------------------------------------------------------

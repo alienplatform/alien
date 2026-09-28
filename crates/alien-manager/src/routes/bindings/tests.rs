@@ -308,7 +308,10 @@ fn remote_gcp_sandbox_binding_reports_the_declared_egress() {
         };
         assert_eq!(resolved.allow_egress, allow_egress);
         let json = serde_json::to_value(&resolved).expect("serializes");
-        assert_eq!(json["allowEgress"], allow_egress, "{json}");
+        // Deny is omitted, so a client whose schema predates the field still decodes it.
+        let sent = json.get("allowEgress").cloned();
+        let expected = allow_egress.then_some(serde_json::Value::Bool(true));
+        assert_eq!(sent, expected, "{json}");
     }
 }
 

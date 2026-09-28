@@ -187,13 +187,18 @@ fn emit_template_management(ctx: &EmitContext<'_>, fragment: &mut TfFragment) ->
     if !granted || ctx.resource.lifecycle != ResourceLifecycle::Frozen {
         return Ok(());
     }
-    let Some(management_label) = ctx.stack.resources().find_map(|(id, entry)| {
-        (entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
-            .then(|| ctx.name_for(id))
-            .flatten()
+    // No management resource means no remote manager identity: the deploying credentials run the
+    // template controller, so there is no member to bind.
+    let Some(management_id) = ctx.stack.resources().find_map(|(id, entry)| {
+        (entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE).then_some(id)
     }) else {
         return Ok(());
     };
+    let management_label = ctx.name_for(management_id).ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: format!("management resource '{management_id}' has no Terraform name"),
+        })
+    })?;
     emit_engine_grant(ctx, fragment, TEMPLATES, management_label, "templates")
 }
 
@@ -486,16 +491,6 @@ mod tests {
                     .is_some_and(|label| label.as_str() == "google_project_iam_member")),
                 "{fragment:?}"
             );
-            let rendered = format!("{fragment:?}");
-            assert!(
-                rendered.contains("aiplatform.sandboxEnvironmentTemplates.create"),
-                "{rendered}"
-            );
-            assert!(
-                !rendered.contains("aiplatform.reasoningEngines."),
-                "{rendered}"
-            );
-
             assert!(granted(false).resource_blocks.is_empty());
         }
 

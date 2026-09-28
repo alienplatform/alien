@@ -504,6 +504,7 @@ fn a_frozen_gcp_sandbox_manager_gets_template_verbs_on_its_engine_only() {
     assert!(member.contains(&templates_role_ref), "{member}");
 
     assert_terraform_valid(&module, "gcp frozen sandbox template management");
+    snapshot_module("gcp_frozen_sandbox_template_management", &module);
 }
 
 /// The management identity reports on a remotely published sandbox without reaching its sessions.

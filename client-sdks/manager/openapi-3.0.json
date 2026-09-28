@@ -13637,7 +13637,7 @@
         "properties": {
           "allowEgress": {
             "type": "boolean",
-            "description": "Whether the declaration asked for open egress, as the template enforces it. Optional in\nthe schema so a client reading an older manager, which never sends it, still decodes."
+            "description": "Whether the declaration asked for open egress, as the template enforces it. Sent only when\ntrue: released clients reject unknown fields, so a deny binding must stay byte-identical."
           },
           "engine": {
             "type": "string",

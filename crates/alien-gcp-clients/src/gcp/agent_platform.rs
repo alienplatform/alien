@@ -370,7 +370,7 @@ pub struct SandboxSnapshot {
 }
 
 /// The `google.protobuf.Empty` a value-less operation resolves to. Deserializes from any object,
-/// ignoring the `@type` marker, so `await_operation::<Empty>` works for value-less operations.
+/// ignoring the `@type` marker, so `await_operation::<Empty>` works for them.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Empty {}
 
@@ -383,7 +383,8 @@ struct ExecuteRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExecuteBlob {
-    /// base64-encoded payload
+    /// base64-encoded payload. Agent Platform omits it when the agent's reply is empty.
+    #[serde(default)]
     data: String,
     /// MIME type of the payload
     mime_type: String,
@@ -1030,6 +1031,33 @@ mod tests {
             .await
             .expect_err("execute should surface the failure");
         assert_eq!(exec.hits_async().await, 1, "execute must be sent once");
+    }
+
+    /// An empty agent reply arrives as an output with no `data`, which is an empty body, not a
+    /// malformed one; an output missing its MIME type still is.
+    #[tokio::test]
+    async fn an_execute_output_without_data_is_an_empty_reply() {
+        for (reply, empty) in [
+            (r#"{"outputs":[{"mimeType":"application/json"}]}"#, true),
+            (r#"{"outputs":[{}]}"#, false),
+            (r#"{"outputs":[]}"#, false),
+        ] {
+            let server = MockServer::start_async().await;
+            server
+                .mock_async(|when, then| {
+                    when.method(POST).path_contains(":execute");
+                    then.status(200)
+                        .header("content-type", "application/json")
+                        .body(reply);
+                })
+                .await;
+            let result = client(&server).execute(ENGINE, SANDBOX, b"{}").await;
+            if empty {
+                assert!(result.expect(reply).is_empty(), "{reply}");
+            } else {
+                result.expect_err(reply);
+            }
+        }
     }
 
     #[tokio::test]

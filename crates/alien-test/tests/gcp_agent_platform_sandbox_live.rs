@@ -595,6 +595,50 @@ async fn a_command_past_the_proxy_cap_completes_detached() {
         .expect("terminate confirms gone");
 }
 
+/// `writeFiles` then `readFile`: the agent answers a write with an empty body, which the proxy
+/// relays as an output with no `data`. Nested paths exercise parent-directory creation.
+#[tokio::test]
+#[ignore = "requires a real GCP project; see module docs"]
+async fn written_files_read_back() {
+    let config = LiveConfig::from_env();
+    let client = config.client();
+    let engine = provision_engine(&client).await;
+    record_engine(&engine);
+    let _guard = EngineGuard {
+        client: client.clone(),
+        engine: engine.clone(),
+    };
+    let template = provision_template(&client, &engine, &agent_image(), true).await;
+    let provider = provider(&client, &engine, &template);
+
+    let session = provider
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("create succeeds");
+    let sid = session.sandbox_id.clone();
+
+    let files = BTreeMap::from([
+        ("/files/a.txt".to_string(), b"alpha\n".to_vec()),
+        ("/files/nested/b.bin".to_string(), vec![0, 1, 2, 255]),
+    ]);
+    provider
+        .write_files(&sid, files.clone())
+        .await
+        .expect("writeFiles succeeds");
+    for (path, contents) in &files {
+        let read_back = provider
+            .read_file(&sid, path)
+            .await
+            .unwrap_or_else(|error| panic!("{path} reads back: {error}"));
+        assert_eq!(&read_back, contents, "{path}");
+    }
+
+    provider
+        .terminate(&sid)
+        .await
+        .expect("terminate confirms gone");
+}
+
 // ---- Capability rows measured live ------------------------------------------------------------
 
 /// `egressDeny`: a `deny` template closes the network — the connection fails and DNS with it.
@@ -621,12 +665,12 @@ async fn egress_deny_blocks_the_network_including_dns() {
     let sid = session.sandbox_id.clone();
 
     // `git` is the one network client in the agent image, and its message names a failed lookup.
-    // A dropped resolver otherwise waits past the 20s command timeout, so glibc is held to one 2s
-    // try and `timeout` caps the whole probe; 124 then means something other than DNS hung.
+    // glibc gets one 2s try and `timeout` caps the probe. Busybox `timeout` exits 143 and leaves
+    // git's transport helper alive, so output goes to a file the helper cannot hold open for us.
     let resolve = shell(
         &provider,
         &sid,
-        "RES_OPTIONS='timeout:2 attempts:1' timeout 10 git ls-remote https://github.com/git/git HEAD 2>&1; echo rc=$?",
+        "RES_OPTIONS='timeout:2 attempts:1' timeout 10 git ls-remote https://github.com/git/git HEAD >/sandbox/egress-probe 2>&1; rc=$?; cat /sandbox/egress-probe; echo rc=$rc",
     )
     .await;
     let stdout = String::from_utf8_lossy(&resolve.stdout).to_string();
@@ -638,7 +682,7 @@ async fn egress_deny_blocks_the_network_including_dns() {
         _ if resolve.exit_code != 0 => Some("the probe wrapper itself failed"),
         None => Some("the probe reported no exit code"),
         Some(127) => Some("git and timeout must exist in the image"),
-        Some(124) => Some("the probe hung past its bound instead of failing the lookup"),
+        Some(124 | 143) => Some("the probe hung past its bound instead of failing the lookup"),
         Some(0) => Some("a closed sandbox reached github.com"),
         Some(_) if !stdout.contains("Could not resolve host") => {
             Some("the failure must be the DNS lookup, not a refused connection")
@@ -646,8 +690,8 @@ async fn egress_deny_blocks_the_network_including_dns() {
         Some(_) => None,
     };
     if let Some(problem) = problem {
-        // The platform has once served a deny sandbox with the network open. The hostname names the
-        // template warm pool the pod came from, which is what a report to the vendor needs.
+        // Agent Platform has once served a deny sandbox with the network open. The hostname names
+        // the template warm pool the pod came from, which is what a report to the vendor needs.
         let facts = shell(
             &provider,
             &sid,
@@ -685,9 +729,9 @@ fn record_engine(engine: &str) {
     }
 }
 
-/// Deletes every engine a prior live run recorded, tolerating not-found. This is the sweep for
-/// orphans a failed run left behind; a completed run's engine is already gone and its line is a
-/// harmless not-found here.
+/// Deletes the engines failed live runs left behind: every one recorded in the log, and any listed
+/// under this suite's prefix that is older than a run can be. Not-found counts as deleted. Logged
+/// engines are taken at any age, so never sweep while another suite on this machine is running.
 #[tokio::test]
 #[ignore = "requires a real GCP project; reaps engines recorded by failed live runs"]
 async fn sweep_orphaned_engines() {
@@ -695,14 +739,16 @@ async fn sweep_orphaned_engines() {
     let recorded = std::fs::read_to_string(sweep_log()).unwrap_or_default();
 
     // Two sources, deduped: engines a failed run recorded, and engines the API still lists under
-    // this suite's display-name prefix. The second catches one killed before it was ever recorded —
-    // the gap a log-only sweep leaves. Only this suite's prefix is reaped, never a stray engine.
+    // this suite's display-name prefix. The second catches one killed before it was ever recorded;
+    // only a listed engine older than any run can be is taken, so a concurrent run keeps its own.
     let mut targets: BTreeSet<String> = recorded
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .map(|line| last_segment(line).to_string())
         .collect();
+    let oldest_live_run =
+        chrono::Utc::now() - chrono::Duration::seconds(2 * i64::from(TTL_SECONDS));
     for engine in client
         .list_engines()
         .await
@@ -712,7 +758,15 @@ async fn sweep_orphaned_engines() {
             .display_name
             .as_deref()
             .is_some_and(|name| name.starts_with(LIVE_PREFIX));
-        if let (true, Some(name)) = (matches_suite, engine.name.as_deref()) {
+        // An engine without a readable createTime is reaped: an orphan must not outlive the sweep.
+        let outlived_any_run = engine
+            .extra
+            .get("createTime")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|created| chrono::DateTime::parse_from_rfc3339(created).ok())
+            .is_none_or(|created| created < oldest_live_run);
+        if let (true, true, Some(name)) = (matches_suite, outlived_any_run, engine.name.as_deref())
+        {
             targets.insert(last_segment(name).to_string());
         }
     }
@@ -720,26 +774,40 @@ async fn sweep_orphaned_engines() {
     let mut failures = Vec::new();
     for engine in &targets {
         if let Err(error) = client.delete_engine(engine).await {
-            failures.push(format!("{engine}: {error}"));
+            failures.push((engine.clone(), error.to_string()));
         }
     }
-    // A failed delete stays in the log, so the next sweep still has its name.
-    if failures.is_empty() {
+    // A delete returns once accepted, so an engine still listed stays in the log with every refused
+    // one: its deletion may yet fail, and the next sweep then still has its name.
+    let still_listed: BTreeSet<String> = client
+        .list_engines()
+        .await
+        .expect("listing engines after the sweep")
+        .iter()
+        .filter_map(|engine| engine.name.as_deref().map(last_segment))
+        .filter(|engine| targets.contains(*engine))
+        .map(str::to_string)
+        .collect();
+    let left: BTreeSet<&String> = failures
+        .iter()
+        .map(|(engine, _)| engine)
+        .chain(&still_listed)
+        .collect();
+    if left.is_empty() {
         let _ = std::fs::remove_file(sweep_log());
     } else {
-        let left: String = failures
-            .iter()
-            .filter_map(|failure| {
-                failure
-                    .split_once(':')
-                    .map(|(engine, _)| format!("{engine}\n"))
-            })
-            .collect();
-        let _ = std::fs::write(sweep_log(), left);
+        let left: String = left.iter().map(|engine| format!("{engine}\n")).collect();
+        std::fs::write(sweep_log(), left)
+            .expect("the sweep log keeps the engines it could not confirm deleted");
     }
 
     assert!(
         failures.is_empty(),
-        "every orphan engine must be gone after a sweep; still present: {failures:?}"
+        "every orphan engine's delete must be accepted; refused: {failures:?}"
     );
+    if !still_listed.is_empty() {
+        eprintln!(
+            "deletion accepted but not yet done, rerun the sweep to confirm: {still_listed:?}"
+        );
+    }
 }

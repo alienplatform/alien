@@ -246,8 +246,9 @@ pub struct RemoteGcpSandboxBinding {
     /// Seconds a sandbox may live, where the declaration asked for one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_lifetime_seconds: Option<u32>,
-    /// Whether the declaration asked for open egress, as the template enforces it. Optional in
-    /// the schema so a client reading an older manager, which never sends it, still decodes.
+    /// Whether the declaration asked for open egress, as the template enforces it. Sent only when
+    /// true: released clients reject unknown fields, so a deny binding must stay byte-identical.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     #[cfg_attr(feature = "openapi", schema(required = false))]
     pub allow_egress: bool,
 }

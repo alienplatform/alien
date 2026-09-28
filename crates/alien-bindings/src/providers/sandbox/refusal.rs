@@ -12,6 +12,7 @@ use crate::error::{ErrorData, Result};
 /// Key the transport records a refused call's response body under. The error derive builds
 /// `context` from raw field names, so this tracks `HttpResponseError`'s own field name.
 const HTTP_RESPONSE_TEXT: &str = "http_response_text";
+const HTTP_STATUS: &str = "http_status";
 
 /// The longest run of cloud text a `reason` carries. A response body has no limit of its own,
 /// and the operation this is appended to has already been named.
@@ -96,22 +97,28 @@ where
     service.or(innermost)
 }
 
-/// The service message of the first layer on `error`'s chain that captured a response body.
-pub(crate) fn captured_service_message<E>(error: &AlienError<E>) -> Option<String>
+/// The service message of the first response body captured on `error`'s chain, when that response
+/// was a 4xx other than a timeout or rate limit: those and a 5xx are transient, not an answer. The
+/// text is unclipped; quote only a truncated part the sandbox's own agent wrote.
+pub(crate) fn captured_refusal<E>(error: &AlienError<E>) -> Option<String>
 where
     E: AlienErrorData + Clone + std::fmt::Debug + Serialize,
 {
-    if let Some(message) = service_message(error.context.as_ref()) {
-        return Some(message);
-    }
+    let mut context = error.context.as_ref();
     let mut layer = error.source.as_deref();
-    while let Some(current) = layer {
-        if let Some(message) = service_message(current.context.as_ref()) {
-            return Some(message);
+    loop {
+        if let Some(message) = service_message(context) {
+            let status = context
+                .and_then(|context| context.get(HTTP_STATUS))
+                .and_then(serde_json::Value::as_u64);
+            return status
+                .is_some_and(|status| (400..500).contains(&status) && ![408, 429].contains(&status))
+                .then_some(message);
         }
+        let current = layer?;
+        context = current.context.as_ref();
         layer = current.source.as_deref();
     }
-    None
 }
 
 /// The service's own sentence out of a captured JSON error body — AWS answers `{"message": …}`

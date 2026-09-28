@@ -464,25 +464,36 @@ impl GcpAgentPlatformSandbox {
     }
 
     /// Probes a RUNNING sandbox's agent until it answers or [`AGENT_READY_TIMEOUT`] passes, returning
-    /// the generation or the last probe's error.
+    /// the generation or the timeout over the last finished probe's cause. Every failure is retried,
+    /// a 404 included: the proxy answers a not-yet-listening container with a relayed 404.
     async fn wait_until_servable(&self, sandbox_id: &str) -> Result<u64> {
         let deadline = tokio::time::Instant::now() + AGENT_READY_TIMEOUT;
+        let mut last_error = None;
         loop {
-            match self.probe_agent(CREATE, sandbox_id).await {
-                Ok(generation) => return Ok(generation),
-                Err(error) if tokio::time::Instant::now() >= deadline => {
-                    return Err(error.context(ErrorData::SandboxUnreachable {
-                        operation: CREATE.to_string(),
-                        reason: format!(
-                            "sandbox '{sandbox_id}' was running but its agent did not answer \
-                             within {}s",
-                            AGENT_READY_TIMEOUT.as_secs()
-                        ),
-                    }))
+            // Bounded by the deadline too, since one probe's own budget is as long as the wait.
+            match tokio::time::timeout_at(deadline, self.probe_agent(CREATE, sandbox_id)).await {
+                Ok(Ok(generation)) => return Ok(generation),
+                Ok(Err(error)) => {
+                    last_error = Some(error);
+                    if tokio::time::Instant::now() + AGENT_READY_POLL >= deadline {
+                        break;
+                    }
+                    tokio::time::sleep(AGENT_READY_POLL).await;
                 }
-                Err(_) => tokio::time::sleep(AGENT_READY_POLL).await,
+                Err(_) => break,
             }
         }
+        let timed_out = ErrorData::SandboxUnreachable {
+            operation: CREATE.to_string(),
+            reason: format!(
+                "sandbox '{sandbox_id}' was running but its agent did not answer within {}s",
+                AGENT_READY_TIMEOUT.as_secs()
+            ),
+        };
+        Err(match last_error {
+            Some(error) => error.context(timed_out),
+            None => AlienError::new(timed_out),
+        })
     }
 
     /// Runs a command inside the proxy's synchronous window, streaming the buffered NDJSON body.
@@ -1533,15 +1544,15 @@ fn pause_resume_unsupported() -> AlienError<ErrorData> {
 
 /// The agent's own refusal, when `:execute` relayed one. The proxy forwards the agent's status, so
 /// its `PATH_NOT_FOUND` is a 404 like a missing sandbox; only a relayed body carries the agent's
-/// error code after `Error Details:`.
+/// error code after `Error Details:`. A relayed 5xx is not an answer: the command may have run.
 fn agent_answer(error: &AlienError<AgentPlatformErrorData>) -> Option<String> {
     const RELAYED: &str = "Error Details: ";
-    let message = super::refusal::captured_service_message(error)?;
+    let message = super::refusal::captured_refusal(error)?;
     let details = message.split_once(RELAYED)?.1.trim();
     let code = details.split(':').next()?;
     let is_agent_code =
         !code.is_empty() && code.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_');
-    is_agent_code.then(|| details.to_string())
+    is_agent_code.then(|| truncated(details.as_bytes()))
 }
 
 /// Whether a client error means the sandbox is already gone.

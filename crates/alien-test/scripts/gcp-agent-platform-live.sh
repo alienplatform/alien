@@ -4,11 +4,9 @@
 #   image     Build alien-sandbox-agent (plus git), push it to an Artifact Registry repo in the
 #             project, and grant the project's Agent Sandbox service agent Reader on that repo.
 #   suite     Run tests/gcp_agent_platform_sandbox_live.rs against that image.
-#   iam-check Prove a role bound on one reasoning engine through its IAM policy (what
-#             `google_vertex_ai_reasoning_engine_iam_member` writes) authorizes template verbs
-#             under that engine and nothing else: the holder can create and replace a template on
-#             its engine, cannot create or delete an engine, and cannot touch another engine's
-#             templates.
+#   iam-check Prove a role bound on one engine's IAM policy (what
+#             `google_vertex_ai_reasoning_engine_iam_member` writes) grants template verbs on that
+#             engine only: no engine create or delete, no other engine's templates.
 #   teardown  Delete every engine, service account and role this script created.
 #
 # Required: GOOGLE_TARGET_PROJECT_ID, GOOGLE_TARGET_REGION, and gcloud logged in as a principal
@@ -70,6 +68,8 @@ create_engine() {
     "{\"displayName\":\"alien-sbx-live-iam-$(date +%s)\"}")"
   [[ "$status" == 200 ]] || { echo "engine create returned $status" >&2; cat "$state_dir/last.json" >&2; return 1; }
   operation="$(jq -r '.name' "$state_dir/last.json")"
+  # Recorded before the wait, so an engine whose create outlives this run is still torn down.
+  echo "${operation%/operations/*}" >>"$state_dir/engines"
   await_operation "$token" "$operation"
 }
 
@@ -167,7 +167,6 @@ cmd_iam_check() {
 
   own="$(create_engine "$admin_token")"
   other="$(create_engine "$admin_token")"
-  printf '%s\n%s\n' "$own" "$other" >"$state_dir/engines"
   echo "own engine:   $own"
   echo "other engine: $other"
 
@@ -206,6 +205,10 @@ cmd_iam_check() {
   expect_status 200 "$status" "delete the replaced template on the own engine"
 
   status="$(call "$holder_token" POST "${parent}/reasoningEngines" '{"displayName":"alien-sbx-live-iam-denied"}')"
+  # A regressed grant creates the engine; record it before the failing check exits the script.
+  if [[ "$status" == 200 ]]; then
+    jq -r '.name | sub("/operations/.*"; "")' "$state_dir/last.json" >>"$state_dir/engines"
+  fi
   expect_status 403 "$status" "create an engine"
   status="$(call "$holder_token" DELETE "$own")"
   expect_status 403 "$status" "delete the own engine"
@@ -231,14 +234,27 @@ cmd_iam_check() {
 }
 
 cmd_teardown() {
-  local admin_token engine
+  local admin_token engine status left=()
   admin_token="$(gcloud auth print-access-token)"
   if [[ -f "$state_dir/engines" ]]; then
     while read -r engine; do
       [[ -n "$engine" ]] || continue
-      echo "delete $engine -> $(call "$admin_token" DELETE "${engine}?force=true")"
+      status="$(call "$admin_token" DELETE "${engine}?force=true" || echo "curl failed")"
+      echo "delete $engine -> $status"
+      # A 200 only accepts the delete; the engine is gone once its operation finishes clean.
+      if [[ "$status" == 200 ]]; then
+        await_operation "$admin_token" "$(jq -r '.name' "$state_dir/last.json")" >/dev/null \
+          || left+=("$engine")
+      elif [[ "$status" != 404 ]]; then
+        left+=("$engine")
+      fi
     done <"$state_dir/engines"
-    rm -f "$state_dir/engines"
+    if ((${#left[@]})); then
+      printf '%s\n' "${left[@]}" >"$state_dir/engines"
+      echo "${#left[@]} engine(s) could not be deleted and stay recorded; rerun teardown" >&2
+    else
+      rm -f "$state_dir/engines"
+    fi
   fi
   gcloud iam service-accounts delete "$holder" --project "$project" --quiet 2>/dev/null || true
   if [[ -f "$state_dir/roles" ]]; then
@@ -248,6 +264,7 @@ cmd_teardown() {
     done <"$state_dir/roles"
     rm -f "$state_dir/roles"
   fi
+  ((${#left[@]} == 0))
 }
 
 case "${1:-}" in

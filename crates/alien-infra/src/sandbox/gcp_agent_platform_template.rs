@@ -21,7 +21,7 @@ use crate::sandbox::GcpAgentPlatformEngineController;
 use alien_core::sandbox_image::GCP_AGENT_PLATFORM;
 use alien_core::{
     GcpAgentPlatformEngine, ResourceOutputs, ResourceRef, ResourceStatus, Sandbox, SandboxCode,
-    SandboxEgress, SandboxLimits,
+    SandboxLimits,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::agent_platform::{
@@ -149,9 +149,10 @@ pub struct GcpAgentPlatformTemplateController {
     pub(crate) region: Option<String>,
     /// Session lifetime from the declaration, carried into the binding.
     pub(crate) max_lifetime_seconds: Option<u32>,
-    /// Whether the declaration asked for open egress, carried into the binding.
+    /// Egress switch of the serving template, carried into the binding. `None` is state saved
+    /// before the field existed, which Ready fills in once; the binding reads it as deny until then.
     #[serde(default)]
-    pub(crate) allow_egress: bool,
+    pub(crate) allow_egress: Option<bool>,
 }
 
 #[controller]
@@ -315,12 +316,13 @@ impl GcpAgentPlatformTemplateController {
             });
         }
 
+        // Set with the swap, so the binding reports the switch of the template that is serving.
+        let allow_egress = internet_access_or_refuse(config)?;
         // The new template is live; only now does it become the serving one, so the reap that
         // follows can delete the old without a window where sessions point at a deleted template.
         self.template_id = Some(pending);
         self.pending_template_id = None;
-        // Set with the swap, so the binding reports the switch of the template that is serving.
-        self.allow_egress = matches!(config.egress, SandboxEgress::Allow);
+        self.allow_egress = Some(allow_egress);
 
         Ok(HandlerAction::Continue {
             state: ReapingOldTemplates,
@@ -413,6 +415,17 @@ impl GcpAgentPlatformTemplateController {
                     template.state.as_deref().unwrap_or("<unset>")
                 ),
             }));
+        }
+        // Fills a value saved before the field existed, from the applied config the serving template
+        // was built from: a held-back update can already put a different egress in `config`.
+        if self.allow_egress.is_none() {
+            let applied = ctx
+                .state
+                .resources
+                .get(&config.id)
+                .and_then(|resource| resource.config.downcast_ref::<Sandbox>())
+                .unwrap_or(config);
+            self.allow_egress = Some(internet_access_or_refuse(applied)?);
         }
 
         ctx.emit_heartbeat(alien_core::ResourceHeartbeat {
@@ -577,7 +590,7 @@ impl GcpAgentPlatformTemplateController {
             BindingValue::value(template_name),
             BindingValue::value(region.clone()),
             self.max_lifetime_seconds,
-            self.allow_egress,
+            self.allow_egress.unwrap_or(false),
         );
         Ok(Some(
             serde_json::to_value(binding).into_alien_error().context(
@@ -609,7 +622,7 @@ impl GcpAgentPlatformTemplateController {
         self.project_id = None;
         self.region = None;
         self.max_lifetime_seconds = None;
-        self.allow_egress = false;
+        self.allow_egress = None;
     }
 
     fn engine_and_template(&self, resource_id: &str) -> Result<(String, String)> {
@@ -648,7 +661,7 @@ impl GcpAgentPlatformTemplateController {
             project_id: Some("test-project-123".to_string()),
             region: Some("us-central1".to_string()),
             max_lifetime_seconds: None,
-            allow_egress: false,
+            allow_egress: None,
             _internal_stay_count: None,
         }
     }
@@ -1000,7 +1013,8 @@ mod tests {
     }
 
     /// The binding reports the egress of the template that is serving: the declared mode after
-    /// create, and the new mode once a replacement that flips the switch goes ACTIVE.
+    /// create, the new mode once a replacement that flips the switch goes ACTIVE, and the declared
+    /// mode after one Ready step only when the saved state predates the field.
     #[tokio::test]
     async fn the_binding_reports_the_serving_templates_egress() {
         use crate::core::ResourceController;
@@ -1066,6 +1080,31 @@ mod tests {
             .expect("update accepted");
         executor.run_until_terminal().await.expect("replace runs");
         assert!(allow_egress(&executor), "the replacement opened egress");
+
+        // Ready fills in only a value saved before the field existed. A recorded deny stays while
+        // desired says allow, since the deny template is still the one serving.
+        for (saved, reported_after_ready) in [(None, true), (Some(false), false)] {
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(sandbox_with(
+                    SandboxEgress::Allow,
+                    "ubuntu:24.04",
+                    None,
+                    None,
+                ))
+                .controller(GcpAgentPlatformTemplateController {
+                    allow_egress: saved,
+                    ..GcpAgentPlatformTemplateController::mock_ready("eng", "tpl1")
+                })
+                .platform(Platform::Gcp)
+                .service_provider(provider_with(happy_client()))
+                .with_test_dependencies()
+                .build()
+                .await
+                .expect("executor builds");
+            assert!(!allow_egress(&executor), "{saved:?} reads as deny");
+            executor.step().await.expect("a Ready reconcile succeeds");
+            assert_eq!(allow_egress(&executor), reported_after_ready, "{saved:?}");
+        }
     }
 
     // ---- 2. Update flow: no-op when the body is unchanged. -------------------------------------
