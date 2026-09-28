@@ -18,7 +18,7 @@ use alien_platform_api::types::{
     ConfigureProjectDeploymentsBodyMethodsItem, ConfigureProjectKeysBody,
     ConfigureProjectRegistryBody, ConfigureProjectRegistryBodyCredentialPolicy,
     ConfigureProjectRegistryBodyRepositoriesItem, ConfigureRemoteSandboxRequest,
-    ConfigureRemoteSandboxRequestBaseImage, CreateProjectBody, CreateProjectBodyName,
+    ConfigureRemoteSandboxRequestCustomImage, CreateProjectBody, CreateProjectBodyName,
     CreateProjectWorkspace, ListProjectsWorkspace, SandboxBaseImageRepository,
 };
 use alien_platform_api::SdkResultExt;
@@ -439,7 +439,7 @@ async fn capabilities_task(
                         })),
                         (None, None) => None,
                     };
-                    let base_image = match source {
+                    let custom_image = match source {
                         Some(SandboxImageSource::Image(image)) => Some(image),
                         Some(SandboxImageSource::Source(source)) => Some(
                             build_and_push_sandbox_base_image(
@@ -451,7 +451,7 @@ async fn capabilities_task(
                     };
                     let saved = saved_remote_sandbox_settings(http, workspace, project).await?;
                     let body = remote_sandbox_request(
-                        base_image.as_deref(),
+                        custom_image.as_deref(),
                         max_lifetime_seconds,
                         saved,
                     )?;
@@ -554,9 +554,9 @@ fn remote_sandbox_lifetime(
     Ok(Some(max_session_lifetime_seconds))
 }
 
-/// The configure endpoint replaces the whole sandbox configuration, so an omitted `azure` turns
-/// Azure off. Returns the saved Azure source to configure alongside, and the saved lifetime to
-/// fall back on when no flag sets one.
+/// The configure endpoint replaces the whole sandbox configuration, so an omitted `customImage`
+/// returns every cloud to the default image. Returns the saved image and lifetime, which a
+/// command without `--image`, `--src` or `--max-session-lifetime-seconds` keeps.
 async fn saved_remote_sandbox_settings(
     http: &crate::auth::AuthHttp,
     workspace: Option<&str>,
@@ -566,7 +566,7 @@ async fn saved_remote_sandbox_settings(
     if let Some(workspace) = workspace {
         request = request.workspace(workspace);
     }
-    let sandbox = request
+    let Some(sandbox) = request
         .send()
         .await
         .into_sdk_error()
@@ -576,36 +576,34 @@ async fn saved_remote_sandbox_settings(
         })?
         .into_inner()
         .project_capabilities
-        .and_then(|capabilities| capabilities.capabilities.remote_sandbox);
-    let max_lifetime_seconds = sandbox
-        .as_ref()
-        .and_then(|sandbox| sandbox.max_lifetime_seconds);
-    // The read and write schemas are generated as separate types; both are the same JSON object.
-    let azure = sandbox
-        .and_then(|sandbox| sandbox.azure)
-        .map(|azure| serde_json::to_value(azure).and_then(serde_json::from_value))
+        .and_then(|capabilities| capabilities.capabilities.remote_sandbox)
+    else {
+        return Ok(ConfigureRemoteSandboxRequest::default());
+    };
+    let custom_image = sandbox
+        .custom_image
+        .map(|image| ConfigureRemoteSandboxRequestCustomImage::try_from(String::from(image)))
         .transpose()
         .into_alien_error()
         .context(ErrorData::ApiRequestFailed {
-            message: "The saved Azure sandbox configuration could not be carried over".to_string(),
+            message: "The saved sandbox image could not be carried over".to_string(),
             url: None,
         })?;
     Ok(ConfigureRemoteSandboxRequest {
-        azure,
-        max_lifetime_seconds,
+        custom_image,
+        max_lifetime_seconds: sandbox.max_lifetime_seconds,
         ..Default::default()
     })
 }
 
-/// Always sends a lifetime, so AWS is enabled even with no image: the API then keeps the saved
-/// image or uses its default.
+/// A flag replaces the saved value; without either the API applies its defaults.
 fn remote_sandbox_request(
-    base_image: Option<&str>,
+    custom_image: Option<&str>,
     max_lifetime_seconds: Option<NonZeroU64>,
     saved: ConfigureRemoteSandboxRequest,
 ) -> Result<ConfigureRemoteSandboxRequest> {
-    let base_image = base_image
-        .map(ConfigureRemoteSandboxRequestBaseImage::try_from)
+    let custom_image = custom_image
+        .map(ConfigureRemoteSandboxRequestCustomImage::try_from)
         .transpose()
         .into_alien_error()
         .context(ErrorData::ValidationError {
@@ -613,13 +611,13 @@ fn remote_sandbox_request(
             message: "Invalid image reference".to_string(),
         })?;
     Ok(ConfigureRemoteSandboxRequest {
-        base_image,
-        azure: saved.azure,
+        custom_image: custom_image.or(saved.custom_image),
         max_lifetime_seconds: Some(
             max_lifetime_seconds
                 .or(saved.max_lifetime_seconds)
                 .unwrap_or(DEFAULT_REMOTE_SANDBOX_LIFETIME_SECONDS),
         ),
+        azure_idle_suspend_seconds: None,
     })
 }
 
@@ -1116,47 +1114,6 @@ mod tests {
     }
 
     #[test]
-    fn remote_sandbox_request_carries_the_saved_azure_configuration() {
-        let saved_azure = serde_json::json!({
-            "catalogImage": "python-3.12",
-            "idleSuspendSeconds": 900,
-        });
-        let saved = serde_json::from_value(serde_json::json!({ "azure": saved_azure }))
-            .expect("the saved Azure configuration should parse");
-        let request = remote_sandbox_request(
-            Some("public.ecr.aws/example/analysis:v1"),
-            NonZeroU64::new(28_800),
-            saved,
-        )
-        .expect("the maximum session lifetime should be accepted");
-        assert_eq!(
-            serde_json::to_value(request).expect("request should serialize"),
-            serde_json::json!({
-                "azure": saved_azure,
-                "baseImage": "public.ecr.aws/example/analysis:v1",
-                "maxLifetimeSeconds": 28_800,
-            }),
-        );
-    }
-
-    #[test]
-    fn remote_sandbox_request_omits_azure_when_none_is_saved() {
-        let request = remote_sandbox_request(
-            Some("public.ecr.aws/example/analysis:v1"),
-            NonZeroU64::new(3600),
-            Default::default(),
-        )
-        .expect("a valid image and lifetime should build a request");
-        assert_eq!(
-            serde_json::to_value(request).expect("request should serialize"),
-            serde_json::json!({
-                "baseImage": "public.ecr.aws/example/analysis:v1",
-                "maxLifetimeSeconds": 3600,
-            }),
-        );
-    }
-
-    #[test]
     fn remote_sandbox_rejects_invalid_base_images() {
         for image in [
             "".to_string(),
@@ -1327,41 +1284,69 @@ mod tests {
     }
 
     #[test]
-    fn remote_sandbox_request_without_an_image_still_enables_aws() {
-        let request = remote_sandbox_request(None, None, Default::default())
-            .expect("no image and no lifetime is a valid request");
-        assert_eq!(
-            serde_json::to_value(request).expect("request should serialize"),
-            serde_json::json!({ "maxLifetimeSeconds": 3600 }),
-        );
-    }
-
-    #[test]
-    fn remote_sandbox_request_falls_back_to_the_saved_lifetime_and_keeps_azure() {
-        let saved_azure = serde_json::json!({
-            "catalogImage": "ubuntu",
-            "idleSuspendSeconds": 1800,
-        });
+    fn remote_sandbox_request_keeps_each_saved_value_its_flag_does_not_replace() {
+        const SAVED_IMAGE: &str = "registry.example.com/acme-sandbox@sha256:abc";
+        const FLAG_IMAGE: &str = "public.ecr.aws/example/analysis:v1";
         let saved = || -> ConfigureRemoteSandboxRequest {
             serde_json::from_value(serde_json::json!({
-                "azure": saved_azure,
+                "customImage": SAVED_IMAGE,
                 "maxLifetimeSeconds": 1200,
             }))
             .expect("the saved configuration should parse")
         };
-
-        let request = remote_sandbox_request(None, None, saved()).expect("valid request");
-        assert_eq!(
-            serde_json::to_value(request).expect("request should serialize"),
-            serde_json::json!({ "azure": saved_azure, "maxLifetimeSeconds": 1200 }),
-        );
-
-        let request =
-            remote_sandbox_request(None, NonZeroU64::new(7200), saved()).expect("valid request");
-        assert_eq!(
-            serde_json::to_value(request).expect("request should serialize"),
-            serde_json::json!({ "azure": saved_azure, "maxLifetimeSeconds": 7200 }),
-        );
+        let lifetime = NonZeroU64::new(7200);
+        let cases = [
+            (
+                None,
+                None,
+                saved(),
+                serde_json::json!({ "customImage": SAVED_IMAGE, "maxLifetimeSeconds": 1200 }),
+            ),
+            (
+                Some(FLAG_IMAGE),
+                None,
+                saved(),
+                serde_json::json!({ "customImage": FLAG_IMAGE, "maxLifetimeSeconds": 1200 }),
+            ),
+            (
+                None,
+                lifetime,
+                saved(),
+                serde_json::json!({ "customImage": SAVED_IMAGE, "maxLifetimeSeconds": 7200 }),
+            ),
+            (
+                Some(FLAG_IMAGE),
+                lifetime,
+                saved(),
+                serde_json::json!({ "customImage": FLAG_IMAGE, "maxLifetimeSeconds": 7200 }),
+            ),
+            (
+                None,
+                None,
+                Default::default(),
+                serde_json::json!({ "maxLifetimeSeconds": 3600 }),
+            ),
+            (
+                Some(FLAG_IMAGE),
+                None,
+                Default::default(),
+                serde_json::json!({ "customImage": FLAG_IMAGE, "maxLifetimeSeconds": 3600 }),
+            ),
+            (
+                None,
+                lifetime,
+                Default::default(),
+                serde_json::json!({ "maxLifetimeSeconds": 7200 }),
+            ),
+        ];
+        for (image, lifetime, saved, expected) in cases {
+            let request = remote_sandbox_request(image, lifetime, saved).expect("valid request");
+            assert_eq!(
+                serde_json::to_value(request).expect("request should serialize"),
+                expected,
+                "--image {image:?}, lifetime {lifetime:?}",
+            );
+        }
     }
 
     #[tokio::test]
@@ -1375,10 +1360,7 @@ mod tests {
         use std::sync::{Arc, Mutex};
 
         const PROJECT_ID: &str = "prj_mcytp6z3j91f7tn5ryqsfwtr0000";
-        let saved_azure = serde_json::json!({
-            "catalogImage": "python-3.12",
-            "idleSuspendSeconds": 900,
-        });
+        const SAVED_IMAGE: &str = "registry.example.com/acme-sandbox@sha256:abc";
         let project = serde_json::json!({
             "id": PROJECT_ID,
             "name": "my-app",
@@ -1389,8 +1371,9 @@ mod tests {
                 "capabilities": {
                     "remoteSandbox": {
                         "enabled": true,
-                        "baseImage": "public.ecr.aws/example/saved:v1",
-                        "azure": saved_azure,
+                        "customImage": SAVED_IMAGE,
+                        "baseImage": "registry.example.com/acme-sandbox@sha256:def",
+                        "azure": { "catalogImage": "python-3.12", "idleSuspendSeconds": 900 },
                         "maxLifetimeSeconds": 1200,
                     },
                 },
@@ -1451,10 +1434,9 @@ mod tests {
         .expect("bare enable should configure the sandbox");
         server.abort();
 
-        // No baseImage, so the API keeps the saved image.
         assert_eq!(
             configured.lock().unwrap().take(),
-            Some(serde_json::json!({ "azure": saved_azure, "maxLifetimeSeconds": 1200 })),
+            Some(serde_json::json!({ "customImage": SAVED_IMAGE, "maxLifetimeSeconds": 1200 })),
         );
     }
 
@@ -1531,7 +1513,7 @@ mod tests {
             remote_sandbox_request(Some(&base_image), NonZeroU64::new(3600), Default::default())
                 .expect("the configured reference is a valid base image");
         assert_eq!(
-            serde_json::to_value(request).expect("request should serialize")["baseImage"],
+            serde_json::to_value(request).expect("request should serialize")["customImage"],
             serde_json::json!(base_image),
         );
     }
