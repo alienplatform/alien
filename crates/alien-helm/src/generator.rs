@@ -3858,8 +3858,8 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
     name: ""
     tokenKey: sync-token
   name: ""
-  # Override for a self-hosted or custom management endpoint.
-  url: "https://manager.alien.dev"
+  # Use the resolved management endpoint supplied by the installation flow.
+  url: ""
   # Leave unset to create a deployment from the bootstrap token.
   deploymentId: null
   setupItem: deployment
@@ -7236,6 +7236,7 @@ fn bootstrap_values_example() -> String {
     r#"# Keep this file private. Do not commit installation credentials.
 management:
   token: "replace-with-bootstrap-token"
+  url: "https://management.example.com"
 
 runtime:
   encryption:
@@ -7254,25 +7255,35 @@ inputValues: {}
 }
 
 fn readme_md(chart_name: &str) -> String {
+    let namespace = chart_name.chars().take(63).collect::<String>();
+    let namespace = namespace.trim_end_matches('-');
     format!(
         r#"# {chart_name}
 
 ## Install
 
 For a managed package, download its generated values file and use its install
-command. For a new deployment, `examples/bootstrap.yaml` shows the installer
-inputs: a bootstrap token and a stable encryption key, plus any application
-`inputValues` required by this chart. Generate the key once with
+command. To prepare a new deployment manually, copy the bootstrap example:
+
+```bash
+cp examples/bootstrap.yaml install-values.yaml
+```
+
+Edit `install-values.yaml` to set a bootstrap token, the management endpoint,
+and a stable encryption key, plus any application `inputValues` required by
+this chart. Generate the key once with
 `openssl rand -hex 32` and keep the resulting values file private.
 
 ```bash
-helm install {chart_name} . --namespace={chart_name} --create-namespace --values values.yaml --atomic --wait --timeout 10m
+helm install {chart_name} . --namespace={namespace} --create-namespace --values install-values.yaml --atomic --wait --timeout 10m
 ```
 
-The management endpoint and `deployment` setup item have defaults. Override
-`management.url` for a self-hosted or custom endpoint, and `management.setupItem`
-when your setup link selects another item. Leave `management.deploymentId`
-unset for a new installation. Set it only when connecting an already registered
+Use the management endpoint resolved by your installation service, including
+any configured manager or active custom domain. The chart does not assume a
+hosted endpoint. The setup item defaults to `deployment`; override
+`management.setupItem` when your setup link selects another item. Leave
+`management.deploymentId` unset for a new installation. Set it only when
+connecting an already registered
 deployment; see `examples/<target>.yaml` for EKS, GKE, AKS, and on-premises
 bindings and service-account identities.
 

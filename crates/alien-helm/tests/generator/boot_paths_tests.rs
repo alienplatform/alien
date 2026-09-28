@@ -100,18 +100,18 @@ fn registered_setup_mounts_external_bindings() {
 }
 
 #[test]
-fn bootstrap_needs_only_credentials_and_keeps_registered_deployments_explicit() {
+fn bootstrap_uses_selected_endpoint_and_keeps_registered_deployments_explicit() {
     let chart = render(
         &Stack::new("sample-agent".to_string()).build(),
         StackSettings::default(),
     );
-    let values = "management:\n  token: ax_bootstrap\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+    let values = "management:\n  token: ax_bootstrap\n  url: https://selected-manager.example.test\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
     let bootstrap = test_utils::helm_template(&chart.files, Some(values));
-    bootstrap.assert_ok("bootstrap with only credentials");
+    bootstrap.assert_ok("bootstrap with selected endpoint and credentials");
     let env = operator_env(&bootstrap.stdout);
     assert_eq!(
         env.get("SYNC_URL").map(String::as_str),
-        Some("https://manager.alien.dev")
+        Some("https://selected-manager.example.test")
     );
     assert_eq!(
         env.get("OPERATOR_SETUP_ITEM").map(String::as_str),
@@ -119,7 +119,10 @@ fn bootstrap_needs_only_credentials_and_keeps_registered_deployments_explicit() 
     );
     assert!(!env.contains_key("DEPLOYMENT_ID"));
 
-    let registered_values = values.replace("  token: ax_bootstrap", "  token: ax_existing\n  deploymentId: dep_existing\n  url: https://management.example.test\n  setupItem: custom-item");
+    let registered_values = values.replace(
+        "  token: ax_bootstrap",
+        "  token: ax_existing\n  deploymentId: dep_existing\n  setupItem: custom-item",
+    );
     let registered = test_utils::helm_template(&chart.files, Some(&registered_values));
     registered.assert_ok("registered deployment with custom endpoint and setup item");
     let env = operator_env(&registered.stdout);
@@ -129,7 +132,7 @@ fn bootstrap_needs_only_credentials_and_keeps_registered_deployments_explicit() 
     );
     assert_eq!(
         env.get("SYNC_URL").map(String::as_str),
-        Some("https://management.example.test")
+        Some("https://selected-manager.example.test")
     );
     assert_eq!(
         env.get("OPERATOR_SETUP_ITEM").map(String::as_str),
