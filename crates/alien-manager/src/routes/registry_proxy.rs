@@ -1099,6 +1099,13 @@ fn refuse_capability_pull(subject: &Subject) -> Result<(), Response> {
             "Image repository provisioning credentials cannot pull images",
         ));
     }
+    if subject.role == Role::SandboxImagePusher {
+        return Err(oci_error(
+            StatusCode::FORBIDDEN,
+            "DENIED",
+            "Sandbox image push credentials cannot pull images",
+        ));
+    }
     Ok(())
 }
 
@@ -1544,7 +1551,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
-    fn the_image_repository_provisioner_cannot_pull() {
+    fn the_image_capability_roles_cannot_pull() {
         let subject = |role| Subject {
             kind: crate::auth::SubjectKind::ServiceAccount {
                 id: "platform".to_string(),
@@ -1557,9 +1564,11 @@ mod tests {
             bearer_token: String::new(),
         };
 
-        let refused = refuse_capability_pull(&subject(Role::ImageRepositoryProvisioner))
-            .expect_err("the provisioner must not reach the project-scope pull bypass");
-        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        for role in [Role::ImageRepositoryProvisioner, Role::SandboxImagePusher] {
+            let refused = refuse_capability_pull(&subject(role))
+                .expect_err("a capability role must not reach the project-scope pull bypass");
+            assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        }
         assert!(refuse_capability_pull(&subject(Role::ProjectDeveloper)).is_ok());
     }
 

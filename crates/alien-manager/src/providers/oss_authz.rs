@@ -28,7 +28,10 @@ impl OssAuthz {
     /// Capability roles share the project scope without its reads. A deny-list so every other
     /// project-scoped subject keeps the reads it has today.
     fn project_reader(s: &Subject) -> bool {
-        s.role != Role::ImageRepositoryProvisioner
+        !matches!(
+            s.role,
+            Role::ImageRepositoryProvisioner | Role::SandboxImagePusher
+        )
     }
 
     /// True if the subject has *any* read authority on the project. Used for
@@ -498,37 +501,39 @@ mod tests {
     }
 
     #[test]
-    // OSS mints no capability role and denies it everything, provisioning included; an embedder's
-    // Authz is what grants the provisioner its one repository.
-    fn the_image_repository_provisioner_has_no_project_access() {
-        let mut subject = admin();
-        subject.scope = Scope::Project {
-            project_id: "default".to_string(),
-        };
-        subject.role = Role::ImageRepositoryProvisioner;
-        let dep = deployment("d1", "dg-a");
+    // OSS mints no capability role and denies it everything, provisioning and push included; an
+    // embedder's Authz is what grants each role its one operation on one project.
+    fn the_image_capability_roles_have_no_project_access() {
+        for role in [Role::ImageRepositoryProvisioner, Role::SandboxImagePusher] {
+            let mut subject = admin();
+            subject.scope = Scope::Project {
+                project_id: "default".to_string(),
+            };
+            subject.role = role;
+            let dep = deployment("d1", "dg-a");
 
-        assert!(!OssAuthz.can_read_deployment(&subject, &dep));
-        assert!(!OssAuthz.can_sync_deployment(&subject, &dep));
-        assert!(!OssAuthz.can_update_deployment(&subject, &dep));
-        assert!(!OssAuthz.can_delete_deployment(&subject, &dep));
-        assert!(!OssAuthz.can_dispatch_command(&subject, &dep));
-        assert!(!OssAuthz.can_create_release(&subject, "default"));
-        assert!(!OssAuthz.can_read_release(&subject, &release()));
-        assert!(!OssAuthz.can_export_release(&subject, &release()));
-        assert!(!OssAuthz.can_acquire_deployments(&subject, &[dep.clone()]));
-        let command = alien_commands::server::CommandAccessContext {
-            workspace_id: "default".to_string(),
-            project_id: "default".to_string(),
-            deployment_id: "d1".to_string(),
-            target: alien_core::CommandTarget::new(
-                "daemon-a",
-                alien_core::CommandTargetType::Daemon,
-            ),
-        };
-        assert!(!OssAuthz.can_read_command_context(&subject, &command));
-        assert!(!OssAuthz.can_push_image(&subject, "default", "repo"));
-        assert!(!OssAuthz.can_provision_image_repository(&subject, "default"));
+            assert!(!OssAuthz.can_read_deployment(&subject, &dep));
+            assert!(!OssAuthz.can_sync_deployment(&subject, &dep));
+            assert!(!OssAuthz.can_update_deployment(&subject, &dep));
+            assert!(!OssAuthz.can_delete_deployment(&subject, &dep));
+            assert!(!OssAuthz.can_dispatch_command(&subject, &dep));
+            assert!(!OssAuthz.can_create_release(&subject, "default"));
+            assert!(!OssAuthz.can_read_release(&subject, &release()));
+            assert!(!OssAuthz.can_export_release(&subject, &release()));
+            assert!(!OssAuthz.can_acquire_deployments(&subject, &[dep.clone()]));
+            let command = alien_commands::server::CommandAccessContext {
+                workspace_id: "default".to_string(),
+                project_id: "default".to_string(),
+                deployment_id: "d1".to_string(),
+                target: alien_core::CommandTarget::new(
+                    "daemon-a",
+                    alien_core::CommandTargetType::Daemon,
+                ),
+            };
+            assert!(!OssAuthz.can_read_command_context(&subject, &command));
+            assert!(!OssAuthz.can_push_image(&subject, "default", "repo"));
+            assert!(!OssAuthz.can_provision_image_repository(&subject, "default"));
+        }
     }
 
     #[test]

@@ -22,6 +22,18 @@ pub const AGENT_PATH: &str = "/usr/local/bin/alien-sandbox-agent";
 /// hangs. AWS scopes its endpoint token to an explicit port set, so this cannot be discovered.
 pub const AGENT_PORT: u16 = 8971;
 
+/// Mode of the agent binary, owned by `0:0` so the exec uid cannot rewrite its supervisor.
+pub const AGENT_MODE: u32 = 0o755;
+
+/// Name of the exec identity's passwd and group entries.
+pub const EXEC_USER: &str = "sandbox";
+
+/// Mode of the session root, which the exec uid owns.
+pub const SESSION_ROOT_MODE: u32 = 0o700;
+
+/// `RUST_LOG` for a GCP image, which the agent needs set before it logs anything.
+pub const GCP_AGENT_LOG_FILTER: &str = "info";
+
 /// How an image ends, and the isolation that ending permits.
 ///
 /// One value rather than two, because `ALIEN_SANDBOX_ISOLATION` and the trailing `USER` describe
@@ -80,6 +92,63 @@ pub struct SandboxImage {
     pub isolation: Isolation,
 }
 
+impl SandboxImage {
+    /// Gid the supervised command runs as, always equal to the exec uid.
+    pub fn exec_gid(&self) -> u32 {
+        self.exec_uid
+    }
+
+    /// The agent's configuration contract as `(name, value)` pairs, in the order the `ENV` block
+    /// lists them.
+    pub fn contract_env_vars(&self) -> [(&'static str, String); 6] {
+        [
+            ("ALIEN_SANDBOX_ROOT", self.session_root.to_string()),
+            ("ALIEN_SANDBOX_PORT", self.port.to_string()),
+            (
+                "ALIEN_SANDBOX_AUTHORIZATION",
+                self.authorization.env_value().to_string(),
+            ),
+            ("ALIEN_SANDBOX_EXEC_UID", self.exec_uid.to_string()),
+            ("ALIEN_SANDBOX_EXEC_GID", self.exec_gid().to_string()),
+            (
+                "ALIEN_SANDBOX_ISOLATION",
+                self.isolation.env_value().to_string(),
+            ),
+        ]
+    }
+
+    /// The `uid:gid` the image runs as, or `None` when it declares no user and starts as root.
+    ///
+    /// Numeric with an explicit gid so a runtime that does not read `/etc/passwd` cannot start
+    /// the agent in group 0.
+    pub fn user(&self) -> Option<String> {
+        match self.isolation {
+            Isolation::UidSplit => None,
+            Isolation::Platform => Some(format!("{}:{}", self.exec_uid, self.exec_gid())),
+        }
+    }
+
+    /// The port the image exposes, as an OCI `ExposedPorts` key.
+    pub fn exposed_port(&self) -> String {
+        format!("{}/tcp", self.port)
+    }
+
+    /// The exec identity's `/etc/passwd` line, without a trailing newline.
+    pub fn passwd_entry(&self) -> String {
+        format!(
+            "{EXEC_USER}:x:{uid}:{gid}::{root}:/sbin/nologin",
+            uid = self.exec_uid,
+            gid = self.exec_gid(),
+            root = self.session_root,
+        )
+    }
+
+    /// The exec identity's `/etc/group` line, without a trailing newline.
+    pub fn group_entry(&self) -> String {
+        format!("{EXEC_USER}:x:{gid}:", gid = self.exec_gid())
+    }
+}
+
 /// The Lambda MicroVM image, rendered per deployment onto a customer base image.
 ///
 /// The agent runs as root so it can drop to [`SandboxImage::exec_uid`] before every spawn; inside
@@ -113,50 +182,38 @@ pub const GCP_AGENT_PLATFORM: SandboxImage = SandboxImage {
 
 /// The `RUN` step creating the exec identity and the session root it owns.
 pub fn identity_setup(image: &SandboxImage) -> String {
-    let SandboxImage {
-        exec_uid,
-        session_root,
-        ..
-    } = *image;
     format!(
-        r#"RUN printf 'sandbox:x:{exec_uid}:{exec_uid}::{session_root}:/sbin/nologin\n' >> /etc/passwd \
- && printf 'sandbox:x:{exec_uid}:\n' >> /etc/group \
- && mkdir -p {session_root} \
- && chown {exec_uid}:{exec_uid} {session_root} \
- && chmod 0700 {session_root}"#
+        r#"RUN printf '{passwd}\n' >> /etc/passwd \
+ && printf '{group}\n' >> /etc/group \
+ && mkdir -p {root} \
+ && chown {uid}:{gid} {root} \
+ && chmod {SESSION_ROOT_MODE:04o} {root}"#,
+        passwd = image.passwd_entry(),
+        group = image.group_entry(),
+        root = image.session_root,
+        uid = image.exec_uid,
+        gid = image.exec_gid(),
     )
 }
 
 /// The `ENV` block carrying the agent's configuration contract.
 pub fn contract_env(image: &SandboxImage) -> String {
-    let SandboxImage {
-        exec_uid,
-        session_root,
-        port,
-        authorization,
-        isolation,
-    } = *image;
-    format!(
-        r#"ENV ALIEN_SANDBOX_ROOT={session_root} \
-    ALIEN_SANDBOX_PORT={port} \
-    ALIEN_SANDBOX_AUTHORIZATION={authorization} \
-    ALIEN_SANDBOX_EXEC_UID={exec_uid} \
-    ALIEN_SANDBOX_EXEC_GID={exec_uid} \
-    ALIEN_SANDBOX_ISOLATION={isolation}"#,
-        authorization = authorization.env_value(),
-        isolation = isolation.env_value(),
-    )
+    let vars: Vec<String> = image
+        .contract_env_vars()
+        .iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect();
+    format!("ENV {}", vars.join(" \\\n    "))
 }
 
 /// `EXPOSE`, the image's ending, and the `ENTRYPOINT`.
 pub fn entrypoint(image: &SandboxImage) -> String {
-    let ending = match image.isolation {
-        Isolation::UidSplit => String::new(),
-        Isolation::Platform => format!(
+    let ending = match image.user() {
+        None => String::new(),
+        Some(user) => format!(
             "# Explicit gid so a runtime that does not read /etc/passwd cannot start the agent in \
              group 0, which\n# makes the exec drop a privilege crossing whose setgroups needs a \
-             CAP_SETGID this image lacks, so\n# every exec fails.\nUSER {uid}:{uid}\n",
-            uid = image.exec_uid
+             CAP_SETGID this image lacks, so\n# every exec fails.\nUSER {user}\n"
         ),
     };
     format!(
@@ -240,7 +297,7 @@ FROM {base}
 
 # Root-owned and unwritable by uid {exec_uid}: the supervised command runs under that uid and must not
 # be able to rewrite its own supervisor.
-COPY --from=binary-selector --chown=0:0 --chmod=0755 \
+COPY --from=binary-selector --chown=0:0 --chmod={AGENT_MODE:04o} \
      /tmp/alien-sandbox-agent {AGENT_PATH}
 
 # Numeric ids and a plain append rather than adduser, which differs across base distributions.
@@ -255,7 +312,7 @@ COPY --from=binary-selector --chown=0:0 --chmod=0755 \
 # The release build resolves tracing-subscriber once across every package it names, and five of
 # them ask for env-filter, so the agent's fmt::init() has an EnvFilter under it. Unset, that
 # filter discards the startup warning saying this image serves requests without a capability.
-ENV RUST_LOG=info
+ENV RUST_LOG={GCP_AGENT_LOG_FILTER}
 
 {entrypoint}
 "#,
