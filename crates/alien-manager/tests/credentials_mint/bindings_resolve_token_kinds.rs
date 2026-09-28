@@ -20,7 +20,7 @@ fn scoped(
 }
 
 #[tokio::test]
-async fn a_resolver_token_without_a_kind_is_authorized_for_a_sandbox_during_the_transition() {
+async fn a_resolver_token_without_a_kind_resolves_storage_but_not_a_sandbox_the_release_gained() {
     let (fixture, calls) = fixture().await;
     let claimless = scoped(
         &fixture,
@@ -36,12 +36,10 @@ async fn a_resolver_token_without_a_kind_is_authorized_for_a_sandbox_during_the_
     assert_eq!(status, StatusCode::OK, "body = {json:#}");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 
-    // Authorization passes; the fixture publishes no sandbox parameters, so a
-    // later server-state check refuses it without resolving credentials.
     current_release_adds_a_remote_sandbox(&fixture).await;
     let (status, _, json) =
         post_resolve_binding(&claimless, "unused", resolve_body(&fixture, "box")).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
+    assert_eq!(status, StatusCode::FORBIDDEN, "body = {json:#}");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
