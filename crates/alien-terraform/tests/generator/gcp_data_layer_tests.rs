@@ -437,27 +437,32 @@ fn gcp_remote_ai_invoke_permissions_attach_to_access_identity() {
 
 #[test]
 fn gcp_default_network_is_resolved_during_mocked_plan() {
-    let settings = StackSettings {
-        network: Some(alien_core::NetworkSettings::Create {
+    for network in [
+        alien_core::NetworkSettings::Create {
             cidr: None,
             availability_zones: 2,
-        }),
-        ..StackSettings::default()
-    };
-    let stack = Stack::new("default-vpc".to_string())
-        .add(
-            alien_core::Network::new("default-network".to_string())
-                .settings(settings.network.clone().unwrap())
-                .build(),
-            ResourceLifecycle::Frozen,
-        )
-        .build();
-    let module = render(&stack, TerraformTarget::Gcp, settings);
-    let mut files: super::helpers::test_utils::LinterFiles = module
-        .iter()
-        .map(|(path, content)| (path.to_string(), content.to_string()))
-        .collect();
-    files.insert("tests/default.tftest.hcl".to_string(), r#"
+        },
+        alien_core::NetworkSettings::UseDefault,
+    ] {
+        let dynamic = matches!(network, alien_core::NetworkSettings::Create { .. });
+        let settings = StackSettings {
+            network: Some(network),
+            ..StackSettings::default()
+        };
+        let stack = Stack::new("default-vpc".to_string())
+            .add(
+                alien_core::Network::new("default-network".to_string())
+                    .settings(settings.network.clone().unwrap())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let module = render(&stack, TerraformTarget::Gcp, settings);
+        let mut files: super::helpers::test_utils::LinterFiles = module
+            .iter()
+            .map(|(path, content)| (path.to_string(), content.to_string()))
+            .collect();
+        files.insert("tests/default.tftest.hcl".to_string(), r#"
 mock_provider "google" {
   mock_data "google_compute_network" { defaults = { self_link = "projects/example/global/networks/default" } }
   mock_data "google_compute_subnetwork" { defaults = { self_link = "projects/example/regions/us-central1/subnetworks/default", ip_cidr_range = "10.128.0.0/20" } }
@@ -485,5 +490,19 @@ run "default_network" {
   }
 }
 "#.to_string());
-    super::helpers::test_utils::terraform_test(&files).assert_ok("GCP default network plan");
+        if !dynamic {
+            let test = files.get_mut("tests/default.tftest.hcl").unwrap();
+            *test = test
+                .replace("default_network[0]", "default_network")
+                .replace(
+                    "default_network_existing_subnet[0]",
+                    "default_network_subnet",
+                )
+                .replace("  network_mode = \"use-default\"\n", "")
+                .replace("  network_name = \"ignored\"\n", "")
+                .replace("  subnet_name = \"ignored\"\n", "")
+                .replace("  network_region = \"us-east1\"\n", "");
+        }
+        super::helpers::test_utils::terraform_test(&files).assert_ok("GCP default network plan");
+    }
 }
