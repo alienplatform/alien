@@ -130,9 +130,35 @@ export type ConfigOperatorImage = {
 };
 
 /**
+ * Kubernetes log collection mechanism.
+ */
+export const PackageMode = {
+  PodApi: "podApi",
+  NodeAgent: "nodeAgent",
+} as const;
+/**
+ * Kubernetes log collection mechanism.
+ */
+export type PackageMode = ClosedEnum<typeof PackageMode>;
+
+/**
+ * Default log collection mode in a generated Helm chart.
+ */
+export type PackageLogCollector = {
+  /**
+   * Whether logs are collected by default; installers can override this value.
+   */
+  enabled: boolean;
+  /**
+   * Kubernetes log collection mechanism.
+   */
+  mode: PackageMode;
+};
+
+/**
  * One Kubernetes API requirement declared by an enabled operation.
  */
-export type PackageRule = {
+export type PermissionsRule = {
   /**
    * Kubernetes API group. An empty string denotes the core API.
    */
@@ -162,7 +188,7 @@ export type PackagePermissions = {
   /**
    * Explicit Kubernetes API requirements.
    */
-  rules: Array<PackageRule>;
+  rules: Array<PermissionsRule>;
   /**
    * Schema version of the validated permission declaration.
    */
@@ -205,6 +231,92 @@ export type OperationPermission = {
 };
 
 /**
+ * Operator identity storage in the generated chart. This does not install a storage driver.
+ */
+export type PackageRuntimePersistence = {
+  /**
+   * Persist operator identity across restarts.
+   */
+  enabled: boolean;
+  /**
+   * Existing namespace claim instead of creating a new claim.
+   */
+  existingClaim: string;
+  /**
+   * Requested claim capacity, for example 1Gi.
+   */
+  size: string;
+  /**
+   * Cluster storage class; empty uses the cluster default.
+   */
+  storageClassName: string;
+};
+
+/**
+ * Non-secret configuration for a chart-generated enrollment token.
+ */
+export type PackageTokenSecret = {
+  /**
+   * Data key inside the Secret.
+   */
+  key: string;
+  /**
+   * Fixed Kubernetes Secret name expected by the workload's Secret mount.
+   */
+  name: string;
+  /**
+   * Plaintext prefix before the random alphanumeric suffix.
+   */
+  prefix: string;
+  /**
+   * Length of the random suffix.
+   */
+  randomLength: number;
+};
+
+/**
+ * Resource family the chart grants get/list/watch over.
+ */
+export type PackageWorkloadReadAccessRule = {
+  /**
+   * Empty string for the core Kubernetes API group.
+   */
+  apiGroup: string;
+  /**
+   * Kubernetes plural resource names; wildcards are not accepted.
+   */
+  resources: Array<string>;
+};
+
+/**
+ * Cluster reads granted to a workload identity, separate from Operator permissions.
+ */
+export type PackageWorkloadReadAccess = {
+  /**
+   * Exact API groups and resources. Verbs are fixed to get/list/watch.
+   */
+  rules: Array<PackageWorkloadReadAccessRule>;
+  /**
+   * Permission profile used by the workload Container and generated ServiceAccount.
+   */
+  serviceAccountProfile: string;
+};
+
+/**
+ * Kubernetes resources created by the product chart before the runtime starts.
+ */
+export type PackageSetupResources = {
+  /**
+   * Non-secret configuration for a chart-generated enrollment token.
+   */
+  tokenSecret: PackageTokenSecret;
+  /**
+   * Cluster reads granted to a workload identity, separate from Operator permissions.
+   */
+  workloadReadAccess: PackageWorkloadReadAccess;
+};
+
+/**
  * Configuration for the Helm chart package
  */
 export type ConfigHelm = {
@@ -217,6 +329,14 @@ export type ConfigHelm = {
    */
   description: string;
   /**
+   * Default log collection mode in a generated Helm chart.
+   */
+  logCollector?: PackageLogCollector | undefined;
+  /**
+   * Resolved default management endpoint captured when this build was queued.
+   */
+  managerUrl?: string | undefined;
+  /**
    * Canonical Kubernetes permissions for the operations enabled when this build was queued.
    *
    * @remarks
@@ -226,6 +346,14 @@ export type ConfigHelm = {
    * that must be re-enqueued; an empty `Some` is a reviewed snapshot with no extra grants.
    */
   operationPermissions?: Array<OperationPermission> | null | undefined;
+  /**
+   * Operator identity storage in the generated chart. This does not install a storage driver.
+   */
+  runtimePersistence?: PackageRuntimePersistence | undefined;
+  /**
+   * Kubernetes resources created by the product chart before the runtime starts.
+   */
+  setupResources?: PackageSetupResources | undefined;
   type: "helm";
 };
 
@@ -527,6 +655,10 @@ export type OutputsHelm = {
    */
   chart: string;
   /**
+   * Default management endpoint embedded in this chart, if available.
+   */
+  managerUrl?: string | undefined;
+  /**
    * Chart version (e.g., "1.2.3")
    */
   version: string;
@@ -821,22 +953,48 @@ export function configOperatorImageFromJSON(
 }
 
 /** @internal */
-export const PackageRule$inboundSchema: z.ZodType<PackageRule, unknown> = z
-  .object({
-    apiGroup: z.string(),
-    reason: z.string(),
-    resource: z.string(),
-    resourceNames: z.array(z.string()).optional(),
-    verbs: z.array(z.string()),
-  });
+export const PackageMode$inboundSchema: z.ZodEnum<typeof PackageMode> = z.enum(
+  PackageMode,
+);
 
-export function packageRuleFromJSON(
+/** @internal */
+export const PackageLogCollector$inboundSchema: z.ZodType<
+  PackageLogCollector,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  mode: PackageMode$inboundSchema,
+});
+
+export function packageLogCollectorFromJSON(
   jsonString: string,
-): SafeParseResult<PackageRule, SDKValidationError> {
+): SafeParseResult<PackageLogCollector, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => PackageRule$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'PackageRule' from JSON`,
+    (x) => PackageLogCollector$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PackageLogCollector' from JSON`,
+  );
+}
+
+/** @internal */
+export const PermissionsRule$inboundSchema: z.ZodType<
+  PermissionsRule,
+  unknown
+> = z.object({
+  apiGroup: z.string(),
+  reason: z.string(),
+  resource: z.string(),
+  resourceNames: z.array(z.string()).optional(),
+  verbs: z.array(z.string()),
+});
+
+export function permissionsRuleFromJSON(
+  jsonString: string,
+): SafeParseResult<PermissionsRule, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PermissionsRule$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PermissionsRule' from JSON`,
   );
 }
 
@@ -845,7 +1003,7 @@ export const PackagePermissions$inboundSchema: z.ZodType<
   PackagePermissions,
   unknown
 > = z.object({
-  rules: z.array(z.lazy(() => PackageRule$inboundSchema)),
+  rules: z.array(z.lazy(() => PermissionsRule$inboundSchema)),
   schemaVersion: z.int(),
 });
 
@@ -886,13 +1044,118 @@ export function operationPermissionFromJSON(
 }
 
 /** @internal */
+export const PackageRuntimePersistence$inboundSchema: z.ZodType<
+  PackageRuntimePersistence,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  existingClaim: z.string(),
+  size: z.string(),
+  storageClassName: z.string(),
+});
+
+export function packageRuntimePersistenceFromJSON(
+  jsonString: string,
+): SafeParseResult<PackageRuntimePersistence, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PackageRuntimePersistence$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PackageRuntimePersistence' from JSON`,
+  );
+}
+
+/** @internal */
+export const PackageTokenSecret$inboundSchema: z.ZodType<
+  PackageTokenSecret,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+  prefix: z.string(),
+  randomLength: z.int(),
+});
+
+export function packageTokenSecretFromJSON(
+  jsonString: string,
+): SafeParseResult<PackageTokenSecret, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PackageTokenSecret$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PackageTokenSecret' from JSON`,
+  );
+}
+
+/** @internal */
+export const PackageWorkloadReadAccessRule$inboundSchema: z.ZodType<
+  PackageWorkloadReadAccessRule,
+  unknown
+> = z.object({
+  apiGroup: z.string(),
+  resources: z.array(z.string()),
+});
+
+export function packageWorkloadReadAccessRuleFromJSON(
+  jsonString: string,
+): SafeParseResult<PackageWorkloadReadAccessRule, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PackageWorkloadReadAccessRule$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PackageWorkloadReadAccessRule' from JSON`,
+  );
+}
+
+/** @internal */
+export const PackageWorkloadReadAccess$inboundSchema: z.ZodType<
+  PackageWorkloadReadAccess,
+  unknown
+> = z.object({
+  rules: z.array(z.lazy(() => PackageWorkloadReadAccessRule$inboundSchema)),
+  serviceAccountProfile: z.string(),
+});
+
+export function packageWorkloadReadAccessFromJSON(
+  jsonString: string,
+): SafeParseResult<PackageWorkloadReadAccess, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PackageWorkloadReadAccess$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PackageWorkloadReadAccess' from JSON`,
+  );
+}
+
+/** @internal */
+export const PackageSetupResources$inboundSchema: z.ZodType<
+  PackageSetupResources,
+  unknown
+> = z.object({
+  tokenSecret: z.lazy(() => PackageTokenSecret$inboundSchema),
+  workloadReadAccess: z.lazy(() => PackageWorkloadReadAccess$inboundSchema),
+});
+
+export function packageSetupResourcesFromJSON(
+  jsonString: string,
+): SafeParseResult<PackageSetupResources, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PackageSetupResources$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PackageSetupResources' from JSON`,
+  );
+}
+
+/** @internal */
 export const ConfigHelm$inboundSchema: z.ZodType<ConfigHelm, unknown> = z
   .object({
     chartName: z.string(),
     description: z.string(),
+    logCollector: z.lazy(() => PackageLogCollector$inboundSchema).optional(),
+    managerUrl: z.string().optional(),
     operationPermissions: z.nullable(
       z.array(z.lazy(() => OperationPermission$inboundSchema)),
     ).optional(),
+    runtimePersistence: z.lazy(() => PackageRuntimePersistence$inboundSchema)
+      .optional(),
+    setupResources: z.lazy(() => PackageSetupResources$inboundSchema)
+      .optional(),
     type: z.literal("helm"),
   });
 
@@ -1160,6 +1423,7 @@ export const OutputsTypeHelm$inboundSchema: z.ZodEnum<typeof OutputsTypeHelm> =
 export const OutputsHelm$inboundSchema: z.ZodType<OutputsHelm, unknown> = z
   .object({
     chart: z.string(),
+    managerUrl: z.string().optional(),
     version: z.string(),
     type: OutputsTypeHelm$inboundSchema,
   });

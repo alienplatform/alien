@@ -88,7 +88,7 @@ export type UpdateProjectDeploymentPortalAppearance = {
  * Used as keys in package output maps (CLI binaries, Terraform providers, etc.)
  * and for cross-compilation target selection during builds.
  */
-export const UpdateProjectBinaryTarget = {
+export const UpdateProjectPackagesConfigBinaryTarget = {
   WindowsX64: "windows-x64",
   LinuxX64: "linux-x64",
   LinuxArm64: "linux-arm64",
@@ -102,14 +102,14 @@ export const UpdateProjectBinaryTarget = {
  * Used as keys in package output maps (CLI binaries, Terraform providers, etc.)
  * and for cross-compilation target selection during builds.
  */
-export type UpdateProjectBinaryTarget = ClosedEnum<
-  typeof UpdateProjectBinaryTarget
+export type UpdateProjectPackagesConfigBinaryTarget = ClosedEnum<
+  typeof UpdateProjectPackagesConfigBinaryTarget
 >;
 
 /**
  * CLI package configuration. If null, CLI packages will not be generated.
  */
-export type UpdateProjectCli = {
+export type UpdateProjectPackagesConfigCli = {
   /**
    * Binary targets required by this package's setup consumer.
    *
@@ -118,7 +118,7 @@ export type UpdateProjectCli = {
    * Older package rows omit this field and retain the historical all-target
    * behavior. Callers creating new packages should state their target set.
    */
-  binaryTargets?: Array<UpdateProjectBinaryTarget> | undefined;
+  binaryTargets?: Array<UpdateProjectPackagesConfigBinaryTarget> | undefined;
   /**
    * Human-friendly display name for help banners and about text
    */
@@ -136,7 +136,7 @@ export type UpdateProjectCli = {
 /**
  * CloudFormation package configuration. If null, CloudFormation packages will not be generated.
  */
-export type UpdateProjectCloudformation = {
+export type UpdateProjectPackagesConfigCloudformation = {
   /**
    * Whether CloudFormation package generation is enabled
    */
@@ -150,7 +150,7 @@ export type UpdateProjectCloudformation = {
 /**
  * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
  */
-export type UpdateProjectOperatorImage = {
+export type UpdateProjectPackagesConfigOperatorImage = {
   /**
    * Short brand slug used for generated resource names.
    */
@@ -178,9 +178,72 @@ export type UpdateProjectOperatorImage = {
 };
 
 /**
+ * Kubernetes log collection mechanism.
+ */
+export const UpdateProjectPackagesConfigMode = {
+  PodApi: "podApi",
+  NodeAgent: "nodeAgent",
+} as const;
+/**
+ * Kubernetes log collection mechanism.
+ */
+export type UpdateProjectPackagesConfigMode = ClosedEnum<
+  typeof UpdateProjectPackagesConfigMode
+>;
+
+/**
+ * Default log collection mode in a generated Helm chart.
+ */
+export type UpdateProjectPackagesConfigLogCollector = {
+  /**
+   * Whether logs are collected by default; installers can override this value.
+   */
+  enabled: boolean;
+  /**
+   * Kubernetes log collection mechanism.
+   */
+  mode: UpdateProjectPackagesConfigMode;
+};
+
+export type UpdateProjectPackagesConfigTokenSecret = {
+  key: string;
+  name: string;
+  prefix: string;
+  randomLength: number;
+};
+
+export type UpdateProjectPackagesConfigRule = {
+  /**
+   * Kubernetes API group: empty for core resources, apps, or networking.k8s.io.
+   */
+  apiGroup: string;
+  resources: Array<string>;
+};
+
+export type UpdateProjectPackagesConfigWorkloadReadAccess = {
+  rules: Array<UpdateProjectPackagesConfigRule>;
+  serviceAccountProfile: string;
+};
+
+export type UpdateProjectPackagesConfigSetupResources = {
+  tokenSecret: UpdateProjectPackagesConfigTokenSecret;
+  workloadReadAccess: UpdateProjectPackagesConfigWorkloadReadAccess;
+};
+
+export type UpdateProjectPackagesConfigRuntimePersistence = {
+  /**
+   * Persist operator identity across restarts.
+   */
+  enabled: boolean;
+  existingClaim: string;
+  size: string;
+  storageClassName: string;
+};
+
+/**
  * Helm chart package configuration. If null, Helm packages will not be generated.
  */
-export type UpdateProjectHelm = {
+export type UpdateProjectPackagesConfigHelm = {
   /**
    * Chart name (e.g., "acme-operator")
    */
@@ -190,15 +253,23 @@ export type UpdateProjectHelm = {
    */
   description: string;
   /**
+   * Default log collection mode in a generated Helm chart.
+   */
+  logCollector?: UpdateProjectPackagesConfigLogCollector | undefined;
+  /**
    * Whether Helm chart package generation is enabled
    */
   enabled: boolean;
+  setupResources?: UpdateProjectPackagesConfigSetupResources | undefined;
+  runtimePersistence?:
+    | UpdateProjectPackagesConfigRuntimePersistence
+    | undefined;
 };
 
 /**
  * Terraform package configuration. If null, Terraform packages will not be generated.
  */
-export type UpdateProjectTerraform = {
+export type UpdateProjectPackagesConfigTerraform = {
   /**
    * Whether Terraform package generation is enabled
    */
@@ -216,23 +287,23 @@ export type UpdateProjectPackagesConfig = {
   /**
    * CLI package configuration. If null, CLI packages will not be generated.
    */
-  cli?: UpdateProjectCli | null | undefined;
+  cli?: UpdateProjectPackagesConfigCli | null | undefined;
   /**
    * CloudFormation package configuration. If null, CloudFormation packages will not be generated.
    */
-  cloudformation?: UpdateProjectCloudformation | null | undefined;
+  cloudformation?: UpdateProjectPackagesConfigCloudformation | null | undefined;
   /**
    * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
    */
-  operatorImage?: UpdateProjectOperatorImage | null | undefined;
+  operatorImage?: UpdateProjectPackagesConfigOperatorImage | null | undefined;
   /**
    * Helm chart package configuration. If null, Helm packages will not be generated.
    */
-  helm?: UpdateProjectHelm | null | undefined;
+  helm?: UpdateProjectPackagesConfigHelm | null | undefined;
   /**
    * Terraform package configuration. If null, Terraform packages will not be generated.
    */
-  terraform?: UpdateProjectTerraform | null | undefined;
+  terraform?: UpdateProjectPackagesConfigTerraform | null | undefined;
 };
 
 /**
@@ -265,6 +336,191 @@ export type UpdateProjectDefaultManagers = {
   local?: string | null | undefined;
 };
 
+/**
+ * Target OS and architecture for compiled binaries.
+ *
+ * @remarks
+ *
+ * Used as keys in package output maps (CLI binaries, Terraform providers, etc.)
+ * and for cross-compilation target selection during builds.
+ */
+export const PackagesConfigPatchBinaryTarget = {
+  WindowsX64: "windows-x64",
+  LinuxX64: "linux-x64",
+  LinuxArm64: "linux-arm64",
+  DarwinArm64: "darwin-arm64",
+} as const;
+/**
+ * Target OS and architecture for compiled binaries.
+ *
+ * @remarks
+ *
+ * Used as keys in package output maps (CLI binaries, Terraform providers, etc.)
+ * and for cross-compilation target selection during builds.
+ */
+export type PackagesConfigPatchBinaryTarget = ClosedEnum<
+  typeof PackagesConfigPatchBinaryTarget
+>;
+
+export type PackagesConfigPatchCli = {
+  /**
+   * Binary targets required by this package's setup consumer.
+   *
+   * @remarks
+   *
+   * Older package rows omit this field and retain the historical all-target
+   * behavior. Callers creating new packages should state their target set.
+   */
+  binaryTargets?: Array<PackagesConfigPatchBinaryTarget> | undefined;
+  /**
+   * Human-friendly display name for help banners and about text
+   */
+  displayName?: string | undefined;
+  /**
+   * Binary name displayed in help and usage (e.g., "acmectl")
+   */
+  name?: string | undefined;
+  /**
+   * Whether CLI package generation is enabled
+   */
+  enabled?: boolean | undefined;
+};
+
+export type PackagesConfigPatchCloudformation = {
+  /**
+   * Whether CloudFormation package generation is enabled
+   */
+  enabled?: boolean | undefined;
+  /**
+   * Human-friendly application name shown in generated install artifacts
+   */
+  displayName?: string | null | undefined;
+};
+
+export type PackagesConfigPatchTerraform = {
+  /**
+   * Whether Terraform package generation is enabled
+   */
+  enabled?: boolean | undefined;
+  /**
+   * Human-friendly application name shown in generated install artifacts
+   */
+  displayName?: string | null | undefined;
+};
+
+export type PackagesConfigPatchOperatorImage = {
+  /**
+   * Short brand slug used for generated resource names.
+   */
+  brand?: string | null | undefined;
+  /**
+   * Human-friendly display name for logs and startup messages
+   */
+  displayName?: string | undefined;
+  /**
+   * Branded environment variable prefix (e.g., "ACME").
+   */
+  envPrefix?: string | null | undefined;
+  /**
+   * Branded Kubernetes/cloud label domain (e.g., "acme.dev").
+   */
+  labelDomain?: string | null | undefined;
+  /**
+   * Image name (e.g., "acme-operator")
+   */
+  name?: string | undefined;
+  /**
+   * Whether Operator image package generation is enabled
+   */
+  enabled?: boolean | undefined;
+};
+
+/**
+ * Kubernetes log collection mechanism.
+ */
+export const PackagesConfigPatchMode = {
+  PodApi: "podApi",
+  NodeAgent: "nodeAgent",
+} as const;
+/**
+ * Kubernetes log collection mechanism.
+ */
+export type PackagesConfigPatchMode = ClosedEnum<
+  typeof PackagesConfigPatchMode
+>;
+
+export type PackagesConfigPatchLogCollector = {
+  /**
+   * Whether logs are collected by default; installers can override this value.
+   */
+  enabled?: boolean | undefined;
+  /**
+   * Kubernetes log collection mechanism.
+   */
+  mode?: PackagesConfigPatchMode | undefined;
+};
+
+export type PackagesConfigPatchTokenSecret = {
+  key: string;
+  name: string;
+  prefix: string;
+  randomLength: number;
+};
+
+export type PackagesConfigPatchRule = {
+  /**
+   * Kubernetes API group: empty for core resources, apps, or networking.k8s.io.
+   */
+  apiGroup: string;
+  resources: Array<string>;
+};
+
+export type PackagesConfigPatchWorkloadReadAccess = {
+  rules: Array<PackagesConfigPatchRule>;
+  serviceAccountProfile: string;
+};
+
+export type PackagesConfigPatchSetupResources = {
+  tokenSecret: PackagesConfigPatchTokenSecret;
+  workloadReadAccess: PackagesConfigPatchWorkloadReadAccess;
+};
+
+export type PackagesConfigPatchRuntimePersistence = {
+  /**
+   * Persist operator identity across restarts.
+   */
+  enabled?: boolean | undefined;
+  existingClaim?: string | undefined;
+  size?: string | undefined;
+  storageClassName?: string | undefined;
+};
+
+export type PackagesConfigPatchHelm = {
+  /**
+   * Chart name (e.g., "acme-operator")
+   */
+  chartName?: string | undefined;
+  /**
+   * Human-friendly description of the chart
+   */
+  description?: string | undefined;
+  logCollector?: PackagesConfigPatchLogCollector | null | undefined;
+  /**
+   * Whether Helm chart package generation is enabled
+   */
+  enabled?: boolean | undefined;
+  setupResources?: PackagesConfigPatchSetupResources | null | undefined;
+  runtimePersistence?: PackagesConfigPatchRuntimePersistence | null | undefined;
+};
+
+export type PackagesConfigPatch = {
+  cli?: PackagesConfigPatchCli | null | undefined;
+  cloudformation?: PackagesConfigPatchCloudformation | null | undefined;
+  terraform?: PackagesConfigPatchTerraform | null | undefined;
+  operatorImage?: PackagesConfigPatchOperatorImage | null | undefined;
+  helm?: PackagesConfigPatchHelm | null | undefined;
+};
+
 export type UpdateProject = {
   /**
    * Verified source repository connected to the project. Alien uses this for GitHub Actions setup and source-aware features; releases are still created explicitly by CI or `alien release`.
@@ -293,6 +549,7 @@ export type UpdateProject = {
    * Project default private managers for new push deployments.
    */
   defaultManagers?: UpdateProjectDefaultManagers | null | undefined;
+  packagesConfigPatch?: PackagesConfigPatch | undefined;
 };
 
 /** @internal */
@@ -362,12 +619,12 @@ export function updateProjectDeploymentPortalAppearanceToJSON(
 }
 
 /** @internal */
-export const UpdateProjectBinaryTarget$outboundSchema: z.ZodEnum<
-  typeof UpdateProjectBinaryTarget
-> = z.enum(UpdateProjectBinaryTarget);
+export const UpdateProjectPackagesConfigBinaryTarget$outboundSchema: z.ZodEnum<
+  typeof UpdateProjectPackagesConfigBinaryTarget
+> = z.enum(UpdateProjectPackagesConfigBinaryTarget);
 
 /** @internal */
-export type UpdateProjectCli$Outbound = {
+export type UpdateProjectPackagesConfigCli$Outbound = {
   binaryTargets?: Array<string> | undefined;
   displayName: string;
   name: string;
@@ -375,51 +632,56 @@ export type UpdateProjectCli$Outbound = {
 };
 
 /** @internal */
-export const UpdateProjectCli$outboundSchema: z.ZodType<
-  UpdateProjectCli$Outbound,
-  UpdateProjectCli
+export const UpdateProjectPackagesConfigCli$outboundSchema: z.ZodType<
+  UpdateProjectPackagesConfigCli$Outbound,
+  UpdateProjectPackagesConfigCli
 > = z.object({
-  binaryTargets: z.array(UpdateProjectBinaryTarget$outboundSchema).optional(),
+  binaryTargets: z.array(UpdateProjectPackagesConfigBinaryTarget$outboundSchema)
+    .optional(),
   displayName: z.string(),
   name: z.string(),
   enabled: z.boolean(),
 });
 
-export function updateProjectCliToJSON(
-  updateProjectCli: UpdateProjectCli,
+export function updateProjectPackagesConfigCliToJSON(
+  updateProjectPackagesConfigCli: UpdateProjectPackagesConfigCli,
 ): string {
   return JSON.stringify(
-    UpdateProjectCli$outboundSchema.parse(updateProjectCli),
-  );
-}
-
-/** @internal */
-export type UpdateProjectCloudformation$Outbound = {
-  enabled: boolean;
-  displayName?: string | null | undefined;
-};
-
-/** @internal */
-export const UpdateProjectCloudformation$outboundSchema: z.ZodType<
-  UpdateProjectCloudformation$Outbound,
-  UpdateProjectCloudformation
-> = z.object({
-  enabled: z.boolean(),
-  displayName: z.nullable(z.string()).optional(),
-});
-
-export function updateProjectCloudformationToJSON(
-  updateProjectCloudformation: UpdateProjectCloudformation,
-): string {
-  return JSON.stringify(
-    UpdateProjectCloudformation$outboundSchema.parse(
-      updateProjectCloudformation,
+    UpdateProjectPackagesConfigCli$outboundSchema.parse(
+      updateProjectPackagesConfigCli,
     ),
   );
 }
 
 /** @internal */
-export type UpdateProjectOperatorImage$Outbound = {
+export type UpdateProjectPackagesConfigCloudformation$Outbound = {
+  enabled: boolean;
+  displayName?: string | null | undefined;
+};
+
+/** @internal */
+export const UpdateProjectPackagesConfigCloudformation$outboundSchema:
+  z.ZodType<
+    UpdateProjectPackagesConfigCloudformation$Outbound,
+    UpdateProjectPackagesConfigCloudformation
+  > = z.object({
+    enabled: z.boolean(),
+    displayName: z.nullable(z.string()).optional(),
+  });
+
+export function updateProjectPackagesConfigCloudformationToJSON(
+  updateProjectPackagesConfigCloudformation:
+    UpdateProjectPackagesConfigCloudformation,
+): string {
+  return JSON.stringify(
+    UpdateProjectPackagesConfigCloudformation$outboundSchema.parse(
+      updateProjectPackagesConfigCloudformation,
+    ),
+  );
+}
+
+/** @internal */
+export type UpdateProjectPackagesConfigOperatorImage$Outbound = {
   brand?: string | null | undefined;
   displayName: string;
   envPrefix?: string | null | undefined;
@@ -429,9 +691,9 @@ export type UpdateProjectOperatorImage$Outbound = {
 };
 
 /** @internal */
-export const UpdateProjectOperatorImage$outboundSchema: z.ZodType<
-  UpdateProjectOperatorImage$Outbound,
-  UpdateProjectOperatorImage
+export const UpdateProjectPackagesConfigOperatorImage$outboundSchema: z.ZodType<
+  UpdateProjectPackagesConfigOperatorImage$Outbound,
+  UpdateProjectPackagesConfigOperatorImage
 > = z.object({
   brand: z.nullable(z.string()).optional(),
   displayName: z.string(),
@@ -441,69 +703,275 @@ export const UpdateProjectOperatorImage$outboundSchema: z.ZodType<
   enabled: z.boolean(),
 });
 
-export function updateProjectOperatorImageToJSON(
-  updateProjectOperatorImage: UpdateProjectOperatorImage,
+export function updateProjectPackagesConfigOperatorImageToJSON(
+  updateProjectPackagesConfigOperatorImage:
+    UpdateProjectPackagesConfigOperatorImage,
 ): string {
   return JSON.stringify(
-    UpdateProjectOperatorImage$outboundSchema.parse(updateProjectOperatorImage),
+    UpdateProjectPackagesConfigOperatorImage$outboundSchema.parse(
+      updateProjectPackagesConfigOperatorImage,
+    ),
   );
 }
 
 /** @internal */
-export type UpdateProjectHelm$Outbound = {
-  chartName: string;
-  description: string;
+export const UpdateProjectPackagesConfigMode$outboundSchema: z.ZodEnum<
+  typeof UpdateProjectPackagesConfigMode
+> = z.enum(UpdateProjectPackagesConfigMode);
+
+/** @internal */
+export type UpdateProjectPackagesConfigLogCollector$Outbound = {
   enabled: boolean;
+  mode: string;
 };
 
 /** @internal */
-export const UpdateProjectHelm$outboundSchema: z.ZodType<
-  UpdateProjectHelm$Outbound,
-  UpdateProjectHelm
+export const UpdateProjectPackagesConfigLogCollector$outboundSchema: z.ZodType<
+  UpdateProjectPackagesConfigLogCollector$Outbound,
+  UpdateProjectPackagesConfigLogCollector
 > = z.object({
-  chartName: z.string(),
-  description: z.string(),
   enabled: z.boolean(),
+  mode: UpdateProjectPackagesConfigMode$outboundSchema,
 });
 
-export function updateProjectHelmToJSON(
-  updateProjectHelm: UpdateProjectHelm,
+export function updateProjectPackagesConfigLogCollectorToJSON(
+  updateProjectPackagesConfigLogCollector:
+    UpdateProjectPackagesConfigLogCollector,
 ): string {
   return JSON.stringify(
-    UpdateProjectHelm$outboundSchema.parse(updateProjectHelm),
+    UpdateProjectPackagesConfigLogCollector$outboundSchema.parse(
+      updateProjectPackagesConfigLogCollector,
+    ),
   );
 }
 
 /** @internal */
-export type UpdateProjectTerraform$Outbound = {
+export type UpdateProjectPackagesConfigTokenSecret$Outbound = {
+  key: string;
+  name: string;
+  prefix: string;
+  randomLength: number;
+};
+
+/** @internal */
+export const UpdateProjectPackagesConfigTokenSecret$outboundSchema: z.ZodType<
+  UpdateProjectPackagesConfigTokenSecret$Outbound,
+  UpdateProjectPackagesConfigTokenSecret
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+  prefix: z.string(),
+  randomLength: z.int(),
+});
+
+export function updateProjectPackagesConfigTokenSecretToJSON(
+  updateProjectPackagesConfigTokenSecret:
+    UpdateProjectPackagesConfigTokenSecret,
+): string {
+  return JSON.stringify(
+    UpdateProjectPackagesConfigTokenSecret$outboundSchema.parse(
+      updateProjectPackagesConfigTokenSecret,
+    ),
+  );
+}
+
+/** @internal */
+export type UpdateProjectPackagesConfigRule$Outbound = {
+  apiGroup: string;
+  resources: Array<string>;
+};
+
+/** @internal */
+export const UpdateProjectPackagesConfigRule$outboundSchema: z.ZodType<
+  UpdateProjectPackagesConfigRule$Outbound,
+  UpdateProjectPackagesConfigRule
+> = z.object({
+  apiGroup: z.string(),
+  resources: z.array(z.string()),
+});
+
+export function updateProjectPackagesConfigRuleToJSON(
+  updateProjectPackagesConfigRule: UpdateProjectPackagesConfigRule,
+): string {
+  return JSON.stringify(
+    UpdateProjectPackagesConfigRule$outboundSchema.parse(
+      updateProjectPackagesConfigRule,
+    ),
+  );
+}
+
+/** @internal */
+export type UpdateProjectPackagesConfigWorkloadReadAccess$Outbound = {
+  rules: Array<UpdateProjectPackagesConfigRule$Outbound>;
+  serviceAccountProfile: string;
+};
+
+/** @internal */
+export const UpdateProjectPackagesConfigWorkloadReadAccess$outboundSchema:
+  z.ZodType<
+    UpdateProjectPackagesConfigWorkloadReadAccess$Outbound,
+    UpdateProjectPackagesConfigWorkloadReadAccess
+  > = z.object({
+    rules: z.array(
+      z.lazy(() => UpdateProjectPackagesConfigRule$outboundSchema),
+    ),
+    serviceAccountProfile: z.string(),
+  });
+
+export function updateProjectPackagesConfigWorkloadReadAccessToJSON(
+  updateProjectPackagesConfigWorkloadReadAccess:
+    UpdateProjectPackagesConfigWorkloadReadAccess,
+): string {
+  return JSON.stringify(
+    UpdateProjectPackagesConfigWorkloadReadAccess$outboundSchema.parse(
+      updateProjectPackagesConfigWorkloadReadAccess,
+    ),
+  );
+}
+
+/** @internal */
+export type UpdateProjectPackagesConfigSetupResources$Outbound = {
+  tokenSecret: UpdateProjectPackagesConfigTokenSecret$Outbound;
+  workloadReadAccess: UpdateProjectPackagesConfigWorkloadReadAccess$Outbound;
+};
+
+/** @internal */
+export const UpdateProjectPackagesConfigSetupResources$outboundSchema:
+  z.ZodType<
+    UpdateProjectPackagesConfigSetupResources$Outbound,
+    UpdateProjectPackagesConfigSetupResources
+  > = z.object({
+    tokenSecret: z.lazy(() =>
+      UpdateProjectPackagesConfigTokenSecret$outboundSchema
+    ),
+    workloadReadAccess: z.lazy(() =>
+      UpdateProjectPackagesConfigWorkloadReadAccess$outboundSchema
+    ),
+  });
+
+export function updateProjectPackagesConfigSetupResourcesToJSON(
+  updateProjectPackagesConfigSetupResources:
+    UpdateProjectPackagesConfigSetupResources,
+): string {
+  return JSON.stringify(
+    UpdateProjectPackagesConfigSetupResources$outboundSchema.parse(
+      updateProjectPackagesConfigSetupResources,
+    ),
+  );
+}
+
+/** @internal */
+export type UpdateProjectPackagesConfigRuntimePersistence$Outbound = {
+  enabled: boolean;
+  existingClaim: string;
+  size: string;
+  storageClassName: string;
+};
+
+/** @internal */
+export const UpdateProjectPackagesConfigRuntimePersistence$outboundSchema:
+  z.ZodType<
+    UpdateProjectPackagesConfigRuntimePersistence$Outbound,
+    UpdateProjectPackagesConfigRuntimePersistence
+  > = z.object({
+    enabled: z.boolean(),
+    existingClaim: z.string(),
+    size: z.string(),
+    storageClassName: z.string(),
+  });
+
+export function updateProjectPackagesConfigRuntimePersistenceToJSON(
+  updateProjectPackagesConfigRuntimePersistence:
+    UpdateProjectPackagesConfigRuntimePersistence,
+): string {
+  return JSON.stringify(
+    UpdateProjectPackagesConfigRuntimePersistence$outboundSchema.parse(
+      updateProjectPackagesConfigRuntimePersistence,
+    ),
+  );
+}
+
+/** @internal */
+export type UpdateProjectPackagesConfigHelm$Outbound = {
+  chartName: string;
+  description: string;
+  logCollector?: UpdateProjectPackagesConfigLogCollector$Outbound | undefined;
+  enabled: boolean;
+  setupResources?:
+    | UpdateProjectPackagesConfigSetupResources$Outbound
+    | undefined;
+  runtimePersistence?:
+    | UpdateProjectPackagesConfigRuntimePersistence$Outbound
+    | undefined;
+};
+
+/** @internal */
+export const UpdateProjectPackagesConfigHelm$outboundSchema: z.ZodType<
+  UpdateProjectPackagesConfigHelm$Outbound,
+  UpdateProjectPackagesConfigHelm
+> = z.object({
+  chartName: z.string(),
+  description: z.string(),
+  logCollector: z.lazy(() =>
+    UpdateProjectPackagesConfigLogCollector$outboundSchema
+  ).optional(),
+  enabled: z.boolean(),
+  setupResources: z.lazy(() =>
+    UpdateProjectPackagesConfigSetupResources$outboundSchema
+  ).optional(),
+  runtimePersistence: z.lazy(() =>
+    UpdateProjectPackagesConfigRuntimePersistence$outboundSchema
+  ).optional(),
+});
+
+export function updateProjectPackagesConfigHelmToJSON(
+  updateProjectPackagesConfigHelm: UpdateProjectPackagesConfigHelm,
+): string {
+  return JSON.stringify(
+    UpdateProjectPackagesConfigHelm$outboundSchema.parse(
+      updateProjectPackagesConfigHelm,
+    ),
+  );
+}
+
+/** @internal */
+export type UpdateProjectPackagesConfigTerraform$Outbound = {
   enabled: boolean;
   displayName?: string | null | undefined;
 };
 
 /** @internal */
-export const UpdateProjectTerraform$outboundSchema: z.ZodType<
-  UpdateProjectTerraform$Outbound,
-  UpdateProjectTerraform
+export const UpdateProjectPackagesConfigTerraform$outboundSchema: z.ZodType<
+  UpdateProjectPackagesConfigTerraform$Outbound,
+  UpdateProjectPackagesConfigTerraform
 > = z.object({
   enabled: z.boolean(),
   displayName: z.nullable(z.string()).optional(),
 });
 
-export function updateProjectTerraformToJSON(
-  updateProjectTerraform: UpdateProjectTerraform,
+export function updateProjectPackagesConfigTerraformToJSON(
+  updateProjectPackagesConfigTerraform: UpdateProjectPackagesConfigTerraform,
 ): string {
   return JSON.stringify(
-    UpdateProjectTerraform$outboundSchema.parse(updateProjectTerraform),
+    UpdateProjectPackagesConfigTerraform$outboundSchema.parse(
+      updateProjectPackagesConfigTerraform,
+    ),
   );
 }
 
 /** @internal */
 export type UpdateProjectPackagesConfig$Outbound = {
-  cli?: UpdateProjectCli$Outbound | null | undefined;
-  cloudformation?: UpdateProjectCloudformation$Outbound | null | undefined;
-  operatorImage?: UpdateProjectOperatorImage$Outbound | null | undefined;
-  helm?: UpdateProjectHelm$Outbound | null | undefined;
-  terraform?: UpdateProjectTerraform$Outbound | null | undefined;
+  cli?: UpdateProjectPackagesConfigCli$Outbound | null | undefined;
+  cloudformation?:
+    | UpdateProjectPackagesConfigCloudformation$Outbound
+    | null
+    | undefined;
+  operatorImage?:
+    | UpdateProjectPackagesConfigOperatorImage$Outbound
+    | null
+    | undefined;
+  helm?: UpdateProjectPackagesConfigHelm$Outbound | null | undefined;
+  terraform?: UpdateProjectPackagesConfigTerraform$Outbound | null | undefined;
 };
 
 /** @internal */
@@ -511,16 +979,19 @@ export const UpdateProjectPackagesConfig$outboundSchema: z.ZodType<
   UpdateProjectPackagesConfig$Outbound,
   UpdateProjectPackagesConfig
 > = z.object({
-  cli: z.nullable(z.lazy(() => UpdateProjectCli$outboundSchema)).optional(),
+  cli: z.nullable(z.lazy(() => UpdateProjectPackagesConfigCli$outboundSchema))
+    .optional(),
   cloudformation: z.nullable(
-    z.lazy(() => UpdateProjectCloudformation$outboundSchema),
+    z.lazy(() => UpdateProjectPackagesConfigCloudformation$outboundSchema),
   ).optional(),
   operatorImage: z.nullable(
-    z.lazy(() => UpdateProjectOperatorImage$outboundSchema),
+    z.lazy(() => UpdateProjectPackagesConfigOperatorImage$outboundSchema),
   ).optional(),
-  helm: z.nullable(z.lazy(() => UpdateProjectHelm$outboundSchema)).optional(),
-  terraform: z.nullable(z.lazy(() => UpdateProjectTerraform$outboundSchema))
+  helm: z.nullable(z.lazy(() => UpdateProjectPackagesConfigHelm$outboundSchema))
     .optional(),
+  terraform: z.nullable(
+    z.lazy(() => UpdateProjectPackagesConfigTerraform$outboundSchema),
+  ).optional(),
 });
 
 export function updateProjectPackagesConfigToJSON(
@@ -567,6 +1038,368 @@ export function updateProjectDefaultManagersToJSON(
 }
 
 /** @internal */
+export const PackagesConfigPatchBinaryTarget$outboundSchema: z.ZodEnum<
+  typeof PackagesConfigPatchBinaryTarget
+> = z.enum(PackagesConfigPatchBinaryTarget);
+
+/** @internal */
+export type PackagesConfigPatchCli$Outbound = {
+  binaryTargets?: Array<string> | undefined;
+  displayName?: string | undefined;
+  name?: string | undefined;
+  enabled?: boolean | undefined;
+};
+
+/** @internal */
+export const PackagesConfigPatchCli$outboundSchema: z.ZodType<
+  PackagesConfigPatchCli$Outbound,
+  PackagesConfigPatchCli
+> = z.object({
+  binaryTargets: z.array(PackagesConfigPatchBinaryTarget$outboundSchema)
+    .optional(),
+  displayName: z.string().optional(),
+  name: z.string().optional(),
+  enabled: z.boolean().optional(),
+});
+
+export function packagesConfigPatchCliToJSON(
+  packagesConfigPatchCli: PackagesConfigPatchCli,
+): string {
+  return JSON.stringify(
+    PackagesConfigPatchCli$outboundSchema.parse(packagesConfigPatchCli),
+  );
+}
+
+/** @internal */
+export type PackagesConfigPatchCloudformation$Outbound = {
+  enabled?: boolean | undefined;
+  displayName?: string | null | undefined;
+};
+
+/** @internal */
+export const PackagesConfigPatchCloudformation$outboundSchema: z.ZodType<
+  PackagesConfigPatchCloudformation$Outbound,
+  PackagesConfigPatchCloudformation
+> = z.object({
+  enabled: z.boolean().optional(),
+  displayName: z.nullable(z.string()).optional(),
+});
+
+export function packagesConfigPatchCloudformationToJSON(
+  packagesConfigPatchCloudformation: PackagesConfigPatchCloudformation,
+): string {
+  return JSON.stringify(
+    PackagesConfigPatchCloudformation$outboundSchema.parse(
+      packagesConfigPatchCloudformation,
+    ),
+  );
+}
+
+/** @internal */
+export type PackagesConfigPatchTerraform$Outbound = {
+  enabled?: boolean | undefined;
+  displayName?: string | null | undefined;
+};
+
+/** @internal */
+export const PackagesConfigPatchTerraform$outboundSchema: z.ZodType<
+  PackagesConfigPatchTerraform$Outbound,
+  PackagesConfigPatchTerraform
+> = z.object({
+  enabled: z.boolean().optional(),
+  displayName: z.nullable(z.string()).optional(),
+});
+
+export function packagesConfigPatchTerraformToJSON(
+  packagesConfigPatchTerraform: PackagesConfigPatchTerraform,
+): string {
+  return JSON.stringify(
+    PackagesConfigPatchTerraform$outboundSchema.parse(
+      packagesConfigPatchTerraform,
+    ),
+  );
+}
+
+/** @internal */
+export type PackagesConfigPatchOperatorImage$Outbound = {
+  brand?: string | null | undefined;
+  displayName?: string | undefined;
+  envPrefix?: string | null | undefined;
+  labelDomain?: string | null | undefined;
+  name?: string | undefined;
+  enabled?: boolean | undefined;
+};
+
+/** @internal */
+export const PackagesConfigPatchOperatorImage$outboundSchema: z.ZodType<
+  PackagesConfigPatchOperatorImage$Outbound,
+  PackagesConfigPatchOperatorImage
+> = z.object({
+  brand: z.nullable(z.string()).optional(),
+  displayName: z.string().optional(),
+  envPrefix: z.nullable(z.string()).optional(),
+  labelDomain: z.nullable(z.string()).optional(),
+  name: z.string().optional(),
+  enabled: z.boolean().optional(),
+});
+
+export function packagesConfigPatchOperatorImageToJSON(
+  packagesConfigPatchOperatorImage: PackagesConfigPatchOperatorImage,
+): string {
+  return JSON.stringify(
+    PackagesConfigPatchOperatorImage$outboundSchema.parse(
+      packagesConfigPatchOperatorImage,
+    ),
+  );
+}
+
+/** @internal */
+export const PackagesConfigPatchMode$outboundSchema: z.ZodEnum<
+  typeof PackagesConfigPatchMode
+> = z.enum(PackagesConfigPatchMode);
+
+/** @internal */
+export type PackagesConfigPatchLogCollector$Outbound = {
+  enabled?: boolean | undefined;
+  mode?: string | undefined;
+};
+
+/** @internal */
+export const PackagesConfigPatchLogCollector$outboundSchema: z.ZodType<
+  PackagesConfigPatchLogCollector$Outbound,
+  PackagesConfigPatchLogCollector
+> = z.object({
+  enabled: z.boolean().optional(),
+  mode: PackagesConfigPatchMode$outboundSchema.optional(),
+});
+
+export function packagesConfigPatchLogCollectorToJSON(
+  packagesConfigPatchLogCollector: PackagesConfigPatchLogCollector,
+): string {
+  return JSON.stringify(
+    PackagesConfigPatchLogCollector$outboundSchema.parse(
+      packagesConfigPatchLogCollector,
+    ),
+  );
+}
+
+/** @internal */
+export type PackagesConfigPatchTokenSecret$Outbound = {
+  key: string;
+  name: string;
+  prefix: string;
+  randomLength: number;
+};
+
+/** @internal */
+export const PackagesConfigPatchTokenSecret$outboundSchema: z.ZodType<
+  PackagesConfigPatchTokenSecret$Outbound,
+  PackagesConfigPatchTokenSecret
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+  prefix: z.string(),
+  randomLength: z.int(),
+});
+
+export function packagesConfigPatchTokenSecretToJSON(
+  packagesConfigPatchTokenSecret: PackagesConfigPatchTokenSecret,
+): string {
+  return JSON.stringify(
+    PackagesConfigPatchTokenSecret$outboundSchema.parse(
+      packagesConfigPatchTokenSecret,
+    ),
+  );
+}
+
+/** @internal */
+export type PackagesConfigPatchRule$Outbound = {
+  apiGroup: string;
+  resources: Array<string>;
+};
+
+/** @internal */
+export const PackagesConfigPatchRule$outboundSchema: z.ZodType<
+  PackagesConfigPatchRule$Outbound,
+  PackagesConfigPatchRule
+> = z.object({
+  apiGroup: z.string(),
+  resources: z.array(z.string()),
+});
+
+export function packagesConfigPatchRuleToJSON(
+  packagesConfigPatchRule: PackagesConfigPatchRule,
+): string {
+  return JSON.stringify(
+    PackagesConfigPatchRule$outboundSchema.parse(packagesConfigPatchRule),
+  );
+}
+
+/** @internal */
+export type PackagesConfigPatchWorkloadReadAccess$Outbound = {
+  rules: Array<PackagesConfigPatchRule$Outbound>;
+  serviceAccountProfile: string;
+};
+
+/** @internal */
+export const PackagesConfigPatchWorkloadReadAccess$outboundSchema: z.ZodType<
+  PackagesConfigPatchWorkloadReadAccess$Outbound,
+  PackagesConfigPatchWorkloadReadAccess
+> = z.object({
+  rules: z.array(z.lazy(() => PackagesConfigPatchRule$outboundSchema)),
+  serviceAccountProfile: z.string(),
+});
+
+export function packagesConfigPatchWorkloadReadAccessToJSON(
+  packagesConfigPatchWorkloadReadAccess: PackagesConfigPatchWorkloadReadAccess,
+): string {
+  return JSON.stringify(
+    PackagesConfigPatchWorkloadReadAccess$outboundSchema.parse(
+      packagesConfigPatchWorkloadReadAccess,
+    ),
+  );
+}
+
+/** @internal */
+export type PackagesConfigPatchSetupResources$Outbound = {
+  tokenSecret: PackagesConfigPatchTokenSecret$Outbound;
+  workloadReadAccess: PackagesConfigPatchWorkloadReadAccess$Outbound;
+};
+
+/** @internal */
+export const PackagesConfigPatchSetupResources$outboundSchema: z.ZodType<
+  PackagesConfigPatchSetupResources$Outbound,
+  PackagesConfigPatchSetupResources
+> = z.object({
+  tokenSecret: z.lazy(() => PackagesConfigPatchTokenSecret$outboundSchema),
+  workloadReadAccess: z.lazy(() =>
+    PackagesConfigPatchWorkloadReadAccess$outboundSchema
+  ),
+});
+
+export function packagesConfigPatchSetupResourcesToJSON(
+  packagesConfigPatchSetupResources: PackagesConfigPatchSetupResources,
+): string {
+  return JSON.stringify(
+    PackagesConfigPatchSetupResources$outboundSchema.parse(
+      packagesConfigPatchSetupResources,
+    ),
+  );
+}
+
+/** @internal */
+export type PackagesConfigPatchRuntimePersistence$Outbound = {
+  enabled?: boolean | undefined;
+  existingClaim?: string | undefined;
+  size?: string | undefined;
+  storageClassName?: string | undefined;
+};
+
+/** @internal */
+export const PackagesConfigPatchRuntimePersistence$outboundSchema: z.ZodType<
+  PackagesConfigPatchRuntimePersistence$Outbound,
+  PackagesConfigPatchRuntimePersistence
+> = z.object({
+  enabled: z.boolean().optional(),
+  existingClaim: z.string().optional(),
+  size: z.string().optional(),
+  storageClassName: z.string().optional(),
+});
+
+export function packagesConfigPatchRuntimePersistenceToJSON(
+  packagesConfigPatchRuntimePersistence: PackagesConfigPatchRuntimePersistence,
+): string {
+  return JSON.stringify(
+    PackagesConfigPatchRuntimePersistence$outboundSchema.parse(
+      packagesConfigPatchRuntimePersistence,
+    ),
+  );
+}
+
+/** @internal */
+export type PackagesConfigPatchHelm$Outbound = {
+  chartName?: string | undefined;
+  description?: string | undefined;
+  logCollector?: PackagesConfigPatchLogCollector$Outbound | null | undefined;
+  enabled?: boolean | undefined;
+  setupResources?:
+    | PackagesConfigPatchSetupResources$Outbound
+    | null
+    | undefined;
+  runtimePersistence?:
+    | PackagesConfigPatchRuntimePersistence$Outbound
+    | null
+    | undefined;
+};
+
+/** @internal */
+export const PackagesConfigPatchHelm$outboundSchema: z.ZodType<
+  PackagesConfigPatchHelm$Outbound,
+  PackagesConfigPatchHelm
+> = z.object({
+  chartName: z.string().optional(),
+  description: z.string().optional(),
+  logCollector: z.nullable(
+    z.lazy(() => PackagesConfigPatchLogCollector$outboundSchema),
+  ).optional(),
+  enabled: z.boolean().optional(),
+  setupResources: z.nullable(
+    z.lazy(() => PackagesConfigPatchSetupResources$outboundSchema),
+  ).optional(),
+  runtimePersistence: z.nullable(
+    z.lazy(() => PackagesConfigPatchRuntimePersistence$outboundSchema),
+  ).optional(),
+});
+
+export function packagesConfigPatchHelmToJSON(
+  packagesConfigPatchHelm: PackagesConfigPatchHelm,
+): string {
+  return JSON.stringify(
+    PackagesConfigPatchHelm$outboundSchema.parse(packagesConfigPatchHelm),
+  );
+}
+
+/** @internal */
+export type PackagesConfigPatch$Outbound = {
+  cli?: PackagesConfigPatchCli$Outbound | null | undefined;
+  cloudformation?:
+    | PackagesConfigPatchCloudformation$Outbound
+    | null
+    | undefined;
+  terraform?: PackagesConfigPatchTerraform$Outbound | null | undefined;
+  operatorImage?: PackagesConfigPatchOperatorImage$Outbound | null | undefined;
+  helm?: PackagesConfigPatchHelm$Outbound | null | undefined;
+};
+
+/** @internal */
+export const PackagesConfigPatch$outboundSchema: z.ZodType<
+  PackagesConfigPatch$Outbound,
+  PackagesConfigPatch
+> = z.object({
+  cli: z.nullable(z.lazy(() => PackagesConfigPatchCli$outboundSchema))
+    .optional(),
+  cloudformation: z.nullable(
+    z.lazy(() => PackagesConfigPatchCloudformation$outboundSchema),
+  ).optional(),
+  terraform: z.nullable(
+    z.lazy(() => PackagesConfigPatchTerraform$outboundSchema),
+  ).optional(),
+  operatorImage: z.nullable(
+    z.lazy(() => PackagesConfigPatchOperatorImage$outboundSchema),
+  ).optional(),
+  helm: z.nullable(z.lazy(() => PackagesConfigPatchHelm$outboundSchema))
+    .optional(),
+});
+
+export function packagesConfigPatchToJSON(
+  packagesConfigPatch: PackagesConfigPatch,
+): string {
+  return JSON.stringify(
+    PackagesConfigPatch$outboundSchema.parse(packagesConfigPatch),
+  );
+}
+
+/** @internal */
 export type UpdateProject$Outbound = {
   gitRepository?: UpdateProjectGitRepository$Outbound | null | undefined;
   rootDirectory?: string | null | undefined;
@@ -577,6 +1410,7 @@ export type UpdateProject$Outbound = {
   packagesConfig?: UpdateProjectPackagesConfig$Outbound | null | undefined;
   domainId?: string | null | undefined;
   defaultManagers?: UpdateProjectDefaultManagers$Outbound | null | undefined;
+  packagesConfigPatch?: PackagesConfigPatch$Outbound | undefined;
 };
 
 /** @internal */
@@ -598,6 +1432,8 @@ export const UpdateProject$outboundSchema: z.ZodType<
   defaultManagers: z.nullable(
     z.lazy(() => UpdateProjectDefaultManagers$outboundSchema),
   ).optional(),
+  packagesConfigPatch: z.lazy(() => PackagesConfigPatch$outboundSchema)
+    .optional(),
 });
 
 export function updateProjectToJSON(updateProject: UpdateProject): string {

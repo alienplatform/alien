@@ -11,6 +11,27 @@ import {
   ruleToJSON,
 } from "../typescript/esm/models/publishoperationspluginrequest.js";
 import { PublishOperationsPluginResponse$inboundSchema } from "../typescript/esm/models/publishoperationspluginresponse.js";
+import { DeploymentInfoHelm$inboundSchema } from "../typescript/esm/models/deploymentinfo.js";
+
+test("Helm installation routing survives SDK response validation", () => {
+  const helm = {
+    status: "ready",
+    chartRef: "oci://registry.example/charts/application",
+    outputs: {
+      chart: "oci://registry.example/charts/application",
+      version: "1.2.3",
+      managerUrl: "https://manager.example",
+    },
+    managerUrlOverride: "https://custom-manager.example",
+  };
+  assert.deepEqual(DeploymentInfoHelm$inboundSchema.parse(helm), helm);
+  const previous = {
+    ...helm,
+    outputs: { chart: helm.outputs.chart, version: helm.outputs.version },
+  };
+  delete previous.managerUrlOverride;
+  assert.deepEqual(DeploymentInfoHelm$inboundSchema.parse(previous), previous);
+});
 
 // Run after pnpm -C client-sdks/platform/typescript build. Exercise the shipped
 // JavaScript, including request serialization and response validation.

@@ -134,6 +134,69 @@ export type CreateProjectFromTemplateOperatorImageRequest = {
 };
 
 /**
+ * Kubernetes log collection mechanism.
+ */
+export const CreateProjectFromTemplateModeRequest = {
+  PodApi: "podApi",
+  NodeAgent: "nodeAgent",
+} as const;
+/**
+ * Kubernetes log collection mechanism.
+ */
+export type CreateProjectFromTemplateModeRequest = ClosedEnum<
+  typeof CreateProjectFromTemplateModeRequest
+>;
+
+/**
+ * Default log collection mode in a generated Helm chart.
+ */
+export type CreateProjectFromTemplateLogCollectorRequest = {
+  /**
+   * Whether logs are collected by default; installers can override this value.
+   */
+  enabled: boolean;
+  /**
+   * Kubernetes log collection mechanism.
+   */
+  mode: CreateProjectFromTemplateModeRequest;
+};
+
+export type CreateProjectFromTemplateTokenSecretRequest = {
+  key: string;
+  name: string;
+  prefix: string;
+  randomLength: number;
+};
+
+export type CreateProjectFromTemplateRuleRequest = {
+  /**
+   * Kubernetes API group: empty for core resources, apps, or networking.k8s.io.
+   */
+  apiGroup: string;
+  resources: Array<string>;
+};
+
+export type CreateProjectFromTemplateWorkloadReadAccessRequest = {
+  rules: Array<CreateProjectFromTemplateRuleRequest>;
+  serviceAccountProfile: string;
+};
+
+export type CreateProjectFromTemplateSetupResourcesRequest = {
+  tokenSecret: CreateProjectFromTemplateTokenSecretRequest;
+  workloadReadAccess: CreateProjectFromTemplateWorkloadReadAccessRequest;
+};
+
+export type CreateProjectFromTemplateRuntimePersistenceRequest = {
+  /**
+   * Persist operator identity across restarts.
+   */
+  enabled: boolean;
+  existingClaim: string;
+  size: string;
+  storageClassName: string;
+};
+
+/**
  * Helm chart package configuration. If null, Helm packages will not be generated.
  */
 export type CreateProjectFromTemplateHelmRequest = {
@@ -146,9 +209,17 @@ export type CreateProjectFromTemplateHelmRequest = {
    */
   description: string;
   /**
+   * Default log collection mode in a generated Helm chart.
+   */
+  logCollector?: CreateProjectFromTemplateLogCollectorRequest | undefined;
+  /**
    * Whether Helm chart package generation is enabled
    */
   enabled: boolean;
+  setupResources?: CreateProjectFromTemplateSetupResourcesRequest | undefined;
+  runtimePersistence?:
+    | CreateProjectFromTemplateRuntimePersistenceRequest
+    | undefined;
 };
 
 /**
@@ -388,6 +459,69 @@ export type CreateProjectFromTemplateOperatorImageResponse = {
 };
 
 /**
+ * Kubernetes log collection mechanism.
+ */
+export const CreateProjectFromTemplateModeResponse = {
+  PodApi: "podApi",
+  NodeAgent: "nodeAgent",
+} as const;
+/**
+ * Kubernetes log collection mechanism.
+ */
+export type CreateProjectFromTemplateModeResponse = ClosedEnum<
+  typeof CreateProjectFromTemplateModeResponse
+>;
+
+/**
+ * Default log collection mode in a generated Helm chart.
+ */
+export type CreateProjectFromTemplateLogCollectorResponse = {
+  /**
+   * Whether logs are collected by default; installers can override this value.
+   */
+  enabled: boolean;
+  /**
+   * Kubernetes log collection mechanism.
+   */
+  mode: CreateProjectFromTemplateModeResponse;
+};
+
+export type CreateProjectFromTemplateTokenSecretResponse = {
+  key: string;
+  name: string;
+  prefix: string;
+  randomLength: number;
+};
+
+export type CreateProjectFromTemplateRuleResponse = {
+  /**
+   * Kubernetes API group: empty for core resources, apps, or networking.k8s.io.
+   */
+  apiGroup: string;
+  resources: Array<string>;
+};
+
+export type CreateProjectFromTemplateWorkloadReadAccessResponse = {
+  rules: Array<CreateProjectFromTemplateRuleResponse>;
+  serviceAccountProfile: string;
+};
+
+export type CreateProjectFromTemplateSetupResourcesResponse = {
+  tokenSecret: CreateProjectFromTemplateTokenSecretResponse;
+  workloadReadAccess: CreateProjectFromTemplateWorkloadReadAccessResponse;
+};
+
+export type CreateProjectFromTemplateRuntimePersistenceResponse = {
+  /**
+   * Persist operator identity across restarts.
+   */
+  enabled: boolean;
+  existingClaim: string;
+  size: string;
+  storageClassName: string;
+};
+
+/**
  * Helm chart package configuration. If null, Helm packages will not be generated.
  */
 export type CreateProjectFromTemplateHelmResponse = {
@@ -400,9 +534,17 @@ export type CreateProjectFromTemplateHelmResponse = {
    */
   description: string;
   /**
+   * Default log collection mode in a generated Helm chart.
+   */
+  logCollector?: CreateProjectFromTemplateLogCollectorResponse | undefined;
+  /**
    * Whether Helm chart package generation is enabled
    */
   enabled: boolean;
+  setupResources?: CreateProjectFromTemplateSetupResourcesResponse | undefined;
+  runtimePersistence?:
+    | CreateProjectFromTemplateRuntimePersistenceResponse
+    | undefined;
 };
 
 /**
@@ -801,10 +943,199 @@ export function createProjectFromTemplateOperatorImageRequestToJSON(
 }
 
 /** @internal */
+export const CreateProjectFromTemplateModeRequest$outboundSchema: z.ZodEnum<
+  typeof CreateProjectFromTemplateModeRequest
+> = z.enum(CreateProjectFromTemplateModeRequest);
+
+/** @internal */
+export type CreateProjectFromTemplateLogCollectorRequest$Outbound = {
+  enabled: boolean;
+  mode: string;
+};
+
+/** @internal */
+export const CreateProjectFromTemplateLogCollectorRequest$outboundSchema:
+  z.ZodType<
+    CreateProjectFromTemplateLogCollectorRequest$Outbound,
+    CreateProjectFromTemplateLogCollectorRequest
+  > = z.object({
+    enabled: z.boolean(),
+    mode: CreateProjectFromTemplateModeRequest$outboundSchema,
+  });
+
+export function createProjectFromTemplateLogCollectorRequestToJSON(
+  createProjectFromTemplateLogCollectorRequest:
+    CreateProjectFromTemplateLogCollectorRequest,
+): string {
+  return JSON.stringify(
+    CreateProjectFromTemplateLogCollectorRequest$outboundSchema.parse(
+      createProjectFromTemplateLogCollectorRequest,
+    ),
+  );
+}
+
+/** @internal */
+export type CreateProjectFromTemplateTokenSecretRequest$Outbound = {
+  key: string;
+  name: string;
+  prefix: string;
+  randomLength: number;
+};
+
+/** @internal */
+export const CreateProjectFromTemplateTokenSecretRequest$outboundSchema:
+  z.ZodType<
+    CreateProjectFromTemplateTokenSecretRequest$Outbound,
+    CreateProjectFromTemplateTokenSecretRequest
+  > = z.object({
+    key: z.string(),
+    name: z.string(),
+    prefix: z.string(),
+    randomLength: z.int(),
+  });
+
+export function createProjectFromTemplateTokenSecretRequestToJSON(
+  createProjectFromTemplateTokenSecretRequest:
+    CreateProjectFromTemplateTokenSecretRequest,
+): string {
+  return JSON.stringify(
+    CreateProjectFromTemplateTokenSecretRequest$outboundSchema.parse(
+      createProjectFromTemplateTokenSecretRequest,
+    ),
+  );
+}
+
+/** @internal */
+export type CreateProjectFromTemplateRuleRequest$Outbound = {
+  apiGroup: string;
+  resources: Array<string>;
+};
+
+/** @internal */
+export const CreateProjectFromTemplateRuleRequest$outboundSchema: z.ZodType<
+  CreateProjectFromTemplateRuleRequest$Outbound,
+  CreateProjectFromTemplateRuleRequest
+> = z.object({
+  apiGroup: z.string(),
+  resources: z.array(z.string()),
+});
+
+export function createProjectFromTemplateRuleRequestToJSON(
+  createProjectFromTemplateRuleRequest: CreateProjectFromTemplateRuleRequest,
+): string {
+  return JSON.stringify(
+    CreateProjectFromTemplateRuleRequest$outboundSchema.parse(
+      createProjectFromTemplateRuleRequest,
+    ),
+  );
+}
+
+/** @internal */
+export type CreateProjectFromTemplateWorkloadReadAccessRequest$Outbound = {
+  rules: Array<CreateProjectFromTemplateRuleRequest$Outbound>;
+  serviceAccountProfile: string;
+};
+
+/** @internal */
+export const CreateProjectFromTemplateWorkloadReadAccessRequest$outboundSchema:
+  z.ZodType<
+    CreateProjectFromTemplateWorkloadReadAccessRequest$Outbound,
+    CreateProjectFromTemplateWorkloadReadAccessRequest
+  > = z.object({
+    rules: z.array(
+      z.lazy(() => CreateProjectFromTemplateRuleRequest$outboundSchema),
+    ),
+    serviceAccountProfile: z.string(),
+  });
+
+export function createProjectFromTemplateWorkloadReadAccessRequestToJSON(
+  createProjectFromTemplateWorkloadReadAccessRequest:
+    CreateProjectFromTemplateWorkloadReadAccessRequest,
+): string {
+  return JSON.stringify(
+    CreateProjectFromTemplateWorkloadReadAccessRequest$outboundSchema.parse(
+      createProjectFromTemplateWorkloadReadAccessRequest,
+    ),
+  );
+}
+
+/** @internal */
+export type CreateProjectFromTemplateSetupResourcesRequest$Outbound = {
+  tokenSecret: CreateProjectFromTemplateTokenSecretRequest$Outbound;
+  workloadReadAccess:
+    CreateProjectFromTemplateWorkloadReadAccessRequest$Outbound;
+};
+
+/** @internal */
+export const CreateProjectFromTemplateSetupResourcesRequest$outboundSchema:
+  z.ZodType<
+    CreateProjectFromTemplateSetupResourcesRequest$Outbound,
+    CreateProjectFromTemplateSetupResourcesRequest
+  > = z.object({
+    tokenSecret: z.lazy(() =>
+      CreateProjectFromTemplateTokenSecretRequest$outboundSchema
+    ),
+    workloadReadAccess: z.lazy(() =>
+      CreateProjectFromTemplateWorkloadReadAccessRequest$outboundSchema
+    ),
+  });
+
+export function createProjectFromTemplateSetupResourcesRequestToJSON(
+  createProjectFromTemplateSetupResourcesRequest:
+    CreateProjectFromTemplateSetupResourcesRequest,
+): string {
+  return JSON.stringify(
+    CreateProjectFromTemplateSetupResourcesRequest$outboundSchema.parse(
+      createProjectFromTemplateSetupResourcesRequest,
+    ),
+  );
+}
+
+/** @internal */
+export type CreateProjectFromTemplateRuntimePersistenceRequest$Outbound = {
+  enabled: boolean;
+  existingClaim: string;
+  size: string;
+  storageClassName: string;
+};
+
+/** @internal */
+export const CreateProjectFromTemplateRuntimePersistenceRequest$outboundSchema:
+  z.ZodType<
+    CreateProjectFromTemplateRuntimePersistenceRequest$Outbound,
+    CreateProjectFromTemplateRuntimePersistenceRequest
+  > = z.object({
+    enabled: z.boolean(),
+    existingClaim: z.string(),
+    size: z.string(),
+    storageClassName: z.string(),
+  });
+
+export function createProjectFromTemplateRuntimePersistenceRequestToJSON(
+  createProjectFromTemplateRuntimePersistenceRequest:
+    CreateProjectFromTemplateRuntimePersistenceRequest,
+): string {
+  return JSON.stringify(
+    CreateProjectFromTemplateRuntimePersistenceRequest$outboundSchema.parse(
+      createProjectFromTemplateRuntimePersistenceRequest,
+    ),
+  );
+}
+
+/** @internal */
 export type CreateProjectFromTemplateHelmRequest$Outbound = {
   chartName: string;
   description: string;
+  logCollector?:
+    | CreateProjectFromTemplateLogCollectorRequest$Outbound
+    | undefined;
   enabled: boolean;
+  setupResources?:
+    | CreateProjectFromTemplateSetupResourcesRequest$Outbound
+    | undefined;
+  runtimePersistence?:
+    | CreateProjectFromTemplateRuntimePersistenceRequest$Outbound
+    | undefined;
 };
 
 /** @internal */
@@ -814,7 +1145,16 @@ export const CreateProjectFromTemplateHelmRequest$outboundSchema: z.ZodType<
 > = z.object({
   chartName: z.string(),
   description: z.string(),
+  logCollector: z.lazy(() =>
+    CreateProjectFromTemplateLogCollectorRequest$outboundSchema
+  ).optional(),
   enabled: z.boolean(),
+  setupResources: z.lazy(() =>
+    CreateProjectFromTemplateSetupResourcesRequest$outboundSchema
+  ).optional(),
+  runtimePersistence: z.lazy(() =>
+    CreateProjectFromTemplateRuntimePersistenceRequest$outboundSchema
+  ).optional(),
 });
 
 export function createProjectFromTemplateHelmRequestToJSON(
@@ -1091,13 +1431,175 @@ export function createProjectFromTemplateOperatorImageResponseFromJSON(
 }
 
 /** @internal */
+export const CreateProjectFromTemplateModeResponse$inboundSchema: z.ZodEnum<
+  typeof CreateProjectFromTemplateModeResponse
+> = z.enum(CreateProjectFromTemplateModeResponse);
+
+/** @internal */
+export const CreateProjectFromTemplateLogCollectorResponse$inboundSchema:
+  z.ZodType<CreateProjectFromTemplateLogCollectorResponse, unknown> = z.object({
+    enabled: z.boolean(),
+    mode: CreateProjectFromTemplateModeResponse$inboundSchema,
+  });
+
+export function createProjectFromTemplateLogCollectorResponseFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateProjectFromTemplateLogCollectorResponse,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateProjectFromTemplateLogCollectorResponse$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateProjectFromTemplateLogCollectorResponse' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateProjectFromTemplateTokenSecretResponse$inboundSchema:
+  z.ZodType<CreateProjectFromTemplateTokenSecretResponse, unknown> = z.object({
+    key: z.string(),
+    name: z.string(),
+    prefix: z.string(),
+    randomLength: z.int(),
+  });
+
+export function createProjectFromTemplateTokenSecretResponseFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateProjectFromTemplateTokenSecretResponse,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateProjectFromTemplateTokenSecretResponse$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateProjectFromTemplateTokenSecretResponse' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateProjectFromTemplateRuleResponse$inboundSchema: z.ZodType<
+  CreateProjectFromTemplateRuleResponse,
+  unknown
+> = z.object({
+  apiGroup: z.string(),
+  resources: z.array(z.string()),
+});
+
+export function createProjectFromTemplateRuleResponseFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectFromTemplateRuleResponse, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateProjectFromTemplateRuleResponse$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectFromTemplateRuleResponse' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateProjectFromTemplateWorkloadReadAccessResponse$inboundSchema:
+  z.ZodType<CreateProjectFromTemplateWorkloadReadAccessResponse, unknown> = z
+    .object({
+      rules: z.array(
+        z.lazy(() => CreateProjectFromTemplateRuleResponse$inboundSchema),
+      ),
+      serviceAccountProfile: z.string(),
+    });
+
+export function createProjectFromTemplateWorkloadReadAccessResponseFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateProjectFromTemplateWorkloadReadAccessResponse,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateProjectFromTemplateWorkloadReadAccessResponse$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateProjectFromTemplateWorkloadReadAccessResponse' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateProjectFromTemplateSetupResourcesResponse$inboundSchema:
+  z.ZodType<CreateProjectFromTemplateSetupResourcesResponse, unknown> = z
+    .object({
+      tokenSecret: z.lazy(() =>
+        CreateProjectFromTemplateTokenSecretResponse$inboundSchema
+      ),
+      workloadReadAccess: z.lazy(() =>
+        CreateProjectFromTemplateWorkloadReadAccessResponse$inboundSchema
+      ),
+    });
+
+export function createProjectFromTemplateSetupResourcesResponseFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateProjectFromTemplateSetupResourcesResponse,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateProjectFromTemplateSetupResourcesResponse$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateProjectFromTemplateSetupResourcesResponse' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateProjectFromTemplateRuntimePersistenceResponse$inboundSchema:
+  z.ZodType<CreateProjectFromTemplateRuntimePersistenceResponse, unknown> = z
+    .object({
+      enabled: z.boolean(),
+      existingClaim: z.string(),
+      size: z.string(),
+      storageClassName: z.string(),
+    });
+
+export function createProjectFromTemplateRuntimePersistenceResponseFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateProjectFromTemplateRuntimePersistenceResponse,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateProjectFromTemplateRuntimePersistenceResponse$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateProjectFromTemplateRuntimePersistenceResponse' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateProjectFromTemplateHelmResponse$inboundSchema: z.ZodType<
   CreateProjectFromTemplateHelmResponse,
   unknown
 > = z.object({
   chartName: z.string(),
   description: z.string(),
+  logCollector: z.lazy(() =>
+    CreateProjectFromTemplateLogCollectorResponse$inboundSchema
+  ).optional(),
   enabled: z.boolean(),
+  setupResources: z.lazy(() =>
+    CreateProjectFromTemplateSetupResourcesResponse$inboundSchema
+  ).optional(),
+  runtimePersistence: z.lazy(() =>
+    CreateProjectFromTemplateRuntimePersistenceResponse$inboundSchema
+  ).optional(),
 });
 
 export function createProjectFromTemplateHelmResponseFromJSON(
