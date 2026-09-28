@@ -102,6 +102,14 @@ pub enum Scope {
         deployment_id: String,
         capability: CommandCapability,
     },
+    /// Narrow, short-lived access to resolve remote bindings of one kind for one deployment.
+    RemoteBindings {
+        #[serde(rename = "projectId")]
+        project_id: String,
+        #[serde(rename = "deploymentId")]
+        deployment_id: String,
+        capability: RemoteBindingCapability,
+    },
     /// Narrow, short-lived access to one telemetry capability for a project.
     Telemetry {
         project_id: String,
@@ -138,6 +146,54 @@ impl GatewayLogSource {
 pub enum TelemetryCapability {
     /// Write request diagnostic logs for one gateway source.
     GatewayLogs { source: GatewayLogSource },
+}
+
+/// Which binding kinds a remote-bindings capability reaches.
+///
+/// Storage, Key and AI are grouped as `data`; a sandbox runs arbitrary code in
+/// the deployment's cloud, so it never shares a grant with them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteBindingGrant {
+    Data,
+    Sandbox,
+}
+
+/// The binding a remote-bindings capability may resolve, checked against the
+/// deployment's current release when the binding is used.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteBindingCapability {
+    pub kind: RemoteBindingGrant,
+    /// Absent means any resource of `kind`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_id: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for RemoteBindingCapability {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            kind: RemoteBindingGrant,
+            #[serde(default)]
+            resource_id: Option<String>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        if wire.resource_id.as_deref() == Some("") {
+            return Err(serde::de::Error::custom(
+                "remote bindings capability resourceId must not be empty",
+            ));
+        }
+        Ok(Self {
+            kind: wire.kind,
+            resource_id: wire.resource_id,
+        })
+    }
 }
 
 /// Operation a commands-only bearer may perform.
@@ -220,6 +276,7 @@ impl Scope {
             | Scope::DeploymentGroup { project_id, .. }
             | Scope::Deployment { project_id, .. }
             | Scope::Commands { project_id, .. }
+            | Scope::RemoteBindings { project_id, .. }
             | Scope::Telemetry { project_id, .. } => Some(project_id),
         }
     }
@@ -287,8 +344,9 @@ pub enum Role {
     TelemetryCapability,
     /// Exact capability for resolving remote bindings for one deployment.
     ///
-    /// This role is paired with [`Scope::Deployment`] and must not imply generic
-    /// deployment read or mutation access.
+    /// Paired with [`Scope::RemoteBindings`], or with [`Scope::Deployment`] for a
+    /// token that names no binding kind. Neither implies generic deployment read
+    /// or mutation access.
     RemoteBindingResolver,
     /// Exact capability for ensuring one project's image repository exists.
     ///
@@ -560,6 +618,57 @@ mod tests {
             result.is_err(),
             "receiver targets must use the canonical shape"
         );
+    }
+
+    #[test]
+    fn remote_bindings_scope_has_a_stable_wire_format() {
+        let subject = sample(
+            Role::RemoteBindingResolver,
+            Scope::RemoteBindings {
+                project_id: "p1".to_string(),
+                deployment_id: "d1".to_string(),
+                capability: RemoteBindingCapability {
+                    kind: RemoteBindingGrant::Sandbox,
+                    resource_id: Some("box".to_string()),
+                },
+            },
+        );
+        let json = serde_json::to_value(&subject).expect("serialize");
+        assert_eq!(
+            json["scope"],
+            serde_json::json!({
+                "type": "remoteBindings",
+                "projectId": "p1",
+                "deploymentId": "d1",
+                "capability": { "kind": "sandbox", "resourceId": "box" },
+            }),
+        );
+        let back: Subject = serde_json::from_value(json).expect("deserialize");
+        assert!(matches!(
+            back.scope,
+            Scope::RemoteBindings { capability, .. }
+                if capability.kind == RemoteBindingGrant::Sandbox
+                    && capability.resource_id.as_deref() == Some("box")
+        ));
+
+        let data: RemoteBindingCapability =
+            serde_json::from_value(serde_json::json!({ "kind": "data" })).expect("data kind");
+        assert_eq!(data.resource_id, None);
+    }
+
+    #[test]
+    fn remote_binding_capability_rejects_unknown_kinds_fields_and_empty_resource_ids() {
+        for claim in [
+            serde_json::json!({ "kind": "storage" }),
+            serde_json::json!({ "kind": "sandbox", "resourceId": "" }),
+            serde_json::json!({ "kind": "sandbox", "releaseId": "r1" }),
+            serde_json::json!({ "resourceId": "box" }),
+        ] {
+            assert!(
+                serde_json::from_value::<RemoteBindingCapability>(claim.clone()).is_err(),
+                "{claim}"
+            );
+        }
     }
 
     #[test]

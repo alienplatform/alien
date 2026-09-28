@@ -2474,6 +2474,10 @@ async fn initialize(
             ErrorData::forbidden("Command credentials cannot initialize deployments")
                 .into_response()
         }
+        crate::auth::Scope::RemoteBindings { .. } => {
+            ErrorData::forbidden("Remote bindings credentials cannot initialize deployments")
+                .into_response()
+        }
         crate::auth::Scope::Telemetry { .. } => {
             ErrorData::forbidden("Telemetry credentials cannot initialize deployments")
                 .into_response()

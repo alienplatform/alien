@@ -10,9 +10,11 @@
 
 pub mod authz;
 pub mod command_capability;
+pub mod remote_binding_capability;
 pub mod subject;
 
 pub use authz::{Authz, DeploymentCreateCtx};
 pub use subject::{
-    CommandCapability, GatewayLogSource, Role, Scope, Subject, SubjectKind, TelemetryCapability,
+    CommandCapability, GatewayLogSource, RemoteBindingCapability, RemoteBindingGrant, Role, Scope,
+    Subject, SubjectKind, TelemetryCapability,
 };

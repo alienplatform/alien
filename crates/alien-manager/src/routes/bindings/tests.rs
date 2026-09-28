@@ -12,6 +12,17 @@ use super::*;
 use crate::auth::Subject;
 use crate::traits::{CreateReleaseParams, ReleaseRecord};
 
+/// The route's release checks in its order: the kind lookup, then the remote-access validation.
+async fn current_release_remote_access(
+    store: &dyn ReleaseStore,
+    deployment: &DeploymentRecord,
+    resource_id: &str,
+) -> Result<alien_core::remote_bindings::RemoteBindingKind, AlienError<ErrorData>> {
+    let (release, kind) = current_release_binding_kind(store, deployment, resource_id).await?;
+    require_current_release_remote_access(&release, deployment, resource_id)?;
+    Ok(kind)
+}
+
 #[derive(Default)]
 struct StubReleaseStore {
     releases: HashMap<String, ReleaseRecord>,
@@ -601,7 +612,7 @@ async fn remote_access_uses_the_current_release_not_the_desired_release() {
         ]),
     };
 
-    require_current_release_remote_access(&store, &deployment, "files")
+    current_release_remote_access(&store, &deployment, "files")
         .await
         .expect("the current release explicitly enables remote access");
 }
@@ -630,7 +641,7 @@ async fn deployment_level_ai_selector_requires_exactly_one_remote_ai() {
         "models"
     );
     assert!(matches!(
-        require_current_release_remote_access(&store, &deployment, "models")
+        current_release_remote_access(&store, &deployment, "models")
             .await
             .expect("an unrelated remote binding does not make AI ambiguous"),
         alien_core::remote_bindings::RemoteBindingKind::Ai
@@ -689,7 +700,7 @@ async fn key_resolution_rechecks_that_no_sibling_is_remotely_published() {
         )]),
     };
 
-    let error = require_current_release_remote_access(&store, &deployment, "customer-key")
+    let error = current_release_remote_access(&store, &deployment, "customer-key")
         .await
         .expect_err("resolver must repeat the one-remote-resource rule");
     assert!(error.message.contains("only remoteAccess resource"));
@@ -712,7 +723,7 @@ async fn legacy_binding_params_cannot_bypass_a_disabled_current_release() {
     };
 
     assert!(remote_storage_binding(&deployment, "files").is_ok());
-    let error = require_current_release_remote_access(&store, &deployment, "files")
+    let error = current_release_remote_access(&store, &deployment, "files")
         .await
         .expect_err("stack-state binding params cannot grant access by themselves");
     assert_eq!(error.code, "BAD_REQUEST");
@@ -739,7 +750,7 @@ async fn remote_access_accepts_a_live_sandbox_and_refuses_a_live_bucket() {
             release("current", Platform::Aws, sandbox_stack),
         )]),
     };
-    require_current_release_remote_access(&store, &live_sandbox, "agents")
+    current_release_remote_access(&store, &live_sandbox, "agents")
         .await
         .expect("a Live sandbox is scaffolded by setup and resolves");
 
@@ -759,7 +770,7 @@ async fn remote_access_accepts_a_live_sandbox_and_refuses_a_live_bucket() {
             release("current", Platform::Aws, bucket_stack),
         )]),
     };
-    let error = require_current_release_remote_access(&store, &live_bucket, "files")
+    let error = current_release_remote_access(&store, &live_bucket, "files")
         .await
         .expect_err("setup renders nothing for a Live bucket, so no grant exists");
     assert_eq!(error.code, "BAD_REQUEST");
@@ -781,14 +792,14 @@ async fn remote_access_fails_closed_when_current_release_context_is_missing() {
     let store = StubReleaseStore::default();
 
     let no_current_release = deployment(stack_state.clone());
-    let error = require_current_release_remote_access(&store, &no_current_release, "files")
+    let error = current_release_remote_access(&store, &no_current_release, "files")
         .await
         .expect_err("missing current release must deny access");
     assert_eq!(error.code, "BAD_REQUEST");
 
     let mut missing_release = deployment(stack_state.clone());
     missing_release.current_release_id = Some("missing".to_string());
-    let error = require_current_release_remote_access(&store, &missing_release, "files")
+    let error = current_release_remote_access(&store, &missing_release, "files")
         .await
         .expect_err("a dangling current release id must deny access");
     assert_eq!(error.code, "INTERNAL_ERROR");
@@ -801,7 +812,7 @@ async fn remote_access_fails_closed_when_current_release_context_is_missing() {
             release("current", Platform::Gcp, storage_stack(true)),
         )]),
     };
-    let error = require_current_release_remote_access(&store, &missing_platform_stack, "files")
+    let error = current_release_remote_access(&store, &missing_platform_stack, "files")
         .await
         .expect_err("missing platform stack must deny access");
     assert_eq!(error.code, "INTERNAL_ERROR");
@@ -815,7 +826,7 @@ async fn remote_access_fails_closed_when_current_release_context_is_missing() {
             release("current", Platform::Aws, empty_stack),
         )]),
     };
-    let error = require_current_release_remote_access(&store, &missing_resource, "files")
+    let error = current_release_remote_access(&store, &missing_resource, "files")
         .await
         .expect_err("resource absent from the current release must deny access");
     assert_eq!(error.code, "BAD_REQUEST");

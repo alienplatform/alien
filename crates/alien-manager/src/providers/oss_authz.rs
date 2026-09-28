@@ -4,10 +4,12 @@
 //! The Subject's `workspace_id` is always `"default"` here; we don't gate on
 //! it. Authz boils down to role × scope.
 
+use crate::auth::remote_binding_capability;
 use crate::auth::{Authz, DeploymentCreateCtx, Role, Scope, Subject, SubjectKind};
 use crate::traits::deployment_store::{DeploymentGroupRecord, DeploymentRecord};
 use crate::traits::release_store::ReleaseRecord;
 use crate::traits::TelemetrySignal;
+use alien_core::remote_bindings::RemoteBindingKind;
 
 /// OSS policy: any authenticated token can read any release / deployment-group
 /// it has scope on. Mutations require a write role. Sync/telemetry endpoints
@@ -55,8 +57,10 @@ impl Authz for OssAuthz {
         // OSS single-tenant: any valid token reads any release. Deployment
         // tokens included — agents need their target release to deploy. A
         // commands capability is deliberately inert outside command routes.
-        !matches!(s.scope, Scope::Commands { .. } | Scope::Telemetry { .. })
-            && !matches!(s.role, Role::CommandCapability | Role::TelemetryCapability)
+        !matches!(
+            s.scope,
+            Scope::Commands { .. } | Scope::RemoteBindings { .. } | Scope::Telemetry { .. }
+        ) && !matches!(s.role, Role::CommandCapability | Role::TelemetryCapability)
             && Self::project_reader(s)
     }
 
@@ -90,7 +94,9 @@ impl Authz for OssAuthz {
                 deployment_id == &deployment.id
                     && matches!(s.role, Role::DeploymentManager | Role::DeploymentViewer)
             }
-            Scope::Commands { .. } | Scope::Telemetry { .. } => false,
+            Scope::Commands { .. } | Scope::RemoteBindings { .. } | Scope::Telemetry { .. } => {
+                false
+            }
         }
     }
 
@@ -108,18 +114,20 @@ impl Authz for OssAuthz {
         )
     }
 
-    fn can_resolve_remote_bindings(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
-        self.can_update_deployment(s, deployment)
-            || matches!(
-                (&s.scope, s.role),
-                (
-                    Scope::Deployment {
-                        project_id,
-                        deployment_id,
-                    },
-                    Role::RemoteBindingResolver,
-                ) if project_id == &deployment.project_id && deployment_id == &deployment.id
-            )
+    fn can_resolve_remote_binding(
+        &self,
+        s: &Subject,
+        deployment: &DeploymentRecord,
+        kind: RemoteBindingKind,
+        resource_id: &str,
+    ) -> bool {
+        if let Some(allowed) =
+            remote_binding_capability::resolve_decision(s, deployment, kind, resource_id)
+        {
+            return allowed;
+        }
+        remote_binding_capability::write_authority_covers(kind)
+            && self.can_update_deployment(s, deployment)
     }
 
     fn can_delete_deployment(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
@@ -153,7 +161,10 @@ impl Authz for OssAuthz {
                 deployment_group_id,
                 ..
             } => deployment_group_id == &dg.id,
-            Scope::Deployment { .. } | Scope::Commands { .. } | Scope::Telemetry { .. } => false,
+            Scope::Deployment { .. }
+            | Scope::Commands { .. }
+            | Scope::RemoteBindings { .. }
+            | Scope::Telemetry { .. } => false,
         }
     }
 
@@ -213,7 +224,9 @@ impl Authz for OssAuthz {
                     && matches!(s.role, Role::DeploymentManager | Role::DeploymentViewer)
             }
             Scope::DeploymentGroup { .. } => false,
-            Scope::Commands { .. } | Scope::Telemetry { .. } => false,
+            Scope::Commands { .. } | Scope::RemoteBindings { .. } | Scope::Telemetry { .. } => {
+                false
+            }
         }
     }
 
@@ -252,7 +265,9 @@ impl Authz for OssAuthz {
             } => deployment_group_id == &deployment.deployment_group_id,
             Scope::Workspace => Self::is_workspace_writer(s),
             Scope::Project { .. } => Self::project_reader(s),
-            Scope::Commands { .. } | Scope::Telemetry { .. } => false,
+            Scope::Commands { .. } | Scope::RemoteBindings { .. } | Scope::Telemetry { .. } => {
+                false
+            }
         }
     }
 
@@ -519,11 +534,78 @@ mod tests {
     #[test]
     fn remote_binding_capability_is_exactly_deployment_scoped() {
         let mut subject = deployment_token("d1");
+        subject.scope = Scope::RemoteBindings {
+            project_id: "default".to_string(),
+            deployment_id: "d1".to_string(),
+            capability: crate::auth::RemoteBindingCapability {
+                kind: crate::auth::RemoteBindingGrant::Sandbox,
+                resource_id: Some("box".to_string()),
+            },
+        };
         subject.role = Role::RemoteBindingResolver;
+        let d1 = deployment("d1", "dg-a");
 
-        assert!(OssAuthz.can_resolve_remote_bindings(&subject, &deployment("d1", "dg-a")));
-        assert!(!OssAuthz.can_resolve_remote_bindings(&subject, &deployment("d2", "dg-a")));
-        assert!(!OssAuthz.can_read_deployment(&subject, &deployment("d1", "dg-a")));
+        assert!(OssAuthz.can_resolve_remote_binding(
+            &subject,
+            &d1,
+            RemoteBindingKind::Sandbox,
+            "box"
+        ));
+        assert!(!OssAuthz.can_resolve_remote_binding(
+            &subject,
+            &d1,
+            RemoteBindingKind::Storage,
+            "box"
+        ));
+        assert!(!OssAuthz.can_resolve_remote_binding(
+            &subject,
+            &deployment("d2", "dg-a"),
+            RemoteBindingKind::Sandbox,
+            "box"
+        ));
+        assert!(!OssAuthz.can_read_deployment(&subject, &d1));
+        assert!(!OssAuthz.can_update_deployment(&subject, &d1));
+    }
+
+    #[test]
+    fn deployment_writers_resolve_data_bindings_but_never_a_sandbox() {
+        let d1 = deployment("d1", "dg-a");
+        let mut member = admin();
+        member.role = Role::WorkspaceMember;
+        let mut developer = admin();
+        developer.scope = Scope::Project {
+            project_id: "default".to_string(),
+        };
+        developer.role = Role::ProjectDeveloper;
+
+        for subject in [
+            admin(),
+            member,
+            developer,
+            dg_token("dg-a"),
+            deployment_token("d1"),
+        ] {
+            assert!(OssAuthz.can_update_deployment(&subject, &d1), "{subject:?}");
+            for kind in [
+                RemoteBindingKind::Storage,
+                RemoteBindingKind::Key,
+                RemoteBindingKind::Ai,
+            ] {
+                assert!(
+                    OssAuthz.can_resolve_remote_binding(&subject, &d1, kind, "r1"),
+                    "{subject:?} {kind:?}"
+                );
+            }
+            assert!(
+                !OssAuthz.can_resolve_remote_binding(
+                    &subject,
+                    &d1,
+                    RemoteBindingKind::Sandbox,
+                    "box"
+                ),
+                "{subject:?}"
+            );
+        }
     }
 
     #[test]

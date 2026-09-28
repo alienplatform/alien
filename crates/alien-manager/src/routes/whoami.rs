@@ -97,6 +97,12 @@ async fn whoami(State(state): State<AppState>, headers: HeaderMap) -> Response {
             return ErrorData::forbidden("Command credentials cannot inspect manager identity")
                 .into_response();
         }
+        Scope::RemoteBindings { .. } => {
+            return ErrorData::forbidden(
+                "Remote bindings credentials cannot inspect manager identity",
+            )
+            .into_response();
+        }
         Scope::Telemetry { .. } => {
             return ErrorData::forbidden("Telemetry credentials cannot inspect manager identity")
                 .into_response();

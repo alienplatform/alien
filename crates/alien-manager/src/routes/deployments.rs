@@ -418,6 +418,10 @@ async fn create_deployment(
             return ErrorData::forbidden("Command credentials cannot create deployments")
                 .into_response();
         }
+        crate::auth::Scope::RemoteBindings { .. } => {
+            return ErrorData::forbidden("Remote bindings credentials cannot create deployments")
+                .into_response();
+        }
         crate::auth::Scope::Telemetry { .. } => {
             return ErrorData::forbidden("Telemetry credentials cannot create deployments")
                 .into_response();
@@ -586,6 +590,10 @@ async fn list_deployments(
         }
         crate::auth::Scope::Commands { .. } => {
             return ErrorData::forbidden("Command credentials cannot list deployments")
+                .into_response();
+        }
+        crate::auth::Scope::RemoteBindings { .. } => {
+            return ErrorData::forbidden("Remote bindings credentials cannot list deployments")
                 .into_response();
         }
         crate::auth::Scope::Telemetry { .. } => {
