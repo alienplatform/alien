@@ -44,6 +44,24 @@ async fn a_resolver_token_without_a_kind_resolves_storage_but_not_a_sandbox_the_
 }
 
 #[tokio::test]
+async fn a_resolver_token_without_a_kind_cannot_tell_a_missing_resource_from_a_refused_one() {
+    let (fixture, calls) = fixture().await;
+    let claimless = scoped(
+        &fixture,
+        alien_manager::auth::Scope::Deployment {
+            project_id: "default".to_string(),
+            deployment_id: fixture.deployment_a.clone(),
+        },
+        alien_manager::auth::Role::RemoteBindingResolver,
+    );
+
+    let (status, _, json) =
+        post_resolve_binding(&claimless, "unused", resolve_body(&fixture, "missing")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "body = {json:#}");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn a_data_capability_scoped_to_another_resource_is_refused() {
     let (fixture, calls) = fixture().await;
     let data = with_subject(

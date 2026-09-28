@@ -47,10 +47,10 @@ pub fn names_deployment(subject: &Subject, deployment: &DeploymentRecord) -> boo
         }
 }
 
-/// True when the subject's capability names a binding kind, so authorization can exclude a
-/// resource of its own deployment.
+/// True when authorization can exclude a resource of the subject's own deployment by kind: a
+/// resolver token names its kind, or names none and is a data token.
 pub fn is_kind_scoped(subject: &Subject) -> bool {
-    matches!(subject.scope, Scope::RemoteBindings { .. })
+    subject.role == Role::RemoteBindingResolver
 }
 
 /// Decide resolution for a subject that carries a remote-bindings capability.
@@ -249,15 +249,25 @@ mod tests {
                 "{kind:?}"
             );
         }
-        let mut other = subject.clone();
-        other.scope = Scope::Deployment {
+        let mut other_workspace = subject.clone();
+        other_workspace.workspace_id = "w2".to_string();
+        let mut other_project = subject.clone();
+        other_project.scope = Scope::Deployment {
+            project_id: "p2".to_string(),
+            deployment_id: "d1".to_string(),
+        };
+        let mut other_deployment = subject.clone();
+        other_deployment.scope = Scope::Deployment {
             project_id: "p1".to_string(),
             deployment_id: "d2".to_string(),
         };
-        assert_eq!(
-            resolve_decision(&other, &deployment(), RemoteBindingKind::Storage, "r1"),
-            Some(false)
-        );
+        for other in [other_workspace, other_project, other_deployment] {
+            assert_eq!(
+                resolve_decision(&other, &deployment(), RemoteBindingKind::Storage, "r1"),
+                Some(false),
+                "{other:?}"
+            );
+        }
     }
 
     #[test]
