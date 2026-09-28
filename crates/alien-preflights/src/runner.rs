@@ -668,7 +668,7 @@ mod setup_update_authorization_tests {
                 image: image.to_string(),
             })
             .maybe_private_base_image(private_base_image.map(str::to_string))
-            .egress(alien_core::SandboxEgress::Deny)
+            .egress(alien_core::SandboxEgress::Allow)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -677,6 +677,47 @@ mod setup_update_authorization_tests {
         Stack::new("stack".to_string())
             .add(sandbox, lifecycle)
             .build()
+    }
+
+    /// A Live sandbox beside the Frozen network a deny connector attaches to.
+    #[cfg(feature = "runtime-checks")]
+    fn live_sandbox_stack(
+        image: &str,
+        private_base_image: Option<&str>,
+        egress: alien_core::SandboxEgress,
+    ) -> Stack {
+        let mut stack = sandbox_stack(
+            alien_core::ResourceLifecycle::Live,
+            image,
+            private_base_image,
+        );
+        stack.resources.shift_insert(
+            0,
+            "net".to_string(),
+            alien_core::ResourceEntry {
+                config: alien_core::Resource::new(
+                    alien_core::Network::new("net".to_string())
+                        .settings(alien_core::NetworkSettings::Create {
+                            cidr: Some("10.0.0.0/16".to_string()),
+                            availability_zones: 2,
+                        })
+                        .build(),
+                ),
+                lifecycle: alien_core::ResourceLifecycle::Frozen,
+                dependencies: vec![],
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        let sandbox = stack.resources.get_mut("agents").expect("sandbox");
+        let mut config = sandbox
+            .config
+            .downcast_ref::<alien_core::Sandbox>()
+            .expect("sandbox")
+            .clone();
+        config.egress = egress;
+        sandbox.config = alien_core::Resource::new(config);
+        stack
     }
 
     #[cfg(feature = "runtime-checks")]
@@ -697,21 +738,16 @@ mod setup_update_authorization_tests {
     /// minted from the digests of the installed and target stacks, so those must differ.
     #[cfg(feature = "runtime-checks")]
     #[tokio::test]
-    async fn a_live_sandbox_repository_change_blocks_until_setup_reruns() {
-        let old = sandbox_stack(
-            alien_core::ResourceLifecycle::Live,
-            "s3://bucket/one.zip",
-            Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:1"),
-        );
-        let target = sandbox_stack(
-            alien_core::ResourceLifecycle::Live,
-            "s3://bucket/two.zip",
-            Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-b:1"),
-        );
+    async fn a_live_sandbox_setup_input_change_blocks_until_setup_reruns() {
+        use alien_core::SandboxEgress::{Allow, Deny};
+        const BASE_A: &str = "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:1";
+        const V1: &str = "s3://bucket/sandbox-bundle/v1/bundle.zip";
+        const V2: &str = "s3://bucket/sandbox-bundle/v2/bundle.zip";
+        let old = live_sandbox_stack(V1, Some(BASE_A), Allow);
         let runner = PreflightRunner::with_registry({
             let mut registry = crate::PreflightRegistry::new();
             registry.add_compatibility_check(Box::new(
-                crate::compatibility::SandboxPrivateRepositoryUnchangedCheck,
+                crate::compatibility::SandboxSetupInputsUnchangedCheck,
             ));
             registry
         });
@@ -721,25 +757,10 @@ mod setup_update_authorization_tests {
             state_directory: "/unused".to_string(),
         };
 
-        let error = runner
-            .run_deployment_time_preflights(
-                target.clone(),
-                &state,
-                &config,
-                &client,
-                Some(&old),
-                None,
-                None,
-            )
-            .await
-            .expect_err("a new repository needs setup");
-        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
-        assert!(error.message.contains("agents"));
-
-        let tag_only = sandbox_stack(
-            alien_core::ResourceLifecycle::Live,
-            "s3://bucket/two.zip",
+        let tag_only = live_sandbox_stack(
+            V2,
             Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:2"),
+            Allow,
         );
         runner
             .run_deployment_time_preflights(
@@ -752,31 +773,62 @@ mod setup_update_authorization_tests {
                 None,
             )
             .await
-            .expect("a new tag rolls without setup");
+            .expect("a new tag and bundle roll without setup");
 
-        let rerun = SetupUpdateAuthorization {
-            nonce: "revision".to_string(),
-            baseline_frozen_digest: old.setup_owned_digest(),
-            target_frozen_digest: target.setup_owned_digest(),
-            release_id: "release".to_string(),
-            setup_target: "target".to_string(),
-            setup_fingerprint: "fingerprint".to_string(),
-            setup_fingerprint_version: 1,
-        };
-        assert_ne!(rerun.baseline_frozen_digest, rerun.target_frozen_digest);
-        let (_, _, authorized) = runner
-            .run_deployment_time_preflights(
-                target,
-                &state,
-                &config,
-                &client,
-                Some(&old),
-                Some(&rerun),
-                None,
-            )
-            .await
-            .expect("the setup rerun applies the blocked update");
-        assert!(authorized);
+        for (target, input) in [
+            (
+                live_sandbox_stack(
+                    V2,
+                    Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-b:1"),
+                    Allow,
+                ),
+                "build role policy",
+            ),
+            (live_sandbox_stack(V2, Some(BASE_A), Deny), "egress"),
+        ] {
+            let error = runner
+                .run_deployment_time_preflights(
+                    target.clone(),
+                    &state,
+                    &config,
+                    &client,
+                    Some(&old),
+                    None,
+                    None,
+                )
+                .await
+                .expect_err("a setup input change needs setup");
+            assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+            assert!(
+                error.message.contains("agents") && error.message.contains(input),
+                "{input}: {}",
+                error.message
+            );
+
+            let rerun = SetupUpdateAuthorization {
+                nonce: "revision".to_string(),
+                baseline_frozen_digest: old.setup_owned_digest(),
+                target_frozen_digest: target.setup_owned_digest(),
+                release_id: "release".to_string(),
+                setup_target: "target".to_string(),
+                setup_fingerprint: "fingerprint".to_string(),
+                setup_fingerprint_version: 1,
+            };
+            assert_ne!(rerun.baseline_frozen_digest, rerun.target_frozen_digest);
+            let (_, _, authorized) = runner
+                .run_deployment_time_preflights(
+                    target,
+                    &state,
+                    &config,
+                    &client,
+                    Some(&old),
+                    Some(&rerun),
+                    None,
+                )
+                .await
+                .expect("the setup rerun applies the blocked update");
+            assert!(authorized, "{input}");
+        }
     }
 
     /// The Frozen check is built from the installed stack's platform, so only an Azure install

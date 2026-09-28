@@ -11,6 +11,7 @@ use alien_core::remote_bindings::{remote_binding_for_entry, remote_binding_is_de
 use alien_core::sandbox_build_role::{
     sandbox_build_role_arn, sandbox_build_role_name, SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME,
 };
+use alien_core::sandbox_setup_inputs::{aws_sandbox_setup_inputs, SetupAccount};
 use alien_core::{
     setup_resource_tags, AwsSandboxEgressScaffolding, ClientConfig, Platform, RemoteBindings,
     ResourceLifecycle, ResourceStatus, Sandbox, SandboxCode, SetupScaffolding, Stack, StackState,
@@ -360,23 +361,17 @@ pub(super) fn setup_inputs(
     lifecycle: ResourceLifecycle,
 ) -> Result<Vec<(&'static str, serde_json::Value)>> {
     let aws = aws_config(client_config)?;
-    let SandboxCode::Image { image } = &sandbox.code else {
-        return Err(not_a_bundle(sandbox));
+    let account = SetupAccount {
+        partition: aws_partition(&aws.region),
+        account_id: &aws.account_id,
+        region: &aws.region,
     };
-    let policy = build_policy(&build_role(aws, sandbox, image, lifecycle), sandbox)?;
-    let egress = serde_json::to_value(&sandbox.egress)
-        .into_alien_error()
-        .context(serialize_failed(&sandbox.id))?;
-    let network = aws_sandbox_egress::egress_network(stack, sandbox)?;
-    // An update that stops publishing keeps the setup-owned Remote Bindings role, so without
-    // this the grant would outlive the declaration.
-    let grant = remote_grant(stack, sandbox).map(|definition| definition.permission_set);
-    Ok(vec![
-        ("egress", egress),
-        ("egress network", serde_json::json!(network)),
-        ("build role policy", policy),
-        ("remote grant", serde_json::json!(grant)),
-    ])
+    aws_sandbox_setup_inputs(stack, sandbox, lifecycle, account).context(
+        ErrorData::ResourceConfigInvalid {
+            message: "the sandbox's setup inputs cannot be resolved".to_string(),
+            resource_id: Some(sandbox.id.clone()),
+        },
+    )
 }
 
 /// What the template setups register for this sandbox, from the build role this step verified

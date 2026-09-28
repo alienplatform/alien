@@ -1871,56 +1871,85 @@ mod setup_update_authorization_tests {
         assert!(metadata.registry_access_granted);
     }
 
-    /// The Live sandbox's image belongs to the runtime, so only its private repository may
-    /// mint setup authority: a rerun after a repository change must carry one, a tag change none.
+    /// The Live sandbox's image belongs to the runtime, so only its setup inputs may mint setup
+    /// authority: a rerun after a repository or egress change carries one, a tag or bundle none.
     #[test]
-    fn a_live_sandbox_repository_change_mints_setup_authority() {
-        let with_base = |private_base_image: &str| {
+    fn a_live_sandbox_setup_input_change_mints_setup_authority() {
+        let with = |bundle: &str, private_base_image: &str, egress: alien_core::SandboxEgress| {
             let sandbox = alien_core::Sandbox::new("agents".to_string())
                 .code(alien_core::SandboxCode::Image {
-                    image: "s3://bucket/bundle.zip".to_string(),
+                    image: bundle.to_string(),
                 })
                 .private_base_image(private_base_image.to_string())
-                .egress(alien_core::SandboxEgress::Deny)
+                .egress(egress)
                 .lifecycle(alien_core::SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
                 })
                 .build();
+            let network = alien_core::Network::new("net".to_string())
+                .settings(alien_core::NetworkSettings::Create {
+                    cidr: Some("10.0.0.0/16".to_string()),
+                    availability_zones: 2,
+                })
+                .build();
             let mut stack = stack("live", "frozen");
-            stack.resources.insert(
-                "agents".to_string(),
-                alien_core::ResourceEntry {
-                    config: alien_core::Resource::new(sandbox),
-                    lifecycle: ResourceLifecycle::Live,
-                    dependencies: Vec::new(),
-                    remote_access: false,
-                    enabled_when: None,
-                },
-            );
+            for (id, config, lifecycle) in [
+                (
+                    "net",
+                    alien_core::Resource::new(network),
+                    ResourceLifecycle::Frozen,
+                ),
+                (
+                    "agents",
+                    alien_core::Resource::new(sandbox),
+                    ResourceLifecycle::Live,
+                ),
+            ] {
+                stack.resources.insert(
+                    id.to_string(),
+                    alien_core::ResourceEntry {
+                        config,
+                        lifecycle,
+                        dependencies: Vec::new(),
+                        remote_access: false,
+                        enabled_when: None,
+                    },
+                );
+            }
             stack
         };
-        let baseline = with_base("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:1");
+        const V1: &str = "s3://bucket/sandbox-bundle/v1/bundle.zip";
+        const BASE_A: &str = "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:1";
+        let baseline = with(V1, BASE_A, alien_core::SandboxEgress::Allow);
+        let reimport = |target: Stack| {
+            reimport_runtime_metadata(
+                &record(baseline.clone()),
+                &target,
+                "release",
+                &request(),
+                Default::default(),
+            )
+            .expect("reimport should succeed")
+            .setup_update_authorization
+        };
 
-        let repository_change = reimport_runtime_metadata(
-            &record(baseline.clone()),
-            &with_base("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-b:1"),
-            "release",
-            &request(),
-            Default::default(),
-        )
-        .expect("setup-owned update should succeed");
-        assert!(repository_change.setup_update_authorization.is_some());
-
-        let tag_change = reimport_runtime_metadata(
-            &record(baseline),
-            &with_base("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:2"),
-            "release",
-            &request(),
-            Default::default(),
-        )
-        .expect("runtime-owned update should succeed");
-        assert!(tag_change.setup_update_authorization.is_none());
+        for setup_owned in [
+            with(
+                V1,
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-b:1",
+                alien_core::SandboxEgress::Allow,
+            ),
+            with(V1, BASE_A, alien_core::SandboxEgress::Deny),
+        ] {
+            assert!(reimport(setup_owned).is_some());
+        }
+        assert!(reimport(with(
+            "s3://bucket/sandbox-bundle/v2/bundle.zip",
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:2",
+            alien_core::SandboxEgress::Allow,
+        ))
+        .is_none());
     }
 
     #[test]

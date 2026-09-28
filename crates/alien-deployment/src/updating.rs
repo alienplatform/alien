@@ -785,7 +785,7 @@ mod tests {
                     "s3://other-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
                     None,
                 ),
-                Some("sandbox 'agents' changes its build role policy. Run the deployment's setup again"),
+                Some("changes its build role policy"),
             )
             .await;
         }
@@ -847,9 +847,21 @@ mod tests {
             assert!(cause.message.contains("is new"), "{}", cause.message);
         }
 
+        /// A template setup renders the same build role, so it rolls a new bundle version and is
+        /// held to the same setup inputs, which its runtime never re-reads.
         #[tokio::test]
-        async fn a_template_setup_is_not_held_to_direct_setup_scaffolding() {
+        async fn a_template_setup_rolls_a_new_bundle_but_waits_for_setup_on_a_new_bucket() {
             assert_updates(
+                InitialSetupAuthority::ImportedHandoff,
+                sandbox(SandboxEgress::Allow, BUNDLE, None),
+                sandbox(
+                    SandboxEgress::Allow,
+                    "s3://acme-artifacts/sandbox-bundle/0ddba11/bundle.zip",
+                    None,
+                ),
+            )
+            .await;
+            let error = update(
                 InitialSetupAuthority::ImportedHandoff,
                 sandbox(SandboxEgress::Allow, BUNDLE, None),
                 sandbox(
@@ -858,7 +870,15 @@ mod tests {
                     None,
                 ),
             )
-            .await;
+            .await
+            .expect_err("a new bucket needs setup to regrant the build role");
+            let cause = error.source.as_deref().expect("the refusal is the cause");
+            assert_eq!(cause.code, "DEPLOYMENT_SETUP_REQUIRED");
+            assert!(
+                cause.message.contains("build role policy"),
+                "{}",
+                cause.message
+            );
         }
     }
 

@@ -399,9 +399,7 @@ impl PreflightRegistry {
 
         // Add compatibility checks
         registry.add_compatibility_check(Box::new(compatibility::PermissionProfilesUnchangedCheck));
-        registry.add_compatibility_check(Box::new(
-            compatibility::SandboxPrivateRepositoryUnchangedCheck,
-        ));
+        registry.add_compatibility_check(Box::new(compatibility::SandboxSetupInputsUnchangedCheck));
 
         // Add runtime checks
         #[cfg(feature = "runtime-checks")]
