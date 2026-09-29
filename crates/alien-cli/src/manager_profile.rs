@@ -1,7 +1,7 @@
-//! The manager this CLI talks to when it isn't the hosted platform.
+//! The manager this CLI talks to when it isn't alien.dev.
 //!
 //! `alien login --manager <url> --token <key>` saves it; `alien logout` (or
-//! `alien login` to the hosted platform) removes it. `ALIEN_MANAGER_URL` and
+//! `alien login` to alien.dev) removes it. `ALIEN_MANAGER_URL` and
 //! `ALIEN_API_KEY` override it for one invocation.
 
 use std::{fs, path::PathBuf};
