@@ -2442,7 +2442,12 @@ async fn initialize(
                 Ok(deployments) => deployments,
                 Err(e) => return e.into_response(),
             };
-            if deployments.is_empty() {
+            // Only deployments the caller may read count, so a 400 reveals nothing it could not
+            // list itself.
+            if !deployments
+                .iter()
+                .any(|deployment| state.authz.can_read_deployment(&subject, deployment))
+            {
                 return ErrorData::bad_request(
                     "No deployments found. Create a deployment before initializing an agent.",
                 )

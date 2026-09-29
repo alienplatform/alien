@@ -331,6 +331,32 @@ async fn a_push_only_credential_pushes_but_cannot_pull_or_cross_projects() {
             assert_eq!(got, 403, "{method} /v2/{path} must be refused, got {got}");
         }
     }
+    // Decoded by the router, these would authorize one repository and reach another upstream.
+    for (method, path) in [
+        (
+            reqwest::Method::POST,
+            format!(
+                "{repo}/blobs/uploads/%3Fmount=sha256:{}%26from=artifacts/other",
+                "0".repeat(64)
+            ),
+        ),
+        (
+            reqwest::Method::PUT,
+            "artifacts/other/manifests/..%2F..%2Fsandbox-image/manifests/v2".to_string(),
+        ),
+        (
+            reqwest::Method::GET,
+            "artifacts/other/manifests/..%5C..%5Csandbox-image/manifests/v1".to_string(),
+        ),
+    ] {
+        let got = status(
+            client
+                .request(method.clone(), format!("{manager_url}/v2/{path}"))
+                .bearer_auth(&own),
+        )
+        .await;
+        assert_eq!(got, 400, "{method} /v2/{path} must be refused, got {got}");
+    }
     // The GAR upload-session route has no GET/HEAD handler at all.
     let got = status(
         client
@@ -365,7 +391,8 @@ async fn a_push_only_credential_pushes_but_cannot_pull_or_cross_projects() {
             .json(&serde_json::json!({ "initialDesiredRelease": "none" })),
     )
     .await;
-    assert_eq!(got, 403, "the pusher must not be assigned to a deployment");
+    // It can read no deployment, so it is told none exists.
+    assert_eq!(got, 400, "the pusher must not be assigned to a deployment");
     let got = status(
         client
             .post(format!("{manager_url}/v1/image-repositories"))

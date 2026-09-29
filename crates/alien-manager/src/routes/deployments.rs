@@ -630,7 +630,7 @@ async fn list_deployments(
         std::collections::HashMap::new();
 
     let mut items = Vec::with_capacity(deployments.len());
-    // The store filters by scope; `Authz` decides per item.
+    // A store need not filter by caller (SQLite does not), so `Authz` decides per item.
     for d in deployments
         .iter()
         .filter(|d| state.authz.can_read_deployment(&subject, d))

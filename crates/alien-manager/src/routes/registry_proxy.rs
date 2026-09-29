@@ -434,6 +434,9 @@ async fn proxy_push(
     Query(query): Query<HashMap<String, String>>,
     body: Body,
 ) -> Response {
+    if let Err(refused) = require_literal_oci_path(&path) {
+        return refused;
+    }
     let oci_path_str = canonicalize_oci_push_path(path.trim_start_matches('/'));
     // The signing flow in `rewrite_location_with_upload_session_auth` signs
     // the URL's full path (`/v2/...`). axum's `Path` extractor on the
@@ -509,6 +512,26 @@ fn query_for_mount_access(
         query.retain(|key, _| key != MOUNT_PARAM && key != MOUNT_SOURCE_PARAM);
     }
     query
+}
+
+/// The path capture is percent-decoded, and the upstream URL is parsed from it again, so a `?`,
+/// `#`, `\`, dot segment or leftover escape would authorize one repository and reach another.
+/// Only a path the upstream URL keeps exactly as given is forwarded.
+fn require_literal_oci_path(path: &str) -> Result<(), Response> {
+    let path = path.trim_start_matches('/');
+    let literal = !path.contains('%')
+        && url::Url::parse(&format!("http://registry.invalid/v2/{path}")).is_ok_and(|url| {
+            url.path() == format!("/v2/{path}") && url.query().is_none() && url.fragment().is_none()
+        });
+    if literal {
+        Ok(())
+    } else {
+        Err(oci_error(
+            StatusCode::BAD_REQUEST,
+            "NAME_INVALID",
+            "Registry paths must name a repository literally",
+        ))
+    }
 }
 
 /// Restore the significant trailing slash on the OCI upload-init endpoint.
@@ -605,6 +628,9 @@ async fn proxy_pull(
         Err(e) => return oci_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", e.to_string()),
     };
 
+    if let Err(refused) = require_literal_oci_path(&path) {
+        return refused;
+    }
     let oci_path_str = path.trim_start_matches('/');
     let repo_name = extract_repo_name(oci_path_str);
     if let Err(e) = validate_pull_access(&state, &subject, &repo_name).await {
@@ -1595,6 +1621,30 @@ mod tests {
             assert_eq!(refused.status(), StatusCode::FORBIDDEN);
         }
         assert!(refuse_capability_pull(&subject(Role::ProjectDeveloper)).is_ok());
+    }
+
+    #[test]
+    fn only_a_literal_registry_path_is_forwarded() {
+        for path in [
+            "artifacts/prj_a/manifests/v1",
+            "/artifacts/prj_a/blobs/sha256:abc",
+            "artifacts/prj_a/blobs/uploads/",
+            "artifacts/prj_a/blobs/uploads/4f1c-9e_2=",
+            "artifacts/prj_a/tags/list",
+        ] {
+            assert!(require_literal_oci_path(path).is_ok(), "{path}");
+        }
+        for path in [
+            "artifacts/prj_a/blobs/uploads/?mount=sha256:abc&from=artifacts/prj_b",
+            "artifacts/prj_a/manifests/../../prj_b/manifests/v1",
+            "artifacts/prj_a/manifests/..\\..\\prj_b/manifests/v1",
+            "artifacts/prj_a/manifests/%2e%2e/%2e%2e/prj_b/manifests/v1",
+            "artifacts/prj_a/manifests/./v1",
+            "artifacts/prj_a/manifests/v1#frag",
+        ] {
+            let refused = require_literal_oci_path(path).expect_err(path);
+            assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{path}");
+        }
     }
 
     #[test]

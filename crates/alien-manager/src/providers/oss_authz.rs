@@ -533,7 +533,7 @@ mod tests {
             assert!(!OssAuthz.can_create_release(&subject, "default"));
             assert!(!OssAuthz.can_read_release(&subject, &release()));
             assert!(!OssAuthz.can_export_release(&subject, &release()));
-            assert!(!OssAuthz.can_acquire_deployments(&subject, &[dep.clone()]));
+            assert!(!OssAuthz.can_acquire_deployments(&subject, std::slice::from_ref(&dep)));
             let command = alien_commands::server::CommandAccessContext {
                 workspace_id: "default".to_string(),
                 project_id: "default".to_string(),
