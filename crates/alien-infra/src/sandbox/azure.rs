@@ -652,9 +652,9 @@ impl AzureSandboxController {
         }
     }
 
-    /// Polls a build again, or once it has run past the timeout retires it and fails: a retry
-    /// then builds afresh rather than polling a wedged build forever. The timeout is the only
-    /// ceiling, so the `Stay` carries none.
+    /// Polls a build, or past the timeout (the `Stay`'s only ceiling) retires it and fails. A retry
+    /// adopts it if Ready by then, since retired images are deleted only from the `Ready` state;
+    /// else it builds afresh.
     fn poll_build(
         &mut self,
         building: Vec<String>,
@@ -675,7 +675,7 @@ impl AzureSandboxController {
         Err(AlienError::new(ErrorData::CloudPlatformError {
             message: format!(
                 "the disk image build from '{reference}' ({}) did not finish within {} minutes; \
-                 a retry builds it again",
+                 a retry uses it if it is Ready by then, or builds it again",
                 building.join(", "),
                 DISK_IMAGE_BUILD_TIMEOUT.num_minutes()
             ),
@@ -1698,8 +1698,9 @@ mod tests {
             assert!(!held(controller, "python-1"), "no binding ever named it");
         }
 
-        /// A build still running past the timeout is retired and the step fails. The retry of
-        /// the failed resource starts a new build instead of polling the wedged one again.
+        /// A build still running past the timeout is retired and the step fails. If it is still
+        /// not Ready at the retry of the failed resource, the retry starts a new build instead of
+        /// polling the wedged one again.
         #[tokio::test]
         async fn a_wedged_build_is_given_up_and_the_retry_builds_afresh() {
             let creates = Arc::new(AtomicUsize::new(0));
@@ -1746,6 +1747,50 @@ mod tests {
 
             assert_eq!(creates.load(Ordering::SeqCst), 1);
             assert_eq!(state_of(&executor).disk_image_id.as_deref(), Some("fresh"));
+        }
+
+        /// A build given up at the timeout that is Ready by the retry serves: the provider finds
+        /// it by label anyway, so building another would leave two Ready images under the label,
+        /// one queued for deletion. It leaves the deletion queue and the Ready tick keeps it.
+        #[tokio::test]
+        async fn a_timed_out_build_ready_by_the_retry_is_adopted_not_rebuilt() {
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .returning(|_| Ok(vec![image("late", PYTHON, "Building")]));
+            let mut controller = adopted(None, None);
+            controller.state = AzureSandboxState::EnsureDiskImage;
+            controller.pending_disk_image = Some(PendingDiskImage {
+                reference: PYTHON.to_string(),
+                id: "late".to_string(),
+                started_at: chrono::Utc::now() - DISK_IMAGE_BUILD_TIMEOUT,
+            });
+            let mut executor = executor(sandbox(PYTHON), controller, client).await;
+            executor
+                .step()
+                .await
+                .expect_err("the timed-out poll gives up");
+            assert_eq!(retired_ids(state_of(&executor)), vec!["late"]);
+
+            let resumed = state_of(&executor).clone();
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .returning(|_| Ok(vec![image("late", PYTHON, "Ready")]));
+            client.expect_create_disk_image().times(0);
+            client.expect_delete_disk_image().times(0);
+            let mut executor = self::executor(sandbox(PYTHON), resumed, client).await;
+            executor.step().await.expect("the retry adopts the build");
+
+            let controller = state_of(&executor);
+            assert_eq!(controller.disk_image_id.as_deref(), Some("late"));
+            assert!(controller.retired_disk_images.is_empty());
+
+            executor
+                .step()
+                .await
+                .expect("the Ready tick keeps the served image");
+            assert!(state_of(&executor).retired_disk_images.is_empty());
         }
 
         /// A build a failed update left running is retired once the declaration reverts to the
