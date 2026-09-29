@@ -50,9 +50,9 @@ fn runtime_managed_frozen_change(old: &Resource, new: &Resource) -> bool {
     normalized == *new_cluster
 }
 
-/// On Azure and GCP the image reaches only the runtime controller (Azure refreshes the catalog
-/// name, GCP replaces the template) and setup renders no grant from it, so only `code.image` may
-/// differ. AWS setup renders the build role from it. A GCP direct setup is held back at update.
+/// On Azure and GCP only the runtime controller reads the image and setup renders no grant from
+/// it, so only `code.image` may differ; AWS setup renders the build role from it. A GCP direct
+/// setup is still refused at update by alien-deployment's `refuse_changes_requiring_setup`.
 fn runtime_managed_sandbox_image(platform: Platform, old: &Resource, new: &Resource) -> bool {
     if !matches!(platform, Platform::Azure | Platform::Gcp) {
         return false;

@@ -239,9 +239,9 @@ pub async fn handle_update_pending(
     })
 }
 
-/// A direct setup's scaffolding is created with the deployer's credentials, which an update
-/// does not hold; applying the update anyway would serve a sandbox without it, such as a newly
-/// denied one with open egress.
+/// A direct setup's scaffolding and a Frozen GCP sandbox's template are made with the
+/// deployer's credentials, which an update does not hold; applying the update anyway would serve
+/// a sandbox without them, such as a newly denied one with open egress.
 fn refuse_changes_requiring_setup(
     client_config: &alien_core::ClientConfig,
     installed_stack: &Stack,
@@ -952,8 +952,7 @@ mod tests {
                 .await
                 .expect("the installed stack passes preflights")
                 .0;
-            let target = frozen("us-docker.pkg.dev/acme/agents/sandbox:v2");
-            let update = |authority| {
+            let update = |authority, target: Stack| {
                 let state = DeploymentState {
                     status: DeploymentStatus::UpdatePending,
                     platform: Platform::Gcp,
@@ -979,12 +978,21 @@ mod tests {
                 )
             };
 
-            let rolled = update(InitialSetupAuthority::ImportedHandoff)
+            let unchanged = update(
+                InitialSetupAuthority::DirectSetup,
+                frozen("us-docker.pkg.dev/acme/agents/sandbox:v1"),
+            )
+            .await
+            .expect("the same image needs nothing on the engine");
+            assert_eq!(unchanged.state.status, DeploymentStatus::Updating);
+
+            let target = || frozen("us-docker.pkg.dev/acme/agents/sandbox:v2");
+            let rolled = update(InitialSetupAuthority::ImportedHandoff, target())
                 .await
                 .expect("a template setup granted the manager the template");
             assert_eq!(rolled.state.status, DeploymentStatus::Updating);
 
-            let error = update(InitialSetupAuthority::DirectSetup)
+            let error = update(InitialSetupAuthority::DirectSetup, target())
                 .await
                 .expect_err("a direct setup granted the manager nothing on the engine");
             let cause = error.source.as_deref().expect("the refusal is the cause");
