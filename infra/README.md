@@ -1,16 +1,31 @@
 # Infrastructure
 
-Terraform modules for provisioning the cloud resources that alien-manager needs. These modules create artifact registries, commands backends, IAM roles, and related resources — **they do not deploy the manager itself**. You run the manager wherever you like (Docker, Kubernetes, a VM, `alien serve`) and point it at these resources via `alien-manager.toml`.
+Two kinds of Terraform and Helm packages live here:
+
+- **Manager deployments** run alien-manager itself: [`helm/alien-manager/`](helm/alien-manager/) on Kubernetes and [`aws-ecs-manager/`](aws-ecs-manager/) on Amazon ECS. You can also run the image with `docker run` (below).
+- **Cloud modules** (`aws/`, `gcp/`, `azure/`) create the cloud resources a manager needs to deploy into those clouds: artifact registries, commands backends and IAM roles. Point the manager at them via `alien-manager.toml`.
 
 ```
 infra/
-├── aws/       ECR, DynamoDB + S3, IAM roles
-├── gcp/       Artifact Registry, Firestore + GCS, service accounts
-├── azure/     ACR, Table + Blob Storage, managed identities
-└── test/      E2E test resources (dual-account per cloud)
+├── helm/alien-manager/  Helm chart for the manager
+├── aws-ecs-manager/     The manager on ECS Fargate (ALB, EFS, ECR, Secrets Manager)
+├── aws/                 ECR, DynamoDB + S3, IAM roles
+├── gcp/                 Artifact Registry, Firestore + GCS, service accounts
+├── azure/               ACR, Table + Blob Storage, managed identities
+└── test/                E2E test resources (dual-account per cloud)
 ```
 
-## Modules
+## Running the manager
+
+| Where | How |
+|-------|-----|
+| Any machine with Docker | `docker run` (below) |
+| Kubernetes | `helm install alien-manager oci://ghcr.io/alienplatform/charts/alien-manager` or [`helm/alien-manager/`](helm/alien-manager/) |
+| Amazon ECS | [`aws-ecs-manager/`](aws-ecs-manager/) |
+
+The manager keeps its state (database, keys, and release images unless an external registry is configured) in `STATE_DIR`, `/data` in the image. Mount a volume there. On first start it prints an admin API key; set `ALIEN_ADMIN_TOKEN` to supply your own from a secret store instead.
+
+## Cloud modules
 
 Each module creates the supporting resources for one cloud provider. All features are optional and controlled via `enable_*` variables.
 

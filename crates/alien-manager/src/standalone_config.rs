@@ -232,6 +232,9 @@ pub struct TelemetryConfig {
     pub headers: HashMap<String, String>,
 }
 
+/// Environment variable holding the whole configuration as TOML.
+pub const CONFIG_ENV: &str = "ALIEN_MANAGER_CONFIG";
+
 // ── Loading ─────────────────────────────────────────────────────────────────
 
 impl Default for ManagerTomlConfig {
@@ -253,8 +256,10 @@ impl ManagerTomlConfig {
     ///
     /// Resolution order:
     /// 1. If `path` is `Some`, load from that exact file (error if missing).
-    /// 2. Otherwise try `alien-manager.toml` in the current working directory.
-    /// 3. If no file exists, fall back to all defaults.
+    /// 2. Otherwise read TOML from the `ALIEN_MANAGER_CONFIG` environment
+    ///    variable (for platforms that set environment but mount no files).
+    /// 3. Otherwise try `alien-manager.toml` in the current working directory.
+    /// 4. If no file exists, fall back to all defaults.
     ///
     /// After loading, environment variable overrides are applied.
     pub fn load(path: Option<&Path>) -> Result<Self, String> {
@@ -264,6 +269,12 @@ impl ManagerTomlConfig {
                     .map_err(|e| format!("Failed to read config file {}: {}", p.display(), e))?;
                 toml::from_str(&contents)
                     .map_err(|e| format!("Failed to parse {}: {}", p.display(), e))?
+            }
+            None if std::env::var_os(CONFIG_ENV).is_some() => {
+                let contents = std::env::var(CONFIG_ENV)
+                    .map_err(|e| format!("{CONFIG_ENV} is not valid UTF-8: {e}"))?;
+                toml::from_str(&contents)
+                    .map_err(|e| format!("Failed to parse {CONFIG_ENV}: {e}"))?
             }
             None => {
                 let default_path = PathBuf::from("alien-manager.toml");
