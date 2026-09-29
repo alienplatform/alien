@@ -64,11 +64,11 @@ pub async fn reconcile(
 }
 
 /// Why an update from `installed` to `target` needs setup to run first: a scaffolded resource that
-/// is new, or whose scaffolding would change, or a Frozen GCP sandbox's new image. An update acts
-/// with the runtime identity, which is never granted what creating or changing either takes.
+/// is new, or whose scaffolding would change, or a Frozen GCP sandbox that is new or changes its
+/// image. An update acts with the runtime identity, which is never granted what either takes.
 ///
-/// A resource `records` holds nothing for counts as new whatever `installed` says: the stack is
-/// what was declared, the record what setup made.
+/// A scaffolded resource `records` holds nothing for counts as new whatever `installed` says: the
+/// stack is what was declared, the record what setup made.
 pub fn changes_requiring_setup(
     client_config: &ClientConfig,
     installed: &Stack,
