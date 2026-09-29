@@ -125,7 +125,9 @@ impl CfEmitter for AwsNetworkEmitter {
                             ("availabilityZones", CfExpression::list([])),
                             ("isByoVpc", CfExpression::from(true)),
                         ]);
-                        if alien_core::restricts_network_mode(ctx.stack, ctx.targets_kubernetes) {
+                        if ctx.targets_kubernetes
+                            || alien_core::restricts_network_mode(ctx.stack, false)
+                        {
                             byo
                         } else {
                             CfExpression::if_(

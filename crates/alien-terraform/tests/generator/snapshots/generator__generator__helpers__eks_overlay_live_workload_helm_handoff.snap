@@ -359,7 +359,7 @@ data "aws_iam_policy_document" "execution_sa_assume_role" {
       test     = "StringEquals"
       variable = "${local.eks_oidc_issuer_host_path}:sub"
       values = [
-        "system:serviceaccount:${var.kubernetes_namespace}:${local.resource_prefix}-execution-sa"
+        "system:serviceaccount:${var.kubernetes_namespace}:${trim(substr(format("%s-%s-sa", coalesce(trim(lower(replace(local.resource_prefix, "/[^a-zA-Z0-9]+/", "-")), "-"), "alien"), coalesce(trim(lower(replace("execution", "/[^a-zA-Z0-9]+/", "-")), "-"), "alien")), 0, 63), "-")}"
       ]
     }
 

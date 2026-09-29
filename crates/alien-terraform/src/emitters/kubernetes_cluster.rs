@@ -109,15 +109,28 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
     mode = "none"
   }}
 }}"#,
-                    public_subnet_ids = public_subnet_ids_expr(label),
-                ),
+                    public_subnet_ids = eks_subnet_ids_expr(ctx, label, false),
+                )),
             )
-            )
+            .with_data(data_block(
+                "aws_eks_cluster",
+                &format!("{label}_existing"),
+                [
+                    attr(
+                        "count",
+                        expr::raw("var.kubernetes_cluster_mode == \"existing\" ? 1 : 0"),
+                    ),
+                    attr("name", expr::raw("var.eks_cluster_name")),
+                ],
+            ));
+        // A declared Network owns the topology shared by workloads and data resources.
+        // Keep the standalone EKS topology only for stacks without that resource.
+        if default_network_label(ctx).is_none() {
             // `create-new` picks AZs by name from this data source for the
             // newly-created subnets. Apply the same EKS-disallowed AZ-ID
             // exclusion here so a brand-new VPC also can't land its subnets
             // in (e.g.) `use1-az3` and then fail at cluster creation.
-            .with_data(data_block(
+            fragment = fragment.with_data(data_block(
                 "aws_availability_zones",
                 &format!("{label}_available"),
                 [
@@ -130,17 +143,6 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                         "exclude_zone_ids",
                         expr::raw("var.unsupported_availability_zone_ids"),
                     ),
-                ],
-            ))
-            .with_data(data_block(
-                "aws_eks_cluster",
-                &format!("{label}_existing"),
-                [
-                    attr(
-                        "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"existing\" ? 1 : 0"),
-                    ),
-                    attr("name", expr::raw("var.eks_cluster_name")),
                 ],
             ))
             // `network_mode == "use-default"` reuses the AWS account's default
@@ -226,9 +228,45 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                     )),
                 ],
             ));
+        }
+
+        if default_network_label(ctx).is_some() {
+            fragment.data_blocks.push(data_block(
+                "aws_availability_zones",
+                &format!("{label}_eks_supported"),
+                [
+                    attr(
+                        "count",
+                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+                    ),
+                    attr("state", Expression::String("available".to_string())),
+                    attr(
+                        "exclude_zone_ids",
+                        expr::raw("var.unsupported_availability_zone_ids"),
+                    ),
+                ],
+            ));
+            for private in [false, true] {
+                let kind = if private { "private" } else { "public" };
+                fragment.data_blocks.push(data_block(
+                    "aws_subnets", &format!("{label}_{kind}_selected"), [
+                        attr("count", expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0")),
+                        nested(block("filter", [
+                            attr("name", Expression::String("subnet-id".to_string())),
+                            attr("values", expr::raw(shared_eks_subnet_ids_expr(ctx, private))),
+                        ])),
+                        nested(block("filter", [
+                            attr("name", Expression::String("availability-zone-id".to_string())),
+                            attr("values", expr::raw(format!("data.aws_availability_zones.{label}_eks_supported[0].zone_ids"))),
+                        ])),
+                    ],
+                ));
+            }
+        }
 
         add_eks_workload_identity_data(&mut fragment, label);
-        fragment.resource_blocks.extend([
+        if default_network_label(ctx).is_none() {
+            fragment.resource_blocks.extend([
             resource_block(
                 "aws_vpc",
                 label,
@@ -418,6 +456,9 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                     ),
                 ],
             ),
+        ]);
+        }
+        fragment.resource_blocks.extend([
             resource_block(
                 "aws_iam_role",
                 &format!("{label}_cluster"),
@@ -530,7 +571,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                         [
                             attr(
                                 "subnet_ids",
-                                expr::raw(private_subnet_ids_expr(label)),
+                                expr::raw(eks_subnet_ids_expr(ctx, label, true)),
                             ),
                             attr("endpoint_public_access", Expression::Bool(true)),
                             attr("endpoint_private_access", Expression::Bool(true)),
@@ -1082,7 +1123,7 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
         if let Some(network_label) = default_network_label(ctx) {
             default_node_pool.push(attr(
                 "vnet_subnet_id",
-                expr::raw(azure_private_subnet_id_expr(network_label)),
+                expr::raw(azure_private_subnet_id_expr(ctx, network_label)),
             ));
         }
         let mut fragment = TfFragment::default()
@@ -1479,6 +1520,38 @@ fn eks_subnet_tags(label: &str, kind: &str, role: &str) -> Expression {
     ))
 }
 
+fn eks_subnet_ids_expr(ctx: &EmitContext<'_>, cluster_label: &str, private: bool) -> String {
+    if default_network_label(ctx).is_none() {
+        return if private {
+            private_subnet_ids_expr(cluster_label)
+        } else {
+            public_subnet_ids_expr(cluster_label)
+        };
+    }
+    let kind = if private { "private" } else { "public" };
+    format!("var.kubernetes_cluster_mode == \"create\" ? data.aws_subnets.{cluster_label}_{kind}_selected[0].ids : []")
+}
+
+fn shared_eks_subnet_ids_expr(ctx: &EmitContext<'_>, private: bool) -> String {
+    let Some((label, network)) = ctx
+        .stack
+        .resources()
+        .find_map(|(id, entry)| Some((ctx.name_for(id)?, entry.config.downcast_ref::<Network>()?)))
+    else {
+        return "[]".to_string();
+    };
+    let kind = if private { "private" } else { "public" };
+    let subnets = match &network.settings {
+        alien_core::NetworkSettings::Create { .. } => format!(
+            "var.network_mode == \"create-new\" ? aws_subnet.{label}_{kind}[*].id : var.network_mode == \"use-existing\" ? var.{kind}_subnet_ids : data.aws_subnets.{label}_default[0].ids"
+        ),
+        alien_core::NetworkSettings::UseDefault => format!("data.aws_subnets.{label}_default.ids"),
+        alien_core::NetworkSettings::ByoVpcAws { .. } => format!("var.{label}_{kind}_subnet_ids"),
+        _ => "[]".to_string(),
+    };
+    subnets
+}
+
 fn public_subnet_ids_expr(label: &str) -> String {
     format!(
         "var.kubernetes_cluster_mode == \"create\" ? (var.network_mode == \"create-new\" ? aws_subnet.{label}_public[*].id : var.network_mode == \"use-existing\" ? var.public_subnet_ids : var.network_mode == \"use-default\" ? data.aws_subnets.{label}_default[0].ids : []) : []"
@@ -1528,8 +1601,20 @@ fn gcp_subnetwork_self_link_expr(label: &str) -> String {
     )
 }
 
-fn azure_private_subnet_id_expr(label: &str) -> String {
-    format!("azurerm_subnet.{label}_private.id")
+fn azure_private_subnet_id_expr(ctx: &EmitContext<'_>, label: &str) -> String {
+    let byo = ctx.stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<Network>()
+            .is_some_and(|network| {
+                matches!(
+                    network.settings,
+                    alien_core::NetworkSettings::ByoVnetAzure { .. }
+                )
+            })
+    });
+    let prefix = if byo { "data." } else { "" };
+    format!("{prefix}azurerm_subnet.{label}_private.id")
 }
 
 fn azure_alb_association_subnet_id_expr(label: &str) -> String {

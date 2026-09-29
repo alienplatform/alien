@@ -11,7 +11,6 @@ use crate::{
 use alien_core::{import::EmitContext, KubernetesCluster, Result};
 
 const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
-const CONDITION_NETWORK_MODE_USE_EXISTING: &str = "NetworkModeUseExisting";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsKubernetesClusterEmitter;
@@ -483,6 +482,49 @@ fn eks_addon(
     resource
 }
 
+/// Exact pod identity trust for setup-created EKS cloud roles.
+/// The stack name used as the runtime prefix must satisfy the chart's DNS naming contract.
+pub(crate) fn eks_pod_trust_statement(
+    ctx: &EmitContext<'_>,
+    profile: &str,
+) -> Option<CfExpression> {
+    if !ctx.targets_kubernetes {
+        return None;
+    }
+    let (cluster_id, cluster) = ctx.stack.resources().find_map(|(id, entry)| {
+        let cluster = entry.config.downcast_ref::<KubernetesCluster>()?;
+        Some((ctx.name_for(id)?, cluster))
+    })?;
+    let issuer_host = CfExpression::object([(
+        "Fn::Select",
+        CfExpression::list([
+            CfExpression::from(1u8),
+            CfExpression::object([(
+                "Fn::Split",
+                CfExpression::list([
+                    CfExpression::from("https://"),
+                    CfExpression::get_att(format!("{cluster_id}Cluster"), "OpenIdConnectIssuerUrl"),
+                ]),
+            )]),
+        ]),
+    )]);
+    let subject = CfExpression::sub(format!(
+        "system:serviceaccount:{}:${{AWS::StackName}}-{profile}-sa",
+        cluster.namespace
+    ));
+    Some(CfExpression::sub_with(
+        r#"{"Effect":"Allow","Principal":{"Federated":"${Provider}"},"Action":"sts:AssumeRoleWithWebIdentity","Condition":{"StringEquals":{"${Issuer}:aud":"sts.amazonaws.com","${Issuer}:sub":"${Subject}"}}}"#,
+        [
+            (
+                "Provider",
+                CfExpression::ref_(format!("{cluster_id}OidcProvider")),
+            ),
+            ("Issuer", issuer_host),
+            ("Subject", subject),
+        ],
+    ))
+}
+
 fn oidc_provider(id: &str, cluster_id: &str) -> CfResource {
     let mut resource = CfResource::new(id.to_string(), "AWS::IAM::OIDCProvider".to_string());
     resource.properties.insert(
@@ -543,11 +585,7 @@ fn eks_private_subnet_ids(ctx: &EmitContext<'_>, prefix: &str) -> CfExpression {
             CfExpression::ref_(private_subnet_id(prefix, 1)),
             CfExpression::ref_(private_subnet_id(prefix, 2)),
         ]),
-        CfExpression::if_(
-            CONDITION_NETWORK_MODE_USE_EXISTING,
-            CfExpression::ref_("PrivateSubnetIds"),
-            CfExpression::list([]),
-        ),
+        CfExpression::ref_("PrivateSubnetIds"),
     )
 }
 

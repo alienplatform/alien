@@ -329,15 +329,16 @@ fn created_or_provided(
     created: CfExpression,
     provided: CfExpression,
 ) -> CfExpression {
-    let otherwise = if alien_core::restricts_network_mode(ctx.stack, ctx.targets_kubernetes) {
-        provided
-    } else {
-        CfExpression::if_(
-            CONDITION_NETWORK_MODE_USE_EXISTING,
-            provided,
-            CfExpression::no_value(),
-        )
-    };
+    let otherwise =
+        if ctx.targets_kubernetes || alien_core::restricts_network_mode(ctx.stack, false) {
+            provided
+        } else {
+            CfExpression::if_(
+                CONDITION_NETWORK_MODE_USE_EXISTING,
+                provided,
+                CfExpression::no_value(),
+            )
+        };
     CfExpression::if_(CONDITION_NETWORK_MODE_CREATE, created, otherwise)
 }
 

@@ -270,7 +270,7 @@ resource "azurerm_federated_identity_credential" "execution_sa_federated" {
     "api://AzureADTokenExchange"
   ]
   issuer  = data.azurerm_kubernetes_cluster.target.oidc_issuer_url
-  subject = "system:serviceaccount:${var.kubernetes_namespace}:${local.resource_prefix}-execution-sa"
+  subject = "system:serviceaccount:${var.kubernetes_namespace}:${trim(substr(format("%s-%s-sa", coalesce(trim(lower(replace(local.resource_prefix, "/[^a-zA-Z0-9]+/", "-")), "-"), "alien"), coalesce(trim(lower(replace("execution", "/[^a-zA-Z0-9]+/", "-")), "-"), "alien")), 0, 63), "-")}"
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]

@@ -2,6 +2,7 @@
 //! wrappers that need vault-backed app or runtime secrets.
 
 use crate::error::Result;
+use crate::mutations::runs_on_platform_or_base;
 use crate::StackMutation;
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
 use alien_core::{
@@ -62,8 +63,7 @@ impl StackMutation for SecretsVaultMutation {
 
         explicitly_configured
             || worker_needs_vault
-            || (stack_state.platform == Platform::Azure
-                && stack.resources.values().any(azure_resource_needs_vault))
+            || azure_setup_needs_vault(stack, stack_state, config)
     }
 
     async fn mutate(
@@ -76,13 +76,14 @@ impl StackMutation for SecretsVaultMutation {
 
         let secrets_vault_id = SECRETS_VAULT_ID;
 
-        let infrastructure_only = stack_state.platform == Platform::Azure
-            && stack.resources.values().any(azure_resource_needs_vault)
+        let infrastructure_only = azure_setup_needs_vault(&stack, stack_state, config)
             && !config.external_bindings.has(SECRETS_VAULT_ID)
-            && !stack
-                .resources
-                .values()
-                .any(|entry| entry.config.resource_type() == Worker::RESOURCE_TYPE);
+            && !stack.resources.values().any(|entry| {
+                entry.config.resource_type() == Worker::RESOURCE_TYPE
+                    && (!SecretDelivery::resolve(stack_state.platform, ComputeKind::Worker)
+                        .is_native_projection()
+                        || config.monitoring.is_some())
+            });
 
         // Step 1: Add vault resource if it doesn't already exist
         if !stack.resources.contains_key(secrets_vault_id) {
@@ -115,6 +116,13 @@ impl StackMutation for SecretsVaultMutation {
             link_vault_to_worker_runtimes(&mut stack, secrets_vault_id)?;
             add_vault_read_permissions_to_worker_profiles(&mut stack, secrets_vault_id)?;
         }
+        if runs_on_platform_or_base(stack_state, config, Platform::Azure) {
+            add_azure_postgres_vault_read_permissions(
+                &mut stack,
+                secrets_vault_id,
+                stack_state.platform,
+            );
+        }
         add_vault_dependency_to_compute_clusters(
             &mut stack,
             secrets_vault_id,
@@ -128,6 +136,20 @@ impl StackMutation for SecretsVaultMutation {
 
         Ok(stack)
     }
+}
+
+/// Managed Azure database passwords need a setup vault even when workloads run
+/// in Kubernetes. Kubernetes HTTP endpoints use their own ingress certificates.
+fn azure_setup_needs_vault(stack: &Stack, state: &StackState, config: &DeploymentConfig) -> bool {
+    runs_on_platform_or_base(state, config, Platform::Azure)
+        && stack.resources.values().any(|entry| {
+            if state.platform == Platform::Kubernetes {
+                entry.lifecycle == ResourceLifecycle::Frozen
+                    && entry.config.downcast_ref::<Postgres>().is_some()
+            } else {
+                azure_resource_needs_vault(entry)
+            }
+        })
 }
 
 /// Azure databases and HTTP endpoints store passwords or certificates in the shared vault.
@@ -159,7 +181,7 @@ pub(super) fn azure_resource_needs_vault(entry: &ResourceEntry) -> bool {
 /// compute role, vault policies, and execution role. The compute role already
 /// carries its scoped Parameter Store access and has no vault resource to await.
 fn add_vault_dependency_to_compute_clusters(stack: &mut Stack, vault_id: &str, platform: Platform) {
-    if platform == Platform::Aws {
+    if matches!(platform, Platform::Aws | Platform::Kubernetes) {
         return;
     }
 
@@ -270,6 +292,45 @@ fn add_vault_read_permissions_to_worker_profiles(
     }
 
     Ok(())
+}
+
+/// Azure Postgres bindings retrieve their password from the setup vault. Only
+/// profiles that explicitly request database data access receive this vault read.
+/// The existing vault binding model scopes Azure reads to a vault, not a secret.
+fn add_azure_postgres_vault_read_permissions(
+    stack: &mut Stack,
+    vault_id: &str,
+    platform: Platform,
+) {
+    let databases: Vec<String> = stack
+        .resources()
+        .filter_map(|(id, entry)| {
+            (entry.config.downcast_ref::<Postgres>().is_some()
+                && (platform != Platform::Kubernetes
+                    || entry.lifecycle == ResourceLifecycle::Frozen))
+                .then(|| id.clone())
+        })
+        .collect();
+    for profile in stack.permissions.profiles.values_mut() {
+        let database_access = databases.iter().any(|id| {
+            profile
+                .0
+                .get(id)
+                .into_iter()
+                .chain(profile.0.get("*"))
+                .flatten()
+                .any(|permission| permission.id() == "postgres/data-access")
+        });
+        if database_access {
+            let permissions = profile.0.entry(vault_id.to_string()).or_default();
+            if !permissions
+                .iter()
+                .any(|permission| permission.id() == "vault/data-read")
+            {
+                permissions.push(PermissionSetReference::from_name("vault/data-read"));
+            }
+        }
+    }
 }
 
 /// Author explicit vault data permissions into the management profile for this vault.
@@ -1322,5 +1383,160 @@ mod tests {
             ),
             "Local stacks without remote stack management should not get resource-scoped management permissions"
         );
+    }
+    #[tokio::test]
+    async fn aks_database_setup_vault_does_not_grant_kubernetes_secret_reads() {
+        let state = StackState::new(Platform::Kubernetes);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .base_platform(Platform::Azure)
+            .build();
+        let stack = Stack::new("database".to_string())
+            .add(
+                Postgres::new("database".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Worker::new("api".to_string())
+                    .code(alien_core::WorkerCode::Image {
+                        image: "example.test/api:1".to_string(),
+                    })
+                    .permissions("default".to_string())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                ComputeCluster::new("pool".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        assert!(SecretsVaultMutation.should_run(&stack, &state, &config));
+        let prepared = crate::runner::PreflightRunner::new()
+            .apply_mutations(stack, &state, &config)
+            .await
+            .unwrap();
+        assert_eq!(
+            prepared.resources["secrets"].lifecycle,
+            ResourceLifecycle::Frozen
+        );
+        assert!(prepared.resources["database"]
+            .dependencies
+            .contains(&ResourceRef::new(Vault::RESOURCE_TYPE, "secrets")));
+        assert!(!prepared.resources["pool"]
+            .dependencies
+            .contains(&ResourceRef::new(Vault::RESOURCE_TYPE, "secrets")));
+        assert!(prepared.resources["api"]
+            .config
+            .downcast_ref::<Worker>()
+            .unwrap()
+            .links
+            .iter()
+            .all(|link| link.id() != "secrets"));
+        let ManagementPermissions::Extend(profile) = &prepared.permissions.management else {
+            panic!("management profile")
+        };
+        let permissions = profile.0.get("secrets").unwrap();
+        assert!(permissions
+            .iter()
+            .any(|permission| permission.id() == "vault/data-write"));
+        assert!(!permissions
+            .iter()
+            .any(|permission| permission.id() == "vault/data-read"));
+    }
+
+    #[test]
+    fn pure_kubernetes_database_does_not_inject_cloud_vault() {
+        let stack = Stack::new("database".to_string())
+            .add(
+                Postgres::new("database".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        assert!(!SecretsVaultMutation.should_run(
+            &stack,
+            &StackState::new(Platform::Kubernetes),
+            &config
+        ));
+    }
+    #[tokio::test]
+    async fn azure_postgres_secret_reads_follow_explicit_database_data_access_profiles() {
+        for platform in [Platform::Azure, Platform::Kubernetes] {
+            let mut stack = Stack::new("database".to_string())
+                .add(
+                    Postgres::new("database".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    Postgres::new("other".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            for (name, resource, permission) in [
+                ("database-client", "database", "postgres/data-access"),
+                ("all-databases", "*", "postgres/data-access"),
+                ("observer", "database", "postgres/heartbeat"),
+                ("unrelated", "missing", "postgres/data-access"),
+                ("database-admin", "database", "postgres/management"),
+            ] {
+                let mut profile = PermissionProfile::new();
+                profile.0.insert(
+                    resource.to_string(),
+                    vec![PermissionSetReference::from_name(permission)],
+                );
+                stack.permissions.profiles.insert(name.to_string(), profile);
+            }
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(empty_env_snapshot())
+                .external_bindings(ExternalBindings::default())
+                .allow_frozen_changes(false)
+                .base_platform(Platform::Azure)
+                .build();
+            let state = StackState::new(platform);
+            let prepared = SecretsVaultMutation
+                .mutate(stack, &state, &config)
+                .await
+                .unwrap();
+            let repeated = SecretsVaultMutation
+                .mutate(prepared, &state, &config)
+                .await
+                .unwrap();
+            for (name, expected) in [
+                ("database-client", true),
+                ("all-databases", true),
+                ("observer", false),
+                ("unrelated", false),
+                ("database-admin", false),
+            ] {
+                let count = repeated.permissions.profiles[name]
+                    .0
+                    .get("secrets")
+                    .into_iter()
+                    .flatten()
+                    .filter(|permission| permission.id() == "vault/data-read")
+                    .count();
+                assert_eq!(
+                    count,
+                    usize::from(expected),
+                    "profile {name}, platform {platform:?}"
+                );
+            }
+            let ManagementPermissions::Auto = repeated.permissions.management else {
+                panic!("database-client access must not change management grants without remote management");
+            };
+        }
     }
 }
