@@ -103,8 +103,9 @@ async fn target(
 
     // No token: the environment pulls from its own registry and never
     // calls the manager.
-    let mut target: TargetDeployment =
-        match super::sync::build_pull_target(&state, &deployment, release, None).await {
+    let mut target: TargetDeployment = match // Bundles are applied by Operators that support air-gapped mode,
+        // which all understand tunnels.
+        super::sync::build_pull_target(&state, &deployment, release, None, true).await {
             Ok(target) => target,
             Err(response) => return response,
         };

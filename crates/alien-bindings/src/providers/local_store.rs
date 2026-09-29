@@ -74,6 +74,7 @@ pub(crate) enum Sharing {
 ///
 /// Exposed to sibling test code so raw white-box connections coexist safely
 /// with live provider handles on the same file.
+#[cfg(test)]
 pub(crate) async fn open_database(path: &std::path::Path, binding_type: &str) -> Result<Database> {
     open_database_with(path, binding_type, Sharing::MultiProcess).await
 }

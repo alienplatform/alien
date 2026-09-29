@@ -260,6 +260,11 @@ pub struct SyncRequest {
     /// Signals that this Operator persists and echoes execution claims.
     #[serde(default)]
     pub supports_execution_claims: bool,
+    /// Signals that this Operator understands container tunnels. Older
+    /// Operators reject stacks that declare one, so the manager leaves
+    /// tunnels out of their targets.
+    #[serde(default)]
+    pub supports_tunnels: bool,
     /// Exact update claim returned by the previous sync response.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_claim: Option<SyncExecutionClaim>,
@@ -490,6 +495,7 @@ mod tests {
             deployment_id: "dep_abc123".to_string(),
             session: "operator-test".to_string(),
             supports_execution_claims: true,
+            supports_tunnels: true,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
@@ -701,6 +707,7 @@ mod tests {
             deployment_id: "dep_1".to_string(),
             session: String::new(),
             supports_execution_claims: false,
+            supports_tunnels: false,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
@@ -730,6 +737,7 @@ mod tests {
             deployment_id: "dep_1".to_string(),
             session: String::new(),
             supports_execution_claims: false,
+            supports_tunnels: false,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
@@ -806,6 +814,7 @@ mod tests {
             deployment_id: "dep_1".to_string(),
             session: String::new(),
             supports_execution_claims: false,
+            supports_tunnels: false,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),

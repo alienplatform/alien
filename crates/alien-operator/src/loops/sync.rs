@@ -242,6 +242,7 @@ async fn sync_with_manager(
         deployment_id: deployment_id.clone(),
         session: sync_session.clone(),
         supports_execution_claims: true,
+        supports_tunnels: true,
         execution_claim,
         current_state: Some(deployment_state),
         heartbeats,
