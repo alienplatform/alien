@@ -1754,6 +1754,10 @@ export type HelmOutputs = {
    */
   chart: string;
   /**
+   * Default management endpoint embedded in this chart, if available.
+   */
+  managerUrl?: string | undefined;
+  /**
    * Chart version (e.g., "1.2.3")
    */
   version: string;
@@ -1774,6 +1778,10 @@ export type DeploymentInfoHelm = {
    * OCI chart reference
    */
   chartRef: string;
+  /**
+   * Management endpoint to supply only when this chart's captured default differs from current installation routing.
+   */
+  managerUrlOverride?: string | undefined;
   managerFetchExample?: string | undefined;
   localImportExample?: string | undefined;
 };
@@ -4441,6 +4449,7 @@ export const HelmStatus$inboundSchema: z.ZodEnum<typeof HelmStatus> = z.enum(
 export const HelmOutputs$inboundSchema: z.ZodType<HelmOutputs, unknown> = z
   .object({
     chart: z.string(),
+    managerUrl: z.string().optional(),
     version: z.string(),
   });
 
@@ -4464,6 +4473,7 @@ export const DeploymentInfoHelm$inboundSchema: z.ZodType<
   outputs: z.lazy(() => HelmOutputs$inboundSchema).optional(),
   error: z.nullable(z.any()).optional(),
   chartRef: z.string(),
+  managerUrlOverride: z.string().optional(),
   managerFetchExample: z.string().optional(),
   localImportExample: z.string().optional(),
 });

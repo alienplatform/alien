@@ -1,21 +1,17 @@
-# PackageRule
+# PermissionsRule
 
 One Kubernetes API requirement declared by an enabled operation.
 
 ## Example Usage
 
 ```typescript
-import { PackageRule } from "@alienplatform/platform-api/models";
+import { PermissionsRule } from "@alienplatform/platform-api/models";
 
-let value: PackageRule = {
+let value: PermissionsRule = {
   apiGroup: "<value>",
   reason: "<value>",
   resource: "<value>",
-  verbs: [
-    "<value 1>",
-    "<value 2>",
-    "<value 3>",
-  ],
+  verbs: [],
 };
 ```
 
