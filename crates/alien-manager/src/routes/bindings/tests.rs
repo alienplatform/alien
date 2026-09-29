@@ -349,6 +349,136 @@ fn remote_sandbox_validation_accepts_a_live_sandbox() {
     assert_eq!(binding.image_version, "3");
 }
 
+fn with_resource_status(
+    mut stack_state: StackState,
+    resource_id: &str,
+    status: ResourceStatus,
+) -> StackState {
+    stack_state
+        .resources
+        .get_mut(resource_id)
+        .expect("the fixture holds the resource")
+        .status = status;
+    stack_state
+}
+
+/// Pins the gate only; that the binding names the previous image version mid-roll is proven in
+/// alien-infra by `a_failed_roll_keeps_the_previous_version_serving`.
+#[test]
+fn a_rolling_aws_sandbox_keeps_serving_its_previous_binding() {
+    for status in [ResourceStatus::Updating, ResourceStatus::UpdateFailed] {
+        let deployment = deployment(with_resource_status(
+            sandbox_stack_state_with_lifecycle(
+                open_sandbox_binding(),
+                Platform::Aws,
+                ResourceLifecycle::Live,
+            ),
+            "agents",
+            status,
+        ));
+
+        let Ok(RemoteSandboxBinding::Aws(binding)) = remote_sandbox_binding(&deployment, "agents")
+        else {
+            panic!("a {status:?} AWS sandbox with a published binding resolves")
+        };
+        assert_eq!(binding.image_version, "3", "{status:?}");
+    }
+}
+
+/// Azure publishes only the current binding. GCP keeps its old template, but its roll reports
+/// Provisioning/ProvisionFailed, so `Updating` here is not a roll the gate can trust.
+#[test]
+fn a_rolling_azure_or_gcp_sandbox_is_refused() {
+    for platform in [Platform::Azure, Platform::Gcp] {
+        for status in [ResourceStatus::Updating, ResourceStatus::UpdateFailed] {
+            let deployment = deployment_on_platform(
+                with_resource_status(
+                    sandbox_stack_state_with_lifecycle(
+                        open_sandbox_binding_for(platform),
+                        platform,
+                        ResourceLifecycle::Live,
+                    ),
+                    "agents",
+                    status,
+                ),
+                platform,
+            );
+
+            let Err(error) = remote_sandbox_binding(&deployment, "agents") else {
+                panic!("a {status:?} {platform} sandbox must not resolve")
+            };
+            assert!(error.message.contains("not running"), "{}", error.message);
+        }
+    }
+}
+
+#[test]
+fn a_rolling_aws_sandbox_without_a_parseable_binding_is_refused() {
+    for params in [None, Some(serde_json::json!({"service": "not-a-sandbox"}))] {
+        let mut stack_state = with_resource_status(
+            sandbox_stack_state_with_lifecycle(
+                open_sandbox_binding(),
+                Platform::Aws,
+                ResourceLifecycle::Live,
+            ),
+            "agents",
+            ResourceStatus::Updating,
+        );
+        stack_state
+            .resources
+            .get_mut("agents")
+            .expect("the fixture holds the resource")
+            .remote_binding_params = params.clone();
+
+        let Err(error) = remote_sandbox_binding(&deployment(stack_state), "agents") else {
+            panic!("an updating sandbox with binding params {params:?} must not resolve")
+        };
+        assert_eq!(error.code, "BAD_REQUEST");
+    }
+}
+
+/// Storage, Key and AI publish no previous binding through a roll, so they still need `Running`.
+#[test]
+fn updating_storage_key_and_ai_resources_are_refused() {
+    let storage = deployment(stack_state_with_resource(
+        Storage::RESOURCE_TYPE.as_ref(),
+        Some(ResourceLifecycle::Frozen),
+        ResourceStatus::Updating,
+        Some(serde_json::to_value(StorageBinding::s3("files")).unwrap()),
+    ));
+    let Err(error) = remote_storage_binding(&storage, "files") else {
+        panic!("updating storage must not resolve")
+    };
+    assert!(error.message.contains("not running"), "{}", error.message);
+
+    let key = deployment(stack_state_with_resource(
+        Key::RESOURCE_TYPE.as_ref(),
+        Some(ResourceLifecycle::Frozen),
+        ResourceStatus::Updating,
+        Some(
+            serde_json::to_value(KeyBinding::aws_kms(
+                "arn:aws:kms:us-east-1:123:key/abc",
+                Some("us-east-1"),
+            ))
+            .unwrap(),
+        ),
+    ));
+    let Err(error) = remote_key_binding(&key, "files") else {
+        panic!("an updating key must not resolve")
+    };
+    assert!(error.message.contains("not running"), "{}", error.message);
+
+    let ai = deployment(with_resource_status(
+        ai_stack_state(AiBinding::bedrock("us-east-1"), Platform::Aws),
+        "models",
+        ResourceStatus::Updating,
+    ));
+    let Err(error) = remote_ai_binding(&ai, "models") else {
+        panic!("updating AI must not resolve")
+    };
+    assert!(error.message.contains("not running"), "{}", error.message);
+}
+
 /// `sandbox/remote-execute` withholds `lambda:PassNetworkConnector`, so a session cannot be
 /// started on the connector a restricting sandbox declares. Refusing here names the reason
 /// instead of surfacing an AccessDenied from inside the caller's own `create()`.
