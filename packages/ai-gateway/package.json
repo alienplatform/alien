@@ -25,12 +25,12 @@
     "build": "tsdown && tsc -p tsconfig.build.json --emitDeclarationOnly",
     "test": "vitest run",
     "test:ts": "tsc --noEmit",
-    "format-and-lint": "biome check .",
-    "format-and-lint:fix": "biome check . --write"
+    "format-and-lint": "oxfmt --check '**/*.{cjs,css,js,json,jsonc,jsx,mjs,ts,tsx}' && oxlint .",
+    "format-and-lint:fix": "oxfmt --write '**/*.{cjs,css,js,json,jsonc,jsx,mjs,ts,tsx}' && oxlint --fix ."
   },
   "keywords": [
-    "alien",
     "ai",
+    "alien",
     "gateway"
   ],
   "author": "Alien Software, Inc. <hi@alien.dev>",
@@ -47,7 +47,6 @@
   },
   "devDependencies": {
     "@alienplatform/typescript-config": "workspace:^",
-    "@biomejs/biome": "^2.0.0",
     "@types/node": "^24.0.15",
     "openai": "^7.0.0",
     "tsdown": "^0.13.0",

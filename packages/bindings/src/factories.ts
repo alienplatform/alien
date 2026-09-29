@@ -544,10 +544,10 @@ function toPostgresConnection(raw: RawPostgresConnection): PostgresConnection {
       return {
         ...fields,
         sslmode: raw.sslmode,
-        ssl: {
-          ...(caCertificates.length > 0 ? { ca: caCertificates } : {}),
-          rejectUnauthorized: true,
-        },
+        ssl:
+          caCertificates.length > 0
+            ? { ca: caCertificates, rejectUnauthorized: true }
+            : { rejectUnauthorized: true },
       }
     default: {
       const unhandledSslMode: never = raw.sslmode

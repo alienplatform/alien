@@ -72,7 +72,6 @@ export function QueryCard({
             </thead>
             <tbody>
               {rows.slice(0, PREVIEW_ROWS).map((row, i) => (
-                // biome-ignore lint/suspicious/noArrayIndexKey: static preview slice with no stable row id
                 <tr key={i} className="border-b border-edge/50 last:border-0">
                   {columns.map(column => (
                     <td

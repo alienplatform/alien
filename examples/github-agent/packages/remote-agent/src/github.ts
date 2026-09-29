@@ -171,7 +171,7 @@ async function mapWithConcurrency<T, R>(
   concurrency: number,
   task: (item: T, index: number) => Promise<R>,
 ): Promise<R[]> {
-  const results: R[] = new Array(items.length)
+  const results: R[] = []
   let nextIndex = 0
 
   async function worker(): Promise<void> {

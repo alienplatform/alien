@@ -23,16 +23,16 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:bun": "BUN_EXPECTED=1 bun test tests/runtime-canary.test.ts tests/commands-client.test.ts tests/receiver.test.ts tests/presigned.test.ts tests/bootstrap.test.ts",
     "test:ts": "tsc --noEmit",
-    "format-and-lint": "biome check .",
-    "format-and-lint:fix": "biome check . --write"
+    "format-and-lint": "oxfmt --check '**/*.{cjs,css,js,json,jsonc,jsx,mjs,ts,tsx}' && oxlint .",
+    "format-and-lint:fix": "oxfmt --write '**/*.{cjs,css,js,json,jsonc,jsx,mjs,ts,tsx}' && oxlint --fix ."
   },
   "keywords": [
     "alien",
     "commands",
-    "invoke",
-    "receiver",
     "deployment",
-    "fetch"
+    "fetch",
+    "invoke",
+    "receiver"
   ],
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "license": "FSL-1.1-Apache-2.0",
@@ -48,7 +48,6 @@
   },
   "devDependencies": {
     "@alienplatform/typescript-config": "workspace:^",
-    "@biomejs/biome": "^2.0.0",
     "@types/node": "^24.0.15",
     "tsdown": "^0.13.0",
     "typescript": "~5.9.0",

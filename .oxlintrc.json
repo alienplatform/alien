@@ -1,0 +1,51 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "react", "jsx-a11y"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error"
+  },
+  "rules": {
+    "no-underscore-dangle": "off",
+    "unicorn/consistent-function-scoping": "off",
+    "unicorn/no-array-sort": "off",
+    "react/react-in-jsx-scope": "off",
+    "no-shadow": "off",
+    "oxc/no-accumulating-spread": "error",
+    "anti-slop/no-array-filter-map": "error",
+    "anti-slop/no-reduce-accumulator-copy": "error",
+    "anti-slop/no-conditional-empty-object-spread": "error",
+    "anti-slop/no-reflect-get": "error",
+    "anti-slop/no-reflect-apply": "error",
+    "no-unexpected-multiline": "off"
+  },
+  "env": {
+    "builtin": true
+  },
+  "ignorePatterns": [
+    "**/.wrangler/**/*.js",
+    "**/.turbo",
+    "**/.alien",
+    "**/alien-data",
+    "**/dist",
+    "**/client-sdks",
+    "**/openapi.json",
+    "**/openapi",
+    "**/app/.well-known",
+    "**/code-samples-overlay.json",
+    "**/.next",
+    "**/api-v1.d.ts",
+    "**/entrypoint.js",
+    "**/generated",
+    "**/shim.mjs",
+    "**/target",
+    "**/examples/**/github-agent/packages/dashboard",
+    "tools/oxlint/anti-slop/**"
+  ],
+  "jsPlugins": [
+    {
+      "name": "anti-slop",
+      "specifier": "./tools/oxlint/anti-slop/index.ts"
+    }
+  ]
+}

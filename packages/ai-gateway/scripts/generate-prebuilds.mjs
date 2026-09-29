@@ -42,9 +42,9 @@ for (const { triple, os, cpu, libc } of TRIPLES) {
     description: `The alien-ai-gateway launcher binary for ${triple}, resolved and spawned by @alienplatform/ai-gateway`,
     os: [os],
     cpu: [cpu],
-    ...(libc ? { libc: [libc] } : {}),
     files: ["alien-ai-gateway"],
   }
+  if (libc) Object.assign(manifest, { libc: [libc] })
   writeFileSync(join(dir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`)
   console.log(`Generated npm/${triple}/package.json at ${version}`)
 }

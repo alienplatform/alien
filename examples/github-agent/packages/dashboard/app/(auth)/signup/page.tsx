@@ -45,7 +45,6 @@ export default function SignUpPage() {
 
   return (
     <div className="flex w-full max-w-sm flex-col gap-6">
-      {/* biome-ignore lint/a11y/useValidAnchor: placeholder logo link */}
       <a href="#" className="flex items-center gap-2 self-center font-medium">
         <div className="bg-primary text-primary-foreground flex size-9 items-center justify-center rounded-lg">
           <IconBrandGithub className="size-5" />

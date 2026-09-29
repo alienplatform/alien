@@ -251,6 +251,7 @@ export class EventLoop {
           `Command '${command.commandName}' has malformed JSON params: ${
             error instanceof Error ? error.message : String(error)
           }`,
+          { cause: error },
         )
       }
     }
