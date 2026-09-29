@@ -371,7 +371,7 @@ fn default_sandbox_tools_list() -> String {
 #[cfg(test)]
 enum GcpBase {
     Image(&'static str),
-    /// A build-arg with no default, which the builder must pass.
+    /// A build-arg with no default, which whoever builds the image must pass.
     BuildArg(&'static str),
 }
 
@@ -388,7 +388,7 @@ RUN apk add --no-cache git",
 }
 
 /// Renders [`GCP_DEFAULT_DOCKERFILE`], the default GCP sandbox image: the agent on the default
-/// sandbox base ([`DEFAULT_SANDBOX_DOCKERFILE`]), which the builder passes by digest.
+/// sandbox base ([`DEFAULT_SANDBOX_DOCKERFILE`]), which whoever builds it passes by digest.
 #[cfg(test)]
 fn gcp_default_sandbox_dockerfile() -> String {
     assert_eq!(
