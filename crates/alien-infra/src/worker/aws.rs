@@ -8,6 +8,7 @@ use crate::core::split_certificate_chain;
 use crate::core::ResourceController;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
+use crate::worker::certificate_wait::{CERTIFICATE_WAIT_MAX_POLLS, CERTIFICATE_WAIT_POLL_SECS};
 use crate::worker::readiness_probe::{
     run_readiness_probe_with_dns_override, ReadinessProbeDnsOverride, READINESS_PROBE_MAX_ATTEMPTS,
 };
@@ -43,12 +44,6 @@ use alien_macros::controller;
 use chrono::Utc;
 
 const AWS_LAMBDA_ACTIVE_MAX_POLLS: u32 = 60;
-/// Public workers wait for the platform to issue their certificate. One ACME
-/// attempt can take up to five minutes and a retry follows after a backoff of
-/// minutes, so the wait covers several attempts (360 polls of 5 seconds, 30
-/// minutes) instead of failing the deployment during the first retry.
-const CERTIFICATE_WAIT_MAX_POLLS: u32 = 360;
-const CERTIFICATE_WAIT_POLL_SECS: u64 = 5;
 
 /// Generates the full, prefixed AWS resource name.
 fn get_aws_worker_name(prefix: &str, name: &str) -> String {

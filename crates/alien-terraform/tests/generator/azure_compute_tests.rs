@@ -90,9 +90,6 @@ fn azure_container_apps_environment_names_stay_within_azure_limits() {
         .iter()
         .map(|(path, content)| (path.to_string(), content.to_string()))
         .collect();
-    // A 40-character prefix (the longest `resource_prefix` accepts) plus the
-    // readable suffix exceeds Azure's 63-character Log Analytics workspace and
-    // 60-character managed environment limits.
     files.insert(
         "tests/names.tftest.hcl".to_string(),
         r#"
@@ -107,6 +104,10 @@ run "long_prefix" {
   command = plan
   variables {
     resource_prefix = "e2e-10-azure-terrafor-w-c2e6a7-98357704a"
+  }
+  assert {
+    condition = length(var.resource_prefix) == 40
+    error_message = "This run must use the longest prefix the module accepts"
   }
   assert {
     condition = length(azurerm_log_analytics_workspace.default_container_apps_environment_logs.name) <= 63 && can(regex("^[a-z0-9][a-z0-9-]+[a-z0-9]$", azurerm_log_analytics_workspace.default_container_apps_environment_logs.name))

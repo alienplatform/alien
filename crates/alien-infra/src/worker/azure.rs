@@ -38,18 +38,13 @@ use crate::infra_requirements::azure_utils::{
     get_container_apps_environment_name, get_container_apps_environment_outputs,
     get_resource_group_name, is_azure_authorization_propagation_error,
 };
+use crate::worker::certificate_wait::{CERTIFICATE_WAIT_MAX_POLLS, CERTIFICATE_WAIT_POLL_SECS};
 use crate::worker::readiness_probe::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
 use alien_macros::controller;
 
 /// Azure rejects a Container App name over 32 characters, and a deployment prefix may be 40 on
 /// its own, so `{prefix}-{worker}` overflows for names that are otherwise ordinary.
 const CONTAINER_APP_NAME_MAX_LEN: usize = 32;
-/// Public workers wait for the platform to issue their certificate. One ACME
-/// attempt can take up to five minutes and a retry follows after a backoff of
-/// minutes, so the wait covers several attempts (360 polls of 5 seconds, 30
-/// minutes) instead of failing the deployment during the first retry.
-const CERTIFICATE_WAIT_MAX_POLLS: u32 = 360;
-const CERTIFICATE_WAIT_POLL_SECS: u64 = 5;
 
 /// Generates a deterministic Azure Container Apps name for a worker, within Azure's 32-character
 /// limit.

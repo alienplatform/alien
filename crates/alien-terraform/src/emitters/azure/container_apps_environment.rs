@@ -12,12 +12,6 @@
 //! controller co-creates one; the emitter does the same so the rendered
 //! module is self-contained — pointer at the workspace via
 //! `log_analytics_workspace_id` on the environment block.
-//!
-//! ## Name limits
-//!
-//! `local.resource_prefix` is up to 40 characters, so the prefixed names are
-//! bounded to Azure's limits: 63 for a Log Analytics workspace and 60 for a
-//! managed environment.
 
 use crate::{
     block::{attr, resource_block},
@@ -33,7 +27,10 @@ use alien_core::{
 };
 use hcl::expr::Expression;
 
+/// Azure caps Log Analytics workspace names at 63 characters; a 40-character
+/// `local.resource_prefix` plus the readable suffix exceeds that.
 const LOG_ANALYTICS_WORKSPACE_NAME_MAX_LEN: usize = 63;
+/// Azure caps Container Apps managed environment names at 60 characters.
 const MANAGED_ENVIRONMENT_NAME_MAX_LEN: usize = 60;
 
 #[derive(Debug, Clone, Copy, Default)]

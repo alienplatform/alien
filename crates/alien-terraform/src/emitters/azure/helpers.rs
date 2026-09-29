@@ -95,9 +95,10 @@ pub fn container_registry_task_name_template(suffix: &str) -> Expression {
 /// hyphens and an 8-character hash of the full name is appended, so the result
 /// stays unique and never ends in a hyphen.
 pub fn bounded_name(name_expr: &str, max_len: usize) -> Expression {
-    let prefix_len = max_len - 9;
+    const HASH_LEN: usize = 8;
+    let prefix_len = max_len - HASH_LEN - 1;
     expr::raw(format!(
-        "length({name_expr}) <= {max_len} ? {name_expr} : format(\"%s-%s\", trim(substr({name_expr}, 0, {prefix_len}), \"-\"), substr(sha1({name_expr}), 0, 8))"
+        "length({name_expr}) <= {max_len} ? {name_expr} : format(\"%s-%s\", trim(substr({name_expr}, 0, {prefix_len}), \"-\"), substr(sha1({name_expr}), 0, {HASH_LEN}))"
     ))
 }
 
