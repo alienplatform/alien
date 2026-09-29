@@ -142,6 +142,7 @@ fi
 check tools-error fail "linux/amd64: stub: the tools probe failed"
 check tools-silent fail "linux/amd64: the tools probe did not complete"
 check tools-missing fail "linux/amd64: tool probe: rg --version failed"
+check tools-hidden-failure fail "linux/amd64: tool probe: false # hidden failed"
 
 check happy pass ""
 for platform in linux/amd64 linux/arm64; do

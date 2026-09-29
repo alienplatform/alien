@@ -70,6 +70,13 @@ case "$command" in
       *"tool probe:"*)
         printf '%s\n' "$all" >> "$state/tools-probes"
         inject tools
+        # Runs the script's real probe over a stand-in list, so a probe that lets a `#`
+        # hide a failing command passes here and fails the check.
+        if [ "$mode" = tools-hidden-failure ] && [ "$platform" = linux/amd64 ]; then
+          j=0
+          while [ "${args[$j]}" != -c ]; do j=$((j + 1)); done
+          exec sh -c "${args[$((j + 1))]}" sh true 'false # hidden' true
+        fi
         if [ "$mode" = tools-missing ] && [ "$platform" = linux/amd64 ]; then
           echo "tool probe: rg --version failed"
           exit 1

@@ -30,6 +30,7 @@ if [ -n "$tools_file" ]; then
     exit 1
   fi
   while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
     line="${line#"${line%%[![:space:]]*}"}"
     case "$line" in ''|'#'*) continue ;; esac
     tools+=("$line")
