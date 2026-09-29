@@ -1094,7 +1094,7 @@ impl<'a> AzureSandboxImage<'a> {
 /// Label key the controller writes on every disk image it builds, and the provider finds it by.
 pub const AZURE_DISK_IMAGE_LABEL: &str = "alienImage";
 
-/// Classifies a declared `code.image` for Azure, or `None` when it is neither shape. A bare
+/// Classifies a declared `code.image` for Azure, or `None` when it is neither kind. A bare
 /// `[A-Za-z0-9._-]+` is checked first and always a catalog name; anything else must carry `/`,
 /// `:` or `@` and parse as an OCI reference.
 pub fn classify_azure_sandbox_image(image: &str) -> Option<AzureSandboxImage<'_>> {
@@ -2049,9 +2049,9 @@ mod tests {
         );
     }
 
-    /// Every value accepted before registry images existed still names a catalog image, so no
-    /// declaration that planned then changes meaning now. Exhaustive to three characters over the
-    /// old alphabet, then a fixed-seed sample of longer ones, some with surrounding space.
+    /// Every value the catalog allowlist `[A-Za-z0-9._-]+` accepts stays a catalog name, so a
+    /// declaration that planned under it keeps its meaning. Exhaustive to three characters, then a
+    /// fixed-seed sample of longer ones, some with surrounding space.
     #[test]
     fn every_value_the_catalog_allowlist_accepted_is_still_a_catalog_name() {
         const ALPHABET: &[u8] =

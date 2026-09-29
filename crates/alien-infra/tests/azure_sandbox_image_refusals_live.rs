@@ -100,7 +100,7 @@ async fn refused(image: &str, expected: &[&str]) {
 #[ignore = "needs a live Azure sandbox group"]
 async fn live_controller_missing_tag() {
     refused(
-        "docker.io/library/python:0.0.0-v43r2-nope",
+        "docker.io/library/python:0.0.0-does-not-exist",
         &["ImageNotFound", "not found in the registry"],
     )
     .await;
@@ -118,7 +118,7 @@ async fn live_controller_private_image_without_credentials() {
 #[ignore = "needs a live Azure sandbox group"]
 async fn live_controller_proxy_host_image_keeps_the_token_out() {
     let image = std::env::var("AZURE_PROXY_IMAGE")
-        .unwrap_or_else(|_| "test-manager.alien.dev/artifacts/prj_v43r2/app:v1".to_string());
+        .unwrap_or_else(|_| "test-manager.alien.dev/artifacts/prj_test/app:v1".to_string());
     let mut executor = executor(&image).await;
     executor.step().await.expect("Ready routes to the build");
     let mut errors = 0;

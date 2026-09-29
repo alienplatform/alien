@@ -52,7 +52,7 @@ fn sandbox(image: &str) -> Sandbox {
 /// The controller as the importer seeds it for a setup-created group.
 fn adopted(disk_image: Option<&str>) -> AzureSandboxController {
     serde_json::from_value(serde_json::json!({
-        "state": "ready",
+        "state": if disk_image.is_some() { "ready" } else { "ensureDiskImage" },
         "sandboxGroup": env("AZURE_SANDBOX_GROUP"),
         "region": region(),
         "resourceGroup": env("AZURE_RESOURCE_GROUP"),
@@ -133,7 +133,8 @@ async fn live_registry_image_build_reuse_rebuild_and_retire() {
         .expect("the retry adopts");
     assert_eq!(internal(&again)["diskImageId"], id_314.as_str());
 
-    // Change the reference: builds anew, then a Ready tick retires the old one.
+    // Change the reference: builds anew and retires the old one, which a Ready tick keeps for
+    // the retention window. The id is left in the group for the teardown to take.
     first.update(sandbox(PY313)).expect("update starts");
     drive(&mut first, "rebuild-313")
         .await
@@ -141,8 +142,11 @@ async fn live_registry_image_build_reuse_rebuild_and_retire() {
     let rebuilt = internal(&first);
     assert_eq!(rebuilt["diskImage"], PY313);
     assert_ne!(rebuilt["diskImageId"], id_314.as_str());
-    first.step().await.expect("the Ready tick reaps");
-    assert_eq!(internal(&first)["retiredDiskImages"], serde_json::json!([]));
+    first.step().await.expect("the Ready tick keeps it");
+    assert_eq!(
+        internal(&first)["retiredDiskImages"][0]["id"],
+        id_314.as_str()
+    );
 }
 
 #[tokio::test]

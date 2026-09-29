@@ -267,7 +267,7 @@ pub struct DiskImageStatus {
 }
 
 /// A registry image to build a disk image from.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct CreateDiskImage {
     /// Registry reference, such as `docker.io/library/python:3.14-slim`. Only a `linux/amd64`
     /// image or index builds; Azure refuses anything else with `ImagePlatformNotSupported`.
@@ -276,6 +276,23 @@ pub struct CreateDiskImage {
     pub labels: BTreeMap<String, String>,
     /// Basic credentials for a private registry, as `(username, token)`. Absent pulls anonymously.
     pub registry_credentials: Option<(String, String)>,
+}
+
+// Written by hand so a log line or a mock mismatch never prints the registry token.
+impl std::fmt::Debug for CreateDiskImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreateDiskImage")
+            .field("base", &self.base)
+            .field("labels", &self.labels)
+            .field(
+                "registry_credentials",
+                &self
+                    .registry_credentials
+                    .as_ref()
+                    .map(|(username, _)| (username, "<redacted>")),
+            )
+            .finish()
+    }
 }
 
 /// The disk image create body: `image.base`, the labels, and `registryCredentials` when set.
@@ -366,9 +383,9 @@ pub trait SandboxDataPlaneApi: Send + Sync + std::fmt::Debug {
     async fn delete_disk_image(&self, group: &str, image_id: &str) -> Result<()>;
 }
 
-/// A 4xx with a `title` (`ImageNotFound`, `RegistryForbidden`, `ImagePlatformNotSupported`) or a
-/// 502 `DependencyError` (the pull failed, as for a helm chart) is Azure's answer about the image,
-/// which a retry does not change. Anything else, such as a bodiless RBAC 403, is about the group.
+/// Azure's answer about the image names the image, not the group. A titled 4xx (`ImageNotFound`,
+/// `RegistryForbidden`, `ImagePlatformNotSupported`) is final. A 502 `DependencyError` is a failed
+/// pull, which a registry outage or rate limit also produces, so it stays retryable.
 fn disk_image_refusal(
     status: reqwest::StatusCode,
     base: &str,
@@ -383,25 +400,36 @@ fn disk_image_refusal(
         detail: String,
     }
 
+    let http_error = |status: reqwest::StatusCode| {
+        alien_error::AlienError::new(ErrorData::HttpResponseError {
+            message: format!("Azure CreateDiskImage failed: HTTP {status}"),
+            url: url.to_string(),
+            http_status: status.as_u16(),
+            http_request_text: None,
+            http_response_text: Some(body.to_string()),
+        })
+    };
+    let reason = |problem: &Problem| {
+        format!(
+            "Azure refused to build a disk image from '{base}' ({}): {}",
+            problem.title, problem.detail
+        )
+    };
+
     match serde_json::from_str::<Problem>(body) {
         Ok(problem)
-            if (status.is_client_error() && status.as_u16() != 409 && status.as_u16() != 429)
-                || (status == reqwest::StatusCode::BAD_GATEWAY
-                    && problem.title == "DependencyError") =>
+            if status.is_client_error() && status.as_u16() != 409 && status.as_u16() != 429 =>
         {
-            alien_error::AlienError::new(ErrorData::HttpResponseError {
-                message: format!("Azure CreateDiskImage failed: HTTP {status}"),
-                url: url.to_string(),
-                http_status: status.as_u16(),
-                http_request_text: None,
-                http_response_text: Some(body.to_string()),
-            })
-            .context(ErrorData::InvalidInput {
-                message: format!(
-                    "Azure refused to build a disk image from '{base}' ({}): {}",
-                    problem.title, problem.detail
-                ),
+            http_error(status).context(ErrorData::InvalidInput {
+                message: reason(&problem),
                 field_name: None,
+            })
+        }
+        Ok(problem)
+            if status == reqwest::StatusCode::BAD_GATEWAY && problem.title == "DependencyError" =>
+        {
+            http_error(status).context(ErrorData::RemoteServiceUnavailable {
+                message: reason(&problem),
             })
         }
         _ => crate::azure::common::create_azure_http_error_with_context(
@@ -1352,7 +1380,7 @@ mod tests {
         );
     }
 
-    /// The wire shapes the live service answered with: a create that is `Ready` in its own
+    /// The wire formats the live service answered with: a create that is `Ready` in its own
     /// response, and a list that is a bare array rather than ARM's `{"value": [...]}`.
     #[tokio::test]
     async fn a_disk_image_is_built_and_listed_in_the_shapes_the_service_sends() {
@@ -1445,30 +1473,34 @@ mod tests {
         );
     }
 
-    /// A missing tag answers 404 and a denied pull 403, each with the reason in the body. Both
-    /// must name the registry's answer rather than the group, and neither is worth a retry.
+    /// Each of Azure's answers about the image names the image rather than the group. The 4xx
+    /// ones are final; a failed pull (502) may be a registry outage, so it stays retryable.
     #[tokio::test]
     async fn a_registry_refusal_names_the_image_not_the_group() {
-        for (status, body, expected) in [
+        for (status, body, expected, retryable) in [
             (
                 404,
                 r#"{"title":"ImageNotFound","status":404,"detail":"The image 'docker.io/library/python:0.0-nope' was not found in the registry."}"#,
                 "not found in the registry",
+                false,
             ),
             (
                 403,
                 r#"{"title":"RegistryForbidden","status":403,"detail":"Pulling the image was forbidden. Provide 'registryCredentials' to authenticate."}"#,
                 "Provide 'registryCredentials'",
+                false,
             ),
             (
                 401,
                 r#"{"title":"RegistryAuthFailed","status":401,"detail":"Authentication failed when pulling container image."}"#,
                 "Authentication failed when pulling",
+                false,
             ),
             (
                 502,
                 r#"{"title":"DependencyError","status":502,"detail":"buildah pull failed with exit code 125."}"#,
                 "buildah pull failed",
+                true,
             ),
         ] {
             let server = MockServer::start_async().await;
@@ -1499,10 +1531,7 @@ mod tests {
             let rendered = error.to_string();
             assert!(rendered.contains(expected), "{status}: {rendered}");
             assert!(!rendered.contains("'grp'"), "{status}: {rendered}");
-            assert!(
-                !error.retryable,
-                "{status}: a registry refusal is not retried"
-            );
+            assert_eq!(error.retryable, retryable, "{status}: {rendered}");
             let serialized = serde_json::to_string(&error).expect("the error serializes");
             assert!(!serialized.contains("secret"), "{serialized}");
         }

@@ -6,6 +6,7 @@
       {
         // Disk-image verbs only: no sandbox is created, read or reached, so `sandbox/execute`'s
         // data-plane role stays the only way into a session.
+        "label": "manage-sandbox-disk-images",
         "description": "Allows creating, reading and deleting disk images under the selected sandbox group.",
         "grant": {
           "dataActions": [

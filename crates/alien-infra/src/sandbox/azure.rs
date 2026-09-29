@@ -32,10 +32,33 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 
-/// A disk image builds in 10-30s. 60 polls at this interval is a 5-minute ceiling, an order of
-/// magnitude past a healthy build, so reaching it means the build is wedged rather than slow.
+/// A disk image builds in 10-30s. 60 polls at this interval is at most 5 minutes (the executor
+/// may step sooner), an order of magnitude past a healthy build, so reaching it means it is wedged.
 const DISK_IMAGE_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const DISK_IMAGE_MAX_POLLS: u32 = 60;
+
+/// How long a disk image a binding named outlives its replacement. Azure caps no session's life,
+/// so this borrows AWS's MicroVM ceiling: long past the rollout that moves every consumer of the
+/// binding to the new image.
+const RETIRED_DISK_IMAGE_RETENTION_SECONDS: i64 = 28_800;
+
+/// A disk image this controller built and no longer serves.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RetiredDiskImage {
+    pub(crate) id: String,
+    /// At once for one no binding named (a duplicate, a failed or abandoned build); after the
+    /// retention window for one a consumer may still start sandboxes from.
+    pub(crate) delete_after: chrono::DateTime<chrono::Utc>,
+}
+
+/// A build Azure accepted but has not finished, kept so a poll never depends on the list alone.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PendingDiskImage {
+    pub(crate) reference: String,
+    pub(crate) id: String,
+}
 
 /// Azure Sandbox controller.
 #[controller]
@@ -54,10 +77,13 @@ pub struct AzureSandboxController {
     /// Disk image built from a registry `disk_image`, which sessions start from.
     #[serde(default)]
     pub(crate) disk_image_id: Option<String>,
-    /// Disk images a changed image replaced, deleted from `Ready`. One a stopped sandbox's
-    /// snapshot still holds is refused with a 409 and stays here for the next tick.
+    /// Disk images deleted from `Ready` once due. One a stopped sandbox's snapshot still holds is
+    /// refused with a 409 and stays here for the next tick.
     #[serde(default)]
-    pub(crate) retired_disk_images: Vec<String>,
+    pub(crate) retired_disk_images: Vec<RetiredDiskImage>,
+    /// The build in flight, if any.
+    #[serde(default)]
+    pub(crate) pending_disk_image: Option<PendingDiskImage>,
     /// Outbound policy every sandbox is created with, from the declaration.
     #[serde(default)]
     pub(crate) egress: Option<SandboxEgress>,
@@ -134,9 +160,9 @@ impl AzureSandboxController {
         // capture is all-or-nothing, so a refusal cannot pair a new policy or size with an
         // older image.
         match self.capture_session_inputs(&config) {
-            // An imported group arrives here with nothing built for a registry image, and a
-            // Frozen one whose image changed without an update flow arrives serving the old one.
-            // The second builds as an update, so a failed build leaves the served binding alone.
+            // A Frozen sandbox whose image changed without an update flow arrives serving the old
+            // one, and builds as an update so a failed build leaves the served binding alone. One
+            // serving nothing yet builds through the create flow.
             Ok(()) if self.pending_image(&config).is_some() => {
                 return Ok(HandlerAction::Continue {
                     state: if self.disk_image.is_some() {
@@ -153,6 +179,10 @@ impl AzureSandboxController {
                 %error,
                 "the declaration did not capture, so the binding keeps the one it has"
             ),
+        }
+        // A build left running by a failed update the declaration has since reverted.
+        if self.pending_image(&config).is_none() {
+            self.abandon_pending_build(None);
         }
         self.reap_retired_disk_images(ctx, &config.id).await;
 
@@ -223,7 +253,9 @@ impl AzureSandboxController {
 
     // ─────────────── UPDATE FLOW ──────────────────────────────────────────
 
-    #[flow_entry(Update, from = [Ready, RefreshFailed])]
+    // `EnsureDiskImage` lets a failed first build be repaired by a changed image: without it the
+    // update restarts the create, whose fresh controller has lost the imported group.
+    #[flow_entry(Update, from = [Ready, RefreshFailed, EnsureDiskImage])]
     #[handler(
         state = UpdatingSandbox,
         on_failure = UpdateFailed,
@@ -248,7 +280,7 @@ impl AzureSandboxController {
     }
 
     /// The create flow's build, routed to `UpdateFailed`: a new image that fails to build leaves
-    /// the sandbox updatable, with the previous image still published and serving.
+    /// the sandbox updatable, still serving the previous image if it had one.
     #[handler(
         state = UpdatingDiskImage,
         on_failure = UpdateFailed,
@@ -270,9 +302,9 @@ impl AzureSandboxController {
         status = ResourceStatus::Deleting
     )]
     async fn deleting(&mut self, _ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        // The group is the setup stack's to destroy, and destroying it takes its sandboxes with
-        // it. A delete here would race `terraform destroy` and fail teardown on the 404 whichever
-        // call lost; the runtime's own grant does not carry the delete in any case.
+        // The group is the setup stack's to destroy, and destroying it takes its sandboxes and
+        // disk images with it. A delete here would race `terraform destroy` and fail teardown on
+        // the 404 whichever call lost; the runtime's own grant does not carry the delete anyway.
         Ok(HandlerAction::Continue {
             state: Deleted,
             suggested_delay: None,
@@ -376,8 +408,9 @@ impl AzureSandboxController {
             AzureSandboxImage::Catalog(name) => {
                 self.disk_image = Some(name.to_string());
                 if let Some(replaced) = self.disk_image_id.take() {
-                    self.retired_disk_images.push(replaced);
+                    self.retire(replaced, true);
                 }
+                self.abandon_pending_build(None);
             }
             // Published by the build once its disk image is Ready; until then the binding keeps
             // naming the image sessions can start from now.
@@ -398,24 +431,32 @@ impl AzureSandboxController {
             .then(|| reference.to_string())
     }
 
-    /// Looked up by label before any create and on every poll: the id is server-minted, so a lost
-    /// create response leaves an image only the label finds, and a second create would duplicate
-    /// it. Extra images under the label are retired.
+    /// Looked up by label before any create and on every poll: the id is server-minted, so only the
+    /// label finds an image whose create response was lost. A returned id is also read directly,
+    /// since the list can lag it. Extra images under the label are retired.
     async fn build_disk_image(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<AzureSandboxHandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
         let Some(reference) = self.pending_image(config) else {
+            self.abandon_pending_build(None);
             return Ok(AzureSandboxHandlerAction::Continue {
                 state: AzureSandboxState::Ready,
                 suggested_delay: None,
             });
         };
+        if self.abandon_pending_build(Some(&reference)) {
+            // Re-entered so the new build gets a poll budget of its own.
+            return Ok(AzureSandboxHandlerAction::Continue {
+                state: self.state.clone(),
+                suggested_delay: None,
+            });
+        }
         let (group, client) = self.data_plane(ctx, &config.id)?;
         let label = azure_disk_image_label(&reference);
 
-        let ours: Vec<DiskImage> = client
+        let mut ours: Vec<DiskImage> = client
             .list_disk_images(&group)
             .await
             .context(ErrorData::CloudPlatformError {
@@ -425,23 +466,54 @@ impl AzureSandboxController {
             .into_iter()
             .filter(|image| image.labels.get(AZURE_DISK_IMAGE_LABEL) == Some(&label))
             .collect();
+        if let Some(pending) = self.pending_disk_image.clone() {
+            if !ours.iter().any(|image| image.id == pending.id) {
+                match client.get_disk_image(&group, &pending.id).await {
+                    Ok(image) => ours.push(image),
+                    Err(error)
+                        if matches!(
+                            error.error,
+                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                        ) =>
+                    {
+                        self.pending_disk_image = None;
+                    }
+                    Err(error) => {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to read disk image '{}' of sandbox group '{group}'",
+                                pending.id
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        }))
+                    }
+                }
+            }
+        }
 
-        // A Failed image is reported once, retired, and passed over from then on: the retry that
-        // follows builds afresh instead of finding the same failure under the label again.
+        // A Failed image is reported once, retired, and passed over from then on. The error is
+        // not retryable, so the rebuild comes from the next update or a retry of the failed
+        // resource, which finds the failure retired and builds afresh.
         let failed = |image: &&DiskImage| image.state() == Some("Failed");
         let image = match ours.iter().find(|image| image.state() == Some("Ready")) {
             Some(ready) => ready.clone(),
-            None if ours.iter().any(|image| !failed(&image)) => {
+            None if ours
+                .iter()
+                .any(|image| !failed(&image) && !self.is_retired(&image.id)) =>
+            {
                 debug!(sandbox_id = %config.id, %reference, "disk image is still building");
-                return Ok(AzureSandboxHandlerAction::Stay {
-                    max_times: Some(DISK_IMAGE_MAX_POLLS),
-                    suggested_delay: Some(DISK_IMAGE_POLL_INTERVAL),
-                });
+                let building = ours
+                    .iter()
+                    .filter(|image| !failed(image))
+                    .map(|image| image.id.clone())
+                    .collect();
+                return self.poll_build(building, &reference, &config.id);
             }
             None => {
+                self.pending_disk_image = None;
                 let unreported: Vec<&DiskImage> = ours
                     .iter()
-                    .filter(|image| !self.retired_disk_images.contains(&image.id))
+                    .filter(|image| !self.is_retired(&image.id))
                     .collect();
                 if let Some(first) = unreported.first() {
                     let reason = first
@@ -450,8 +522,9 @@ impl AzureSandboxController {
                         .and_then(|status| status.error_message.clone())
                         .filter(|message| !message.is_empty())
                         .unwrap_or_else(|| "no reason given".to_string());
-                    self.retired_disk_images
-                        .extend(unreported.iter().map(|image| image.id.clone()));
+                    for image in &unreported {
+                        self.retire(image.id.clone(), false);
+                    }
                     return Err(AlienError::new(ErrorData::CloudPlatformError {
                         message: format!(
                             "the disk image built from '{reference}' failed: {reason}"
@@ -484,23 +557,31 @@ impl AzureSandboxController {
                     })?;
                 info!(sandbox_id = %config.id, %reference, image = %created.id, "disk image build started");
                 if created.state() != Some("Ready") {
-                    return Ok(AzureSandboxHandlerAction::Stay {
-                        max_times: Some(DISK_IMAGE_MAX_POLLS),
-                        suggested_delay: Some(DISK_IMAGE_POLL_INTERVAL),
+                    self.pending_disk_image = Some(PendingDiskImage {
+                        reference: reference.clone(),
+                        id: created.id.clone(),
                     });
+                    return self.poll_build(vec![created.id], &reference, &config.id);
                 }
                 created
             }
         };
 
+        // An abandoned build adopted after all serves now, so it leaves the deletion queue.
+        self.retired_disk_images
+            .retain(|retired| retired.id != image.id);
+        // A Ready duplicate may be the one a provider found first, so it keeps the window.
         for other in ours.iter().filter(|other| other.id != image.id) {
-            if !self.retired_disk_images.contains(&other.id) {
-                self.retired_disk_images.push(other.id.clone());
+            self.retire(other.id.clone(), other.state() == Some("Ready"));
+        }
+        if let Some(pending) = self.pending_disk_image.take() {
+            if pending.id != image.id {
+                self.retire(pending.id, false);
             }
         }
         if let Some(replaced) = self.disk_image_id.replace(image.id.clone()) {
             if replaced != image.id {
-                self.retired_disk_images.push(replaced);
+                self.retire(replaced, true);
             }
         }
         self.disk_image = Some(reference.clone());
@@ -512,15 +593,85 @@ impl AzureSandboxController {
         })
     }
 
+    /// Queues a disk image for deletion from `Ready`; `served` holds it for the retention window.
+    fn retire(&mut self, id: String, served: bool) {
+        if self.is_retired(&id) {
+            return;
+        }
+        let now = chrono::Utc::now();
+        let delete_after = if served {
+            now + chrono::Duration::seconds(RETIRED_DISK_IMAGE_RETENTION_SECONDS)
+        } else {
+            now
+        };
+        self.retired_disk_images
+            .push(RetiredDiskImage { id, delete_after });
+    }
+
+    fn is_retired(&self, id: &str) -> bool {
+        self.retired_disk_images
+            .iter()
+            .any(|retired| retired.id == id)
+    }
+
+    /// Retires a build in flight for anything but `reference`: the declaration moved on, and
+    /// nothing else remembers its id once its label is no longer the one looked up. Returns
+    /// whether one was retired.
+    fn abandon_pending_build(&mut self, reference: Option<&str>) -> bool {
+        match self
+            .pending_disk_image
+            .take_if(|pending| Some(pending.reference.as_str()) != reference)
+        {
+            Some(pending) => {
+                self.retire(pending.id, false);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Polls a build again, or on the last poll retires it and fails: a retry then builds afresh
+    /// rather than polling a wedged build forever.
+    fn poll_build(
+        &mut self,
+        building: Vec<String>,
+        reference: &str,
+        resource_id: &str,
+    ) -> Result<AzureSandboxHandlerAction> {
+        if self._internal_stay_count.unwrap_or(0) + 1 < DISK_IMAGE_MAX_POLLS {
+            return Ok(AzureSandboxHandlerAction::Stay {
+                max_times: Some(DISK_IMAGE_MAX_POLLS),
+                suggested_delay: Some(DISK_IMAGE_POLL_INTERVAL),
+            });
+        }
+        self.pending_disk_image = None;
+        for id in &building {
+            self.retire(id.clone(), false);
+        }
+        Err(AlienError::new(ErrorData::CloudPlatformError {
+            message: format!(
+                "the disk image build from '{reference}' ({}) did not finish after \
+                 {DISK_IMAGE_MAX_POLLS} polls; a retry builds it again",
+                building.join(", ")
+            ),
+            resource_id: Some(resource_id.to_string()),
+        }))
+    }
+
     /// Best-effort, and never fails the heartbeat: a lingering old image does not make a serving
-    /// sandbox unhealthy. A 409 (a stopped sandbox's snapshot holds it) or any other failure keeps
-    /// the id for the next tick.
+    /// sandbox unhealthy. One not yet due, refused with a 409 (a stopped sandbox's snapshot holds
+    /// it) or failing otherwise is kept for a later tick.
     async fn reap_retired_disk_images(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
     ) {
-        if self.retired_disk_images.is_empty() {
+        let now = chrono::Utc::now();
+        if !self
+            .retired_disk_images
+            .iter()
+            .any(|retired| retired.delete_after <= now)
+        {
             return;
         }
         let (group, client) = match self.data_plane(ctx, resource_id) {
@@ -532,14 +683,17 @@ impl AzureSandboxController {
         };
 
         let mut kept = Vec::new();
-        for image_id in std::mem::take(&mut self.retired_disk_images) {
-            if self.disk_image_id.as_deref() == Some(image_id.as_str()) || kept.contains(&image_id)
-            {
+        for retired in std::mem::take(&mut self.retired_disk_images) {
+            if self.disk_image_id.as_deref() == Some(retired.id.as_str()) {
                 continue;
             }
-            match client.delete_disk_image(&group, &image_id).await {
+            if retired.delete_after > now {
+                kept.push(retired);
+                continue;
+            }
+            match client.delete_disk_image(&group, &retired.id).await {
                 Ok(()) => {
-                    debug!(sandbox_id = %resource_id, image = %image_id, "retired disk image deleted")
+                    debug!(sandbox_id = %resource_id, image = %retired.id, "retired disk image deleted")
                 }
                 Err(error)
                     if matches!(
@@ -552,12 +706,12 @@ impl AzureSandboxController {
                         Some(CloudClientErrorData::RemoteResourceConflict { .. })
                     ) =>
                 {
-                    debug!(sandbox_id = %resource_id, image = %image_id, "retired disk image is still held by a snapshot");
-                    kept.push(image_id);
+                    debug!(sandbox_id = %resource_id, image = %retired.id, "retired disk image is still held by a snapshot");
+                    kept.push(retired);
                 }
                 Err(error) => {
-                    warn!(sandbox_id = %resource_id, image = %image_id, %error, "retired disk image kept for the next tick");
-                    kept.push(image_id);
+                    warn!(sandbox_id = %resource_id, image = %retired.id, %error, "retired disk image kept for the next tick");
+                    kept.push(retired);
                 }
             }
         }
@@ -687,6 +841,7 @@ mod tests {
             disk_image: Some("ubuntu".to_string()),
             disk_image_id: None,
             retired_disk_images: Vec::new(),
+            pending_disk_image: None,
             egress: Some(SandboxEgress::Deny),
             idle_pause_seconds: Some(300),
             limits: None,
@@ -733,6 +888,7 @@ mod tests {
             disk_image: Some("ubuntu".to_string()),
             disk_image_id: None,
             retired_disk_images: Vec::new(),
+            pending_disk_image: None,
             egress: Some(SandboxEgress::Allow),
             idle_pause_seconds: None,
             limits: None,
@@ -860,6 +1016,7 @@ mod tests {
             disk_image: Some("ubuntu".to_string()),
             disk_image_id: None,
             retired_disk_images: Vec::new(),
+            pending_disk_image: None,
             egress: Some(SandboxEgress::Deny),
             idle_pause_seconds: None,
             limits: None,
@@ -903,6 +1060,7 @@ mod tests {
             disk_image: Some("ubuntu".to_string()),
             disk_image_id: None,
             retired_disk_images: Vec::new(),
+            pending_disk_image: None,
             egress: Some(SandboxEgress::Allow),
             idle_pause_seconds: None,
             limits: None,
@@ -949,6 +1107,7 @@ mod tests {
             disk_image: Some("ubuntu".to_string()),
             disk_image_id: None,
             retired_disk_images: Vec::new(),
+            pending_disk_image: None,
             egress: Some(SandboxEgress::Deny),
             idle_pause_seconds: Some(300),
             limits: Some(SandboxLimits {
@@ -982,6 +1141,7 @@ mod tests {
             disk_image: Some("ubuntu".to_string()),
             disk_image_id: None,
             retired_disk_images: Vec::new(),
+            pending_disk_image: None,
             egress: Some(SandboxEgress::Deny),
             idle_pause_seconds: None,
             limits: None,
@@ -1010,6 +1170,7 @@ mod tests {
             disk_image: Some("ubuntu".to_string()),
             disk_image_id: None,
             retired_disk_images: Vec::new(),
+            pending_disk_image: None,
             egress: Some(SandboxEgress::AllowDomains {
                 domains: vec!["api.example.com".to_string()],
             }),
@@ -1092,6 +1253,7 @@ mod tests {
                 disk_image: disk_image.map(str::to_string),
                 disk_image_id: disk_image_id.map(str::to_string),
                 retired_disk_images: Vec::new(),
+                pending_disk_image: None,
                 egress: Some(SandboxEgress::Allow),
                 idle_pause_seconds: None,
                 limits: None,
@@ -1155,15 +1317,31 @@ mod tests {
                 .expect("executor should build")
         }
 
+        fn retired_ids(controller: &AzureSandboxController) -> Vec<&str> {
+            controller
+                .retired_disk_images
+                .iter()
+                .map(|retired| retired.id.as_str())
+                .collect()
+        }
+
+        /// Whether `id` is held for the retention window rather than due now.
+        fn held(controller: &AzureSandboxController, id: &str) -> bool {
+            controller.retired_disk_images.iter().any(|retired| {
+                retired.id == id
+                    && retired.delete_after > chrono::Utc::now() + chrono::Duration::seconds(3600)
+            })
+        }
+
         fn state_of(executor: &SingleControllerExecutor) -> &AzureSandboxController {
             executor
                 .internal_state::<AzureSandboxController>()
                 .expect("an Azure sandbox controller")
         }
 
-        /// An imported group reaches `Ready` with nothing built for its registry image, so the
-        /// first tick builds it. The binding names the image only once the build is Ready, and
-        /// the build carries the label the provider finds it by and no registry credential.
+        /// A sandbox at `Ready` with nothing built for its registry image builds on its first
+        /// tick. The binding names the image only once the build is Ready, and the build carries
+        /// the label the provider finds it by and no registry credential.
         #[tokio::test]
         async fn an_imported_registry_image_is_built_before_its_binding_is_published() {
             let mut client = MockSandboxDataPlaneApi::new();
@@ -1222,7 +1400,11 @@ mod tests {
 
             let controller = state_of(&executor);
             assert_eq!(controller.disk_image_id.as_deref(), Some("img-1"));
-            assert_eq!(controller.retired_disk_images, vec!["dup".to_string()]);
+            assert_eq!(retired_ids(controller), vec!["dup"]);
+            assert!(
+                held(controller, "dup"),
+                "a Ready duplicate may be what a provider cached"
+            );
         }
 
         /// A build that is not Ready yet is polled on the same label rather than re-created.
@@ -1251,12 +1433,10 @@ mod tests {
             assert_eq!(polls.load(Ordering::SeqCst), 2);
         }
 
-        /// A changed reference builds a new image, then retires the old one. The delete a stopped
-        /// sandbox's snapshot refuses with a 409 is kept and retried on a later tick, not lost.
+        /// A changed reference builds a new image and retires the old one, which stays for the
+        /// retention window: a consumer still holding the previous binding starts from it.
         #[tokio::test]
-        async fn a_changed_image_is_rebuilt_and_the_old_one_retired_through_a_409() {
-            let deletes = Arc::new(AtomicUsize::new(0));
-            let seen = deletes.clone();
+        async fn a_changed_image_is_rebuilt_and_the_old_one_kept_for_the_window() {
             let mut client = MockSandboxDataPlaneApi::new();
             client
                 .expect_list_disk_images()
@@ -1266,6 +1446,40 @@ mod tests {
                 .withf(|_, request| request.base == NODE)
                 .times(1)
                 .returning(|_, _| Ok(image("new", NODE, "Ready")));
+            client.expect_delete_disk_image().times(0);
+            let mut executor =
+                executor(sandbox(PYTHON), adopted(Some(PYTHON), Some("old")), client).await;
+
+            executor
+                .update(sandbox(NODE))
+                .expect("transition to update");
+            executor
+                .step()
+                .await
+                .expect("the update routes to the build");
+            executor.step().await.expect("the new image builds");
+            let controller = state_of(&executor);
+            assert_eq!(controller.disk_image_id.as_deref(), Some("new"));
+            assert!(held(controller, "old"));
+            assert_eq!(
+                controller.get_binding_params().unwrap().unwrap()["diskImage"],
+                NODE
+            );
+
+            executor
+                .step()
+                .await
+                .expect("the Ready tick keeps an image not yet due");
+            assert_eq!(retired_ids(state_of(&executor)), vec!["old"]);
+        }
+
+        /// A due image a stopped sandbox's snapshot still holds is refused with a 409. It is kept
+        /// and deleted on a later tick, not lost.
+        #[tokio::test]
+        async fn a_due_image_held_by_a_snapshot_is_deleted_on_a_later_tick() {
+            let deletes = Arc::new(AtomicUsize::new(0));
+            let seen = deletes.clone();
+            let mut client = MockSandboxDataPlaneApi::new();
             client
                 .expect_delete_disk_image()
                 .withf(|group, id| group == "sbg" && id == "old")
@@ -1283,37 +1497,160 @@ mod tests {
                         Ok(())
                     }
                 });
-            let mut executor =
-                executor(sandbox(PYTHON), adopted(Some(PYTHON), Some("old")), client).await;
-
-            executor
-                .update(sandbox(NODE))
-                .expect("transition to update");
-            executor
-                .step()
-                .await
-                .expect("the update routes to the build");
-            executor.step().await.expect("the new image builds");
-            let controller = state_of(&executor);
-            assert_eq!(controller.disk_image_id.as_deref(), Some("new"));
-            assert_eq!(controller.retired_disk_images, vec!["old".to_string()]);
-            assert_eq!(
-                controller.get_binding_params().unwrap().unwrap()["diskImage"],
-                NODE
-            );
+            let mut controller = adopted(Some(NODE), Some("new"));
+            controller.retired_disk_images = vec![RetiredDiskImage {
+                id: "old".to_string(),
+                delete_after: chrono::Utc::now() - chrono::Duration::seconds(1),
+            }];
+            let mut executor = executor(sandbox(NODE), controller, client).await;
 
             executor
                 .step()
                 .await
                 .expect("a held image does not fail the tick");
-            assert_eq!(
-                state_of(&executor).retired_disk_images,
-                vec!["old".to_string()]
-            );
+            assert_eq!(retired_ids(state_of(&executor)), vec!["old"]);
 
             executor.step().await.expect("the next tick deletes it");
             assert!(state_of(&executor).retired_disk_images.is_empty());
             assert_eq!(deletes.load(Ordering::SeqCst), 2);
+        }
+
+        /// A create Azure accepted but has not finished is polled by its id when the list lags it,
+        /// rather than built a second time.
+        #[tokio::test]
+        async fn a_build_the_list_does_not_show_yet_is_read_by_id() {
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .returning(|_| Ok(Vec::new()));
+            client
+                .expect_create_disk_image()
+                .times(1)
+                .returning(|_, _| Ok(image("img-1", PYTHON, "Building")));
+            client
+                .expect_get_disk_image()
+                .withf(|group, id| group == "sbg" && id == "img-1")
+                .times(1)
+                .returning(|_, _| Ok(image("img-1", PYTHON, "Ready")));
+            let mut executor = executor(sandbox(PYTHON), adopted(None, None), client).await;
+
+            executor.step().await.expect("the tick routes to the build");
+            executor.step().await.expect("the build is accepted");
+            assert_eq!(
+                state_of(&executor)
+                    .pending_disk_image
+                    .as_ref()
+                    .map(|pending| pending.id.as_str()),
+                Some("img-1")
+            );
+            executor
+                .step()
+                .await
+                .expect("the poll reads the build by id");
+
+            let controller = state_of(&executor);
+            assert_eq!(controller.disk_image_id.as_deref(), Some("img-1"));
+            assert!(controller.pending_disk_image.is_none());
+        }
+
+        /// A build still running when the declaration moves to another image is retired for
+        /// deletion at once: its label is no longer looked up, so nothing else would find it.
+        #[tokio::test]
+        async fn a_build_the_declaration_moved_past_is_retired() {
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .returning(|_| Ok(Vec::new()));
+            client
+                .expect_create_disk_image()
+                .withf(|_, request| request.base == NODE)
+                .times(1)
+                .returning(|_, _| Ok(image("node-1", NODE, "Ready")));
+            let mut controller = adopted(None, None);
+            controller.state = AzureSandboxState::EnsureDiskImage;
+            controller.pending_disk_image = Some(PendingDiskImage {
+                reference: PYTHON.to_string(),
+                id: "python-1".to_string(),
+            });
+            let mut executor = executor(sandbox(NODE), controller, client).await;
+
+            executor
+                .step()
+                .await
+                .expect("the abandoned build is retired");
+            assert_eq!(retired_ids(state_of(&executor)), vec!["python-1"]);
+            executor.step().await.expect("the new image builds");
+
+            let controller = state_of(&executor);
+            assert_eq!(controller.disk_image_id.as_deref(), Some("node-1"));
+            assert_eq!(retired_ids(controller), vec!["python-1"]);
+            assert!(!held(controller, "python-1"), "no binding ever named it");
+        }
+
+        /// A build still running on the last poll is retired and the step fails. The retry of
+        /// the failed resource starts a new build instead of polling the wedged one again.
+        #[tokio::test]
+        async fn a_wedged_build_is_given_up_and_the_retry_builds_afresh() {
+            let creates = Arc::new(AtomicUsize::new(0));
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .returning(|_| Ok(vec![image("stuck", PYTHON, "Building")]));
+            client.expect_create_disk_image().times(0);
+            let mut controller = adopted(None, None);
+            controller.state = AzureSandboxState::EnsureDiskImage;
+            controller._internal_stay_count = Some(DISK_IMAGE_MAX_POLLS - 1);
+            let mut executor = executor(sandbox(PYTHON), controller, client).await;
+
+            let error = executor.step().await.expect_err("the last poll gives up");
+            assert!(error.to_string().contains("stuck"), "{error}");
+            assert_eq!(retired_ids(state_of(&executor)), vec!["stuck"]);
+
+            let mut resumed = state_of(&executor).clone();
+            resumed._internal_stay_count = None;
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .returning(|_| Ok(vec![image("stuck", PYTHON, "Building")]));
+            let counter = creates.clone();
+            client
+                .expect_create_disk_image()
+                .times(1)
+                .returning(move |_, _| {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(image("fresh", PYTHON, "Ready"))
+                });
+            let mut executor = self::executor(sandbox(PYTHON), resumed, client).await;
+            executor.step().await.expect("the retry builds afresh");
+
+            assert_eq!(creates.load(Ordering::SeqCst), 1);
+            assert_eq!(state_of(&executor).disk_image_id.as_deref(), Some("fresh"));
+        }
+
+        /// A build a failed update left running is retired once the declaration reverts to the
+        /// image already served, since no later build under its label would find it.
+        #[tokio::test]
+        async fn a_build_left_by_a_reverted_update_is_retired_from_ready() {
+            let mut client = MockSandboxDataPlaneApi::new();
+            client.expect_list_disk_images().times(0);
+            client
+                .expect_delete_disk_image()
+                .withf(|_, id| id == "node-1")
+                .times(1)
+                .returning(|_, _| Ok(()));
+            let mut controller = adopted(Some(PYTHON), Some("python-1"));
+            controller.pending_disk_image = Some(PendingDiskImage {
+                reference: NODE.to_string(),
+                id: "node-1".to_string(),
+            });
+            let mut executor = executor(sandbox(PYTHON), controller, client).await;
+
+            executor.step().await.expect("the Ready tick");
+
+            let controller = state_of(&executor);
+            assert!(controller.pending_disk_image.is_none());
+            assert!(controller.retired_disk_images.is_empty());
+            assert_eq!(controller.disk_image_id.as_deref(), Some("python-1"));
         }
 
         /// A Frozen sandbox whose image changed without an update flow reaches `Ready` serving the
@@ -1346,7 +1683,7 @@ mod tests {
             executor.step().await.expect("the new image builds");
             let controller = state_of(&executor);
             assert_eq!(controller.disk_image_id.as_deref(), Some("new"));
-            assert_eq!(controller.retired_disk_images, vec!["old".to_string()]);
+            assert!(held(controller, "old"));
         }
 
         /// An image on the manager's own host is pulled through its registry proxy, which takes
@@ -1417,6 +1754,77 @@ mod tests {
             assert!(state_of(&executor).get_binding_params().unwrap().is_none());
         }
 
+        /// A first build that failed is repaired by declaring another image: the update resumes
+        /// from the build's checkpoint, keeping the imported group, rather than restarting the
+        /// create, which cannot recover the group.
+        #[tokio::test]
+        async fn a_failed_first_build_is_repaired_by_a_changed_image() {
+            use crate::core::{StackExecutor, StackResourceStateExt};
+            use alien_azure_clients::AzureClientConfigExt as _;
+            use alien_core::{ClientConfig, StackResourceState, StackState};
+
+            let mut failed = StackResourceState::new_pending(
+                Sandbox::RESOURCE_TYPE.to_string(),
+                alien_core::Resource::new(sandbox(PYTHON)),
+                Some(ResourceLifecycle::Frozen),
+                vec![],
+            );
+            failed.status = ResourceStatus::ProvisionFailed;
+            let mut checkpoint = adopted(None, None);
+            checkpoint.state = AzureSandboxState::EnsureDiskImage;
+            failed
+                .set_last_failed_controller(Some(Box::new(checkpoint)))
+                .unwrap();
+            let mut state = StackState::new(Platform::Azure);
+            state.resources.insert("agents".to_string(), failed);
+
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .returning(|_| Ok(Vec::new()));
+            client
+                .expect_create_disk_image()
+                .withf(|group, request| group == "sbg" && request.base == NODE)
+                .times(1)
+                .returning(|_, _| Ok(image("node-1", NODE, "Ready")));
+            let stack = alien_core::Stack::new("repair".to_string())
+                .add(sandbox(NODE), ResourceLifecycle::Frozen)
+                .build();
+            let deployment_config = alien_core::DeploymentConfig::builder()
+                .stack_settings(alien_core::StackSettings::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(alien_core::ExternalBindings::default())
+                .allow_frozen_changes(true)
+                .build();
+            let executor = StackExecutor::builder(
+                &stack,
+                ClientConfig::Azure(Box::new(alien_azure_clients::AzureClientConfig::mock())),
+            )
+            .deployment_config(&deployment_config)
+            .service_provider(provider_with(client))
+            .build()
+            .unwrap();
+
+            let plan = executor.plan(&state).unwrap();
+            assert!(plan.updates.contains_key("agents"), "{plan:?}");
+            assert!(!plan.creates.contains(&"agents".to_string()), "{plan:?}");
+
+            for _ in 0..3 {
+                state = executor.step(state).await.unwrap().next_state;
+            }
+            let repaired = &state.resources["agents"];
+            assert_eq!(repaired.status, ResourceStatus::Running, "{repaired:?}");
+            let controller = repaired
+                .get_internal_controller_typed::<AzureSandboxController>()
+                .unwrap();
+            assert_eq!(controller.sandbox_group.as_deref(), Some("sbg"));
+            assert_eq!(controller.disk_image_id.as_deref(), Some("node-1"));
+        }
+
         /// Switching back to a catalog name publishes it at once and retires the built image.
         #[test]
         fn a_catalog_name_retires_the_image_a_registry_reference_built() {
@@ -1428,7 +1836,7 @@ mod tests {
 
             assert_eq!(controller.disk_image.as_deref(), Some("ubuntu"));
             assert_eq!(controller.disk_image_id, None);
-            assert_eq!(controller.retired_disk_images, vec!["img-1".to_string()]);
+            assert!(held(&controller, "img-1"));
         }
     }
 }

@@ -1,10 +1,12 @@
 //! Refuses the Azure management profiles whose `sandbox/images` grant would bind nothing.
 //!
-//! The grant binds only on a sandbox's own group, so at `*` or under any other resource id it
-//! renders nothing, and an override that leaves it off a registry-image sandbox 403s at its build.
+//! The grant binds only on a sandbox's own group, so at `*` it fails to render, under any other
+//! resource id it binds nothing, and an override that leaves it off a registry-image sandbox 403s
+//! at its build.
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
+use alien_core::permissions::PermissionSetReference;
 use alien_core::{AzureSandboxImage, ManagementPermissions, Platform, Sandbox, Stack};
 
 const IMAGES: &str = "sandbox/images";
@@ -36,7 +38,13 @@ impl CompileTimeCheck for SandboxImagePermissionsCheck {
             profile
                 .0
                 .get(scope)
-                .is_some_and(|refs| refs.iter().any(|reference| reference.id() == IMAGES))
+                // By registry name, as the emitter binds it: an inline set's id is whatever its
+                // author typed.
+                .is_some_and(|refs| {
+                    refs.iter().any(|reference| {
+                        matches!(reference, PermissionSetReference::Name(name) if name == IMAGES)
+                    })
+                })
         };
         let is_sandbox = |resource_id: &str| {
             stack.resources().any(|(id, entry)| {
@@ -45,6 +53,17 @@ impl CompileTimeCheck for SandboxImagePermissionsCheck {
         };
 
         let mut errors = Vec::new();
+        // The setup package renders this set's role by its registry name, so an inline set
+        // carrying the name would render in its place.
+        let borrows_the_name = profile.0.values().flatten().any(|reference| {
+            matches!(reference, PermissionSetReference::Inline(set) if set.id == IMAGES)
+        });
+        if borrows_the_name {
+            errors.push(format!(
+                "An inline permission set cannot be named '{IMAGES}', which is a built-in set. \
+                 Rename it."
+            ));
+        }
         if grants("*") {
             errors.push(format!(
                 "'{IMAGES}' cannot be granted at '*': it binds on one sandbox's group. Grant it \
@@ -175,6 +194,28 @@ mod tests {
         ))
         .await;
         assert!(on_a_sandbox.is_empty(), "{on_a_sandbox:?}");
+    }
+
+    #[tokio::test]
+    async fn an_inline_set_named_like_images_is_refused() {
+        let borrowed = alien_core::permissions::PermissionSet {
+            id: IMAGES.to_string(),
+            description: "not the built-in set".to_string(),
+            platforms: alien_core::permissions::PlatformPermissions {
+                aws: None,
+                gcp: None,
+                azure: None,
+            },
+        };
+        let found = errors(ManagementPermissions::Extend(
+            PermissionProfile::new().resource(
+                "registry-box",
+                [PermissionSetReference::from_inline(borrowed)],
+            ),
+        ))
+        .await;
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("inline"), "{found:?}");
     }
 
     #[tokio::test]

@@ -1113,7 +1113,7 @@ async fn validate_pull_access(
     repo_name: &str,
 ) -> Result<(), Response> {
     refuse_capability_pull(subject)?;
-    let deployment_id = match &subject.scope {
+    let (deployment_id, own_project) = match &subject.scope {
         Scope::Workspace | Scope::Project { .. } => return Ok(()),
         Scope::DeploymentGroup { .. } => {
             return Err(oci_error(
@@ -1158,7 +1158,7 @@ async fn validate_pull_access(
             {
                 return Ok(());
             }
-            deployment_id.as_str()
+            (deployment_id.as_str(), project_id.as_str())
         }
     };
 
@@ -1228,10 +1228,16 @@ async fn validate_pull_access(
 
         let proxy_host = state.config.base_url();
         let proxy_host = alien_core::image_rewrite::strip_url_scheme(&proxy_host);
+        // A sandbox image in another project's repository never enters the list, so naming one
+        // in a release cannot open that project's images to this deployment's token. An
+        // unattributable repo counts as "default", as a push to it does.
+        let routes = &state.registry_routing_table;
+        let not_another_project =
+            |repo: &str| routes.project_id_for_repo(repo).unwrap_or("default") == own_project;
         let repos = release
             .stacks
             .values()
-            .flat_map(|stack| extract_repo_names(stack, proxy_host))
+            .flat_map(|stack| extract_repo_names(stack, proxy_host, &not_another_project))
             .collect::<Vec<_>>();
 
         // Cache the result.
@@ -1257,8 +1263,13 @@ async fn validate_pull_access(
 }
 
 /// Extract the set of repo names from a release's stack. `proxy_host` is this manager's own
-/// registry host, the only one a sandbox image is pulled through.
-fn extract_repo_names(stack: &alien_core::Stack, proxy_host: &str) -> Vec<String> {
+/// registry host, the only one a sandbox image is pulled through, and `sandbox_repo_allowed`
+/// filters the repos a sandbox image may add.
+fn extract_repo_names(
+    stack: &alien_core::Stack,
+    proxy_host: &str,
+    sandbox_repo_allowed: &dyn Fn(&str) -> bool,
+) -> Vec<String> {
     use alien_core::image_rewrite::strip_registry_host;
     use alien_core::{
         classify_azure_sandbox_image, AzureSandboxImage, Container, ContainerCode, Daemon,
@@ -1268,6 +1279,7 @@ fn extract_repo_names(stack: &alien_core::Stack, proxy_host: &str) -> Vec<String
     let mut repos = Vec::new();
 
     for (_resource_id, entry) in stack.resources() {
+        let mut from_sandbox = false;
         let image = if let Some(func) = entry.config.downcast_ref::<Worker>() {
             match &func.code {
                 WorkerCode::Image { image } => Some(image.as_str()),
@@ -1293,6 +1305,7 @@ fn extract_repo_names(stack: &alien_core::Stack, proxy_host: &str) -> Vec<String
                             .split_once('/')
                             .is_some_and(|(host, _)| host.eq_ignore_ascii_case(proxy_host)) =>
                     {
+                        from_sandbox = true;
                         Some(reference)
                     }
                     _ => None,
@@ -1307,6 +1320,9 @@ fn extract_repo_names(stack: &alien_core::Stack, proxy_host: &str) -> Vec<String
             if let Some(stripped) = strip_registry_host(image_uri) {
                 let repo = stripped.split(':').next().unwrap_or(&stripped);
                 let repo = repo.split('@').next().unwrap_or(repo);
+                if from_sandbox && !sandbox_repo_allowed(repo) {
+                    continue;
+                }
                 if !repo.is_empty() && !repos.contains(&repo.to_string()) {
                     repos.push(repo.to_string());
                 }
@@ -1606,7 +1622,7 @@ mod tests {
             .build();
 
         assert_eq!(
-            extract_repo_names(&stack, "manager.example.com"),
+            extract_repo_names(&stack, "manager.example.com", &|_| true),
             vec!["artifacts/prj_test".to_string()]
         );
     }
@@ -1647,9 +1663,32 @@ mod tests {
             .build();
 
         assert_eq!(
-            extract_repo_names(&stack, "manager.example.com"),
+            extract_repo_names(&stack, "manager.example.com", &|_| true),
             vec!["artifacts/prj_test".to_string()]
         );
+    }
+
+    /// A sandbox image in another project's repository is left out of the release's list.
+    #[test]
+    fn extract_repo_names_leaves_out_a_sandbox_image_of_another_project() {
+        let sandbox = Sandbox::new("agents".to_string())
+            .code(SandboxCode::Image {
+                image: "manager.example.com/artifacts/prj_other:sandbox-v1".to_string(),
+            })
+            .egress(SandboxEgress::Allow)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let stack = Stack::new("test-stack".to_string())
+            .add(sandbox, ResourceLifecycle::Frozen)
+            .build();
+
+        assert!(extract_repo_names(&stack, "manager.example.com", &|repo| {
+            repo != "artifacts/prj_other"
+        })
+        .is_empty());
     }
 
     #[test]

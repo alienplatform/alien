@@ -761,6 +761,7 @@ fn azure_sandbox_image_grant_reaches_the_manager_on_its_own_group_only() {
     }
     assert!(!role_text.contains("sandboxes/"), "{role_text}");
 
+    snapshot_module("azure_sandbox_image_grant", &module);
     assert_terraform_valid(&module, "azure sandbox image grant");
 }
 

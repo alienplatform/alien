@@ -15,15 +15,13 @@ use crate::{
     block::{attr, data_block, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
-        downcast, permission_context, required_label, service_account_principal_id,
-        setup_execution_role_label, setup_management_role_label, tags,
+        downcast, permission_context, remote_stack_management_label, required_label,
+        service_account_principal_id, setup_execution_role_label, setup_management_role_label,
+        tags,
     },
     expr,
 };
-use alien_core::{
-    import::EmitContext, PermissionProfile, PermissionSetReference, RemoteStackManagement, Result,
-    Vault,
-};
+use alien_core::{import::EmitContext, PermissionProfile, PermissionSetReference, Result, Vault};
 use alien_error::Context;
 use alien_permissions::{
     generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
@@ -322,16 +320,6 @@ fn sanitize_role_label(input: &str) -> String {
             }
         })
         .collect()
-}
-
-fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
-    ctx.stack.resources().find_map(|(id, entry)| {
-        if entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE {
-            ctx.name_for(id)
-        } else {
-            None
-        }
-    })
 }
 
 fn vault_permission_owners<'a>(

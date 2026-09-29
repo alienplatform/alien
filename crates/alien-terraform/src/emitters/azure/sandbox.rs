@@ -15,14 +15,12 @@ use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
         downcast, emit_remote_bindings_role_definitions, permission_context,
-        remote_bindings_role_label, required_label, setup_management_role_label, tags,
+        remote_bindings_role_label, remote_stack_management_label, required_label,
+        setup_management_role_label, tags,
     },
     expr,
 };
-use alien_core::{
-    import::EmitContext, ErrorData, RemoteBindings, RemoteStackManagement, Result, Sandbox,
-    SandboxEgress,
-};
+use alien_core::{import::EmitContext, ErrorData, RemoteBindings, Result, Sandbox, SandboxEgress};
 use alien_error::{AlienError, Context};
 use alien_permissions::{
     generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
@@ -138,8 +136,8 @@ impl TfEmitter for AzureSandboxEmitter {
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let _ = required_label(ctx)?;
-        // The declared value in either shape: a registry image is resolved to the disk image the
-        // controller built from it by the provider, so this stays a declaration value.
+        // The declared value as is: the provider resolves a registry image to the disk image the
+        // controller built from it.
         let disk_image = sandbox.azure_image()?.as_str().to_string();
         let mut fields = vec![
             ("service", Expression::String("sandbox-azure".to_string())),
@@ -275,17 +273,16 @@ fn emit_image_management(
         .management()
         .profile()
         .and_then(|profile| profile.0.get(ctx.resource_id))
-        .is_some_and(|refs| refs.iter().any(|reference| reference.id() == IMAGES));
+        // By registry name, never by `id()`: an inline set carries whatever id its author typed.
+        .is_some_and(|refs| {
+            refs.iter().any(|reference| {
+                matches!(reference, alien_core::permissions::PermissionSetReference::Name(name) if name == IMAGES)
+            })
+        });
     // No management resource means no remote manager identity: the deploying credentials run the
     // controller, so there is no member to bind.
     let Some(management_label) = granted
-        .then(|| {
-            ctx.stack.resources().find_map(|(id, entry)| {
-                (entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
-                    .then(|| ctx.name_for(id))
-                    .flatten()
-            })
-        })
+        .then(|| remote_stack_management_label(ctx))
         .flatten()
     else {
         return Ok(());

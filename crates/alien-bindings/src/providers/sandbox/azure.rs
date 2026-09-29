@@ -90,13 +90,19 @@ impl AzureSandbox {
             .list_disk_images(&self.sandbox_group)
             .await
             .map_err(|error| {
-                error.context(ErrorData::SandboxUnreachable {
-                    operation: CREATE.to_string(),
-                    reason: format!(
-                        "could not read the disk images of sandbox group '{}'",
-                        self.sandbox_group
-                    ),
-                })
+                // A read before any create: a transport failure mints nothing, so it is never
+                // the create's unknown outcome.
+                if is_refusal(&error) {
+                    Self::failed(CREATE, error)
+                } else {
+                    error.context(ErrorData::SandboxUnreachable {
+                        operation: CREATE.to_string(),
+                        reason: format!(
+                            "could not list the disk images of sandbox group '{}'",
+                            self.sandbox_group
+                        ),
+                    })
+                }
             })?;
         let id = images
             .into_iter()
@@ -105,18 +111,19 @@ impl AzureSandbox {
                     && image.state() == Some("Ready")
             })
             .map(|image| image.id)
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::SandboxUnreachable {
-                    operation: CREATE.to_string(),
-                    reason: format!(
-                        "no disk image built from '{reference}' is ready in sandbox group '{}' \
-                         yet; the sandbox's controller builds it after setup",
-                        self.sandbox_group
-                    ),
-                })
-            })?;
+            .ok_or_else(|| self.image_not_ready(reference))?;
         *self.disk_image_id.lock().expect("disk image id lock") = Some(id.clone());
         Ok(Some(id))
+    }
+
+    fn image_not_ready(&self, reference: &str) -> AlienError<ErrorData> {
+        AlienError::new(ErrorData::SandboxUnreachable {
+            operation: CREATE.to_string(),
+            reason: format!(
+                "no Ready disk image built from '{reference}' is in sandbox group '{}'",
+                self.sandbox_group
+            ),
+        })
     }
 
     fn cached_disk_image_id(&self) -> Option<String> {
@@ -132,7 +139,7 @@ impl AzureSandbox {
     async fn create_from_image(
         &self,
         request: CreateSandbox,
-    ) -> alien_client_core::Result<alien_azure_clients::azure::sandbox_data_plane::Sandbox> {
+    ) -> Result<alien_azure_clients::azure::sandbox_data_plane::Sandbox> {
         let first = self
             .client
             .create_sandbox(&self.sandbox_group, request.clone())
@@ -140,20 +147,35 @@ impl AzureSandbox {
         match first {
             Err(error) if request.disk_image_id.is_some() && disk_image_gone(&error) => {
                 *self.disk_image_id.lock().expect("disk image id lock") = None;
-                let Ok(Some(id)) = self.disk_image_id().await else {
-                    return Err(error);
-                };
-                self.client
+                let id = self.disk_image_id().await?;
+                match self
+                    .client
                     .create_sandbox(
                         &self.sandbox_group,
                         CreateSandbox {
-                            disk_image_id: Some(id),
+                            disk_image_id: id,
                             ..request
                         },
                     )
                     .await
+                {
+                    // The list still named a deleted image. Nothing was minted, and the next
+                    // create looks again, so this is the same wait as an image not built yet.
+                    Err(error) if disk_image_gone(&error) => {
+                        *self.disk_image_id.lock().expect("disk image id lock") = None;
+                        Err(error.context(ErrorData::SandboxUnreachable {
+                            operation: CREATE.to_string(),
+                            reason: format!(
+                                "the disk image of sandbox group '{}' was replaced; no \
+                                 replacement is listed yet",
+                                self.sandbox_group
+                            ),
+                        }))
+                    }
+                    other => other.map_err(|error| Self::failed(CREATE, error)),
+                }
             }
-            other => other,
+            other => other.map_err(|error| Self::failed(CREATE, error)),
         }
     }
 
@@ -290,8 +312,7 @@ impl Sandbox for AzureSandbox {
                 egress: asked.clone(),
                 idle_pause_seconds: self.idle_pause_seconds,
             })
-            .await
-            .map_err(|error| Self::failed(CREATE, error))?;
+            .await?;
 
         // The caller's requested id is not authoritative: Azure allocates the id, and returning
         // the requested one would hand back a handle that addresses nothing. Checked because
@@ -1662,6 +1683,115 @@ mod tests {
             .await
             .expect("the replacement image serves");
         assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    /// A cached image retired while its replacement still builds fails as retryable: a later
+    /// create succeeds, so the refusal of the stale id must not tell the caller to stop.
+    #[tokio::test]
+    async fn a_retired_image_whose_replacement_still_builds_is_retryable() {
+        let label = azure_disk_image_label("docker.io/library/python:3.14-slim");
+        let mut client = MockSandboxDataPlaneApi::new();
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = seen.clone();
+        client
+            .expect_list_disk_images()
+            .times(2)
+            .returning(move |_| {
+                let state = if counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    "Ready"
+                } else {
+                    "Building"
+                };
+                Ok(vec![disk_image("img", &label, state)])
+            });
+        client.expect_create_sandbox().times(1).returning(|_, _| {
+            Err(AlienError::new(ClientErrorData::InvalidInput {
+                message:
+                    r#"Bad request for Resource 'grp': {"title":"DiskImageNotFound","status":400}"#
+                        .to_string(),
+                field_name: None,
+            }))
+        });
+
+        let error = registry_sandbox(client)
+            .create(CreateSandboxRequest::default())
+            .await
+            .expect_err("nothing is Ready to start from");
+
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+        assert!(error.retryable, "{error}");
+    }
+
+    /// A list that fails in transport comes before any create, so it is a retryable wait and
+    /// never the create's unknown outcome.
+    #[tokio::test]
+    async fn a_disk_image_list_lost_in_transport_is_retryable() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_list_disk_images().times(1).returning(|_| {
+            Err(AlienError::new(ClientErrorData::RemoteServiceUnavailable {
+                message: "Service unavailable".to_string(),
+            }))
+        });
+        client.expect_create_sandbox().times(0);
+
+        let error = registry_sandbox(client)
+            .create(CreateSandboxRequest::default())
+            .await
+            .expect_err("the list failed");
+
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+        assert!(error.retryable, "{error}");
+    }
+
+    /// A list that still names the deleted image refuses the resend too. No sandbox was minted
+    /// either time, so the caller is told to retry, and the stale id is not kept.
+    #[tokio::test]
+    async fn a_list_still_naming_the_deleted_image_is_retryable() {
+        let label = azure_disk_image_label("docker.io/library/python:3.14-slim");
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_list_disk_images()
+            .times(2)
+            .returning(move |_| Ok(vec![disk_image("old", &label, "Ready")]));
+        client.expect_create_sandbox().times(2).returning(|_, _| {
+            Err(AlienError::new(ClientErrorData::InvalidInput {
+                message:
+                    r#"Bad request for Resource 'grp': {"title":"DiskImageNotFound","status":400}"#
+                        .to_string(),
+                field_name: None,
+            }))
+        });
+        let sandbox = registry_sandbox(client);
+
+        let error = sandbox
+            .create(CreateSandboxRequest::default())
+            .await
+            .expect_err("the listed image is gone");
+
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+        assert!(error.retryable, "{error}");
+        assert!(sandbox.cached_disk_image_id().is_none());
+    }
+
+    /// A denied list is a refusal, not an unreachable agent: retrying cannot grant the role.
+    #[tokio::test]
+    async fn a_denied_disk_image_list_is_a_refusal() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_list_disk_images().times(1).returning(|_| {
+            Err(AlienError::new(ClientErrorData::RemoteAccessDenied {
+                resource_type: "Resource".to_string(),
+                resource_name: "grp".to_string(),
+            }))
+        });
+        client.expect_create_sandbox().times(0);
+
+        let error = registry_sandbox(client)
+            .create(CreateSandboxRequest::default())
+            .await
+            .expect_err("the list is denied");
+
+        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
+        assert!(!error.retryable, "{error}");
     }
 
     /// Before the controller has built the image there is nothing to start from, and the miss is

@@ -1,5 +1,5 @@
-//! A disk image whose build ended `Failed` must not block the retry that follows it: the retry
-//! lists the group again and still finds that image, since only `Ready` deletes retired ones.
+//! A disk image whose build ended `Failed` fails the resource once, and the retry of the failed
+//! resource builds afresh even though the group still lists that image until `Ready` reaps it.
 
 #![cfg(all(feature = "azure", feature = "test-utils"))]
 
@@ -120,13 +120,24 @@ async fn a_failed_build_is_rebuilt_on_retry() {
         .unwrap();
 
     executor.step().await.expect("Ready routes to the build");
-    let first = executor.step().await;
-    assert!(first.is_err(), "the Failed build is reported: {first:?}");
+    let failure = executor
+        .step()
+        .await
+        .expect_err("the Failed build is reported");
+    assert!(
+        !failure.retryable,
+        "the executor must not rebuild on its own: {failure}"
+    );
 
-    // The executor's automatic retries re-run the same state with the same controller.
-    for _ in 0..3 {
-        let _ = executor.step().await;
-    }
+    // A retry of the failed resource resumes the same state with the controller as persisted.
+    executor
+        .step()
+        .await
+        .expect("the retry builds afresh and adopts the new image");
+    executor
+        .step()
+        .await
+        .expect("the Ready tick reaps the Failed image");
     assert_eq!(
         creates.load(Ordering::SeqCst),
         1,

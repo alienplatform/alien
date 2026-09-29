@@ -787,8 +787,9 @@ mod tests {
                 .expect("auto management profile should be generated");
             let has_images = |scope: &str| {
                 profile.0.get(scope).is_some_and(|refs| {
-                    refs.iter()
-                        .any(|permission| permission.id() == "sandbox/images")
+                    refs.iter().any(|permission| {
+                        matches!(permission, PermissionSetReference::Name(name) if name == "sandbox/images")
+                    })
                 })
             };
 

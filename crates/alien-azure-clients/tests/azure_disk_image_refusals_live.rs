@@ -13,7 +13,7 @@ use alien_azure_clients::azure::sandbox_data_plane::{
 use alien_azure_clients::AzureTokenCache;
 use alien_azure_clients::{AzureClientConfig, AzureCredentials};
 
-const TOKEN: &str = "v43r2-registry-token-must-not-leak";
+const TOKEN: &str = "registry-token-must-not-leak";
 
 fn env(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("{name} must be set"))
@@ -48,7 +48,7 @@ async fn refused(base: String, credentials: bool, expected: &[&str]) {
             &group,
             CreateDiskImage {
                 base: base.clone(),
-                labels: [("alienImage".to_string(), "v43r2-refusal".to_string())].into(),
+                labels: [("alienImage".to_string(), "alien-test-refusal".to_string())].into(),
                 registry_credentials: credentials
                     .then(|| ("deployment".to_string(), TOKEN.to_string())),
             },
@@ -75,7 +75,7 @@ async fn refused(base: String, credentials: bool, expected: &[&str]) {
 #[ignore = "needs a live Azure sandbox group"]
 async fn live_missing_tag_names_image_not_found() {
     refused(
-        "docker.io/library/python:0.0.0-v43r2-nope".to_string(),
+        "docker.io/library/python:0.0.0-does-not-exist".to_string(),
         false,
         &["ImageNotFound", "not found in the registry"],
     )
@@ -113,7 +113,9 @@ async fn live_no_refused_build_leaves_an_image_behind() {
         .expect("the group lists");
     let left: Vec<_> = images
         .iter()
-        .filter(|image| image.labels.get("alienImage").map(String::as_str) == Some("v43r2-refusal"))
+        .filter(|image| {
+            image.labels.get("alienImage").map(String::as_str) == Some("alien-test-refusal")
+        })
         .map(|image| (image.id.clone(), image.state().map(str::to_string)))
         .collect();
     eprintln!("refusal-labelled images: {left:?}");
