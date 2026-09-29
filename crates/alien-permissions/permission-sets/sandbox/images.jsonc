@@ -1,0 +1,28 @@
+{
+  "id": "sandbox/images",
+  "description": "Allows building, reading and deleting the disk images under a sandbox's setup-created parent, including ones committed from its sessions (no access into a running sandbox)",
+  "platforms": {
+    "azure": [
+      {
+        // Disk-image verbs only. Committing a session into an image is the separate
+        // `sandboxes/commit/action`, so `sandbox/execute`'s role stays the only way into one.
+        "label": "manage-sandbox-disk-images",
+        "description": "Allows creating, reading and deleting disk images under the selected sandbox group.",
+        "grant": {
+          "dataActions": [
+            "Microsoft.App/sandboxGroups/diskimages/read",
+            "Microsoft.App/sandboxGroups/diskimages/write",
+            "Microsoft.App/sandboxGroups/diskimages/delete"
+          ]
+        },
+        // The group only: at resource-group scope the manager could replace a sibling sandbox's
+        // image.
+        "binding": {
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

@@ -23,14 +23,14 @@ use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
         downcast, emit_remote_bindings_role_definitions, permission_context,
-        remote_bindings_role_label, required_label, service_account_principal_id,
-        setup_execution_role_label, setup_management_role_label,
+        remote_bindings_role_label, remote_stack_management_label, required_label,
+        service_account_principal_id, setup_execution_role_label, setup_management_role_label,
     },
     expr,
 };
 use alien_core::{
     import::EmitContext, AzureStorageAccount, ErrorData, LifecycleRule, PermissionProfile,
-    PermissionSet, PermissionSetReference, RemoteStackManagement, Result, Storage,
+    PermissionSet, PermissionSetReference, Result, Storage,
 };
 use alien_error::{AlienError, Context};
 use alien_permissions::{
@@ -485,16 +485,6 @@ fn resource_permission_refs<'a>(
     refs
 }
 
-fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
-    ctx.stack.resources().find_map(|(id, entry)| {
-        if entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE {
-            ctx.name_for(id)
-        } else {
-            None
-        }
-    })
-}
-
 fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
     ctx.stack.resources().find_map(|(id, entry)| {
         (entry.config.resource_type() == alien_core::RemoteBindings::RESOURCE_TYPE)
@@ -576,8 +566,8 @@ mod tests {
     use super::*;
     use crate::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
     use alien_core::{
-        AzureResourceGroup, ManagementPermissions, RemoteBindings, ResourceLifecycle,
-        ServiceAccount, Stack, StackSettings,
+        AzureResourceGroup, ManagementPermissions, RemoteBindings, RemoteStackManagement,
+        ResourceLifecycle, ServiceAccount, Stack, StackSettings,
     };
 
     const STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE_ID: &str = "ba92f5b4-2d11-453d-a403-e96b0029c9fe";

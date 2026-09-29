@@ -104,11 +104,9 @@ pub struct AzureSandboxBinding {
     /// travel with the create body is a declaration the sandbox never hears about.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_pause_seconds: Option<u32>,
-    /// Catalog disk image every sandbox is created from, taken from the declaration's `code`.
-    ///
-    /// Carried rather than hardcoded in the provider because the declaration is the only place
-    /// that knows it, and a sandbox running an image its author did not choose is the one Azure
-    /// gap that fails without an error.
+    /// Catalog name or registry image every sandbox is created from, as `code` declares it. A
+    /// registry image is resolved by label to the disk image the controller built, so the value
+    /// stays one a setup package can render.
     pub disk_image: BindingValue<String>,
     /// Sandbox ceilings in the data plane's own units, from the declaration. Optional because a
     /// binding from an earlier release carries none — a required field would fail to deserialize

@@ -1113,7 +1113,7 @@ async fn validate_pull_access(
     repo_name: &str,
 ) -> Result<(), Response> {
     refuse_capability_pull(subject)?;
-    let deployment_id = match &subject.scope {
+    let (deployment_id, own_project) = match &subject.scope {
         Scope::Workspace | Scope::Project { .. } => return Ok(()),
         Scope::DeploymentGroup { .. } => {
             return Err(oci_error(
@@ -1158,7 +1158,7 @@ async fn validate_pull_access(
             {
                 return Ok(());
             }
-            deployment_id.as_str()
+            (deployment_id.as_str(), project_id.as_str())
         }
     };
 
@@ -1226,10 +1226,14 @@ async fn validate_pull_access(
                 )
             })?;
 
+        let proxy_host = state.config.base_url();
+        let proxy_host = alien_core::image_rewrite::strip_url_scheme(&proxy_host);
+        let routes = &state.registry_routing_table;
+        let own_repo = |repo: &str| sandbox_repo_in_own_project(routes, repo, own_project);
         let repos = release
             .stacks
             .values()
-            .flat_map(|stack| extract_repo_names(stack))
+            .flat_map(|stack| extract_repo_names(stack, proxy_host, &own_repo))
             .collect::<Vec<_>>();
 
         // Cache the result.
@@ -1254,14 +1258,35 @@ async fn validate_pull_access(
     Ok(())
 }
 
-/// Extract the set of repo names from a release's stack.
-fn extract_repo_names(stack: &alien_core::Stack) -> Vec<String> {
+/// Whether a Sandbox's image repo may enter the release's list: only one in the deployment's own
+/// project, so a Sandbox naming another project's repo cannot open it to this deployment's token.
+/// An unattributable repo counts as "default", as a push to it does.
+fn sandbox_repo_in_own_project(
+    routes: &RegistryRoutingTable,
+    repo: &str,
+    own_project: &str,
+) -> bool {
+    routes.project_id_for_repo(repo).unwrap_or("default") == own_project
+}
+
+/// Extract the set of repo names from a release's stack. `proxy_host` is this manager's own
+/// registry host, the only one a sandbox image is pulled through, and `sandbox_repo_allowed`
+/// filters the repos a sandbox image may add.
+fn extract_repo_names(
+    stack: &alien_core::Stack,
+    proxy_host: &str,
+    sandbox_repo_allowed: &dyn Fn(&str) -> bool,
+) -> Vec<String> {
     use alien_core::image_rewrite::strip_registry_host;
-    use alien_core::{Container, ContainerCode, Daemon, DaemonCode, Worker, WorkerCode};
+    use alien_core::{
+        classify_azure_sandbox_image, AzureSandboxImage, Container, ContainerCode, Daemon,
+        DaemonCode, Sandbox, SandboxCode, Worker, WorkerCode,
+    };
 
     let mut repos = Vec::new();
 
     for (_resource_id, entry) in stack.resources() {
+        let mut from_sandbox = false;
         let image = if let Some(func) = entry.config.downcast_ref::<Worker>() {
             match &func.code {
                 WorkerCode::Image { image } => Some(image.as_str()),
@@ -1277,6 +1302,23 @@ fn extract_repo_names(stack: &alien_core::Stack) -> Vec<String> {
                 DaemonCode::Image { image } => Some(image.as_str()),
                 DaemonCode::Source { .. } => None,
             }
+        } else if let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() {
+            // Only a registry image on this host, the rule the controller sends credentials by: a
+            // public image, catalog name or `s3://` bundle is never pulled here.
+            match &sandbox.code {
+                SandboxCode::Image { image } => match classify_azure_sandbox_image(image) {
+                    Some(AzureSandboxImage::Registry(reference))
+                        if reference
+                            .split_once('/')
+                            .is_some_and(|(host, _)| host.eq_ignore_ascii_case(proxy_host)) =>
+                    {
+                        from_sandbox = true;
+                        Some(reference)
+                    }
+                    _ => None,
+                },
+                SandboxCode::Source { .. } => None,
+            }
         } else {
             None
         };
@@ -1285,6 +1327,9 @@ fn extract_repo_names(stack: &alien_core::Stack) -> Vec<String> {
             if let Some(stripped) = strip_registry_host(image_uri) {
                 let repo = stripped.split(':').next().unwrap_or(&stripped);
                 let repo = repo.split('@').next().unwrap_or(repo);
+                if from_sandbox && !sandbox_repo_allowed(repo) {
+                    continue;
+                }
                 if !repo.is_empty() && !repos.contains(&repo.to_string()) {
                     repos.push(repo.to_string());
                 }
@@ -1492,7 +1537,10 @@ async fn load_artifact_registry_for_repo(
 mod tests {
     use super::*;
     use alien_core::image_rewrite::strip_registry_host;
-    use alien_core::{Daemon, DaemonCode, ResourceLifecycle, Stack};
+    use alien_core::{
+        Daemon, DaemonCode, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
+        SandboxLifecyclePolicy, Stack,
+    };
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
@@ -1581,9 +1629,93 @@ mod tests {
             .build();
 
         assert_eq!(
-            extract_repo_names(&stack),
+            extract_repo_names(&stack, "manager.example.com", &|_| true),
             vec!["artifacts/prj_test".to_string()]
         );
+    }
+
+    /// A sandbox image on this host is pulled through the proxy, so its repo is in the release; a
+    /// public image elsewhere, a catalog name or an `s3://` bundle is never pulled here.
+    #[test]
+    fn extract_repo_names_includes_sandbox_registry_images_only() {
+        let sandbox = |id: &str, image: &str| {
+            Sandbox::new(id.to_string())
+                .code(SandboxCode::Image {
+                    image: image.to_string(),
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build()
+        };
+        let stack = Stack::new("test-stack".to_string())
+            .add(
+                sandbox(
+                    "agents",
+                    "manager.example.com/artifacts/prj_test:sandbox-v1",
+                ),
+                ResourceLifecycle::Frozen,
+            )
+            .add(sandbox("catalog", "ubuntu"), ResourceLifecycle::Frozen)
+            .add(
+                sandbox("public", "docker.io/library/python:3.14-slim"),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                sandbox("bundle", "s3://bucket/sandbox/bundle.zip"),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        assert_eq!(
+            extract_repo_names(&stack, "manager.example.com", &|_| true),
+            vec!["artifacts/prj_test".to_string()]
+        );
+    }
+
+    /// A sandbox image in another project's repository is left out of the release's list.
+    #[test]
+    fn extract_repo_names_leaves_out_a_sandbox_image_of_another_project() {
+        let sandbox = Sandbox::new("agents".to_string())
+            .code(SandboxCode::Image {
+                image: "manager.example.com/artifacts/prj_other:sandbox-v1".to_string(),
+            })
+            .egress(SandboxEgress::Allow)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let stack = Stack::new("test-stack".to_string())
+            .add(sandbox, ResourceLifecycle::Frozen)
+            .build();
+
+        assert!(extract_repo_names(&stack, "manager.example.com", &|repo| {
+            repo != "artifacts/prj_other"
+        })
+        .is_empty());
+    }
+
+    #[test]
+    fn a_sandbox_repo_counts_only_in_its_own_project() {
+        let routes =
+            RegistryRoutingTable::new(vec![registry_route("artifacts", Platform::Aws, "aws")])
+                .unwrap();
+
+        assert!(sandbox_repo_in_own_project(
+            &routes,
+            "artifacts/prj_a",
+            "prj_a"
+        ));
+        assert!(!sandbox_repo_in_own_project(
+            &routes,
+            "artifacts/prj_b",
+            "prj_a"
+        ));
+        assert!(!sandbox_repo_in_own_project(&routes, "elsewhere", "prj_a"));
+        assert!(sandbox_repo_in_own_project(&routes, "elsewhere", "default"));
     }
 
     #[test]

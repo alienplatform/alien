@@ -212,7 +212,8 @@ pub struct RemoteAzureSandboxBinding {
     pub region: String,
     /// Resource group the data-plane path is scoped by.
     pub resource_group: String,
-    /// Catalog disk image every sandbox is created from.
+    /// Catalog name or registry image every sandbox is created from. A registry image is
+    /// started from the disk image built from it, found by label in the group.
     pub disk_image: String,
     /// Idle seconds after which a sandbox pauses, where the declaration asked for one.
     #[serde(skip_serializing_if = "Option::is_none")]

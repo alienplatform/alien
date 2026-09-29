@@ -219,6 +219,16 @@ fn generate_auto_management_profile(
                 .insert("sandbox/templates".to_string());
         }
 
+        // Disk images live on the data plane, which `provision` and `management` do not reach.
+        // Every lifecycle and image, so a later switch to a registry image rolls without rerunning
+        // setup; the Azure emitter binds it on this sandbox's group.
+        if platform == Platform::Azure && resource_type == "sandbox" {
+            resource_permission_set_ids
+                .entry(resource_id.clone())
+                .or_default()
+                .insert("sandbox/images".to_string());
+        }
+
         // Add heartbeat permissions if heartbeat is enabled (Auto or RequiresApproval)
         // Disabled means no infrastructure/IAM permissions at all
         if config.stack_settings.heartbeats.is_enabled() {
@@ -736,6 +746,61 @@ mod tests {
             );
             assert!(!has_templates("*"), "{platform:?}: {profile:?}");
             assert!(!has_templates("live-box"), "{platform:?}: {profile:?}");
+        }
+    }
+
+    /// Every Azure sandbox gets disk-image verbs scoped to itself, whatever its lifecycle or
+    /// image: at `*` they would bind at resource-group scope and reach every sibling's images.
+    #[tokio::test]
+    async fn azure_sandbox_gets_disk_image_verbs_scoped_to_itself() {
+        let sandbox = |id: &str, image: &str| {
+            Sandbox::new(id.to_string())
+                .code(SandboxCode::Image {
+                    image: image.to_string(),
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build()
+        };
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let stack = Stack::new("test-stack".to_string())
+                .add(sandbox("catalog-box", "ubuntu"), ResourceLifecycle::Frozen)
+                .add(
+                    sandbox("registry-box", "docker.io/library/python:3.14-slim"),
+                    ResourceLifecycle::Live,
+                )
+                .build();
+            let result_stack = ManagementPermissionProfileMutation
+                .mutate(
+                    stack,
+                    &StackState::new(platform),
+                    &deployment_config_for_management_permission_test(),
+                )
+                .await
+                .expect("management permission mutation should succeed");
+            let profile = result_stack
+                .management()
+                .profile()
+                .expect("auto management profile should be generated");
+            let has_images = |scope: &str| {
+                profile.0.get(scope).is_some_and(|refs| {
+                    refs.iter().any(|permission| {
+                        matches!(permission, PermissionSetReference::Name(name) if name == "sandbox/images")
+                    })
+                })
+            };
+
+            for scope in ["catalog-box", "registry-box"] {
+                assert_eq!(
+                    has_images(scope),
+                    platform == Platform::Azure,
+                    "{platform:?} {scope}: {profile:?}"
+                );
+            }
+            assert!(!has_images("*"), "{platform:?}: {profile:?}");
         }
     }
 

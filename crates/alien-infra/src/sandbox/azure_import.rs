@@ -2,18 +2,21 @@
 
 use alien_core::{
     import::{data::AzureSandboxImportData, ImportContext},
-    ErrorData as CoreErrorData, Platform, ResourceStatus, Result, Sandbox, StackResourceState,
+    AzureSandboxImage, ErrorData as CoreErrorData, Platform, ResourceStatus, Result, Sandbox,
+    StackResourceState,
 };
 use alien_error::AlienError;
 
+use crate::core::{serialize_controller, ResourceController};
 use crate::import::ResourceImporter;
 use crate::import_helpers::make_imported_state_with_status;
 use crate::sandbox::{AzureSandboxController, AzureSandboxState};
 
 /// Azure Sandbox importer — for the sandbox group the setup package created.
 ///
-/// It arrives already provisioned, so it imports at `Ready`; the controller reads and heartbeats
-/// it and never creates or deletes one.
+/// A catalog image serves at once, so it imports at `Ready`. A registry image imports at the
+/// create flow's build, so the deployment loop builds its disk image before anything linking the
+/// sandbox deploys. The controller never creates or deletes the group.
 ///
 /// All three fields are required: the ADC data plane endpoint is per-region and its paths are
 /// scoped by resource group, so a group imported without either cannot be addressed at all.
@@ -42,18 +45,108 @@ impl ResourceImporter for AzureSandboxImporter {
                     platform: Platform::Azure,
                 })
             })?;
+        // A registry image is published once its disk image is built; a catalog name serves at
+        // once.
+        let (state, status, disk_image) = match sandbox.azure_image()? {
+            AzureSandboxImage::Catalog(name) => (
+                AzureSandboxState::Ready,
+                ResourceStatus::Running,
+                Some(name.to_string()),
+            ),
+            AzureSandboxImage::Registry(_) => (
+                AzureSandboxState::EnsureDiskImage,
+                ResourceStatus::Provisioning,
+                None,
+            ),
+        };
         let controller = AzureSandboxController {
-            state: AzureSandboxState::Ready,
+            state,
             sandbox_group: Some(data.sandbox_group),
             region: Some(data.region),
             resource_group: Some(data.resource_group),
-            disk_image: Some(sandbox.azure_catalog_image()?.to_string()),
+            disk_image,
+            disk_image_id: None,
+            retired_disk_images: Vec::new(),
+            pending_disk_image: None,
+            built_disk_images: false,
             egress: Some(sandbox.egress.clone()),
             idle_pause_seconds: sandbox.lifecycle.idle_pause_seconds,
             limits: sandbox.limits.clone(),
             _internal_stay_count: None,
         };
-        make_imported_state_with_status(controller, ctx, ResourceStatus::Running)
+        make_imported_state_with_status(controller, ctx, status)
+    }
+
+    /// A re-import of the same group keeps the controller's state: replacing it would drop a built
+    /// disk image and unpublish a serving sandbox. A changed image arrives through the update flow.
+    /// A different group holds none of those images, so its import replaces the state.
+    fn merge_reimport(
+        &self,
+        existing: StackResourceState,
+        imported: StackResourceState,
+        ctx: &ImportContext<'_>,
+    ) -> Result<StackResourceState> {
+        let (Some(existing_state), Some(imported_state)) = (
+            existing.internal_state.clone(),
+            imported.internal_state.clone(),
+        ) else {
+            return Ok(imported);
+        };
+        let unreadable = |error: String| {
+            AlienError::new(CoreErrorData::GenericError {
+                message: format!(
+                    "sandbox '{}' has unreadable controller state: {error}",
+                    ctx.resource_id
+                ),
+            })
+        };
+        let imported_controller: AzureSandboxController = serde_json::from_value(imported_state)
+            .map_err(|error| unreadable(error.to_string()))?;
+        let existing_controller: AzureSandboxController = serde_json::from_value(existing_state)
+            .map_err(|error| unreadable(error.to_string()))?;
+
+        let same_group = imported_controller.sandbox_group == existing_controller.sandbox_group
+            && imported_controller.region == existing_controller.region
+            && imported_controller.resource_group == existing_controller.resource_group;
+        // A torn-down entry holds nothing to keep; keeping it would re-create from an empty
+        // controller that has lost the group.
+        let torn_down = matches!(
+            existing.status,
+            ResourceStatus::Deleted | ResourceStatus::Deleting
+        );
+        if !same_group || torn_down {
+            return Ok(imported);
+        }
+        let merged = existing_controller;
+        let remote_binding_params = if ctx.resource.publishes_binding_params() {
+            merged.get_binding_params().map_err(|error| {
+                AlienError::new(CoreErrorData::GenericError {
+                    message: format!(
+                        "binding params extraction failed for resource '{}': {error}",
+                        ctx.resource_id
+                    ),
+                })
+            })?
+        } else {
+            None
+        };
+        let outputs = merged.get_outputs();
+        let internal_state = serialize_controller(&merged).map_err(|error| {
+            AlienError::new(CoreErrorData::JsonSerializationFailed {
+                reason: format!(
+                    "controller serialization failed for resource '{}': {error}",
+                    ctx.resource_id
+                ),
+            })
+        })?;
+
+        Ok(StackResourceState {
+            internal_state: Some(internal_state),
+            outputs,
+            remote_binding_params,
+            lifecycle: Some(ctx.resource.lifecycle),
+            ..existing
+        })
     }
 }
 
@@ -137,6 +230,124 @@ mod tests {
         assert_eq!(internal["limits"]["cpu"], "4000m");
         assert_eq!(internal["limits"]["memory"], "8192Mi");
         assert_eq!(internal["limits"]["disk"], "40960Mi");
+    }
+
+    /// A registry image has no disk image yet at import, so it imports Provisioning at the build
+    /// with nothing published: a Running sandbox with no binding would let its dependents deploy
+    /// without one.
+    #[test]
+    fn azure_sandbox_import_leaves_a_registry_image_for_the_controller_to_build() {
+        let resource = entry(Resource::new(
+            Sandbox::new("sbx".to_string())
+                .code(SandboxCode::Image {
+                    image: "docker.io/library/python:3.14-slim".to_string(),
+                })
+                .egress(SandboxEgress::Deny)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+        ));
+        let settings = StackSettings::default();
+        let ctx = import_context(&settings, &resource);
+
+        let imported = AzureSandboxImporter
+            .import(import_data(), &ctx)
+            .expect("a registry image imports");
+
+        let internal = imported
+            .internal_state
+            .expect("imported sandbox should have controller state");
+        assert!(internal["diskImage"].is_null(), "{internal}");
+        assert!(internal["diskImageId"].is_null(), "{internal}");
+        assert_eq!(imported.status, ResourceStatus::Provisioning);
+        assert!(imported.remote_binding_params.is_none());
+    }
+
+    /// Rerunning setup re-imports the group. The built disk image is the controller's, so a
+    /// re-import of the same group keeps it serving. One naming another group, or replacing a
+    /// torn-down entry, starts the build over.
+    #[test]
+    fn a_reimport_keeps_the_built_disk_image_only_in_the_same_group() {
+        const PYTHON: &str = "docker.io/library/python:3.14-slim";
+        let resource = entry(Resource::new(
+            Sandbox::new("sbx".to_string())
+                .code(SandboxCode::Image {
+                    image: PYTHON.to_string(),
+                })
+                .egress(SandboxEgress::Deny)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+        ));
+        let settings = StackSettings::default();
+        let ctx = import_context(&settings, &resource);
+        let serving = || {
+            let mut existing = AzureSandboxImporter
+                .import(import_data(), &ctx)
+                .expect("a registry image imports");
+            let mut controller: AzureSandboxController =
+                serde_json::from_value(existing.internal_state.clone().unwrap()).unwrap();
+            controller.state = AzureSandboxState::Ready;
+            controller.disk_image = Some(PYTHON.to_string());
+            controller.disk_image_id = Some("img-1".to_string());
+            existing.internal_state = Some(serialize_controller(&controller).unwrap());
+            existing.status = ResourceStatus::Running;
+            existing
+        };
+        let controller_of = |state: StackResourceState| -> AzureSandboxController {
+            serde_json::from_value(state.internal_state.unwrap()).unwrap()
+        };
+
+        let same = AzureSandboxImporter
+            .merge_reimport(
+                serving(),
+                AzureSandboxImporter.import(import_data(), &ctx).unwrap(),
+                &ctx,
+            )
+            .expect("the re-import merges");
+        assert_eq!(same.status, ResourceStatus::Running);
+        let kept = controller_of(same);
+        assert!(matches!(kept.state, AzureSandboxState::Ready));
+        assert_eq!(kept.disk_image_id.as_deref(), Some("img-1"));
+        let binding = kept.get_binding_params().unwrap().expect("a binding");
+        assert_eq!(binding["diskImage"], PYTHON);
+
+        let moved = AzureSandboxImporter
+            .merge_reimport(
+                serving(),
+                AzureSandboxImporter
+                    .import(
+                        AzureSandboxImportData {
+                            resource_group: "rg-2".to_string(),
+                            ..import_data()
+                        },
+                        &ctx,
+                    )
+                    .unwrap(),
+                &ctx,
+            )
+            .expect("the re-import replaces");
+        assert_eq!(moved.status, ResourceStatus::Provisioning);
+        let fresh = controller_of(moved);
+        assert!(matches!(fresh.state, AzureSandboxState::EnsureDiskImage));
+        assert_eq!(fresh.resource_group.as_deref(), Some("rg-2"));
+        assert!(fresh.disk_image_id.is_none());
+
+        let mut deleted = serving();
+        deleted.status = ResourceStatus::Deleted;
+        let rebuilt = AzureSandboxImporter
+            .merge_reimport(
+                deleted,
+                AzureSandboxImporter.import(import_data(), &ctx).unwrap(),
+                &ctx,
+            )
+            .expect("the re-import replaces a torn-down entry");
+        assert_eq!(rebuilt.status, ResourceStatus::Provisioning);
+        assert_eq!(controller_of(rebuilt).sandbox_group.as_deref(), Some("sbg"));
     }
 
     /// Azure creates a sandbox only from a catalog image, so a source-built sandbox is refused at

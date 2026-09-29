@@ -56,6 +56,16 @@ pub fn downcast<'a, T: ResourceDefinition>(
     })
 }
 
+/// The Terraform label of the stack's remote management resource, whose identity management
+/// grants bind to. `None` when the stack has none.
+pub fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        (entry.config.resource_type() == alien_core::RemoteStackManagement::RESOURCE_TYPE)
+            .then(|| ctx.name_for(id))
+            .flatten()
+    })
+}
+
 /// Look up the precomputed Terraform label for the current emitter context.
 pub fn required_label<'a>(ctx: &'a EmitContext<'_>) -> Result<&'a str> {
     ctx.name_for(ctx.resource_id).ok_or_else(|| {
