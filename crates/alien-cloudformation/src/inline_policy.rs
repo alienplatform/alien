@@ -283,7 +283,7 @@ fn policy_is_referenced(template: &CfTemplate, policy_id: &str) -> bool {
         .any(|expression| expression_references(expression, policy_id))
 }
 
-fn expression_references(expression: &CfExpression, logical_id: &str) -> bool {
+pub(crate) fn expression_references(expression: &CfExpression, logical_id: &str) -> bool {
     match expression {
         CfExpression::String(value) => {
             value == logical_id
