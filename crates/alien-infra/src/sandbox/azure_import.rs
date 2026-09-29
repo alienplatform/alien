@@ -76,10 +76,9 @@ impl ResourceImporter for AzureSandboxImporter {
         make_imported_state_with_status(controller, ctx, status)
     }
 
-    /// The disk images are the controller's, so a re-import of the same group keeps its state:
-    /// replacing it would drop a built image and unpublish a serving sandbox. A changed image
-    /// reaches the controller through the update flow. A different group holds none of those
-    /// images, so its import replaces the state outright.
+    /// A re-import of the same group keeps the controller's state: replacing it would drop a built
+    /// disk image and unpublish a serving sandbox. A changed image arrives through the update flow.
+    /// A different group holds none of those images, so its import replaces the state.
     fn merge_reimport(
         &self,
         existing: StackResourceState,
