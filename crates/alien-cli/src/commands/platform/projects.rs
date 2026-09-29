@@ -556,7 +556,7 @@ fn remote_sandbox_lifetime(
 
 /// The configure endpoint replaces the whole sandbox configuration, so an omitted value returns
 /// to its default. Returns the saved image, lifetime and Azure idle time, which a command keeps
-/// unless a flag replaces them.
+/// unless a flag replaces them. The request has no Azure catalog image: the API always picks it.
 async fn saved_remote_sandbox_settings(
     http: &crate::auth::AuthHttp,
     workspace: Option<&str>,
