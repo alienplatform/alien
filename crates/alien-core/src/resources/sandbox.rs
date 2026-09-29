@@ -1335,68 +1335,65 @@ mod tests {
         ));
     }
 
+    /// The vectors' `repositoryKey`: registry host and repository, never the tag or digest, so a
+    /// new tag keeps the key. A reference the parser refuses stays whole.
+    fn repository_key(image: &str) -> String {
+        match parse_ecr_image_repository(image) {
+            Ok(parsed) => {
+                let host = image.split_once('/').map_or(image, |(host, _)| host);
+                format!("{host}/{}", parsed.repository)
+            }
+            Err(_) => image.to_string(),
+        }
+    }
+
     #[test]
     fn a_private_base_image_names_one_repository() {
-        let deployment = EcrImageRegion::Deployment;
-        let literal = EcrImageRegion::Literal;
-        let accepted = [
-            (
-                "123456789012.dkr.ecr.us-east-1.amazonaws.com/base:1.0",
-                literal("us-east-1"),
-                "base",
-            ),
-            (
-                "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/agents/base:1.0",
-                literal("us-east-1"),
-                "team/agents/base",
-            ),
-            (
-                "123456789012.dkr.ecr.{region}.amazonaws.com/team/base@sha256:abc123",
-                deployment,
-                "team/base",
-            ),
-            (
-                "123456789012.dkr.ecr.cn-north-1.amazonaws.com.cn/base",
-                literal("cn-north-1"),
-                "base",
-            ),
-            (
-                "123456789012.dkr.ecr.us-gov-west-1.amazonaws.com/my.base_image-x",
-                literal("us-gov-west-1"),
-                "my.base_image-x",
-            ),
-        ];
-        for (image, region, repository) in accepted {
+        let vectors: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/ecr-image-repository-parity.json"
+        ))
+        .expect("the ECR repository vectors must be JSON");
+        let field = |case: &serde_json::Value, name: &str| {
+            case[name]
+                .as_str()
+                .unwrap_or_else(|| panic!("vector must carry {name}: {case}"))
+                .to_string()
+        };
+
+        for case in vectors["accepted"].as_array().expect("accepted vectors") {
+            let image = field(case, "image");
+            let region = field(case, "region");
+            let region = if region == BUNDLE_REGION_TOKEN {
+                EcrImageRegion::Deployment
+            } else {
+                EcrImageRegion::Literal(&region)
+            };
             assert_eq!(
-                parse_ecr_image_repository(image),
+                parse_ecr_image_repository(&image),
                 Ok(EcrImageRepository {
-                    account_id: "123456789012",
+                    account_id: &field(case, "accountId"),
                     region,
-                    repository,
+                    repository: &field(case, "repository"),
                 }),
+                "{image}"
+            );
+            assert_eq!(
+                repository_key(&image),
+                field(case, "repositoryKey"),
                 "{image}"
             );
         }
 
-        for refused in [
-            "public.ecr.aws/docker/library/alpine:3.20",
-            "docker.io/library/alpine:3.20",
-            "https://123456789012.dkr.ecr.us-east-1.amazonaws.com/base:1.0",
-            "123456789012.dkr.ecr.us-east-1.amazonaws.com",
-            "123456789012.dkr.ecr.us-east-1.amazonaws.com/",
-            "12345.dkr.ecr.us-east-1.amazonaws.com/base",
-            "123456789012.dkr.ecr..amazonaws.com/base",
-            "123456789012.dkr.ecr.{account}.amazonaws.com/base",
-            "123456789012.dkr.ecr.us-east-1.amazonaws.com/*",
-            "123456789012.dkr.ecr.us-east-1.amazonaws.com/ba?e",
-            "123456789012.dkr.ecr.us-east-1.amazonaws.com/${AWS::AccountId}",
-            "123456789012.dkr.ecr.us-east-1.amazonaws.com/{region}/base",
-            "123456789012.dkr.ecr.us-east-1.amazonaws.com/Base:1.0",
-            "123456789012.dkr.ecr.us-east-1.amazonaws.com/team//base",
-        ] {
+        for case in vectors["refused"].as_array().expect("refused vectors") {
+            let image = field(case, "image");
             assert!(
-                parse_ecr_image_repository(refused).is_err(),
-                "{refused} must be refused"
+                parse_ecr_image_repository(&image).is_err(),
+                "{image} must be refused"
+            );
+            assert_eq!(
+                repository_key(&image),
+                field(case, "repositoryKey"),
+                "{image}"
             );
         }
     }
