@@ -13,6 +13,7 @@ use alien_core::{
     Stack, StackSettings, ToolchainConfig, Vault, Worker, WorkerCode,
 };
 use alien_helm::{generate_helm_chart, HelmOptions, HelmRegistry};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 #[test]
@@ -308,36 +309,67 @@ fn workload_vault_permissions_render_runtime_secret_rbac() {
 }
 
 #[test]
-fn manager_chart_uses_explicit_secrets_and_restricted_defaults() {
+fn manager_chart_generates_keys_and_requires_safe_identity_configuration() {
     let stack = Stack::new("manager-only".to_string()).build();
     let chart = render(&stack, StackSettings::default());
+    let render_documents = || {
+        let rendered = test_utils::helm_template(&chart.files, None);
+        rendered.assert_ok("runtime identity defaults");
+        serde_yaml::Deserializer::from_str(&rendered.stdout)
+            .map(|document| Value::deserialize(document).expect("rendered Kubernetes document"))
+            .collect::<Vec<_>>()
+    };
+    let first = render_documents();
+    let second = render_documents();
+    let key = |documents: &[Value]| {
+        documents
+            .iter()
+            .find_map(|document| document.pointer("/stringData/encryption-key"))
+            .and_then(Value::as_str)
+            .expect("generated runtime encryption key")
+            .to_string()
+    };
+    let first_key = key(&first);
+    assert_eq!(first_key.len(), 64);
+    assert!(first_key
+        .chars()
+        .all(|character| character.is_ascii_hexdigit()));
+    assert_ne!(
+        first_key,
+        key(&second),
+        "separate installs must not share keys"
+    );
+    assert!(first
+        .iter()
+        .any(|document| document["kind"] == "PersistentVolumeClaim"));
+    let deployment = first
+        .iter()
+        .find(|document| document["kind"] == "Deployment")
+        .expect("runtime deployment");
+    assert_eq!(deployment.pointer("/spec/replicas"), Some(&json!(1)));
+    assert_eq!(
+        deployment.pointer("/spec/strategy/type"),
+        Some(&json!("Recreate"))
+    );
+    assert_eq!(
+        deployment
+            .pointer("/spec/template/spec/containers/0/securityContext/readOnlyRootFilesystem"),
+        Some(&json!(true))
+    );
+    assert_eq!(
+        deployment
+            .pointer("/spec/template/spec/containers/0/securityContext/allowPrivilegeEscalation"),
+        Some(&json!(false))
+    );
 
-    let values = chart.files.get("values.yaml").expect("values.yaml");
-    assert!(values.contains("existingSecret:"));
-    assert!(values.contains("readOnlyRootFilesystem: true"));
-    assert!(values.contains("allowPrivilegeEscalation: false"));
-    assert!(values.contains("automountServiceAccountToken: true"));
-    assert!(values.contains("persistence:"));
-    assert!(values.contains("networkPolicy:"));
-    assert!(values.contains("pdb:"));
-    assert!(values.contains("heartbeat:"));
-    assert!(values.contains("nodes:"));
-
-    let secret = chart.files.get("templates/secret.yaml").expect("secret");
-    assert!(secret.contains("sync-token: {{ .Values.management.token | quote }}"));
-    assert!(secret
-        .contains("runtime.encryption.key or runtime.encryption.existingSecret.name is required"));
-    assert!(secret.contains("$collectorToken"));
-    assert!(secret.contains(".Values.management.existingSecret.name"));
-    assert!(secret.contains(".Values.runtime.encryption.existingSecret.name"));
-
-    let deployment = chart
-        .files
-        .get("templates/deployment.yaml")
-        .expect("deployment");
-    assert!(deployment.contains("securityContext:"));
-    assert!(deployment.contains("mountPath: /tmp"));
-    assert!(deployment.contains("mountPath: {{ .Values.runtime.data.mountPath | quote }}"));
+    for values in [
+        "runtime:\n  replicas: 2\n",
+        "runtime:\n  encryption:\n    key: placeholder\n",
+        "management:\n  token: ax_synthetic_bootstrap\nruntime:\n  data:\n    persistence:\n      enabled: false\n",
+    ] {
+        let rendered = test_utils::helm_template(&chart.files, Some(values));
+        assert!(matches!(rendered.status, LinterStatus::Failed(_)), "unsafe configuration rendered: {}", rendered.stderr);
+    }
 }
 
 #[test]

@@ -300,15 +300,15 @@ locals {
 }
 
 === kubernetes.tf ===
+data "aws_eks_cluster" "kubernetes_existing" {
+  count = var.kubernetes_cluster_mode == "existing" ? 1 : 0
+  name  = var.eks_cluster_name
+}
+
 data "aws_availability_zones" "kubernetes_available" {
   count            = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
   state            = "available"
   exclude_zone_ids = var.unsupported_availability_zone_ids
-}
-
-data "aws_eks_cluster" "kubernetes_existing" {
-  count = var.kubernetes_cluster_mode == "existing" ? 1 : 0
-  name  = var.eks_cluster_name
 }
 
 data "aws_vpc" "kubernetes_default" {
@@ -590,7 +590,7 @@ data "aws_iam_policy_document" "management_assume_role" {
       test     = "StringEquals"
       variable = "${local.eks_oidc_issuer_host_path}:sub"
       values = [
-        "system:serviceaccount:${var.kubernetes_namespace}:${local.resource_prefix}-manager-sa"
+        "system:serviceaccount:${var.kubernetes_namespace}:${trim(substr(format("%s-%s-sa", coalesce(trim(lower(replace(local.resource_prefix, "/[^a-zA-Z0-9]+/", "-")), "-"), "alien"), coalesce(trim(lower(replace("manager", "/[^a-zA-Z0-9]+/", "-")), "-"), "alien")), 0, 63), "-")}"
       ]
     }
 

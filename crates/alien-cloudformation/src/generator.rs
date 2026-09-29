@@ -1,6 +1,6 @@
 use crate::{
     emitters::enabled,
-    inline_policy::consolidate_role_inline_policies,
+    inline_policy::{consolidate_role_inline_policies, expression_references},
     registry::CfRegistry,
     template::{
         CfExpression, CfMapping, CfOutput, CfParameter, CfResource, CfRule, CfRuleAssertion,
@@ -212,22 +212,63 @@ impl CloudFormationTarget {
     }
 }
 
-/// Generate a CloudFormation template for a stack.
-/// Whether this template will actually emit a sandbox that demands named subnets.
-///
-/// The predicate answers a question about the stack; this answers it about the artifact. On a
-/// Kubernetes target the sandbox is skipped, so nothing forces subnets and withholding the mode
-/// would remove an install option while explaining it with a resource the template never carries.
+/// Setup resources that require subnet IDs cannot use implicit default networking.
+/// EKS also requires explicit subnets: this package does not discover the default VPC.
 fn restricts_network_mode(stack: &Stack, target: CloudFormationTarget) -> bool {
-    alien_core::restricts_network_mode(stack, target.is_kubernetes())
+    target.is_kubernetes() || alien_core::restricts_network_mode(stack, false)
 }
 
+/// Generate a CloudFormation template for a stack.
 pub fn generate_cloudformation_template(
     stack: &Stack,
     options: CloudFormationOptions<'_>,
 ) -> Result<CfTemplate> {
     validate_stack_for_cloudformation(stack)?;
     validate_stack_settings(&options.stack_settings)?;
+    if options.target.is_kubernetes()
+        && (matches!(
+            options.stack_settings.network,
+            Some(NetworkSettings::Create {
+                availability_zones: 1,
+                ..
+            })
+        ) || stack.resources().any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Network>()
+                .is_some_and(|network| {
+                    matches!(
+                        network.settings,
+                        NetworkSettings::Create {
+                            availability_zones: 1,
+                            ..
+                        }
+                    )
+                })
+        }))
+    {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "generate EKS CloudFormation package".to_string(),
+            reason: "EKS requires at least two distinct Availability Zones".to_string(),
+        }));
+    }
+
+    if options.target.is_kubernetes()
+        && (matches!(
+            options.stack_settings.network,
+            Some(NetworkSettings::UseDefault)
+        ) || stack.resources().any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Network>()
+                .is_some_and(|network| matches!(network.settings, NetworkSettings::UseDefault))
+        }))
+    {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "generate EKS CloudFormation package".to_string(),
+            reason: "CloudFormation EKS requires create-new networking or an existing VPC with explicit subnet IDs; automatic default-VPC discovery is not supported".to_string(),
+        }));
+    }
 
     let mut stack_settings = options.stack_settings.clone();
     if options.target.is_kubernetes() {
@@ -450,6 +491,7 @@ pub fn generate_cloudformation_template(
         access_only,
     );
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
+    apply_network_iam_dependencies(stack, &emitted_resource_ids, &mut template);
     consolidate_role_inline_policies(&mut template)?;
 
     if let Some(service_token) = options.registration.service_token(&mut template)? {
@@ -901,6 +943,112 @@ fn insert_resource(template: &mut CfTemplate, resource: CfResource) -> Result<()
     Ok(())
 }
 
+/// Lambda deletes a worker's Hyperplane ENI with the function's execution
+/// role and its permissions. If those are deleted first, the ENI stays and the
+/// private subnets and security group it sits in can never be deleted. The
+/// created network's private subnets and security group therefore depend on
+/// every IAM role and policy, so CloudFormation deletes IAM last. Skipped:
+/// conditional IAM resources (`DependsOn` cannot name a resource whose
+/// condition is false) and IAM resources that already depend on the network,
+/// such as an IRSA role trusting a cluster placed in it.
+fn apply_network_iam_dependencies(
+    stack: &Stack,
+    emitted_resource_ids: &IndexMap<String, Vec<String>>,
+    template: &mut CfTemplate,
+) {
+    const IAM_TYPES: [&str; 3] = [
+        "AWS::IAM::Role",
+        "AWS::IAM::Policy",
+        "AWS::IAM::ManagedPolicy",
+    ];
+    let Some(network_id) = stack
+        .resources()
+        .find_map(|(id, entry)| entry.config.downcast_ref::<Network>().map(|_| id))
+    else {
+        return;
+    };
+    let targets: Vec<String> = emitted_resource_ids
+        .get(network_id)
+        .into_iter()
+        .flatten()
+        .filter(|logical_id| {
+            template.resources.get(*logical_id).is_some_and(|resource| {
+                match resource.resource_type.as_str() {
+                    "AWS::EC2::Subnet" => logical_id.contains("PrivateSubnet"),
+                    "AWS::EC2::SecurityGroup" => true,
+                    _ => false,
+                }
+            })
+        })
+        .cloned()
+        .collect();
+    if targets.is_empty() {
+        return;
+    }
+
+    let logical_ids: Vec<&String> = template.resources.keys().collect();
+    let direct_dependencies: IndexMap<&String, Vec<&String>> = template
+        .resources
+        .iter()
+        .map(|(logical_id, resource)| {
+            let dependencies = logical_ids
+                .iter()
+                .copied()
+                .filter(|other| {
+                    *other != logical_id
+                        && (resource.depends_on.contains(other)
+                            || resource
+                                .properties
+                                .values()
+                                .any(|expression| expression_references(expression, other)))
+                })
+                .collect();
+            (logical_id, dependencies)
+        })
+        .collect();
+    let reaches_target = |start: &String| -> bool {
+        let mut pending = vec![start];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(logical_id) = pending.pop() {
+            if !seen.insert(logical_id) {
+                continue;
+            }
+            if targets.contains(logical_id) {
+                return true;
+            }
+            pending.extend(
+                direct_dependencies
+                    .get(logical_id)
+                    .into_iter()
+                    .flatten()
+                    .copied(),
+            );
+        }
+        false
+    };
+    let iam_logical_ids: Vec<String> = template
+        .resources
+        .iter()
+        .filter(|(logical_id, resource)| {
+            IAM_TYPES.contains(&resource.resource_type.as_str())
+                && resource.condition.is_none()
+                && !reaches_target(logical_id)
+        })
+        .map(|(logical_id, _)| logical_id.clone())
+        .collect();
+
+    for target in &targets {
+        let Some(resource) = template.resources.get_mut(target) else {
+            continue;
+        };
+        for logical_id in &iam_logical_ids {
+            if !resource.depends_on.contains(logical_id) {
+                resource.depends_on.push(logical_id.clone());
+            }
+        }
+    }
+}
+
 fn apply_resource_dependencies(
     stack: &Stack,
     emitted_resource_ids: &IndexMap<String, Vec<String>>,
@@ -1142,11 +1290,15 @@ fn add_network_parameters(
                 number_parameter(
                     "Only used with create-new. Number of availability zones for the new VPC.",
                     u32::from(defaults.availability_zones),
-                    Some(vec![
-                        CfExpression::from(1u8),
-                        CfExpression::from(2u8),
-                        CfExpression::from(3u8),
-                    ]),
+                    Some(if target.is_kubernetes() {
+                        vec![CfExpression::from(2u8), CfExpression::from(3u8)]
+                    } else {
+                        vec![
+                            CfExpression::from(1u8),
+                            CfExpression::from(2u8),
+                            CfExpression::from(3u8),
+                        ]
+                    }),
                 ),
             );
             template.parameters.insert(
@@ -1347,24 +1499,24 @@ fn add_standard_conditions(
                 CONDITION_NETWORK_MODE_USE_EXISTING.to_string(),
                 equals_ref(PARAM_NETWORK_MODE, "use-existing"),
             );
-            if has_created_network
-                && stack.resources().any(|(_id, entry)| {
-                    entry.lifecycle == alien_core::ResourceLifecycle::Frozen
-                        && entry
-                            .config
-                            .downcast_ref::<alien_core::Postgres>()
-                            .is_some()
-                })
-            {
-                template.conditions.insert(
-                    crate::emitters::aws::helpers::CONDITION_NETWORK_MODE_HAS_NAMED_SUBNETS
-                        .to_string(),
-                    CfExpression::or([
-                        equals_ref(PARAM_NETWORK_MODE, "create-new"),
-                        equals_ref(PARAM_NETWORK_MODE, "use-existing"),
-                    ]),
-                );
-            }
+        }
+        if !restricts_network_mode(stack, target)
+            && has_created_network
+            && stack.resources().any(|(_id, entry)| {
+                entry.lifecycle == alien_core::ResourceLifecycle::Frozen
+                    && entry
+                        .config
+                        .downcast_ref::<alien_core::Postgres>()
+                        .is_some()
+            })
+        {
+            template.conditions.insert(
+                crate::emitters::aws::helpers::CONDITION_NETWORK_MODE_HAS_NAMED_SUBNETS.to_string(),
+                CfExpression::or([
+                    equals_ref(PARAM_NETWORK_MODE, "create-new"),
+                    equals_ref(PARAM_NETWORK_MODE, "use-existing"),
+                ]),
+            );
         }
     }
     if has_created_network {

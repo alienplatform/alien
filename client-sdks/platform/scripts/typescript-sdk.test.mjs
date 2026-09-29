@@ -11,6 +11,43 @@ import {
   ruleToJSON,
 } from "../typescript/esm/models/publishoperationspluginrequest.js";
 import { PublishOperationsPluginResponse$inboundSchema } from "../typescript/esm/models/publishoperationspluginresponse.js";
+import { DeploymentInfoHelm$inboundSchema } from "../typescript/esm/models/deploymentinfo.js";
+import { PackageRule$inboundSchema, packageRuleFromJSON } from "../typescript/esm/models/package.js";
+import {
+  UpdateProjectBinaryTarget,
+  UpdateProjectHelm$outboundSchema,
+  updateProjectHelmToJSON,
+} from "../typescript/esm/models/updateproject.js";
+
+test("published package model imports still validate and serialize", () => {
+  const rule = { apiGroup: "apps", resource: "deployments", verbs: ["get"], reason: "Read workload state" };
+  assert.deepEqual(PackageRule$inboundSchema.parse(rule), rule);
+  assert.deepEqual(packageRuleFromJSON(JSON.stringify(rule)), { ok: true, value: rule });
+  const helm = { enabled: true, chartName: "application", description: "Application deployment" };
+  assert.deepEqual(UpdateProjectHelm$outboundSchema.parse(helm), helm);
+  assert.deepEqual(JSON.parse(updateProjectHelmToJSON(helm)), helm);
+  assert.equal(UpdateProjectBinaryTarget.LinuxArm64, "linux-arm64");
+});
+
+test("Helm installation routing survives SDK response validation", () => {
+  const helm = {
+    status: "ready",
+    chartRef: "oci://registry.example/charts/application",
+    outputs: {
+      chart: "oci://registry.example/charts/application",
+      version: "1.2.3",
+      managerUrl: "https://manager.example",
+    },
+    managerUrlOverride: "https://custom-manager.example",
+  };
+  assert.deepEqual(DeploymentInfoHelm$inboundSchema.parse(helm), helm);
+  const previous = {
+    ...helm,
+    outputs: { chart: helm.outputs.chart, version: helm.outputs.version },
+  };
+  delete previous.managerUrlOverride;
+  assert.deepEqual(DeploymentInfoHelm$inboundSchema.parse(previous), previous);
+});
 
 // Run after pnpm -C client-sdks/platform/typescript build. Exercise the shipped
 // JavaScript, including request serialization and response validation.

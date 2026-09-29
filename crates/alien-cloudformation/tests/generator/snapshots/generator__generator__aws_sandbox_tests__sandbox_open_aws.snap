@@ -266,6 +266,8 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - AgentsBuildRole
     Condition: NetworkModeCreate
   DefaultNetworkPublicSubnet2:
     Type: AWS::EC2::Subnet
@@ -327,6 +329,8 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - AgentsBuildRole
     Condition: NetworkCreateUseAz2
   DefaultNetworkPublicSubnet3:
     Type: AWS::EC2::Subnet
@@ -388,6 +392,8 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - AgentsBuildRole
     Condition: NetworkCreateUseAz3
   DefaultNetworkPublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -535,6 +541,8 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - AgentsBuildRole
     Condition: NetworkModeCreate
   AgentsBuildRole:
     Type: AWS::IAM::Role

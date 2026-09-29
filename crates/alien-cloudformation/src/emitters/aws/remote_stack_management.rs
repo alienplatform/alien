@@ -40,7 +40,7 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
         );
         role.properties.insert(
             "AssumeRolePolicyDocument".to_string(),
-            remote_management_trust_policy(),
+            remote_management_trust_policy(ctx),
         );
         role.properties.insert("Tags".to_string(), tags(ctx));
 
@@ -72,7 +72,16 @@ fn role_logical_id(resource_logical_id: &str) -> String {
     }
 }
 
-fn remote_management_trust_policy() -> CfExpression {
+fn remote_management_trust_policy(ctx: &EmitContext<'_>) -> CfExpression {
+    if let Some(statement) = super::kubernetes_cluster::eks_pod_trust_statement(ctx, "manager") {
+        return CfExpression::sub_with(
+            r#"{"Version":"2012-10-17","Statement":[{"Sid":"AllowManagingRole","Effect":"Allow","Principal":{"AWS":"${ManagingRole}"},"Action":"sts:AssumeRole","Condition":{"StringEquals":{"aws:PrincipalArn":"${ManagingRole}"}}},${PodTrust}]}"#,
+            [
+                ("ManagingRole", CfExpression::ref_(PARAM_MANAGING_ROLE_ARN)),
+                ("PodTrust", statement),
+            ],
+        );
+    }
     CfExpression::object([
         ("Version", CfExpression::from("2012-10-17")),
         (

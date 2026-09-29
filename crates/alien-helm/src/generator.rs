@@ -261,6 +261,10 @@ fn generate_helm_chart_internal(
     files.insert("values.schema.json".to_string(), values_schema_json(stack)?);
     files.insert("templates/_helpers.tpl".to_string(), helpers_tpl());
     files.insert(
+        "templates/_runtime-identity.tpl".to_string(),
+        include_str!("templates/_runtime-identity.tpl").to_string(),
+    );
+    files.insert(
         "templates/serviceaccount.yaml".to_string(),
         serviceaccount_tpl(),
     );
@@ -1569,7 +1573,7 @@ fn remote_operator_checks_tpl() -> String {
 {{- end -}}
 {{- end -}}
 {{- if .Values.remoteOperator.enabled -}}
-{{- if not .Values.management.url -}}
+{{- if not (include "deployment.managementUrl" .) -}}
   {{- fail "management.url is required when Remote Operator is enabled." -}}
 {{- end -}}
 {{- $expected := include "deployment.remoteOperatorAccessRequestCrd" . | fromYaml -}}
@@ -3858,7 +3862,9 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
     name: ""
     tokenKey: sync-token
   name: ""
-  # Use the resolved management endpoint supplied by the installation flow.
+  # Resolved management endpoint captured when this package was built.
+  defaultUrl: ""
+  # Override the captured or installed endpoint when routing changes.
   url: ""
   # Leave unset to create a deployment from the bootstrap token.
   deploymentId: null
@@ -3879,9 +3885,9 @@ runtime:
   podAnnotations: {}
   automountServiceAccountToken: true
   encryption:
-    # Generate once with openssl rand -hex 32; retain across upgrades.
-    # Alternatively reference an existing Secret below.
-    key: "replace-me-with-a-stable-64-character-encryption-secret"
+    # Empty generates a key on first install and retains it across upgrades.
+    # Alternatively provide a stable 64-character hex key or an existing Secret.
+    key: ""
     existingSecret:
       name: ""
       key: encryption-key
@@ -3933,9 +3939,8 @@ runtime:
   data:
     mountPath: /var/lib/deployment-operator
     persistence:
-      # With the Remote Operator disabled, Pod-log cursors live here. An
-      # emptyDir can replay retained lines after the runtime Pod is replaced.
-      enabled: false
+      # Required for bootstrap identity and durable local runtime state.
+      enabled: true
       existingClaim: ""
       storageClassName: ""
       accessModes:
@@ -4558,6 +4563,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         },
         "name": { "type": "string" },
         "url": { "type": "string" },
+        "defaultUrl": { "type": "string" },
         "deploymentId": { "type": ["string", "null"] },
         "setupItem": { "type": "string" },
         "updates": { "type": "string", "enum": ["auto", "approval-required"] },
@@ -4598,7 +4604,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "key": { "type": "string" },
+            "key": { "type": "string", "pattern": "^$|^[a-fA-F0-9]{64}$" },
             "existingSecret": {
               "type": "object",
               "additionalProperties": false,
@@ -4609,7 +4615,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             }
           }
         },
-        "replicas": { "type": "integer", "minimum": 1 },
+        "replicas": { "type": "integer", "minimum": 1, "maximum": 1 },
         "resources": { "type": "object" },
         "api": {
           "type": "object",
@@ -5180,11 +5186,11 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
                     "required": ["management", "inputValues"],
                     "properties": {
                         "management": {
-                            "required": ["url"],
-                            "properties": {
-                                "url": { "minLength": 1 },
-                                "deploymentId": { "type": "null" }
-                            }
+                            "anyOf": [
+                                { "required": ["url"], "properties": { "url": { "minLength": 1 } } },
+                                { "required": ["defaultUrl"], "properties": { "defaultUrl": { "minLength": 1 } } }
+                            ],
+                            "properties": { "deploymentId": { "type": "null" } }
                         },
                         "inputValues": { "required": required }
                     }
@@ -5510,7 +5516,7 @@ stringData:
   sync-token: {{ .Values.management.token | quote }}
   {{- end }}
   {{- if $createEncryptionSecret }}
-  encryption-key: {{ required "runtime.encryption.key or runtime.encryption.existingSecret.name is required" .Values.runtime.encryption.key | quote }}
+  encryption-key: {{ include "deployment.runtimeEncryptionKey" . | quote }}
   {{- end }}
   {{- if .Values.infrastructure }}
   external-bindings.json: {{ toJson .Values.infrastructure | quote }}
@@ -6205,7 +6211,8 @@ spec:
 }
 
 fn deployment_tpl() -> String {
-    r#"apiVersion: apps/v1
+    r#"{{- include "deployment.validateRuntimeIdentity" . -}}
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "deployment.fullname" . }}
@@ -6309,7 +6316,7 @@ spec:
               value: {{ .Values.basePlatformConfig.azure.location | quote }}
             {{- end }}
             - name: SYNC_URL
-              value: {{ .Values.management.url | quote }}
+              value: {{ include "deployment.managementUrl" . | quote }}
             - name: OPERATOR_NAME
               value: {{ .Values.management.name | quote }}
             - name: OPERATOR_RESOURCE_PREFIX
@@ -7238,15 +7245,12 @@ management:
   token: "replace-with-bootstrap-token"
   url: "https://management.example.com"
 
-runtime:
-  encryption:
-    # Generate once: openssl rand -hex 32. Keep the same key across upgrades.
-    key: "replace-with-generated-64-character-hex-key"
-  data:
-    persistence:
-      enabled: true
-      # Set only if your cluster has no suitable default storage class.
-      # storageClassName: "your-storage-class"
+# Identity storage and encryption are configured automatically.
+# If your cluster has no suitable default storage class, uncomment:
+# runtime:
+#   data:
+#     persistence:
+#       storageClassName: "your-storage-class"
 
 # Add the application inputs required by this chart.
 inputValues: {}
@@ -7262,25 +7266,32 @@ fn readme_md(chart_name: &str) -> String {
 
 ## Install
 
-For a managed package, download its generated values file and use its install
-command. To prepare a new deployment manually, copy the bootstrap example:
+For a managed package, use the installation command supplied by its deployment
+page. The chart supplies storage and encryption defaults; a values file is only
+needed for additional configuration. To prepare an installation manually, copy
+the bootstrap example:
 
 ```bash
 cp examples/bootstrap.yaml install-values.yaml
 ```
 
-Edit `install-values.yaml` to set a bootstrap token, the management endpoint,
-and a stable encryption key, plus any application `inputValues` required by
-this chart. Generate the key once with
-`openssl rand -hex 32` and keep the resulting values file private.
+Edit `install-values.yaml` to set a bootstrap token and any application
+`inputValues` required by this chart. Set the management endpoint only when the
+installation service supplies an override or the chart has no endpoint default.
+The chart generates an encryption key on first installation and reuses it on
+upgrades. Keep credentials and any values file containing them private.
 
 ```bash
 helm install {chart_name} . --namespace={namespace} --create-namespace --values install-values.yaml --atomic --wait --timeout 10m
 ```
 
-Use the management endpoint resolved by your installation service, including
-any configured manager or active custom domain. The chart does not assume a
-hosted endpoint. The setup item defaults to `deployment`; override
+Managed packages can supply the project's resolved management endpoint as a
+chart default. The installation service supplies an override when the selected
+manager or active custom domain differs from that captured default. Existing
+runtime installations retain their installed endpoint across chart upgrades unless
+`management.url` explicitly supplies a new endpoint. `management.defaultUrl` is
+the package default, used only for an installation without an assigned endpoint.
+The chart does not assume a hosted endpoint. The setup item defaults to `deployment`; override
 `management.setupItem` when your setup link selects another item. Leave
 `management.deploymentId` unset for a new installation. Set it only when
 connecting an already registered
@@ -7290,14 +7301,20 @@ bindings and service-account identities.
 ## Credentials and storage
 
 The bootstrap token is exchanged for a deployment credential on first connection.
-Keep the same encryption key across upgrades: changing it makes stored encrypted
-data unreadable. Existing Secrets are supported through
-`management.existingSecret` and `runtime.encryption.existingSecret`.
+The chart generates an encryption key on first install and reuses the installed
+Secret on upgrades. Explicit keys and existing Secrets remain supported through
+`runtime.encryption.key`, `management.existingSecret`, and
+`runtime.encryption.existingSecret`. Keep the original key: changing it makes
+stored encrypted data unreadable. A missing key must be restored, not regenerated.
 
-Enable `runtime.data.persistence.enabled` when the Operator's identity and log
-cursor must survive Pod replacement. The chart uses the cluster's default
-storage class; set `runtime.data.persistence.storageClassName` only when needed.
-The chart does not install a storage driver by default.
+Runtime persistence is on by default and required for bootstrap installations.
+The identity, deployment credential, and log cursor survive Pod replacement.
+Keep an existing installation's identity claim unchanged; moving from ephemeral
+storage or to another claim requires migrating the state before an upgrade.
+The chart uses the cluster's default storage class; set
+`runtime.data.persistence.storageClassName` only when needed, or supply
+`runtime.data.persistence.existingClaim`. It does not install a storage driver.
+A Remote Operator uses its own mandatory identity PVC.
 
 ## Auto-updates
 
@@ -7326,11 +7343,10 @@ logCollector:
 deployments and clusters that restrict node access. The Operator supports 32
 concurrent streams by default (`logCollector.maxStreams`, up to 256) and a
 bounded 64 MiB queue. Kubernetes exposes only retained Pod logs, so rotation
-or a prolonged API outage can lose lines. The default runtime Operator keeps
-its resume cursor on `emptyDir`; replacing that Pod can replay retained lines.
-Set `runtime.data.persistence.enabled: true` to keep the cursor on a PVC if the
-cluster has suitable storage. A Remote Operator already keeps its cursor on
-its identity PVC; runtime persistence affects only the separate runtime Pod.
+or a prolonged API outage can lose lines. The runtime Operator keeps
+its resume cursor on the runtime PVC by default. Explicitly configured ephemeral
+runtime storage can replay retained lines after Pod replacement. A Remote
+Operator keeps its cursor on its own mandatory identity PVC.
 
 `nodeAgent` runs a Fluent Bit DaemonSet and reads the selected Pod log files on
 each node. Choose it for larger workloads in clusters that permit read-only
@@ -8222,7 +8238,7 @@ mod tests {
             },
             ProductOperatorManifestOptions {
                 manifest: OperatorManifestOptions {
-                    manager_url: "{{ .Values.management.url }}",
+                    manager_url: r#"{{ include "deployment.managementUrl" . }}"#,
                     group_token: "",
                     encryption_key: "",
                     image: "registry.example.com/operator@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -8465,8 +8481,15 @@ infrastructureExistingSecret: customer-bindings
             );
         crate::test_utils::helm_template(&chart.files, Some(&registered))
             .assert_ok("registered deployment keeps its stored inputs");
+        let captured_endpoint = values.replace(
+            "  url: https://manager.example.test",
+            "  defaultUrl: https://manager.example.test",
+        );
+        crate::test_utils::helm_template(&chart.files, Some(&captured_endpoint))
+            .assert_ok("bootstrap with captured management endpoint");
         let missing_inputs = values.replace("  ingestUrl: https://ingest.example.test\n", "");
         for invalid in [
+            captured_endpoint.replace("  ingestUrl: https://ingest.example.test\n", ""),
             missing_inputs.clone(),
             missing_inputs.replace(
                 "  token: ax_test",
@@ -9516,7 +9539,12 @@ remoteOperator:
     fn product_chart_remote_operator_removal_requires_the_exact_release_name() {
         let chart = sample_product_chart();
         let render = |values: &str| {
-            crate::test_utils::helm_template_for_release(&chart.files, Some(values), "shop")
+            // This compares complete resources; use the same explicit key so
+            // independently rendered first-install Secrets remain comparable.
+            let values = format!(
+                "runtime:\n  encryption:\n    key: {TEST_RUNTIME_ENCRYPTION_KEY}\n{values}"
+            );
+            crate::test_utils::helm_template_for_release(&chart.files, Some(&values), "shop")
         };
         let has_rollback_guard = |manifest: &str| {
             docs_by_kind(&parse_manifest_docs(manifest), "Job")

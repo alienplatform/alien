@@ -27,15 +27,12 @@ impl StackMutation for ServiceAccountDependenciesMutation {
         &self,
         stack: &Stack,
         stack_state: &StackState,
-        _config: &DeploymentConfig,
+        config: &DeploymentConfig,
     ) -> bool {
-        // These platforms do not create ServiceAccount resources in the runtime
-        // stack. Kubernetes installs them with Helm; Machines use their runtime
-        // identity. A dependency on a missing resource makes execution fail.
-        if matches!(
-            stack_state.platform,
-            Platform::Kubernetes | Platform::Machines
-        ) {
+        // Cloud-backed Kubernetes creates setup-owned cloud identities; plain
+        // Kubernetes and Machines do not have these resources to depend on.
+        let identity_platform = config.base_platform.unwrap_or(stack_state.platform);
+        if stack_state.platform == Platform::Machines || identity_platform == Platform::Kubernetes {
             return false;
         }
 
@@ -360,19 +357,24 @@ mod tests {
                 ResourceLifecycle::Live,
             )
             .build();
-        let stack_state = StackState::new(Platform::Local);
-        let config = empty_config(None);
-
-        assert!(ServiceAccountDependenciesMutation.should_run(&stack, &stack_state, &config));
-        let result = ServiceAccountDependenciesMutation
-            .mutate(stack, &stack_state, &config)
-            .await
-            .unwrap();
-
-        let daemon = result.resources.get("agent").unwrap();
-        assert!(daemon.dependencies.iter().any(|dependency| {
-            dependency.resource_type() == &ServiceAccount::RESOURCE_TYPE
-                && dependency.id() == "execution-sa"
-        }));
+        for (platform, base) in [
+            (Platform::Local, None),
+            (Platform::Kubernetes, Some(Platform::Aws)),
+            (Platform::Kubernetes, Some(Platform::Gcp)),
+            (Platform::Kubernetes, Some(Platform::Azure)),
+        ] {
+            let stack_state = StackState::new(platform);
+            let config = empty_config(base);
+            assert!(ServiceAccountDependenciesMutation.should_run(&stack, &stack_state, &config));
+            let result = ServiceAccountDependenciesMutation
+                .mutate(stack.clone(), &stack_state, &config)
+                .await
+                .unwrap();
+            let daemon = result.resources.get("agent").unwrap();
+            assert!(daemon.dependencies.iter().any(|dependency| {
+                dependency.resource_type() == &ServiceAccount::RESOURCE_TYPE
+                    && dependency.id() == "execution-sa"
+            }));
+        }
     }
 }

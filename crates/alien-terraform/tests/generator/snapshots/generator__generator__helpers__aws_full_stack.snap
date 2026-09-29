@@ -342,6 +342,23 @@ resource "aws_subnet" "default_network_private" {
     resource        = "default-network"
     "resource-type" = "network"
   }
+  depends_on = [
+    aws_iam_role.execution_sa,
+    aws_iam_role_policy.execution_sa_set_0,
+    aws_iam_role_policy.execution_sa_set_1,
+    aws_iam_role.management,
+    aws_iam_policy.management_managed_policy_0,
+    aws_iam_role_policy_attachment.management_managed_policy_0_attachment,
+    aws_iam_policy.management_managed_policy_1,
+    aws_iam_role_policy_attachment.management_managed_policy_1_attachment,
+    aws_iam_role_policy.management_self_read,
+    aws_iam_role_policy.assets_management_storage-heartbeat_0,
+    aws_iam_role_policy.management_vault_secrets_set_0,
+    aws_iam_role.registry_pull,
+    aws_iam_role.registry_push,
+    aws_iam_role_policy.registry_pull_policy,
+    aws_iam_role_policy.registry_push_policy
+  ]
 }
 
 resource "aws_eip" "default_network_nat" {
@@ -434,6 +451,23 @@ resource "aws_security_group" "default_network_workload" {
     resource        = "default-network"
     "resource-type" = "network"
   }
+  depends_on = [
+    aws_iam_role.execution_sa,
+    aws_iam_role_policy.execution_sa_set_0,
+    aws_iam_role_policy.execution_sa_set_1,
+    aws_iam_role.management,
+    aws_iam_policy.management_managed_policy_0,
+    aws_iam_role_policy_attachment.management_managed_policy_0_attachment,
+    aws_iam_policy.management_managed_policy_1,
+    aws_iam_role_policy_attachment.management_managed_policy_1_attachment,
+    aws_iam_role_policy.management_self_read,
+    aws_iam_role_policy.assets_management_storage-heartbeat_0,
+    aws_iam_role_policy.management_vault_secrets_set_0,
+    aws_iam_role.registry_pull,
+    aws_iam_role.registry_push,
+    aws_iam_role_policy.registry_pull_policy,
+    aws_iam_role_policy.registry_push_policy
+  ]
 }
 
 === execution_sa.tf ===
