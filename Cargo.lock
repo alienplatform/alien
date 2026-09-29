@@ -1350,6 +1350,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "alien-tunnel"
+version = "3.3.25"
+dependencies = [
+ "alien-error",
+ "alien-tunnel",
+ "bytes",
+ "futures",
+ "hex",
+ "http 1.5.0",
+ "http-body-util",
+ "hyper 1.11.1",
+ "hyper-util",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "alien-worker-protocol"
 version = "3.3.26"
 dependencies = [

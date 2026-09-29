@@ -1,0 +1,37 @@
+[package]
+name = "alien-tunnel"
+version.workspace = true
+edition = "2021"
+description = "Reverse HTTP tunnel: HTTP/2 over an outbound WebSocket from a deployment to its manager"
+license-file.workspace = true
+
+[features]
+default = []
+# Manager end: accepts operator connections and sends requests into them.
+manager = []
+# Operator end: dials the manager and forwards requests to in-cluster services.
+operator = ["dep:reqwest", "hyper-util/client-legacy", "hyper-util/http1"]
+
+[dependencies]
+alien-error = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true, features = ["http2", "client", "server"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+reqwest = { workspace = true, optional = true, default-features = false, features = ["rustls-tls-webpki-roots"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "io-util"] }
+tokio-tungstenite = { workspace = true }
+tokio-util = { workspace = true, features = ["io"] }
+tracing = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+alien-tunnel = { path = ".", features = ["manager", "operator"] }
+hex = { workspace = true }
+hyper = { workspace = true, features = ["http1", "server"] }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
