@@ -10,6 +10,7 @@ pub mod deployments;
 pub mod health;
 pub mod image_repositories;
 pub mod install;
+pub mod logs;
 pub mod manager_info;
 pub mod operator_image;
 pub mod platforms;
@@ -87,6 +88,8 @@ pub struct AppState {
     pub tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
     /// Chart settings; `Some` serves Helm charts at `/v2/charts/...`.
     pub charts: Option<Arc<charts::ChartSettings>>,
+    /// Recent deployment logs kept by the manager (see `providers::recent_logs`).
+    pub log_buffer: Arc<crate::dev::LogBuffer>,
 }
 
 impl HasCommandServer for AppState {
@@ -172,6 +175,7 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         // Identity
         .merge(whoami::router())
         .merge(manager_info::router())
+        .merge(logs::router())
         // Deployments
         .merge(deployments::router())
         // Releases

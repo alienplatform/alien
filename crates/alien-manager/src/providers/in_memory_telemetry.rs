@@ -25,7 +25,16 @@ impl TelemetryBackend for InMemoryTelemetryBackend {
     ) -> Result<(), AlienError> {
         match signal {
             TelemetrySignal::Logs => {
-                // For now, store as raw entry. Full OTLP protobuf parsing can be added later.
+                if let Some(deployment_id) = &caller.deployment_id {
+                    if let Ok(entries) =
+                        crate::providers::recent_logs::decode_log_entries(deployment_id, &data)
+                    {
+                        for entry in entries {
+                            self.log_buffer.push(entry).await;
+                        }
+                        return Ok(());
+                    }
+                }
                 self.log_buffer
                     .push(LogEntry {
                         timestamp: chrono::Utc::now(),

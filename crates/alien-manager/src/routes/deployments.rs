@@ -617,7 +617,30 @@ async fn list_deployments(
             ..
         } => Some(deployment_group_id.clone()),
         crate::auth::Scope::Workspace | crate::auth::Scope::Project { .. } => {
-            query.deployment_group_id.clone()
+            match query.deployment_group_id.as_deref() {
+                // Clients may pass a group name where an ID is expected, as the
+                // hosted API accepts; resolve it the same way.
+                Some(group) if !group.starts_with("dg_") => {
+                    match state
+                        .deployment_store
+                        .list_deployment_groups(&subject)
+                        .await
+                    {
+                        Ok(groups) => Some(
+                            groups
+                                .into_iter()
+                                .find(|dg| {
+                                    dg.name == group
+                                        && state.authz.can_read_deployment_group(&subject, dg)
+                                })
+                                .map(|dg| dg.id)
+                                .unwrap_or_else(|| group.to_string()),
+                        ),
+                        Err(e) => return e.into_response(),
+                    }
+                }
+                other => other.map(str::to_string),
+            }
         }
         crate::auth::Scope::Deployment { .. } => {
             return ErrorData::forbidden("Deployment tokens cannot list deployments")
@@ -1210,6 +1233,7 @@ mod tests {
             import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
             tunnels: None,
             charts: None,
+            log_buffer: std::sync::Arc::new(crate::dev::LogBuffer::new()),
         };
         let response = router()
             .with_state(state)

@@ -1002,6 +1002,7 @@ dependencies = [
  "nanoid",
  "ngrok",
  "oci-client",
+ "opentelemetry-proto",
  "prost 0.13.5",
  "prost-types",
  "rand 0.9.5",

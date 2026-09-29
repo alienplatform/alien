@@ -937,6 +937,68 @@
         }
       }
     },
+    "/v1/deployments/{id}/logs": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "recent_logs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Most recent entries to return (default 200, max 5000).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Only entries after this time (RFC 3339).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent logs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecentLogsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/deployments/{id}/redeploy": {
       "post": {
         "tags": [
@@ -1988,6 +2050,13 @@
                 "description": "Bundles the Operator should download to catch up to the target\nenabled-plugin-set hash. Opaque passthrough from the embedder's\n`DeploymentStore::reconcile`; `None` in OSS."
               }
             ]
+          },
+          "targetOperatorImage": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Operator image this manager's charts install. Operators that manage\ntheir own workload update to it. Absent when the manager serves no\ncharts."
           },
           "tunnelUrl": {
             "type": [
@@ -15053,6 +15122,58 @@
           "yaml",
           "text"
         ]
+      },
+      "RecentLogEntry": {
+        "type": "object",
+        "required": [
+          "timestamp",
+          "severity",
+          "message",
+          "attributes"
+        ],
+        "properties": {
+          "attributes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "message": {
+            "type": "string"
+          },
+          "resource": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Workload that produced the entry (OTLP `service.name`)."
+          },
+          "severity": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RecentLogsResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecentLogEntry"
+            },
+            "description": "Oldest first."
+          }
+        }
       },
       "ReconcileRequest": {
         "type": "object",

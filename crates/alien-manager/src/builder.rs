@@ -383,19 +383,26 @@ impl AlienManagerBuilder {
         }
 
         // --- Telemetry backend ---
+        // Forward to the configured OTLP endpoint, and keep recent logs
+        // readable through the manager (`alien logs`).
         if self.telemetry_backend.is_none() {
-            self.telemetry_backend = Some(
-                if let Some(ref endpoint) = toml_config.telemetry.otlp_endpoint {
-                    Arc::new(
-                        crate::providers::otlp_forwarding::OtlpForwardingBackend::new(
-                            endpoint.clone(),
-                            toml_config.telemetry.headers.clone(),
-                        ),
-                    ) as Arc<dyn TelemetryBackend>
-                } else {
-                    Arc::new(crate::providers::NullTelemetryBackend) as Arc<dyn TelemetryBackend>
-                },
-            );
+            let forward = if let Some(ref endpoint) = toml_config.telemetry.otlp_endpoint {
+                Arc::new(
+                    crate::providers::otlp_forwarding::OtlpForwardingBackend::new(
+                        endpoint.clone(),
+                        toml_config.telemetry.headers.clone(),
+                    ),
+                ) as Arc<dyn TelemetryBackend>
+            } else {
+                Arc::new(crate::providers::NullTelemetryBackend) as Arc<dyn TelemetryBackend>
+            };
+            let buffer = self
+                .log_buffer
+                .get_or_insert_with(|| Arc::new(crate::dev::LogBuffer::new()))
+                .clone();
+            self.telemetry_backend = Some(Arc::new(
+                crate::providers::recent_logs::RecentLogsBackend::new(forward, buffer),
+            ));
         }
 
         // --- Auth validator ---
@@ -835,6 +842,7 @@ async fn finalize(
             .unwrap_or_else(|| Arc::new(alien_infra::ImporterRegistry::built_in())),
         tunnels,
         charts,
+        log_buffer: log_buffer.clone(),
     };
 
     // --- Router ---

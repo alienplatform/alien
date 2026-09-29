@@ -937,6 +937,64 @@
         }
       }
     },
+    "/v1/deployments/{id}/logs": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "recent_logs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Most recent entries to return (default 200, max 5000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "nullable": true
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Only entries after this time (RFC 3339).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent logs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecentLogsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/deployments/{id}/redeploy": {
       "post": {
         "tags": [
@@ -1956,6 +2014,11 @@
                 "$ref": "#/components/schemas/TargetOperationsBundleSet"
               }
             ]
+          },
+          "targetOperatorImage": {
+            "type": "string",
+            "description": "Operator image this manager's charts install. Operators that manage\ntheir own workload update to it. Absent when the manager serves no\ncharts.",
+            "nullable": true
           },
           "tunnelUrl": {
             "type": "string",
@@ -13420,6 +13483,53 @@
           "yaml",
           "text"
         ]
+      },
+      "RecentLogEntry": {
+        "type": "object",
+        "required": [
+          "timestamp",
+          "severity",
+          "message",
+          "attributes"
+        ],
+        "properties": {
+          "attributes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "message": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string",
+            "description": "Workload that produced the entry (OTLP `service.name`).",
+            "nullable": true
+          },
+          "severity": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RecentLogsResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecentLogEntry"
+            },
+            "description": "Oldest first."
+          }
+        }
       },
       "ReconcileRequest": {
         "type": "object",

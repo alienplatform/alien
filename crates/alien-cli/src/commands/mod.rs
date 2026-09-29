@@ -17,6 +17,7 @@ mod event_display;
 pub mod examples;
 pub mod init;
 pub mod logs;
+pub mod logs_manager;
 pub mod onboard;
 #[cfg(feature = "platform")]
 pub mod packages;

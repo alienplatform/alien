@@ -197,6 +197,7 @@ async fn make_fixture_for_platform(platform: Platform, seeded_stack: Option<Stac
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
         tunnels: None,
         charts: None,
+        log_buffer: std::sync::Arc::new(alien_manager::LogBuffer::new()),
     };
 
     Fixture {

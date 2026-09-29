@@ -38,6 +38,7 @@ impl Modify for BearerSecurity {
         // Identity
         crate::routes::whoami::whoami,
         crate::routes::manager_info::manager_info,
+        crate::routes::logs::recent_logs,
         crate::routes::tokens::list_tokens,
         crate::routes::tokens::create_token,
         crate::routes::tokens::delete_token,
@@ -141,6 +142,8 @@ impl Modify for BearerSecurity {
         crate::routes::whoami::WhoamiResponse,
         crate::routes::manager_info::ManagerInfoResponse,
         crate::routes::manager_info::ManagerCapabilities,
+        crate::routes::logs::RecentLogsResponse,
+        crate::routes::logs::RecentLogEntry,
         crate::routes::tokens::TokenResponse,
         crate::routes::tokens::ListTokensResponse,
         crate::routes::tokens::CreateTokenRequest,
