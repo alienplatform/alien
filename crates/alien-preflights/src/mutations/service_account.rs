@@ -27,14 +27,12 @@ impl StackMutation for ServiceAccountMutation {
         &self,
         stack: &Stack,
         stack_state: &StackState,
-        _config: &DeploymentConfig,
+        config: &DeploymentConfig,
     ) -> bool {
-        // Kubernetes ServiceAccounts are installed by the chart before the Operator starts.
-        // Machines use their own runtime identity and do not create this resource either.
-        if matches!(
-            stack_state.platform,
-            Platform::Kubernetes | Platform::Machines
-        ) {
+        // Plain Kubernetes installs pod identities through Helm. Cloud-backed Kubernetes
+        // also needs setup-owned cloud identities for those pods' data permissions.
+        let identity_platform = config.base_platform.unwrap_or(stack_state.platform);
+        if stack_state.platform == Platform::Machines || identity_platform == Platform::Kubernetes {
             return false;
         }
 
@@ -46,7 +44,7 @@ impl StackMutation for ServiceAccountMutation {
         &self,
         mut stack: Stack,
         stack_state: &StackState,
-        _config: &DeploymentConfig,
+        config: &DeploymentConfig,
     ) -> Result<Stack> {
         info!("Creating ServiceAccount resources from permission profiles");
 
@@ -62,7 +60,7 @@ impl StackMutation for ServiceAccountMutation {
             // as these are handled by RemoteStackManagement
             if profile_name == "management"
                 && matches!(
-                    stack_state.platform,
+                    config.base_platform.unwrap_or(stack_state.platform),
                     Platform::Aws | Platform::Gcp | Platform::Azure
                 )
             {
@@ -232,5 +230,44 @@ mod tests {
             .build();
 
         assert!(!ServiceAccountMutation.should_run(&stack, &stack_state, &config));
+    }
+    #[tokio::test]
+    async fn cloud_backed_kubernetes_creates_cloud_profile_identity_but_not_management() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let stack = Stack::new("test-stack".to_string())
+                .permissions(
+                    alien_core::PermissionsConfig::default()
+                        .with_profile("application", PermissionProfile::new())
+                        .with_profile("management", PermissionProfile::new()),
+                )
+                .build();
+            let state = StackState::new(Platform::Kubernetes);
+            let config = DeploymentConfig::builder()
+                .stack_settings(Default::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: Vec::new(),
+                    hash: "empty".to_string(),
+                    created_at: "2026-09-28T00:00:00Z".to_string(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(Default::default())
+                .base_platform(platform)
+                .build();
+            assert!(ServiceAccountMutation.should_run(&stack, &state, &config));
+            let prepared = ServiceAccountMutation
+                .mutate(stack.clone(), &state, &config)
+                .await
+                .unwrap();
+            let account = prepared
+                .resources
+                .get("application-sa")
+                .expect("cloud identity");
+            assert_eq!(account.lifecycle, ResourceLifecycle::Frozen);
+            assert!(account.config.downcast_ref::<ServiceAccount>().is_some());
+            assert!(!prepared.resources.contains_key("management-sa"));
+            let mut plain_config = config.clone();
+            plain_config.base_platform = None;
+            assert!(!ServiceAccountMutation.should_run(&stack, &state, &plain_config));
+        }
     }
 }

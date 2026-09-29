@@ -38,6 +38,7 @@ use crate::infra_requirements::azure_utils::{
     get_container_apps_environment_name, get_container_apps_environment_outputs,
     get_resource_group_name, is_azure_authorization_propagation_error,
 };
+use crate::worker::certificate_wait::{CERTIFICATE_WAIT_MAX_POLLS, CERTIFICATE_WAIT_POLL_SECS};
 use crate::worker::readiness_probe::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
 use alien_macros::controller;
 
@@ -1145,8 +1146,8 @@ impl AzureWorkerController {
                 }))
             }
             _ => Ok(HandlerAction::Stay {
-                max_times: Some(60),
-                suggested_delay: Some(Duration::from_secs(5)),
+                max_times: Some(CERTIFICATE_WAIT_MAX_POLLS),
+                suggested_delay: Some(Duration::from_secs(CERTIFICATE_WAIT_POLL_SECS)),
             }),
         }
     }

@@ -187,6 +187,69 @@ export type ProjectListItemResponseOperatorImage = {
 };
 
 /**
+ * Kubernetes log collection mechanism.
+ */
+export const ProjectListItemResponseMode = {
+  PodApi: "podApi",
+  NodeAgent: "nodeAgent",
+} as const;
+/**
+ * Kubernetes log collection mechanism.
+ */
+export type ProjectListItemResponseMode = ClosedEnum<
+  typeof ProjectListItemResponseMode
+>;
+
+/**
+ * Default log collection mode in a generated Helm chart.
+ */
+export type ProjectListItemResponseLogCollector = {
+  /**
+   * Whether logs are collected by default; installers can override this value.
+   */
+  enabled: boolean;
+  /**
+   * Kubernetes log collection mechanism.
+   */
+  mode: ProjectListItemResponseMode;
+};
+
+export type ProjectListItemResponseTokenSecret = {
+  key: string;
+  name: string;
+  prefix: string;
+  randomLength: number;
+};
+
+export type ProjectListItemResponseRule = {
+  /**
+   * Kubernetes API group: empty for core resources, apps, or networking.k8s.io.
+   */
+  apiGroup: string;
+  resources: Array<string>;
+};
+
+export type ProjectListItemResponseWorkloadReadAccess = {
+  rules: Array<ProjectListItemResponseRule>;
+  serviceAccountProfile: string;
+};
+
+export type ProjectListItemResponseSetupResources = {
+  tokenSecret: ProjectListItemResponseTokenSecret;
+  workloadReadAccess: ProjectListItemResponseWorkloadReadAccess;
+};
+
+export type ProjectListItemResponseRuntimePersistence = {
+  /**
+   * Persist operator identity across restarts.
+   */
+  enabled: boolean;
+  existingClaim: string;
+  size: string;
+  storageClassName: string;
+};
+
+/**
  * Helm chart package configuration. If null, Helm packages will not be generated.
  */
 export type ProjectListItemResponseHelm = {
@@ -199,9 +262,15 @@ export type ProjectListItemResponseHelm = {
    */
   description: string;
   /**
+   * Default log collection mode in a generated Helm chart.
+   */
+  logCollector?: ProjectListItemResponseLogCollector | undefined;
+  /**
    * Whether Helm chart package generation is enabled
    */
   enabled: boolean;
+  setupResources?: ProjectListItemResponseSetupResources | undefined;
+  runtimePersistence?: ProjectListItemResponseRuntimePersistence | undefined;
 };
 
 /**
@@ -559,13 +628,161 @@ export function projectListItemResponseOperatorImageFromJSON(
 }
 
 /** @internal */
+export const ProjectListItemResponseMode$inboundSchema: z.ZodEnum<
+  typeof ProjectListItemResponseMode
+> = z.enum(ProjectListItemResponseMode);
+
+/** @internal */
+export const ProjectListItemResponseLogCollector$inboundSchema: z.ZodType<
+  ProjectListItemResponseLogCollector,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  mode: ProjectListItemResponseMode$inboundSchema,
+});
+
+export function projectListItemResponseLogCollectorFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseLogCollector, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ProjectListItemResponseLogCollector$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseLogCollector' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectListItemResponseTokenSecret$inboundSchema: z.ZodType<
+  ProjectListItemResponseTokenSecret,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+  prefix: z.string(),
+  randomLength: z.int(),
+});
+
+export function projectListItemResponseTokenSecretFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseTokenSecret, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ProjectListItemResponseTokenSecret$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseTokenSecret' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectListItemResponseRule$inboundSchema: z.ZodType<
+  ProjectListItemResponseRule,
+  unknown
+> = z.object({
+  apiGroup: z.string(),
+  resources: z.array(z.string()),
+});
+
+export function projectListItemResponseRuleFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseRule, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectListItemResponseRule$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseRule' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectListItemResponseWorkloadReadAccess$inboundSchema: z.ZodType<
+  ProjectListItemResponseWorkloadReadAccess,
+  unknown
+> = z.object({
+  rules: z.array(z.lazy(() => ProjectListItemResponseRule$inboundSchema)),
+  serviceAccountProfile: z.string(),
+});
+
+export function projectListItemResponseWorkloadReadAccessFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ProjectListItemResponseWorkloadReadAccess,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ProjectListItemResponseWorkloadReadAccess$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ProjectListItemResponseWorkloadReadAccess' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectListItemResponseSetupResources$inboundSchema: z.ZodType<
+  ProjectListItemResponseSetupResources,
+  unknown
+> = z.object({
+  tokenSecret: z.lazy(() => ProjectListItemResponseTokenSecret$inboundSchema),
+  workloadReadAccess: z.lazy(() =>
+    ProjectListItemResponseWorkloadReadAccess$inboundSchema
+  ),
+});
+
+export function projectListItemResponseSetupResourcesFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseSetupResources, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ProjectListItemResponseSetupResources$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseSetupResources' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectListItemResponseRuntimePersistence$inboundSchema: z.ZodType<
+  ProjectListItemResponseRuntimePersistence,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  existingClaim: z.string(),
+  size: z.string(),
+  storageClassName: z.string(),
+});
+
+export function projectListItemResponseRuntimePersistenceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ProjectListItemResponseRuntimePersistence,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ProjectListItemResponseRuntimePersistence$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ProjectListItemResponseRuntimePersistence' from JSON`,
+  );
+}
+
+/** @internal */
 export const ProjectListItemResponseHelm$inboundSchema: z.ZodType<
   ProjectListItemResponseHelm,
   unknown
 > = z.object({
   chartName: z.string(),
   description: z.string(),
+  logCollector: z.lazy(() => ProjectListItemResponseLogCollector$inboundSchema)
+    .optional(),
   enabled: z.boolean(),
+  setupResources: z.lazy(() =>
+    ProjectListItemResponseSetupResources$inboundSchema
+  ).optional(),
+  runtimePersistence: z.lazy(() =>
+    ProjectListItemResponseRuntimePersistence$inboundSchema
+  ).optional(),
 });
 
 export function projectListItemResponseHelmFromJSON(

@@ -1,0 +1,12 @@
+diff --git a/src/models/package.ts b/src/models/package.ts
+--- a/src/models/package.ts
++++ b/src/models/package.ts
+@@ -1619,3 +1619,8 @@
+     `Failed to parse 'Package' from JSON`,
+   );
+ }
++
++// Preserve published model imports across generator naming changes.
++export type PackageRule = PermissionsRule;
++export const PackageRule$inboundSchema = PermissionsRule$inboundSchema;
++export const packageRuleFromJSON = permissionsRuleFromJSON;

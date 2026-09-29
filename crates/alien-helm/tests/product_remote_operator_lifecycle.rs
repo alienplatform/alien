@@ -1644,6 +1644,21 @@ spec:
         ],
         None,
     );
+    // --no-hooks deliberately retains Remote Operator records, but normal
+    // runtime storage must finish deletion before testing a fresh installation.
+    // Otherwise the encryption-key guard correctly rejects the terminating PVC.
+    run_ok(
+        "kubectl",
+        [
+            "wait",
+            "--for=delete",
+            &format!("persistentvolumeclaim/{helm_release}-runtime-data"),
+            "--namespace",
+            &helm_namespace,
+            "--timeout=2m",
+        ],
+        None,
+    );
     let mut disabled_reinstall = helm_install_args(
         &helm_release,
         &helm_namespace,
@@ -1656,11 +1671,18 @@ spec:
             *argument = "--set=remoteOperator.enabled=false".to_string();
         }
     }
-    run_fails(
+    let rejected_reinstall = run_fails(
         "helm",
         disabled_reinstall.iter().map(String::as_str),
         None,
         "a disabled same-name reinstall must reject lifecycle records retained by --no-hooks",
+    );
+    assert!(
+        rejected_reinstall
+            .diagnostic
+            .contains("Retained Remote Operator lifecycle records already exist"),
+        "reinstall must fail for retained lifecycle records: {}",
+        rejected_reinstall.diagnostic
     );
     run_ok(
         "kubectl",

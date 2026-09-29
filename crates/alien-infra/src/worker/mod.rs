@@ -38,6 +38,7 @@ pub use test::*;
 /// Re-export from alien-core (single source of truth).
 pub use alien_core::crontab_to_eventbridge;
 
+mod certificate_wait;
 mod readiness_probe;
 pub use readiness_probe::*;
 

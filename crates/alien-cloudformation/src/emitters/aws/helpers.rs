@@ -304,17 +304,22 @@ pub fn subnet_refs(prefix: &str, kind: &str) -> CfExpression {
 }
 
 /// Per-AZ availability-zone names with the same `Fn::If` masking.
-pub fn availability_zone_names() -> CfExpression {
+pub fn availability_zone_names(ctx: &EmitContext<'_>) -> CfExpression {
+    let zones = if super::eks_availability_zones::required(ctx) {
+        super::eks_availability_zones::zones("ZoneNames")
+    } else {
+        get_azs()
+    };
     CfExpression::list([
-        select(0, get_azs()),
+        select(0, zones.clone()),
         CfExpression::if_(
             CONDITION_NETWORK_AZ2,
-            select(1, get_azs()),
+            select(1, zones.clone()),
             CfExpression::no_value(),
         ),
         CfExpression::if_(
             CONDITION_NETWORK_AZ3,
-            select(2, get_azs()),
+            select(2, zones),
             CfExpression::no_value(),
         ),
     ])
@@ -329,15 +334,16 @@ fn created_or_provided(
     created: CfExpression,
     provided: CfExpression,
 ) -> CfExpression {
-    let otherwise = if alien_core::restricts_network_mode(ctx.stack, ctx.targets_kubernetes) {
-        provided
-    } else {
-        CfExpression::if_(
-            CONDITION_NETWORK_MODE_USE_EXISTING,
-            provided,
-            CfExpression::no_value(),
-        )
-    };
+    let otherwise =
+        if ctx.targets_kubernetes || alien_core::restricts_network_mode(ctx.stack, false) {
+            provided
+        } else {
+            CfExpression::if_(
+                CONDITION_NETWORK_MODE_USE_EXISTING,
+                provided,
+                CfExpression::no_value(),
+            )
+        };
     CfExpression::if_(CONDITION_NETWORK_MODE_CREATE, created, otherwise)
 }
 

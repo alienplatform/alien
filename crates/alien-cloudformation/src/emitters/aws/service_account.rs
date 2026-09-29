@@ -29,6 +29,23 @@ impl CfEmitter for AwsServiceAccountEmitter {
     fn emit_resources(&self, ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         let service_account =
             resource_config::<ServiceAccount>(ctx, ServiceAccount::RESOURCE_TYPE)?;
+        if ctx.targets_kubernetes {
+            let profile = service_account
+                .id
+                .strip_suffix("-sa")
+                .unwrap_or(&service_account.id);
+            // Generated launch links use a lowercase stack prefix of at most 35 characters.
+            // Preserve an exact IRSA subject; CloudFormation cannot normalize dynamic names.
+            if profile.len() > 24
+                || alien_core::kubernetes_service_account_name("prefix", profile)
+                    != format!("prefix-{profile}-sa")
+            {
+                return Err(AlienError::new(ErrorData::OperationNotSupported {
+                    operation: "generate EKS CloudFormation workload identity".to_string(),
+                    reason: format!("permission profile '{profile}' must be a lowercase DNS label of at most 24 characters for the generated EKS CloudFormation stack naming contract"),
+                }));
+            }
+        }
         let logical_id = required_logical_id(ctx)?;
         let role_id = format!("{logical_id}Role");
 
@@ -92,6 +109,16 @@ fn service_account_trust_policy(
     service_account: &ServiceAccount,
 ) -> CfExpression {
     let profile_name = service_account.id.strip_suffix("-sa");
+    if let Some(statement) = super::kubernetes_cluster::eks_pod_trust_statement(
+        ctx,
+        profile_name.unwrap_or(&service_account.id),
+    ) {
+        // Fn::Sub builds JSON so dynamic OIDC issuer names can be condition keys.
+        return CfExpression::sub_with(
+            r#"{"Version":"2012-10-17","Statement":[${PodTrust}]}"#,
+            [("PodTrust", statement)],
+        );
+    }
     let mut services = BTreeSet::new();
     let mut compute_role_arns = Vec::new();
 
