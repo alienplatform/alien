@@ -588,7 +588,9 @@ fn collect_strict_schemas(value: &Value, pointer: &str, found: &mut Vec<String>)
         Value::Object(object) => {
             for (key, child) in object {
                 let literal = matches!(key.as_str(), "example" | "examples")
-                    || (key == "default" && !pointer.ends_with("/responses"));
+                    || (key == "default"
+                        && !pointer.ends_with("/responses")
+                        && !pointer.ends_with("/properties"));
                 if literal {
                     continue;
                 }
