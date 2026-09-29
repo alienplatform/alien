@@ -455,14 +455,15 @@ impl AlienManagerBuilder {
                         reason: "Failed to load KV binding".to_string(),
                     })?
             } else {
+                // Only the manager opens this store, so it doesn't need
+                // cross-process coordination, and it works when the state
+                // directory is a network volume (EFS, NFS).
                 let kv_path = state_dir.join("commands_kv");
-                Arc::new(
-                    LocalKv::new(kv_path)
-                        .await
-                        .context(ErrorData::ServerInitFailed {
-                            reason: "Failed to create local KV store".to_string(),
-                        })?,
-                )
+                Arc::new(LocalKv::single_process(kv_path).await.context(
+                    ErrorData::ServerInitFailed {
+                        reason: "Failed to create local KV store".to_string(),
+                    },
+                )?)
             };
 
             // -- Commands storage: from TOML config or local filesystem --

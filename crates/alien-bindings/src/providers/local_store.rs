@@ -58,16 +58,37 @@ pub(crate) struct LocalStore {
     spec: &'static StoreSpec,
 }
 
-/// Open the turso database at `path` with multi-process WAL mode enabled.
+/// Which processes may open a store's file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Sharing {
+    /// Several OS processes share the file (local development, where
+    /// functions and the manager run separately). Needs shared-memory WAL
+    /// coordination, which network filesystems (NFS, EFS) do not support.
+    MultiProcess,
+    /// Only the opening process uses the file, for example a manager's own
+    /// state. Works on any filesystem, including network volumes.
+    SingleProcess,
+}
+
+/// Open the turso database at `path`.
 ///
 /// Exposed to sibling test code so raw white-box connections coexist safely
 /// with live provider handles on the same file.
 pub(crate) async fn open_database(path: &std::path::Path, binding_type: &str) -> Result<Database> {
+    open_database_with(path, binding_type, Sharing::MultiProcess).await
+}
+
+async fn open_database_with(
+    path: &std::path::Path,
+    binding_type: &str,
+    sharing: Sharing,
+) -> Result<Database> {
     turso::Builder::new_local(&path.to_string_lossy())
-        // Experimental in turso, deliberately enabled: multiple OS processes
-        // (and independent Database handles) may share this file. Gated by
-        // the multi-handle concurrency tests in the provider modules.
-        .experimental_multiprocess_wal(true)
+        // Experimental in turso, deliberately enabled for shared stores:
+        // multiple OS processes (and independent Database handles) may share
+        // this file. Gated by the multi-handle concurrency tests in the
+        // provider modules.
+        .experimental_multiprocess_wal(sharing == Sharing::MultiProcess)
         .build()
         .await
         .into_alien_error()
@@ -146,7 +167,11 @@ impl LocalStore {
     /// `schema_ddl` runs: a store whose format this build does not understand is
     /// rejected without gaining any provider tables — we never write into a file
     /// we then refuse to touch.
-    pub(crate) async fn open(data_dir: PathBuf, spec: &'static StoreSpec) -> Result<Self> {
+    pub(crate) async fn open(
+        data_dir: PathBuf,
+        spec: &'static StoreSpec,
+        sharing: Sharing,
+    ) -> Result<Self> {
         tokio::fs::create_dir_all(&data_dir)
             .await
             .into_alien_error()
@@ -156,7 +181,7 @@ impl LocalStore {
             })?;
 
         let db_path = data_dir.join(spec.db_filename);
-        let db = open_database(&db_path, spec.binding_type).await?;
+        let db = open_database_with(&db_path, spec.binding_type, sharing).await?;
         let store = Self { data_dir, db, spec };
         let conn = store.connect().await?;
 
@@ -300,7 +325,7 @@ mod tests {
         }
 
         // Opening must be rejected, naming both the found and expected formats.
-        let err = LocalStore::open(dir.clone(), &TEST_SPEC)
+        let err = LocalStore::open(dir.clone(), &TEST_SPEC, Sharing::MultiProcess)
             .await
             .expect_err("foreign format must be rejected");
         let msg = err.to_string();
