@@ -114,4 +114,51 @@ fn aws_full_stack_renders_audit_ready_module() {
     let module = render(&stack, TerraformTarget::Aws, settings);
     snapshot_module("aws_full_stack", &module);
     assert_terraform_valid(&module, "aws_full_stack");
+
+    // Lambda deletes a worker's Hyperplane ENI with the execution role, so the
+    // role must outlive the subnets and security group the ENI sits in.
+    let network: hcl::Body = hcl::from_str(
+        module
+            .get("default_network.tf")
+            .expect("default_network.tf should render"),
+    )
+    .expect("default_network.tf parses");
+    for (resource_type, label) in [
+        ("aws_subnet", "default_network_private"),
+        ("aws_security_group", "default_network_workload"),
+    ] {
+        let block = network
+            .blocks()
+            .find(|block| {
+                block.identifier() == "resource"
+                    && block
+                        .labels()
+                        .iter()
+                        .map(|label| label.as_str())
+                        .collect::<Vec<_>>()
+                        == [resource_type, label]
+            })
+            .unwrap_or_else(|| panic!("{resource_type}.{label} should render"));
+        let depends_on = block
+            .body()
+            .attributes()
+            .find(|attribute| attribute.key() == "depends_on")
+            .unwrap_or_else(|| panic!("{resource_type}.{label} must declare depends_on"));
+        assert_eq!(
+            hcl::format::to_string(depends_on.expr()).expect("depends_on formats"),
+            "[\n  aws_iam_role.execution_sa\n]",
+            "{resource_type}.{label} must be destroyed before the execution role"
+        );
+    }
+    assert!(
+        !network.blocks().any(|block| block
+            .labels()
+            .iter()
+            .any(|label| label.as_str() == "default_network_public")
+            && block
+                .body()
+                .attributes()
+                .any(|attribute| attribute.key() == "depends_on")),
+        "public subnets do not host worker ENIs"
+    );
 }

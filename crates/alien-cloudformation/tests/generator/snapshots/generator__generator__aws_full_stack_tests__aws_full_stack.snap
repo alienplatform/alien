@@ -309,6 +309,8 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - ExecutionSaRole
     Condition: NetworkModeCreate
   DefaultNetworkPublicSubnet2:
     Type: AWS::EC2::Subnet
@@ -370,6 +372,8 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - ExecutionSaRole
     Condition: NetworkCreateUseAz2
   DefaultNetworkPublicSubnet3:
     Type: AWS::EC2::Subnet
@@ -431,6 +435,8 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - ExecutionSaRole
     Condition: NetworkCreateUseAz3
   DefaultNetworkPublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -578,6 +584,8 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - ExecutionSaRole
     Condition: NetworkModeCreate
   ExecutionSaRole:
     Type: AWS::IAM::Role

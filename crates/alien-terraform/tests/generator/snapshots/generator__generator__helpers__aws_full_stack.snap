@@ -342,6 +342,9 @@ resource "aws_subnet" "default_network_private" {
     resource        = "default-network"
     "resource-type" = "network"
   }
+  depends_on = [
+    aws_iam_role.execution_sa
+  ]
 }
 
 resource "aws_eip" "default_network_nat" {
@@ -434,6 +437,9 @@ resource "aws_security_group" "default_network_workload" {
     resource        = "default-network"
     "resource-type" = "network"
   }
+  depends_on = [
+    aws_iam_role.execution_sa
+  ]
 }
 
 === execution_sa.tf ===

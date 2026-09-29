@@ -13,7 +13,9 @@
 use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::aws::helpers::{downcast, nested_block, required_label, tags},
+    emitters::aws::helpers::{
+        downcast, nested_block, required_label, service_account_role_label, tags,
+    },
     expr,
 };
 use alien_core::{import::EmitContext, ErrorData, Network, NetworkSettings, Result};
@@ -347,27 +349,38 @@ fn create_topology(
         ],
     ));
 
+    // Lambda deletes a worker's Hyperplane ENI with the function's execution
+    // role. If the role is destroyed first, the ENI stays and the private
+    // subnets and workload security group can never be destroyed. Destroying
+    // the role only after them keeps the ENI cleanup working.
+    let execution_role_dependency = service_account_role_label(ctx, "execution")
+        .map(|role_label| Expression::from(vec![expr::traversal(["aws_iam_role", role_label])]));
+
+    let mut private_subnet = vec![
+        attr(
+            "count",
+            expr::raw("var.network_mode == \"create-new\" ? var.availability_zones : 0"),
+        ),
+        attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
+        attr(
+            "cidr_block",
+            expr::raw(format!(
+                "cidrsubnet(aws_vpc.{label}[0].cidr_block, 8, count.index + var.availability_zones)"
+            )),
+        ),
+        attr(
+            "availability_zone",
+            expr::raw("data.aws_availability_zones.available.names[count.index]"),
+        ),
+        attr("tags", tags(ctx, "network")),
+    ];
+    if let Some(dependency) = &execution_role_dependency {
+        private_subnet.push(attr("depends_on", dependency.clone()));
+    }
     fragment.resource_blocks.push(resource_block(
         "aws_subnet",
         &format!("{label}_private"),
-        [
-            attr(
-                "count",
-                expr::raw("var.network_mode == \"create-new\" ? var.availability_zones : 0"),
-            ),
-            attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
-            attr(
-                "cidr_block",
-                expr::raw(format!(
-                    "cidrsubnet(aws_vpc.{label}[0].cidr_block, 8, count.index + var.availability_zones)"
-                )),
-            ),
-            attr(
-                "availability_zone",
-                expr::raw("data.aws_availability_zones.available.names[count.index]"),
-            ),
-            attr("tags", tags(ctx, "network")),
-        ],
+        private_subnet,
     ));
 
     fragment.resource_blocks.push(resource_block(
@@ -474,37 +487,41 @@ fn create_topology(
         ));
     }
 
+    let mut workload_security_group = vec![
+        attr(
+            "count",
+            expr::raw("var.network_mode == \"create-new\" ? 1 : 0"),
+        ),
+        attr(
+            "name_prefix",
+            crate::emitters::aws::helpers::resource_prefix_template("workload-"),
+        ),
+        attr(
+            "description",
+            Expression::String("Private workload security group".to_string()),
+        ),
+        attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
+        nested_block(
+            "egress",
+            vec![
+                attr("from_port", Expression::Number(hcl::Number::from(0i64))),
+                attr("to_port", Expression::Number(hcl::Number::from(0i64))),
+                attr("protocol", Expression::String("-1".to_string())),
+                attr(
+                    "cidr_blocks",
+                    Expression::Array(vec![Expression::String("0.0.0.0/0".to_string())]),
+                ),
+            ],
+        ),
+        attr("tags", tags(ctx, "network")),
+    ];
+    if let Some(dependency) = execution_role_dependency {
+        workload_security_group.push(attr("depends_on", dependency));
+    }
     fragment.resource_blocks.push(resource_block(
         "aws_security_group",
         &format!("{label}_workload"),
-        [
-            attr(
-                "count",
-                expr::raw("var.network_mode == \"create-new\" ? 1 : 0"),
-            ),
-            attr(
-                "name_prefix",
-                crate::emitters::aws::helpers::resource_prefix_template("workload-"),
-            ),
-            attr(
-                "description",
-                Expression::String("Private workload security group".to_string()),
-            ),
-            attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
-            nested_block(
-                "egress",
-                vec![
-                    attr("from_port", Expression::Number(hcl::Number::from(0i64))),
-                    attr("to_port", Expression::Number(hcl::Number::from(0i64))),
-                    attr("protocol", Expression::String("-1".to_string())),
-                    attr(
-                        "cidr_blocks",
-                        Expression::Array(vec![Expression::String("0.0.0.0/0".to_string())]),
-                    ),
-                ],
-            ),
-            attr("tags", tags(ctx, "network")),
-        ],
+        workload_security_group,
     ));
 
     fragment

@@ -12,9 +12,9 @@ use crate::{
     emitter::CfEmitter,
     emitters::aws::helpers::{
         availability_zone_names, az_condition, first_or_null, get_azs, required_logical_id,
-        resource_config, select, subnet_refs, tags, CONDITION_HAS_VPC_CIDR,
-        PARAM_PRIVATE_SUBNET_IDS, PARAM_PUBLIC_SUBNET_IDS, PARAM_SECURITY_GROUP_IDS,
-        PARAM_VPC_CIDR,
+        resource_config, select, service_account_role_id, subnet_refs, tags,
+        CONDITION_HAS_VPC_CIDR, PARAM_PRIVATE_SUBNET_IDS, PARAM_PUBLIC_SUBNET_IDS,
+        PARAM_SECURITY_GROUP_IDS, PARAM_VPC_CIDR,
     },
     template::{CfExpression, CfResource},
 };
@@ -206,6 +206,12 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         .insert("InternetGatewayId".to_string(), CfExpression::ref_(&igw_id));
     resources.push(attachment);
 
+    // Lambda deletes a worker's Hyperplane ENI with the function's execution
+    // role. If the role is gone first, the ENI stays and the private subnets
+    // and workload security group can never be deleted. Deleting the role
+    // only after them keeps the ENI cleanup working during stack deletion.
+    let execution_role_id = service_account_role_id(ctx, "execution");
+
     for index in 0..3usize {
         let public_id = format!("{prefix}PublicSubnet{}", index + 1);
         let private_id = format!("{prefix}PrivateSubnet{}", index + 1);
@@ -250,6 +256,7 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         private_subnet
             .properties
             .insert("Tags".to_string(), tags(ctx));
+        private_subnet.depends_on.extend(execution_role_id.clone());
         resources.push(private_subnet);
     }
 
@@ -372,6 +379,7 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
     security_group
         .properties
         .insert("Tags".to_string(), tags(ctx));
+    security_group.depends_on.extend(execution_role_id);
     resources.push(security_group);
 
     for resource in &mut resources {

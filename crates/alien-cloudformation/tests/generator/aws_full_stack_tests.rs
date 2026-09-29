@@ -136,4 +136,26 @@ fn aws_full_stack_with_create_network_renders_audit_ready_template() {
         "aws full stack",
     );
     insta::assert_snapshot!("aws_full_stack", yaml);
+
+    // Lambda deletes a worker's Hyperplane ENI with the execution role, so the
+    // role must outlive the subnets and security group the ENI sits in.
+    let template: serde_yaml::Value = serde_yaml::from_str(&yaml).expect("template parses");
+    let resources = &template["Resources"];
+    for logical_id in [
+        "DefaultNetworkPrivateSubnet1",
+        "DefaultNetworkPrivateSubnet2",
+        "DefaultNetworkPrivateSubnet3",
+        "DefaultNetworkSecurityGroup",
+    ] {
+        let depends_on = resources[logical_id]["DependsOn"]
+            .as_sequence()
+            .unwrap_or_else(|| panic!("{logical_id} must declare DependsOn"));
+        assert!(
+            depends_on
+                .iter()
+                .any(|value| value.as_str() == Some("ExecutionSaRole")),
+            "{logical_id} must be deleted before ExecutionSaRole: {depends_on:?}"
+        );
+    }
+    assert!(resources["DefaultNetworkPublicSubnet1"]["DependsOn"].is_null());
 }
