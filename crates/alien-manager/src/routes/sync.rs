@@ -2449,6 +2449,12 @@ async fn initialize(
             {
                 Ok(deployments) if !deployments.is_empty() => {
                     let deployment = &deployments[0];
+                    if !state.authz.can_sync_deployment(&subject, deployment) {
+                        return ErrorData::forbidden(
+                            "Caller cannot assign an agent to this deployment",
+                        )
+                        .into_response();
+                    }
                     let deployment_id = deployment.id.clone();
                     tracing::info!(
                         %deployment_id,

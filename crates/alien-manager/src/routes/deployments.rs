@@ -630,7 +630,11 @@ async fn list_deployments(
         std::collections::HashMap::new();
 
     let mut items = Vec::with_capacity(deployments.len());
-    for d in &deployments {
+    // Pattern 1 (List Endpoints): the store filters by scope, `Authz` decides per item.
+    for d in deployments
+        .iter()
+        .filter(|d| state.authz.can_read_deployment(&subject, d))
+    {
         let dg_minimal = if include_dg {
             if let Some(cached) = dg_cache.get(&d.deployment_group_id) {
                 cached.clone()
