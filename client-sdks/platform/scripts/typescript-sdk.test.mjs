@@ -12,6 +12,22 @@ import {
 } from "../typescript/esm/models/publishoperationspluginrequest.js";
 import { PublishOperationsPluginResponse$inboundSchema } from "../typescript/esm/models/publishoperationspluginresponse.js";
 import { DeploymentInfoHelm$inboundSchema } from "../typescript/esm/models/deploymentinfo.js";
+import { PackageRule$inboundSchema, packageRuleFromJSON } from "../typescript/esm/models/package.js";
+import {
+  UpdateProjectBinaryTarget,
+  UpdateProjectHelm$outboundSchema,
+  updateProjectHelmToJSON,
+} from "../typescript/esm/models/updateproject.js";
+
+test("published package model imports still validate and serialize", () => {
+  const rule = { apiGroup: "apps", resource: "deployments", verbs: ["get"], reason: "Read workload state" };
+  assert.deepEqual(PackageRule$inboundSchema.parse(rule), rule);
+  assert.deepEqual(packageRuleFromJSON(JSON.stringify(rule)), { ok: true, value: rule });
+  const helm = { enabled: true, chartName: "application", description: "Application deployment" };
+  assert.deepEqual(UpdateProjectHelm$outboundSchema.parse(helm), helm);
+  assert.deepEqual(JSON.parse(updateProjectHelmToJSON(helm)), helm);
+  assert.equal(UpdateProjectBinaryTarget.LinuxArm64, "linux-arm64");
+});
 
 test("Helm installation routing survives SDK response validation", () => {
   const helm = {

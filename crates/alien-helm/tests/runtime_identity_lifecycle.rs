@@ -179,6 +179,40 @@ fn runtime_identity_survives_upgrade_and_pod_replacement() {
     );
     assert_eq!(state(), original_identity);
     assert_eq!(key(), original_key);
+    let mut preserve_endpoint = vec!["upgrade", release, chart, "--reset-values"];
+    preserve_endpoint.extend(common);
+    preserve_endpoint.extend([
+        "--set-string",
+        "management.defaultUrl=https://new-default-manager.example.test",
+        "--set-string",
+        "runtime.podAnnotations.revision=third",
+    ]);
+    run("helm", &preserve_endpoint, &kubeconfig);
+    let deployment: serde_json::Value = serde_json::from_str(&run(
+        "kubectl",
+        &[
+            "--namespace",
+            namespace,
+            "get",
+            "deployment",
+            name,
+            "-o",
+            "json",
+        ],
+        &kubeconfig,
+    ))
+    .expect("installed Deployment after clearing the override");
+    assert_eq!(
+        deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_array()
+            .expect("runtime environment")
+            .iter()
+            .find(|variable| variable["name"] == "SYNC_URL")
+            .expect("preserved management endpoint")["value"],
+        "https://corrected-manager.example.test"
+    );
+    assert_eq!(state(), original_identity);
+    assert_eq!(key(), original_key);
     run(
         "kubectl",
         &[

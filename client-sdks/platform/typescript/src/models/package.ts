@@ -1619,3 +1619,8 @@ export function packageFromJSON(
     `Failed to parse 'Package' from JSON`,
   );
 }
+
+// Preserve published model imports across generator naming changes.
+export type PackageRule = PermissionsRule;
+export const PackageRule$inboundSchema = PermissionsRule$inboundSchema;
+export const packageRuleFromJSON = permissionsRuleFromJSON;
