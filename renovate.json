@@ -2,6 +2,19 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
   "additionalBranchPrefix": "alien-370-",
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/bower_components/**",
+    "**/vendor/**",
+    "**/examples/**",
+    "**/__tests__/**",
+    "**/test/**",
+    "**/tests/**",
+    "**/__fixtures__/**",
+    "docker/Dockerfile.alien-sandbox-agent",
+    "docker/Dockerfile.alien-sandbox-default",
+    "docker/Dockerfile.alien-sandbox-gcp"
+  ],
   "packageRules": [
     {
       "description": "Automerge stable non-major updates independently after CI passes",
