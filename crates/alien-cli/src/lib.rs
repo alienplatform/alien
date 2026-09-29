@@ -1063,6 +1063,7 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
     // Build the server
     let server = AlienManager::builder(config.clone())
         .token_store(token_store)
+        .tunnels()
         .with_standalone_defaults(&toml_config)
         .await
         .context(ErrorData::ServerStartFailed {

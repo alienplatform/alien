@@ -494,6 +494,7 @@ async fn build(
             RegistryRoutingTable::new(vec![]).expect("empty routing table is unambiguous"),
         ),
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
+        tunnels: None,
     };
 
     Fixture {

@@ -453,6 +453,10 @@ pub struct SyncResponse {
     /// not support this protocol; Some(empty) means remove owned containers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_dynamic_containers: Option<Vec<TargetDynamicContainer>>,
+    /// Base URL the Operator opens tunnel connections to. None means the
+    /// manager does not accept tunnels, so the Operator never dials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tunnel_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -527,6 +531,7 @@ mod tests {
             commands_url: None,
             target_operations_bundle_set: None,
             target_dynamic_containers: None,
+            tunnel_url: None,
         };
         let json = serde_json::to_value(&resp).unwrap();
         // target is None → should be omitted
@@ -544,6 +549,7 @@ mod tests {
             commands_url: None,
             target_operations_bundle_set: None,
             target_dynamic_containers: None,
+            tunnel_url: None,
         };
         let serialized = serde_json::to_string(&resp).unwrap();
         let deserialized: SyncResponse = serde_json::from_str(&serialized).unwrap();
@@ -638,6 +644,7 @@ mod tests {
             commands_url: None,
             target_operations_bundle_set: None,
             target_dynamic_containers: None,
+            tunnel_url: None,
         };
 
         let serialized = serde_json::to_string(&resp).unwrap();
@@ -854,6 +861,7 @@ mod tests {
                 }],
             }),
             target_dynamic_containers: None,
+            tunnel_url: None,
         };
 
         let json = serde_json::to_value(&resp).unwrap();
@@ -892,6 +900,7 @@ mod tests {
             commands_url: None,
             target_operations_bundle_set: None,
             target_dynamic_containers: Some(vec![]),
+            tunnel_url: None,
         };
         let json = serde_json::to_value(&empty_target).unwrap();
         assert_eq!(json["targetDynamicContainers"], serde_json::json!([]));

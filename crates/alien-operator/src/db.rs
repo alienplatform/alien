@@ -1611,6 +1611,58 @@ impl OperatorDb {
         }
     }
 
+    /// Manager URL to open tunnel connections to, from the last sync.
+    /// `None` when the manager does not accept tunnels.
+    pub async fn get_tunnel_url(&self) -> Result<Option<String>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT value FROM state WHERE key = 'tunnel_url'", ())
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query tunnel_url".to_string(),
+            })?;
+        match rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch tunnel_url row".to_string(),
+            })? {
+            Some(row) => Ok(Some(row.get(0).into_alien_error().context(
+                ErrorData::DatabaseError {
+                    message: "Failed to read tunnel_url value".to_string(),
+                },
+            )?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Record the tunnel URL from the manager's sync response; `None` clears it.
+    pub async fn set_tunnel_url(&self, url: Option<&str>) -> Result<()> {
+        let conn = self.conn.lock().await;
+        let result = match url {
+            Some(url) => {
+                conn.execute(
+                    "INSERT INTO state (key, value, updated_at) VALUES ('tunnel_url', ?, datetime('now'))
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    (url.to_string(),),
+                )
+                .await
+            }
+            None => {
+                conn.execute("DELETE FROM state WHERE key = 'tunnel_url'", ())
+                    .await
+            }
+        };
+        result
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to set tunnel_url".to_string(),
+            })?;
+        Ok(())
+    }
+
     /// Set the commands URL from the manager's sync response.
     pub async fn set_commands_url(&self, url: &str) -> Result<()> {
         let conn = self.conn.lock().await;

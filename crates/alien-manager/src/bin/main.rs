@@ -128,6 +128,7 @@ async fn build_standalone_server(
     // Build the server with standalone defaults
     let server = AlienManager::builder(config)
         .token_store(token_store)
+        .tunnels()
         .with_standalone_defaults(toml_config)
         .await
         .expect("Failed to set up standalone defaults")

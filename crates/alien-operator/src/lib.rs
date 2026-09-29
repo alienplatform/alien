@@ -378,6 +378,21 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         None
     };
 
+    // Tunnel loop: serves requests from the manager for the stack's declared
+    // tunnel endpoints over outbound connections. Idle unless the manager
+    // advertises a tunnel URL and the stack declares endpoints.
+    let tunnel_handle = if !config.is_airgapped() && matches!(config.platform, Platform::Kubernetes)
+    {
+        Some(tokio::spawn({
+            let state = state.clone();
+            async move {
+                loops::tunnel::run_tunnel_loop(state).await;
+            }
+        }))
+    } else {
+        None
+    };
+
     let telemetry_handle = if !config.is_airgapped() {
         Some(tokio::spawn({
             let state = state.clone();
@@ -546,6 +561,13 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
                 std::future::pending::<()>().await;
             }
         } => Ok(loop_exit(&cancel, "telemetry")),
+        _ = async {
+            if let Some(h) = tunnel_handle {
+                h.await.ok();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => Ok(loop_exit(&cancel, "tunnel")),
         _ = async {
             if let Some(h) = commands_handle {
                 h.await.ok();

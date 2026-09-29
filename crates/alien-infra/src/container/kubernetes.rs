@@ -1654,7 +1654,11 @@ impl KubernetesContainerController {
                 status: ContainerStatus::Running,
                 current_replicas: 0, // Will be updated by runtime
                 desired_replicas: 0, // Will be updated by runtime
-                internal_dns: format!("{}.svc.cluster.local", workload_name),
+                // The internal Service shares the workload's name.
+                internal_dns: match &self.namespace {
+                    Some(namespace) => format!("{workload_name}.{namespace}.svc.cluster.local"),
+                    None => format!("{workload_name}.svc.cluster.local"),
+                },
                 replicas: Vec::new(), // Replica details tracked separately
                 public_endpoints: self
                     .public_endpoint

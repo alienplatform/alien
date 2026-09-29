@@ -212,6 +212,10 @@ pub struct AgentSyncResponse {
     /// Complete release-independent target set. Older embedders omit it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_dynamic_containers: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
+    /// Base URL operators open tunnel connections to. Absent when this manager
+    /// does not accept tunnels; operators then never dial.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tunnel_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -1914,6 +1918,7 @@ async fn agent_sync(
         commands_url: Some(state.config.commands_base_url()),
         target_operations_bundle_set,
         target_dynamic_containers,
+        tunnel_url: state.tunnels.as_ref().map(|_| state.config.base_url()),
     })
     .into_response()
 }

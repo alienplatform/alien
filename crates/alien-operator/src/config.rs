@@ -116,6 +116,12 @@ pub struct OperatorConfig {
     /// Stack settings for deployment customization.
     pub stack_settings: Option<StackSettings>,
 
+    /// Accept tunnel requests from the manager for the stack's declared
+    /// tunnel endpoints. The operator dials only when the manager advertises
+    /// a tunnel URL and the stack declares at least one endpoint.
+    #[builder(default = true)]
+    pub tunnel_enabled: bool,
+
     /// Allow Local runtime debug commands and shells.
     #[builder(default = false)]
     pub local_debug_enabled: bool,

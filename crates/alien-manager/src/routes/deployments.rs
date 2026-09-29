@@ -1203,6 +1203,7 @@ mod tests {
                     .expect("empty registry routing table should initialize"),
             ),
             import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
+            tunnels: None,
         };
         let response = router()
             .with_state(state)

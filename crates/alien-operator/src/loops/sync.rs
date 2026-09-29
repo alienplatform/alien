@@ -343,6 +343,16 @@ async fn sync_with_manager(
         }
     }
 
+    // The manager advertises its tunnel endpoint on every sync; an absent URL
+    // (older manager, or tunnels disabled) stops the tunnel loop from dialing.
+    if let Err(e) = state
+        .db
+        .set_tunnel_url(sync_response.tunnel_url.as_deref())
+        .await
+    {
+        error!(error = %e, "Failed to persist tunnel_url");
+    }
+
     // Persist the target bundle set so a restart doesn't lose it for a full
     // extra tick — the sync_bundles() call above (built from THIS response,
     // used on the NEXT request) reads it back via get_target_operations_bundle_set.

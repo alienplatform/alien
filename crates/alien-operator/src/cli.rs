@@ -171,6 +171,11 @@ pub struct Args {
     #[arg(long, env = "STACK_INPUT_VALUES_FILE")]
     pub stack_input_values_file: Option<PathBuf>,
 
+    /// Serve tunnel requests from the manager for the stack's declared tunnel
+    /// endpoints (`--tunnel-enabled=false` turns the tunnel off).
+    #[arg(long, env = "TUNNEL_ENABLED", default_value_t = true, action = clap::ArgAction::Set)]
+    pub tunnel_enabled: bool,
+
     #[arg(long, env = "ALIEN_ENABLE_LOCAL_DEBUG", default_value_t = false)]
     pub enable_local_debug: bool,
 
@@ -682,6 +687,7 @@ async fn run_operator_cli(
         .maybe_public_endpoints(public_endpoints)
         .stack_settings(stack_settings)
         .local_debug_enabled(args.enable_local_debug)
+        .tunnel_enabled(args.tunnel_enabled)
         .maybe_local_debug_shell_command(args.local_debug_shell_command)
         .build();
 
