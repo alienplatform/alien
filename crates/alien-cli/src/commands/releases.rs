@@ -138,8 +138,12 @@ pub async fn releases_task(args: ReleasesArgs, ctx: ExecutionMode) -> Result<()>
             channel,
             project,
             json,
-        } => promote_release_task(&ctx, &id, &channel, project.as_deref(), json).await,
+        } => {
+            require_release_channels(&ctx)?;
+            promote_release_task(&ctx, &id, &channel, project.as_deref(), json).await
+        }
         ReleasesCmd::Channels { project, json } => {
+            require_release_channels(&ctx)?;
             list_channels_task(&ctx, project.as_deref(), json).await
         }
         ReleasesCmd::CreateChannel {
@@ -147,11 +151,28 @@ pub async fn releases_task(args: ReleasesArgs, ctx: ExecutionMode) -> Result<()>
             project,
             release,
             json,
-        } => create_channel_task(&ctx, &name, project.as_deref(), release.as_deref(), json).await,
+        } => {
+            require_release_channels(&ctx)?;
+            create_channel_task(&ctx, &name, project.as_deref(), release.as_deref(), json).await
+        }
         ReleasesCmd::DeleteChannel { name, project } => {
+            require_release_channels(&ctx)?;
             delete_channel_task(&ctx, &name, project.as_deref()).await
         }
     }
+}
+
+/// Release channels are an alien.dev feature; a manager you run sends every
+/// release to every deployment.
+fn require_release_channels(ctx: &ExecutionMode) -> Result<()> {
+    if ctx.is_platform() {
+        return Ok(());
+    }
+    Err(alien_error::AlienError::new(
+        ErrorData::ConfigurationError {
+            message: "This manager doesn't support release channels: every release goes to every deployment.".to_string(),
+        },
+    ))
 }
 
 #[cfg(feature = "platform")]
