@@ -515,12 +515,14 @@ fn query_for_mount_access(
 }
 
 /// The path capture is percent-decoded, and the upstream URL is parsed from it again, so a `?`,
-/// `#`, `\`, dot segment or leftover escape would authorize one repository and reach another.
-/// Only a path the upstream URL keeps exactly as given is forwarded.
+/// `#`, `\`, dot or empty segment, or leftover escape would authorize one repository and reach
+/// another. Only a path the upstream keeps exactly as given is forwarded.
 fn require_literal_oci_path(path: &str) -> Result<(), Response> {
     let path = path.trim_start_matches('/');
+    let segments = path.strip_suffix('/').unwrap_or(path);
     let literal = !path.contains('%')
-        && url::Url::parse(&format!("http://registry.invalid/v2/{path}")).is_ok_and(|url| {
+        && !segments.split('/').any(str::is_empty)
+        && Url::parse(&format!("http://registry.invalid/v2/{path}")).is_ok_and(|url| {
             url.path() == format!("/v2/{path}") && url.query().is_none() && url.fragment().is_none()
         });
     if literal {
@@ -1641,6 +1643,8 @@ mod tests {
             "artifacts/prj_a/manifests/%2e%2e/%2e%2e/prj_b/manifests/v1",
             "artifacts/prj_a/manifests/./v1",
             "artifacts/prj_a/manifests/v1#frag",
+            "artifacts//prj_b/manifests/v1",
+            "artifacts/prj_a/blobs/uploads//",
         ] {
             let refused = require_literal_oci_path(path).expect_err(path);
             assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{path}");

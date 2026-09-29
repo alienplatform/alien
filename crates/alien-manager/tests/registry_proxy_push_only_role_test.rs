@@ -348,6 +348,10 @@ async fn a_push_only_credential_pushes_but_cannot_pull_or_cross_projects() {
             reqwest::Method::GET,
             "artifacts/other/manifests/..%5C..%5Csandbox-image/manifests/v1".to_string(),
         ),
+        (
+            reqwest::Method::PUT,
+            "artifacts//sandbox-image/manifests/v2".to_string(),
+        ),
     ] {
         let got = status(
             client
