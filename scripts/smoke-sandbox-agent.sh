@@ -43,8 +43,8 @@ fi
 # Each command gets its own shell, so a `#` or a quote in one line cannot swallow the
 # check on it or reach the next one.
 # shellcheck disable=SC2016
-tools_probe='for tool do sh -c "$tool" >/dev/null 2>&1 </dev/null ||
-  { printf "tool probe: %s failed\n" "$tool"; exit 1; }; done'
+tools_probe='for tool do echo "probing ${tool}"; out=$(sh -c "$tool" 2>&1 </dev/null) ||
+  { printf "tool probe: %s failed: %s\n" "$tool" "$(printf "%s" "$out" | tail -n 1)"; exit 1; }; done'
 
 IFS=, read -r -a platform_list <<< "$platforms"
 for platform in "${platform_list[@]}"; do
@@ -115,11 +115,16 @@ for platform in "${platform_list[@]}"; do
     case "$status" in
       0) ;;
       124|137)
-        docker rm -f "$probe" >/dev/null 2>&1 || true
+        # The last "probing" line names the tool that hung.
+        echo "$tools_out"
+        if ! timeout -k 5 30 docker rm -f "$probe" >/dev/null 2>&1; then
+          echo "::warning::${platform}: container ${probe} could not be removed and may still be running"
+        fi
         echo "::error::${platform}: the tools probe did not finish within 120s"
         exit 1 ;;
       *)
-        echo "::error::${platform}: ${tools_out:-the tools probe did not complete}"
+        echo "$tools_out"
+        echo "::error::${platform}: $(printf '%s' "$tools_out" | tail -n 1 | grep . || echo 'the tools probe did not complete')"
         exit 1 ;;
     esac
   fi

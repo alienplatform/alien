@@ -130,15 +130,19 @@ fi
 # The committed list, so a tool added to the contract is one this harness sends.
 tools_list="$here/../docker/sandbox-default-tools.txt"
 flags=(--tools "$tools_list")
-check tools-124 fail "linux/amd64: the tools probe did not finish within 120s"
-check tools-137 fail "linux/amd64: the tools probe did not finish within 120s"
-if grep -q "^-f smoke-tools-[0-9]*-linux-amd64$" "$state/container-removals" 2>/dev/null; then
-  passed=$((passed + 1))
-  echo "ok   tools-137: the timed-out probe container was removed"
-else
-  failed=$((failed + 1))
-  echo "FAIL tools-137: the timed-out probe container was never removed"
-fi
+# A timed-out probe's client is killed but its container is not, so each timeout path
+# must remove the container by name.
+for mode in tools-124 tools-137 tools-hang; do
+  check "$mode" fail "linux/amd64: the tools probe did not finish within 120s"
+  if grep -q "^-f smoke-tools-[0-9]*-linux-amd64$" "$state/container-removals" 2>/dev/null; then
+    passed=$((passed + 1))
+    echo "ok   ${mode}: the timed-out probe container was removed"
+  else
+    failed=$((failed + 1))
+    echo "FAIL ${mode}: the timed-out probe container was never removed"
+  fi
+done
+check tools-hang fail "linux/amd64: the tools probe did not finish within 120s" "probing node --version"
 check tools-error fail "linux/amd64: stub: the tools probe failed"
 check tools-silent fail "linux/amd64: the tools probe did not complete"
 check tools-missing fail "linux/amd64: tool probe: rg --version failed"
@@ -156,8 +160,11 @@ for platform in linux/amd64 linux/arm64; do
   fi
 done
 missing=""
-while IFS= read -r line; do
+listed=0
+while IFS= read -r line || [ -n "$line" ]; do
+  line="${line#"${line%%[![:space:]]*}"}"
   case "$line" in ''|'#'*) continue ;; esac
+  listed=$((listed + 1))
   grep -qF -- "$line" "$state/tools-probes" || missing+=" '${line}'"
 done < "$tools_list"
 if [ -n "$missing" ]; then
@@ -167,6 +174,14 @@ else
   passed=$((passed + 1))
   echo "ok   tools happy: the probe sent every command in the list"
 fi
+# One argument per tool, so no two commands share a shell.
+if [ "$(sort -u "$state/tools-arguments")" != "$listed" ]; then
+  failed=$((failed + 1))
+  echo "FAIL tools happy: the probe got $(sort -u "$state/tools-arguments" | tr '\n' ' ')arguments, expected ${listed}"
+else
+  passed=$((passed + 1))
+  echo "ok   tools happy: the probe got one argument per tool"
+fi
 
 empty_list="$(mktemp)"
 printf '# only a comment\n  # indented\n\n' > "$empty_list"
@@ -174,6 +189,7 @@ flags=(--tools "$empty_list")
 check tools-list-empty fail "the tools list ${empty_list} names no tools"
 flags=(--tools "$empty_list.missing")
 check tools-list-unreadable fail "the tools list ${empty_list}.missing is not readable"
+rm -f "$empty_list"
 
 flags=(--platforms linux/arm64)
 check happy pass ""

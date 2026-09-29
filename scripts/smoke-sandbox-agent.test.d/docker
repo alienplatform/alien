@@ -69,12 +69,16 @@ case "$command" in
         ;;
       *"tool probe:"*)
         printf '%s\n' "$all" >> "$state/tools-probes"
+        # The probe's arguments after `-c <script> sh`, one per tool.
+        j=0
+        while [ "${args[$j]}" != -c ]; do j=$((j + 1)); done
+        echo $((${#args[@]} - j - 3)) >> "$state/tools-arguments"
         inject tools
+        [ "$mode" = tools-hang ] && [ "$platform" = linux/amd64 ] &&
+          { echo "probing node --version"; exec sleep 10; }
         # Runs the script's real probe over a stand-in list, so a probe that lets a `#`
         # hide a failing command passes here and fails the check.
         if [ "$mode" = tools-hidden-failure ] && [ "$platform" = linux/amd64 ]; then
-          j=0
-          while [ "${args[$j]}" != -c ]; do j=$((j + 1)); done
           exec sh -c "${args[$((j + 1))]}" sh true 'false # hidden' true
         fi
         if [ "$mode" = tools-missing ] && [ "$platform" = linux/amd64 ]; then
