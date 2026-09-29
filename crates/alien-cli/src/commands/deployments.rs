@@ -364,7 +364,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             if !ctx.is_platform() {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "command".to_string(),
-                    message: "Deployment event history requires platform mode.".to_string(),
+                    message: "This manager doesn't keep deployment event history. Use `alien logs --deployment` for recent activity.".to_string(),
                 }));
             }
             let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
@@ -412,7 +412,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             if !ctx.is_platform() {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "command".to_string(),
-                    message: "Machine inventory requires platform mode.".to_string(),
+                    message: "This manager doesn't report machine inventory.".to_string(),
                 }));
             }
             let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
@@ -539,7 +539,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             if ctx.is_dev() {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "command".to_string(),
-                    message: "`alien dev deployments pin` is not supported in local dev mode."
+                    message: "`alien dev deployments pin` is not available in `alien dev`."
                         .to_string(),
                 }));
             }
@@ -551,7 +551,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             if !ctx.is_platform() {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "command".to_string(),
-                    message: "Changing release channels requires platform mode.".to_string(),
+                    message: "This manager doesn't support release channels: every release goes to every deployment.".to_string(),
                 }));
             }
             let client = ctx.sdk_client().await?;
@@ -588,7 +588,16 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             if ctx.is_dev() {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "command".to_string(),
-                    message: "`alien dev deployments token` is not supported in local dev mode."
+                    message: "`alien dev deployments token` is not available in `alien dev`."
+                        .to_string(),
+                }));
+            }
+            if ctx.is_standalone() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "command".to_string(),
+                    message: "This manager issues each deployment's token when it registers. \
+                              For a backend that calls deployments, create a scoped token with \
+                              `alien tokens create --tunnel`."
                         .to_string(),
                 }));
             }

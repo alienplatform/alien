@@ -112,7 +112,7 @@ pub async fn releases_task(args: ReleasesArgs, ctx: ExecutionMode) -> Result<()>
             if channel.is_some() || all_channels {
                 return Err(alien_error::AlienError::new(
                     ErrorData::ConfigurationError {
-                        message: "Release channel filters require platform mode.".to_string(),
+                        message: "This manager doesn't support release channels, so there is nothing to filter by.".to_string(),
                     },
                 ));
             }
@@ -232,7 +232,7 @@ async fn list_platform_releases_task(
 ) -> Result<()> {
     Err(alien_error::AlienError::new(
         ErrorData::ConfigurationError {
-            message: "Release channels require platform mode.".to_string(),
+            message: "This manager doesn't support release channels: every release goes to every deployment.".to_string(),
         },
     ))
 }
@@ -289,7 +289,7 @@ async fn list_channels_task(
 ) -> Result<()> {
     Err(alien_error::AlienError::new(
         ErrorData::ConfigurationError {
-            message: "Release channels require platform mode.".to_string(),
+            message: "This manager doesn't support release channels: every release goes to every deployment.".to_string(),
         },
     ))
 }
@@ -357,7 +357,7 @@ async fn create_channel_task(
 ) -> Result<()> {
     Err(alien_error::AlienError::new(
         ErrorData::ConfigurationError {
-            message: "Release channels require platform mode.".to_string(),
+            message: "This manager doesn't support release channels: every release goes to every deployment.".to_string(),
         },
     ))
 }
@@ -397,7 +397,7 @@ async fn delete_channel_task(
 ) -> Result<()> {
     Err(alien_error::AlienError::new(
         ErrorData::ConfigurationError {
-            message: "Release channels require platform mode.".to_string(),
+            message: "This manager doesn't support release channels: every release goes to every deployment.".to_string(),
         },
     ))
 }
@@ -503,7 +503,7 @@ async fn promote_release_task(
 ) -> Result<()> {
     Err(alien_error::AlienError::new(
         ErrorData::ConfigurationError {
-            message: "Release promotion requires platform mode.".to_string(),
+            message: "This manager doesn't support release promotion: every release goes to every deployment.".to_string(),
         },
     ))
 }

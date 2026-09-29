@@ -162,7 +162,7 @@ pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()
     if let Some(title) = args.title.as_deref() {
         if !ctx.is_platform() {
             return Err(AlienError::new(ErrorData::ConfigurationError {
-                message: "--title requires platform mode".to_string(),
+                message: "This manager doesn't store release titles; omit --title".to_string(),
             }));
         }
         #[cfg(feature = "platform")]
@@ -199,7 +199,7 @@ fn validate_release_channel(channel: &str, ctx: &ExecutionMode) -> Result<()> {
     if !ctx.is_platform() && channel != "production" {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "channel".to_string(),
-            message: "Named release channels currently require platform mode.".to_string(),
+            message: "This manager doesn't support release channels: every release goes to every deployment. Omit --channel.".to_string(),
         }));
     }
 
@@ -857,8 +857,7 @@ async fn release_declare(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<Decl
 
     if ctx.is_standalone() || ctx.is_dev() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "Declaring a stackless release (--no-stack) requires platform mode."
-                .to_string(),
+            message: "This manager doesn't support stackless releases (--no-stack).".to_string(),
         }));
     }
 

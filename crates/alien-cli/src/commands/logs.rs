@@ -459,7 +459,8 @@ async fn resolve_deployment_target(
             allow_prompt,
         );
         Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "Deployment log discovery requires platform support.".to_string(),
+            message: "This manager doesn't index logs for discovery; pass --deployment."
+                .to_string(),
         }))
     }
 }
