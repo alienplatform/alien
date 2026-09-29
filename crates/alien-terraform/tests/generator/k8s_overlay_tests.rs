@@ -592,6 +592,48 @@ fn eks_managed_cluster_with_remote_management_irsa_is_valid() {
 }
 
 #[test]
+fn eks_created_network_with_irsa_and_remote_management_is_valid() {
+    let stack = Stack::new("eks-created-network-identity".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().resource("kubernetes", ["kubernetes-cluster/heartbeat"]),
+        ))
+        .add(
+            Network::new("default-network".to_string())
+                .settings(NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            storage_data_read_service_account(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Eks, StackSettings::default());
+    assert_terraform_valid(&module, "eks_created_network_identity");
+}
+
+#[test]
 fn managed_kubernetes_cluster_preserves_stack_settings_exposure() {
     let stack = Stack::new("eks-custom-exposure".to_string())
         .add(
