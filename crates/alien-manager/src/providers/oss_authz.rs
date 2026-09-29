@@ -25,6 +25,15 @@ impl OssAuthz {
             && matches!(s.role, Role::WorkspaceAdmin | Role::WorkspaceMember)
     }
 
+    /// The project roles that may write, as `can_create_release` grants them. A sync writes
+    /// deployment state and reads its environment, so a viewer is refused.
+    fn is_project_writer(s: &Subject) -> bool {
+        matches!(
+            s.role,
+            Role::WorkspaceAdmin | Role::WorkspaceMember | Role::ProjectDeveloper
+        )
+    }
+
     /// Capability roles share the project scope without its reads. A deny-list so every other
     /// project-scoped subject keeps the reads it has today.
     fn project_reader(s: &Subject) -> bool {
@@ -159,7 +168,9 @@ impl Authz for OssAuthz {
     fn can_read_deployment_group(&self, s: &Subject, dg: &DeploymentGroupRecord) -> bool {
         match &s.scope {
             Scope::Workspace => true,
-            Scope::Project { .. } => Self::project_reader(s),
+            Scope::Project { project_id } => {
+                Self::project_reader(s) && project_id == &dg.project_id
+            }
             Scope::DeploymentGroup {
                 deployment_group_id,
                 ..
@@ -268,7 +279,7 @@ impl Authz for OssAuthz {
             } => deployment_group_id == &deployment.deployment_group_id,
             Scope::Workspace => Self::is_workspace_writer(s),
             Scope::Project { project_id } => {
-                Self::project_reader(s) && project_id == &deployment.project_id
+                Self::is_project_writer(s) && project_id == &deployment.project_id
             }
             Scope::Commands { .. } | Scope::RemoteBindings { .. } | Scope::Telemetry { .. } => {
                 false
@@ -586,6 +597,32 @@ mod tests {
 
         assert!(OssAuthz.can_sync_deployment(&developer, &deployment("d1", "dg-a")));
         assert!(!OssAuthz.can_sync_deployment(&developer, &other));
+
+        let mut viewer = developer.clone();
+        viewer.role = Role::ProjectViewer;
+        assert!(!OssAuthz.can_sync_deployment(&viewer, &deployment("d1", "dg-a")));
+        assert!(OssAuthz.can_read_deployment(&viewer, &deployment("d1", "dg-a")));
+    }
+
+    #[test]
+    fn a_project_credential_reads_only_its_own_projects_deployment_groups() {
+        let mut viewer = admin();
+        viewer.scope = Scope::Project {
+            project_id: "default".to_string(),
+        };
+        viewer.role = Role::ProjectViewer;
+        let group = |project_id: &str| DeploymentGroupRecord {
+            id: "dg-a".to_string(),
+            workspace_id: "default".to_string(),
+            project_id: project_id.to_string(),
+            name: "dg-a".to_string(),
+            max_deployments: 10,
+            deployment_count: 0,
+            created_at: Utc::now(),
+        };
+
+        assert!(OssAuthz.can_read_deployment_group(&viewer, &group("default")));
+        assert!(!OssAuthz.can_read_deployment_group(&viewer, &group("prj_other")));
     }
 
     #[test]

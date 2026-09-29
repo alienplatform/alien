@@ -354,10 +354,12 @@ pub enum Role {
     /// or any other project access.
     ImageRepositoryProvisioner,
     /// Exact capability for pushing a sandbox image into one project's
-    /// repository through the registry proxy.
+    /// repositories through the registry proxy.
     ///
-    /// Paired with [`Scope::Project`]. Push only: it must not pull, provision a
-    /// repository, or imply any other project access.
+    /// Paired with [`Scope::Project`]. `Authz` receives the repository, but
+    /// unless it narrows by it the grant covers every repository of the
+    /// project. Push only: it must not pull, mount from another repository,
+    /// provision a repository, or imply any other project access.
     SandboxImagePusher,
 }
 

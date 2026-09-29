@@ -452,10 +452,10 @@ async fn proxy_push(
         None
     };
 
-    let repo_name = if let Some(ref repo) = signed_session_repo {
+    let (repo_name, upstream_query) = if let Some(ref repo) = signed_session_repo {
         // Signed-URL bypass: the path's repo is implied by the signature,
         // not by Bearer auth. Trust the signature's repo.
-        repo.clone()
+        (repo.clone(), strip_upload_session_auth_params(&query))
     } else {
         let subject = match super::auth::require_auth(&state, &headers).await {
             Ok(s) => s,
@@ -465,13 +465,11 @@ async fn proxy_push(
         if let Err(e) = require_push_auth(&state, &subject, &repo_name) {
             return e;
         }
-        repo_name
-    };
-
-    let upstream_query = if signed_session_repo.is_some() {
-        strip_upload_session_auth_params(&query)
-    } else {
-        query
+        let may_mount = match query.get(MOUNT_SOURCE_PARAM) {
+            Some(source) => validate_pull_access(&state, &subject, source).await.is_ok(),
+            None => true,
+        };
+        (repo_name, query_for_mount_access(query, may_mount))
     };
     let qs = query_string(&upstream_query);
     let oci_path = format!("{}{}", oci_path_str, qs);
@@ -484,6 +482,22 @@ async fn proxy_push(
         Some(&repo_name),
     )
     .await
+}
+
+/// The repository a cross-repository blob mount copies from.
+const MOUNT_SOURCE_PARAM: &str = "from";
+
+/// Upstream push credentials reach every repository, so a mount from one the caller may not pull
+/// would copy, and reveal, another project's blob. Without the parameters the registry opens a
+/// plain upload session, which the OCI spec also answers a failed mount with.
+fn query_for_mount_access(
+    mut query: HashMap<String, String>,
+    may_mount: bool,
+) -> HashMap<String, String> {
+    if !may_mount {
+        query.retain(|key, _| key != "mount" && key != MOUNT_SOURCE_PARAM);
+    }
+    query
 }
 
 /// Restore the significant trailing slash on the OCI upload-init endpoint.
@@ -1570,6 +1584,21 @@ mod tests {
             assert_eq!(refused.status(), StatusCode::FORBIDDEN);
         }
         assert!(refuse_capability_pull(&subject(Role::ProjectDeveloper)).is_ok());
+    }
+
+    #[test]
+    fn a_mount_is_forwarded_only_from_a_repository_the_caller_may_pull() {
+        let query = HashMap::from([
+            ("mount".to_string(), "sha256:abc".to_string()),
+            ("from".to_string(), "artifacts/prj_other".to_string()),
+            ("digest".to_string(), "sha256:abc".to_string()),
+        ]);
+
+        assert_eq!(query_for_mount_access(query.clone(), true), query);
+        assert_eq!(
+            query_for_mount_access(query, false),
+            HashMap::from([("digest".to_string(), "sha256:abc".to_string())])
+        );
     }
 
     #[test]
