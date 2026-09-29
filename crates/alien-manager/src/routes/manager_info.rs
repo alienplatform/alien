@@ -27,6 +27,9 @@ pub struct ManagerInfoResponse {
     pub version: String,
     /// Features this manager serves.
     pub capabilities: ManagerCapabilities,
+    /// Operator image the charts this manager serves install.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator_image: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -61,12 +64,16 @@ async fn manager_info(State(state): State<AppState>, headers: HeaderMap) -> Resp
     let url = state.config.base_url();
     Json(ManagerInfoResponse {
         registry_host: alien_core::image_rewrite::strip_url_scheme(&url).to_string(),
-        url,
+        url: url.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         capabilities: ManagerCapabilities {
             tunnels: state.tunnels.is_some(),
             charts: state.charts.is_some(),
         },
+        operator_image: state
+            .charts
+            .as_ref()
+            .map(|charts| charts.deployed_operator_image(&state.config.base_url())),
     })
     .into_response()
 }

@@ -27,6 +27,7 @@ pub mod whoami;
 // Public so embedders (e.g. alien-managerx route handlers) can fetch a
 // validated `Subject` the same way as OSS handlers, instead of pulling the
 // raw bearer + workspace headers themselves.
+pub mod airgap;
 pub mod auth;
 
 use std::collections::HashMap;
@@ -176,6 +177,7 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         .merge(whoami::router())
         .merge(manager_info::router())
         .merge(logs::router())
+        .merge(airgap::router())
         // Deployments
         .merge(deployments::router())
         // Releases

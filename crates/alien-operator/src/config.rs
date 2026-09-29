@@ -126,6 +126,16 @@ pub struct OperatorConfig {
     /// Operator updates its own image to the one the manager targets.
     pub self_update_deployment: Option<String>,
 
+    /// Prefix for resources this Operator names (Kubernetes service accounts
+    /// among them), as the chart configured it.
+    pub resource_prefix: Option<String>,
+
+    /// Air-gapped: Secret in `namespace` that bundles write targets into.
+    pub airgap_target_secret: Option<String>,
+
+    /// Air-gapped: Secret in `namespace` the Operator writes its state into.
+    pub airgap_status_secret: Option<String>,
+
     /// Allow Local runtime debug commands and shells.
     #[builder(default = false)]
     pub local_debug_enabled: bool,

@@ -1,6 +1,7 @@
 //! Background loops for the alien-operator
 
 pub mod access_requests;
+pub mod airgap;
 pub mod commands;
 pub mod debug_session;
 pub mod deployment;

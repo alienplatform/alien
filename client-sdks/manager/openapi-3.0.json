@@ -942,7 +942,7 @@
         "tags": [
           "deployments"
         ],
-        "operationId": "recent_logs",
+        "operationId": "get_deployment_logs",
         "parameters": [
           {
             "name": "id",
@@ -1059,6 +1059,96 @@
             "description": "Not found"
           }
         }
+      }
+    },
+    "/v1/deployments/{id}/status-report": {
+      "post": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "import_deployment_status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Report applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusReportResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/deployments/{id}/target": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "get_deployment_target",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "releaseId",
+            "in": "query",
+            "description": "Release to target; defaults to the latest release.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Target the deployment converges to",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
       }
     },
     "/v1/deployments/{id}/vault/{vault_name}/secrets/{key}": {
@@ -12222,6 +12312,11 @@
             "$ref": "#/components/schemas/ManagerCapabilities",
             "description": "Features this manager serves."
           },
+          "operatorImage": {
+            "type": "string",
+            "description": "Operator image the charts this manager serves install.",
+            "nullable": true
+          },
           "registryHost": {
             "type": "string",
             "description": "Registry host (`host[:port]`) release images and charts are pulled from."
@@ -14241,6 +14336,33 @@
           }
         }
       },
+      "ReportedLog": {
+        "type": "object",
+        "required": [
+          "timestamp",
+          "message"
+        ],
+        "properties": {
+          "attributes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "message": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string",
+            "description": "Workload that wrote the line.",
+            "nullable": true
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "ReportedOperation": {
         "type": "object",
         "description": "A single operation the Operator currently has loaded. Opaque identifiers\nonly — no tier, description, or other plugin business logic crosses into\nthis public crate.",
@@ -15912,6 +16034,41 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/StackResourceState"
             }
+          }
+        }
+      },
+      "StatusReport": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "logs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportedLog"
+            },
+            "description": "Recent log lines collected from the environment."
+          },
+          "state": {
+            "type": "object",
+            "description": "Deployment state as the environment's Operator last recorded it."
+          }
+        }
+      },
+      "StatusReportResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "logsAccepted"
+        ],
+        "properties": {
+          "logsAccepted": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string"
           }
         }
       },

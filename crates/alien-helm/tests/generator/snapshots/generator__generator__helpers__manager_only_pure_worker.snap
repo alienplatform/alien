@@ -164,6 +164,12 @@ heartbeat:
     nodes:
       enabled: true
 
+airgapped:
+  # No connection to the manager: targets arrive in bundles applied with
+  # `alien-deploy airgap apply`, and state leaves with `alien-deploy airgap
+  # status`. Needs management.deploymentId from the bundle.
+  enabled: false
+
 tunnel:
   # Serve requests the control plane sends through the manager to the stack's
   # declared tunnel endpoints, over the Operator's outbound connection.
@@ -598,6 +604,13 @@ ephemeralStorage:
             "tenantId": { "type": "string" }
           }
         }
+      }
+    },
+    "airgapped": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" }
       }
     },
     "tunnel": {
@@ -1366,8 +1379,18 @@ spec:
             - name: AZURE_REGION
               value: {{ .Values.basePlatformConfig.azure.location | quote }}
             {{- end }}
+            {{- if dig "enabled" false (default dict .Values.airgapped) }}
+            {{- if not .Values.management.deploymentId }}
+              {{- fail "airgapped.enabled needs management.deploymentId (from the bundle)" }}
+            {{- end }}
+            - name: AIRGAP_TARGET_SECRET
+              value: {{ printf "%s-airgap-target" (include "deployment.fullname" .) | quote }}
+            - name: AIRGAP_STATUS_SECRET
+              value: {{ printf "%s-airgap-status" (include "deployment.fullname" .) | quote }}
+            {{- else }}
             - name: SYNC_URL
               value: {{ include "deployment.managementUrl" . | quote }}
+            {{- end }}
             - name: OPERATOR_NAME
               value: {{ .Values.management.name | quote }}
             - name: OPERATOR_RESOURCE_PREFIX
@@ -1394,8 +1417,10 @@ spec:
               value: "helm"
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
+            {{- if not (dig "enabled" false (default dict .Values.airgapped)) }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token
+            {{- end }}
             - name: OPERATOR_ENCRYPTION_KEY_FILE
               value: /etc/deployment/secrets/encryption-key
             - name: STACK_SETTINGS_FILE

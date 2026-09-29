@@ -40,7 +40,7 @@ pub async fn manager_logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()>
     loop {
         let response = mgr
             .client
-            .recent_logs()
+            .get_deployment_logs()
             .id(&deployment.id)
             .limit(args.limit as i64)
             .since(since)

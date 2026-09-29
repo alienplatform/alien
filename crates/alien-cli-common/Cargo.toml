@@ -18,4 +18,13 @@ clap = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 termcolor = "1"
+hex = { workspace = true }
+oci-client = { workspace = true, features = ["rustls-tls"] }
+sha2 = { workspace = true }
+tar = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "fs"] }
 

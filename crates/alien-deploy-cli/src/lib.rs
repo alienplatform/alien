@@ -52,6 +52,8 @@ pub enum Commands {
     Join(JoinArgs),
     /// Leave a Machines deployment from this host.
     Leave(LeaveArgs),
+    /// Run a deployment with no connection to its manager
+    Airgap(commands::airgap::AirgapArgs),
 }
 
 /// Parse command-line arguments using any branding embedded in this binary.
@@ -147,6 +149,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         Commands::Register(args) => register_command(args, embedded_config.as_ref()).await,
         Commands::Join(args) => join_command(args, embedded_config.as_ref()).await,
         Commands::Leave(args) => leave_command(args).await,
+        Commands::Airgap(args) => commands::airgap::airgap_command(args).await,
     }
 }
 

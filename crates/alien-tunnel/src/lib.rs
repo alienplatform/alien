@@ -52,6 +52,7 @@ pub(crate) mod h2_settings {
 
     pub const INITIAL_STREAM_WINDOW: u32 = 2 * 1024 * 1024;
     pub const INITIAL_CONNECTION_WINDOW: u32 = 16 * 1024 * 1024;
+    #[cfg(feature = "operator")]
     pub const MAX_CONCURRENT_STREAMS: u32 = 512;
     /// Below common 60s idle timeouts of load balancers and proxies.
     pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(20);

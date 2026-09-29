@@ -62,6 +62,11 @@ pub struct OnboardArgs {
     /// Public subdomain to reserve for deployments created from this link.
     #[arg(long)]
     pub subdomain: Option<String>,
+
+    /// The environment can't reach your manager: register its deployment now
+    /// and ship releases as bundles (`alien airgap bundle`).
+    #[arg(long)]
+    pub airgapped: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -1155,6 +1160,17 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
         .token
         .clone();
 
+    if args.airgapped {
+        return register_airgapped(
+            &args,
+            &mgr.manager_url,
+            &name,
+            &deployment_group_name,
+            &token,
+        )
+        .await;
+    }
+
     let kubernetes_stack = stack_values
         .iter()
         .find(|(platform, _)| *platform == Platform::Kubernetes)
@@ -1245,6 +1261,76 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
         command("wait for customer setup, then run alien deployments ls")
     );
 
+    Ok(())
+}
+
+/// Register the deployment for an environment that can't reach the manager,
+/// the way its Operator would on first contact.
+async fn register_airgapped(
+    args: &OnboardArgs,
+    manager_url: &str,
+    name: &str,
+    group_name: &str,
+    group_token: &str,
+) -> Result<()> {
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{}/v1/initialize",
+            manager_url.trim_end_matches('/')
+        ))
+        .bearer_auth(group_token)
+        .json(&serde_json::json!({
+            "name": group_name,
+            "platform": "kubernetes",
+            "initialDesiredRelease": "active",
+        }))
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to register the air-gapped deployment".to_string(),
+            url: None,
+        })?;
+    if !response.status().is_success() {
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!(
+                "Registering the air-gapped deployment failed ({}): {}",
+                response.status(),
+                response.text().await.unwrap_or_default()
+            ),
+            url: None,
+        }));
+    }
+    let registered: serde_json::Value =
+        response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to read the registration".to_string(),
+                url: None,
+            })?;
+    let deployment_id = registered["deploymentId"].as_str().unwrap_or_default();
+    let reference = format!("{group_name}/{group_name}");
+    if args.json {
+        return print_json(&serde_json::json!({
+            "name": name,
+            "deploymentId": deployment_id,
+            "reference": reference,
+            "airgapped": true,
+        }));
+    }
+    println!("{}", success_line("Registered for air-gapped delivery."));
+    println!("{} {}", dim_label("Customer"), name);
+    println!("{} {}", dim_label("Deployment"), deployment_id);
+    println!();
+    println!(
+        "{} {}",
+        dim_label("Next"),
+        command(&format!(
+            "alien airgap bundle {reference} -o {group_name}.tar"
+        ))
+    );
     Ok(())
 }
 

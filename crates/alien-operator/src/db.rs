@@ -1611,6 +1611,57 @@ impl OperatorDb {
         }
     }
 
+    /// Sequence of the last air-gapped bundle target applied.
+    pub async fn get_airgap_sequence(&self) -> Result<Option<u64>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT value FROM state WHERE key = 'airgap_sequence'", ())
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query airgap_sequence".to_string(),
+            })?;
+        let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch airgap_sequence row".to_string(),
+            })?
+        else {
+            return Ok(None);
+        };
+        let value: String = row
+            .get(0)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read airgap_sequence".to_string(),
+            })?;
+        value
+            .parse()
+            .map(Some)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: format!("Stored airgap_sequence '{value}' is not a number"),
+            })
+    }
+
+    /// Record the sequence of the air-gapped bundle target just applied.
+    pub async fn set_airgap_sequence(&self, sequence: u64) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('airgap_sequence', ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (sequence.to_string(),),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to set airgap_sequence".to_string(),
+        })?;
+        Ok(())
+    }
+
     /// Manager URL to open tunnel connections to, from the last sync.
     /// `None` when the manager does not accept tunnels.
     pub async fn get_tunnel_url(&self) -> Result<Option<String>> {

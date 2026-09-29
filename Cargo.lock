@@ -473,6 +473,7 @@ dependencies = [
  "keyring",
  "oauth2",
  "object_store",
+ "oci-client",
  "open",
  "portpicker",
  "predicates",
@@ -513,9 +514,15 @@ dependencies = [
  "alien-error",
  "alien-preflights",
  "clap",
+ "hex",
+ "oci-client",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "tempfile",
  "termcolor",
+ "tokio",
 ]
 
 [[package]]
@@ -685,6 +692,7 @@ dependencies = [
  "hostname 0.4.2",
  "httpmock",
  "libc",
+ "oci-client",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

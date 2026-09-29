@@ -52,6 +52,7 @@ pub fn router() -> Router<AppState> {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/v1/deployments/{id}/logs",
+    operation_id = "get_deployment_logs",
     tag = "deployments",
     params(("id" = String, Path, description = "Deployment ID"), RecentLogsQuery),
     responses((status = 200, description = "Recent logs", body = RecentLogsResponse)),
