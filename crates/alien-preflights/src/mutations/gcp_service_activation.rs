@@ -8,7 +8,7 @@ use alien_core::{
     StackState,
 };
 use async_trait::async_trait;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use tracing::{debug, info};
 
 /// Mutation that adds ServiceActivation resources for required GCP APIs.
@@ -116,9 +116,10 @@ impl StackMutation for GcpServiceActivationMutation {
 }
 
 impl GcpServiceActivationMutation {
-    /// Get the mapping of service activation ID to API name based on resources in the stack
-    fn get_required_services(&self, stack: &Stack) -> HashMap<String, String> {
-        let mut services = HashMap::new();
+    /// Get the mapping of service activation ID to API name based on resources in the stack.
+    /// Ordered, because `mutate` inserts in this order and setup renders the stack in it.
+    fn get_required_services(&self, stack: &Stack) -> BTreeMap<String, String> {
+        let mut services = BTreeMap::new();
 
         for (_, entry) in &stack.resources {
             let resource_type = entry.config.resource_type();

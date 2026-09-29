@@ -13,8 +13,8 @@ use std::collections::{HashMap, HashSet};
 /// 2. Adding frozen resources during update creates inconsistent state
 /// 3. Modifying frozen resources risks breaking security/permission models
 ///
-/// The platform is the installed stack's, because some runtime-owned fields exist on one
-/// platform only.
+/// The platform is the installed stack's, because some runtime-owned fields exist on some
+/// platforms only.
 pub struct FrozenResourcesUnchangedCheck {
     pub platform: Platform,
 }
@@ -50,11 +50,11 @@ fn runtime_managed_frozen_change(old: &Resource, new: &Resource) -> bool {
     normalized == *new_cluster
 }
 
-/// An Azure sandbox's image is a catalog name its controller refreshes in place on update, and
-/// setup renders nothing that depends on it. Only `code.image` may differ; any other field
-/// still requires setup.
+/// On Azure and GCP only the runtime controller reads the image and setup renders no grant from
+/// it, so only `code.image` may differ; AWS setup renders the build role from it. A GCP direct
+/// setup is still refused at update by alien-infra's `changes_requiring_setup`.
 fn runtime_managed_sandbox_image(platform: Platform, old: &Resource, new: &Resource) -> bool {
-    if platform != Platform::Azure {
+    if !matches!(platform, Platform::Azure | Platform::Gcp) {
         return false;
     }
     let (Some(old_sandbox), Some(new_sandbox)) =
@@ -563,5 +563,32 @@ mod tests {
             !with_other_field.success,
             "an image change must not carry another field past setup"
         );
+    }
+
+    #[tokio::test]
+    async fn a_gcp_frozen_sandbox_image_is_runtime_manageable() {
+        let check = |platform| FrozenResourcesUnchangedCheck { platform };
+        let old = sandbox_stack(
+            "us-central1-docker.pkg.dev/proj/agents/sandbox@sha256:aaaa",
+            None,
+        );
+        // Another host entirely: GCP setup grants no repository, so none can be left uncovered.
+        let moved = || sandbox_stack("ghcr.io/org/sandbox:v2", None);
+
+        let image_only = check(Platform::Gcp).check(&old, &moved()).await.unwrap();
+        assert!(image_only.success, "{:?}", image_only.errors);
+
+        let on_aws = check(Platform::Aws).check(&old, &moved()).await.unwrap();
+        assert!(!on_aws.success, "AWS Frozen sandboxes stay setup-owned");
+
+        let with_other_field = check(Platform::Gcp)
+            .check(&old, &sandbox_stack("ghcr.io/org/sandbox:v2", Some(60)))
+            .await
+            .unwrap();
+        assert!(
+            !with_other_field.success,
+            "an image change must not carry another field past setup"
+        );
+        assert!(with_other_field.errors[0].contains("Rerun setup"));
     }
 }

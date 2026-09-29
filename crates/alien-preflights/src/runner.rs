@@ -831,11 +831,11 @@ mod setup_update_authorization_tests {
         }
     }
 
-    /// The Frozen check is built from the installed stack's platform, so only an Azure install
-    /// may roll a Frozen sandbox's image without setup.
+    /// The Frozen check is built from the installed stack's platform, so only an Azure or GCP
+    /// install may roll a Frozen sandbox's image without setup.
     #[cfg(feature = "runtime-checks")]
     #[tokio::test]
-    async fn only_an_azure_frozen_sandbox_rolls_its_image_without_setup() {
+    async fn azure_and_gcp_frozen_sandboxes_roll_their_image_without_setup() {
         let old = sandbox_stack(alien_core::ResourceLifecycle::Frozen, "ubuntu", None);
         let target = sandbox_stack(alien_core::ResourceLifecycle::Frozen, "debian", None);
         let runner = PreflightRunner::with_registry(crate::PreflightRegistry::new());
@@ -844,29 +844,35 @@ mod setup_update_authorization_tests {
             state_directory: "/unused".to_string(),
         };
 
-        runner
-            .run_compatibility_checks(&old, &target, &config, Platform::Azure)
-            .await
-            .map(|summary| assert!(summary.success, "{:?}", summary.results))
-            .expect("checks run");
+        for platform in [Platform::Azure, Platform::Gcp] {
+            runner
+                .run_compatibility_checks(&old, &target, &config, platform)
+                .await
+                .map(|summary| assert!(summary.success, "{platform}: {:?}", summary.results))
+                .expect("checks run");
+        }
         let on_aws = runner
             .run_compatibility_checks(&old, &target, &config, Platform::Aws)
             .await
             .expect("checks run");
         assert!(!on_aws.success, "an AWS Frozen image change needs setup");
 
-        runner
-            .run_deployment_time_preflights(
-                target.clone(),
-                &StackState::new(Platform::Azure),
-                &config,
-                &client,
-                Some(&old),
-                None,
-                None,
-            )
-            .await
-            .expect("an Azure deployment rolls the image");
+        for platform in [Platform::Azure, Platform::Gcp] {
+            runner
+                .run_deployment_time_preflights(
+                    target.clone(),
+                    &StackState::new(platform),
+                    &config,
+                    &client,
+                    Some(&old),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("a {platform} deployment rolls the image: {error:?}")
+                });
+        }
         let error = runner
             .run_deployment_time_preflights(
                 target,
@@ -878,7 +884,7 @@ mod setup_update_authorization_tests {
                 None,
             )
             .await
-            .expect_err("the deployment's own platform is not Azure");
+            .expect_err("the deployment's own platform is neither Azure nor GCP");
         assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
     }
 }

@@ -434,6 +434,9 @@ async fn proxy_push(
     Query(query): Query<HashMap<String, String>>,
     body: Body,
 ) -> Response {
+    if let Err(refused) = require_literal_oci_path(&path) {
+        return refused;
+    }
     let oci_path_str = canonicalize_oci_push_path(path.trim_start_matches('/'));
     // The signing flow in `rewrite_location_with_upload_session_auth` signs
     // the URL's full path (`/v2/...`). axum's `Path` extractor on the
@@ -452,10 +455,10 @@ async fn proxy_push(
         None
     };
 
-    let repo_name = if let Some(ref repo) = signed_session_repo {
+    let (repo_name, upstream_query) = if let Some(ref repo) = signed_session_repo {
         // Signed-URL bypass: the path's repo is implied by the signature,
         // not by Bearer auth. Trust the signature's repo.
-        repo.clone()
+        (repo.clone(), strip_upload_session_auth_params(&query))
     } else {
         let subject = match super::auth::require_auth(&state, &headers).await {
             Ok(s) => s,
@@ -465,13 +468,19 @@ async fn proxy_push(
         if let Err(e) = require_push_auth(&state, &subject, &repo_name) {
             return e;
         }
-        repo_name
-    };
-
-    let upstream_query = if signed_session_repo.is_some() {
-        strip_upload_session_auth_params(&query)
-    } else {
-        query
+        let source_pullable = match query.get(MOUNT_SOURCE_PARAM) {
+            Some(source) => Some(match validate_pull_access(&state, &subject, source).await {
+                Ok(()) => true,
+                Err(refused) => {
+                    if refused.status().is_server_error() {
+                        warn!(%source, status = %refused.status(), "Mount source check failed; forwarding a plain upload");
+                    }
+                    false
+                }
+            }),
+            None => None,
+        };
+        (repo_name, query_for_mount_access(query, source_pullable))
     };
     let qs = query_string(&upstream_query);
     let oci_path = format!("{}{}", oci_path_str, qs);
@@ -484,6 +493,47 @@ async fn proxy_push(
         Some(&repo_name),
     )
     .await
+}
+
+/// The digest a cross-repository blob mount copies.
+const MOUNT_PARAM: &str = "mount";
+/// The repository a cross-repository blob mount copies from.
+const MOUNT_SOURCE_PARAM: &str = "from";
+
+/// Upstream push credentials reach every repository, so a mount is forwarded only from a named
+/// source the caller may pull (`source_pullable`); a mount naming none could reach any. Without
+/// the parameters the registry opens a plain upload session, as it does after a failed mount.
+fn query_for_mount_access(
+    mut query: HashMap<String, String>,
+    source_pullable: Option<bool>,
+) -> HashMap<String, String> {
+    let mounting = query.contains_key(MOUNT_PARAM) || source_pullable.is_some();
+    if mounting && source_pullable != Some(true) {
+        query.retain(|key, _| key != MOUNT_PARAM && key != MOUNT_SOURCE_PARAM);
+    }
+    query
+}
+
+/// The path capture is percent-decoded, and the upstream URL is parsed from it again, so a `?`,
+/// `#`, `\`, dot or empty segment, or leftover escape would authorize one repository and reach
+/// another. Only a path the upstream keeps exactly as given is forwarded.
+fn require_literal_oci_path(path: &str) -> Result<(), Response> {
+    let path = path.trim_start_matches('/');
+    let segments = path.strip_suffix('/').unwrap_or(path);
+    let literal = !path.contains('%')
+        && !segments.split('/').any(str::is_empty)
+        && Url::parse(&format!("http://registry.invalid/v2/{path}")).is_ok_and(|url| {
+            url.path() == format!("/v2/{path}") && url.query().is_none() && url.fragment().is_none()
+        });
+    if literal {
+        Ok(())
+    } else {
+        Err(oci_error(
+            StatusCode::BAD_REQUEST,
+            "NAME_INVALID",
+            "Registry paths must name a repository literally",
+        ))
+    }
 }
 
 /// Restore the significant trailing slash on the OCI upload-init endpoint.
@@ -580,6 +630,9 @@ async fn proxy_pull(
         Err(e) => return oci_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", e.to_string()),
     };
 
+    if let Err(refused) = require_literal_oci_path(&path) {
+        return refused;
+    }
     let oci_path_str = path.trim_start_matches('/');
     let repo_name = extract_repo_name(oci_path_str);
     if let Err(e) = validate_pull_access(&state, &subject, &repo_name).await {
@@ -1099,6 +1152,13 @@ fn refuse_capability_pull(subject: &Subject) -> Result<(), Response> {
             "Image repository provisioning credentials cannot pull images",
         ));
     }
+    if subject.role == Role::SandboxImagePusher {
+        return Err(oci_error(
+            StatusCode::FORBIDDEN,
+            "DENIED",
+            "Sandbox image push credentials cannot pull images",
+        ));
+    }
     Ok(())
 }
 
@@ -1544,7 +1604,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
-    fn the_image_repository_provisioner_cannot_pull() {
+    fn the_image_capability_roles_cannot_pull() {
         let subject = |role| Subject {
             kind: crate::auth::SubjectKind::ServiceAccount {
                 id: "platform".to_string(),
@@ -1557,10 +1617,63 @@ mod tests {
             bearer_token: String::new(),
         };
 
-        let refused = refuse_capability_pull(&subject(Role::ImageRepositoryProvisioner))
-            .expect_err("the provisioner must not reach the project-scope pull bypass");
-        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        for role in [Role::ImageRepositoryProvisioner, Role::SandboxImagePusher] {
+            let refused = refuse_capability_pull(&subject(role))
+                .expect_err("a capability role must not reach the project-scope pull bypass");
+            assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        }
         assert!(refuse_capability_pull(&subject(Role::ProjectDeveloper)).is_ok());
+    }
+
+    #[test]
+    fn only_a_literal_registry_path_is_forwarded() {
+        for path in [
+            "artifacts/prj_a/manifests/v1",
+            "/artifacts/prj_a/blobs/sha256:abc",
+            "artifacts/prj_a/blobs/uploads/",
+            "artifacts/prj_a/blobs/uploads/4f1c-9e_2=",
+            "artifacts/prj_a/tags/list",
+        ] {
+            assert!(require_literal_oci_path(path).is_ok(), "{path}");
+        }
+        for path in [
+            "artifacts/prj_a/blobs/uploads/?mount=sha256:abc&from=artifacts/prj_b",
+            "artifacts/prj_a/manifests/../../prj_b/manifests/v1",
+            "artifacts/prj_a/manifests/..\\..\\prj_b/manifests/v1",
+            "artifacts/prj_a/manifests/%2e%2e/%2e%2e/prj_b/manifests/v1",
+            "artifacts/prj_a/manifests/./v1",
+            "artifacts/prj_a/manifests/v1#frag",
+            "artifacts//prj_b/manifests/v1",
+            "artifacts/prj_a/blobs/uploads//",
+        ] {
+            let refused = require_literal_oci_path(path).expect_err(path);
+            assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{path}");
+        }
+    }
+
+    #[test]
+    fn a_mount_is_forwarded_only_from_a_repository_the_caller_may_pull() {
+        let query = HashMap::from([
+            ("mount".to_string(), "sha256:abc".to_string()),
+            ("from".to_string(), "artifacts/prj_other".to_string()),
+            ("digest".to_string(), "sha256:abc".to_string()),
+        ]);
+
+        let plain_upload = HashMap::from([("digest".to_string(), "sha256:abc".to_string())]);
+
+        assert_eq!(query_for_mount_access(query.clone(), Some(true)), query);
+        assert_eq!(
+            query_for_mount_access(query.clone(), Some(false)),
+            plain_upload
+        );
+
+        let mut unsourced = query;
+        unsourced.remove("from");
+        assert_eq!(query_for_mount_access(unsourced, None), plain_upload);
+        assert_eq!(
+            query_for_mount_access(plain_upload.clone(), None),
+            plain_upload
+        );
     }
 
     #[test]
