@@ -41,7 +41,7 @@ pub async fn manager_logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()>
         crate::deployment_resolver::resolve(&mgr.client, &reference, ctx.is_dev()).await?;
 
     let mut since: DateTime<Utc> = args.from.unwrap_or_else(|| Utc::now() - args.since);
-    // `since` is inclusive: entries at the cursor's timestamp come back on
+    // `since` is inclusive: entries at the last timestamp seen come back on
     // the next poll, and these fingerprints skip the ones already printed.
     let mut printed_at_since: HashSet<u64> = HashSet::new();
     loop {
