@@ -2463,7 +2463,7 @@ async fn initialize(
             let deployment_id = deployment.id.clone();
             tracing::info!(
                 %deployment_id,
-                "Admin token: assigning agent to existing deployment"
+                "Workspace or project token: assigning agent to existing deployment"
             );
             Json(InitializeResponse {
                 deployment_model: super::deployments::deployment_model_for_record(deployment),

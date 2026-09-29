@@ -118,9 +118,7 @@ impl SandboxImage {
     }
 
     /// The `uid:gid` the image runs as, or `None` when it declares no user and starts as root.
-    ///
-    /// Numeric with an explicit gid so a runtime that does not read `/etc/passwd` cannot start
-    /// the agent in group 0.
+    /// Why the gid is explicit is in the `USER` comment [`entrypoint`] renders.
     pub fn user(&self) -> Option<String> {
         match self.isolation {
             Isolation::UidSplit => None,
@@ -411,9 +409,7 @@ mod tests {
         assert_eq!(accessor, set);
     }
 
-    /// The ending an image declares and the isolation it claims come off one value, so they
-    /// cannot disagree. The AWS half is rendered at run time and reaches no committed file, which
-    /// Every consumer now derives these, so nothing else compares them against a number. The
+    /// Every consumer derives these, so nothing else compares them against a number. The
     /// setup emitters tell the agent which uid to drop to; if that stops matching the uid the
     /// image creates, the sandbox starts and every exec fails.
     #[test]
@@ -429,6 +425,8 @@ mod tests {
         }
     }
 
+    /// The ending an image declares and the isolation it claims come off one value, so they
+    /// cannot disagree. The AWS half is rendered at run time and reaches no committed file, which
     /// is why the whole-file comparison above covers only the GCP side of it.
     #[test]
     fn the_ending_an_image_declares_follows_its_isolation() {

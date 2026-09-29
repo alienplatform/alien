@@ -1,6 +1,6 @@
 //! What a direct setup creates beside a resource, and what an update after one must refuse. The
 //! runtime identity may use those objects but is never granted what creating them takes, so they
-//! are made during InitialSetup, the only time Alien holds the deployer's administrator credentials.
+//! are made during InitialSetup, the only time Alien holds the deployer's admin credentials.
 
 use std::collections::BTreeMap;
 
@@ -63,12 +63,9 @@ pub async fn reconcile(
     Ok(progress)
 }
 
-/// Why an update after a direct setup, from `installed` to `target`, needs setup to run first: a
-/// scaffolded resource that is new or whose scaffolding would change, or a Frozen GCP sandbox that
-/// is new or changes its image. The update's runtime identity is never granted what either takes.
-///
-/// A scaffolded resource `records` holds nothing for counts as new whatever `installed` says: the
-/// stack is what was declared, the record what setup made.
+/// Why an update after a direct setup needs setup to run first: a scaffolded resource that is new
+/// (no entry in `records`, whatever `installed` says) or whose scaffolding would change, or a
+/// Frozen GCP sandbox that is new or changes its image. The runtime identity is granted neither.
 pub fn changes_requiring_setup(
     client_config: &ClientConfig,
     installed: &Stack,
