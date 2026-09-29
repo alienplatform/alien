@@ -630,7 +630,7 @@ async fn list_deployments(
         std::collections::HashMap::new();
 
     let mut items = Vec::with_capacity(deployments.len());
-    // Pattern 1 (List Endpoints): the store filters by scope, `Authz` decides per item.
+    // The store filters by scope; `Authz` decides per item.
     for d in deployments
         .iter()
         .filter(|d| state.authz.can_read_deployment(&subject, d))

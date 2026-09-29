@@ -249,7 +249,7 @@ fn refuse_changes_requiring_setup(
     target_stack: &Stack,
     platform: Platform,
 ) -> Result<()> {
-    let changes = alien_infra::setup_scaffolding::changes_requiring_setup(
+    let mut changes = alien_infra::setup_scaffolding::changes_requiring_setup(
         client_config,
         installed_stack,
         records,
@@ -260,6 +260,11 @@ fn refuse_changes_requiring_setup(
         message: "Failed to compare the release with the deployment's setup scaffolding"
             .to_string(),
     })?;
+    changes.extend(gcp_frozen_sandbox_image_changes(
+        installed_stack,
+        target_stack,
+        platform,
+    ));
     if changes.is_empty() {
         return Ok(());
     }
@@ -273,6 +278,33 @@ fn refuse_changes_requiring_setup(
         },
     ))
     .context(ErrorData::PreflightChecksFailed)
+}
+
+/// A new image for a Frozen GCP sandbox replaces its template, which takes `sandbox/templates` on
+/// its engine. Only a Terraform setup grants that to the manager, so after a direct setup the
+/// replace needs the deployer's credentials.
+fn gcp_frozen_sandbox_image_changes(
+    installed_stack: &Stack,
+    target_stack: &Stack,
+    platform: Platform,
+) -> Vec<String> {
+    if platform != Platform::Gcp {
+        return Vec::new();
+    }
+    target_stack
+        .resources()
+        .filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Frozen)
+        .filter_map(|(resource_id, entry)| {
+            let target = entry.config.downcast_ref::<alien_core::Sandbox>()?;
+            let installed = installed_stack
+                .resources
+                .get(resource_id)?
+                .config
+                .downcast_ref::<alien_core::Sandbox>()?;
+            (installed.code != target.code)
+                .then(|| format!("sandbox '{resource_id}' changes its image"))
+        })
+        .collect()
 }
 
 /// Handle Updating status (update live resources)
@@ -876,6 +908,89 @@ mod tests {
             assert_eq!(cause.code, "DEPLOYMENT_SETUP_REQUIRED");
             assert!(
                 cause.message.contains("build role policy"),
+                "{}",
+                cause.message
+            );
+        }
+
+        /// Only a Terraform setup grants the manager what replacing a Frozen GCP sandbox's
+        /// template takes, so the same image-only release rolls after one and not after a
+        /// direct setup.
+        #[tokio::test]
+        async fn a_gcp_frozen_image_waits_for_a_direct_setup_but_rolls_after_a_template_setup() {
+            use alien_gcp_clients::{GcpClientConfig, GcpClientConfigExt as _};
+
+            let frozen = |image: &str| {
+                Stack::new("acme".to_string())
+                    .add(
+                        Sandbox::new("agents".to_string())
+                            .code(SandboxCode::Image {
+                                image: image.to_string(),
+                            })
+                            .egress(SandboxEgress::Deny)
+                            .lifecycle(SandboxLifecyclePolicy {
+                                max_lifetime_seconds: Some(3600),
+                                idle_pause_seconds: None,
+                            })
+                            .build(),
+                        ResourceLifecycle::Frozen,
+                    )
+                    .build()
+            };
+            let client_config = ClientConfig::Gcp(Box::new(GcpClientConfig::mock()));
+            let stack_state = StackState::with_resource_prefix(Platform::Gcp, "test".to_string());
+            let installed = alien_preflights::runner::PreflightRunner::new()
+                .run_deployment_time_preflights(
+                    frozen("us-docker.pkg.dev/acme/agents/sandbox:v1"),
+                    &stack_state,
+                    &config(),
+                    &client_config,
+                    None,
+                    None,
+                    Some(InitialSetupAuthority::DirectSetup),
+                )
+                .await
+                .expect("the installed stack passes preflights")
+                .0;
+            let target = frozen("us-docker.pkg.dev/acme/agents/sandbox:v2");
+            let update = |authority| {
+                let state = DeploymentState {
+                    status: DeploymentStatus::UpdatePending,
+                    platform: Platform::Gcp,
+                    current_release: None,
+                    target_release: Some(release(target.clone(), "rel_target")),
+                    stack_state: Some(stack_state.clone()),
+                    error: None,
+                    environment_info: None,
+                    runtime_metadata: Some(RuntimeMetadata {
+                        initial_setup_authority: authority,
+                        prepared_stack: Some(installed.clone()),
+                        ..Default::default()
+                    }),
+                    retry_requested: false,
+                    protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                };
+                handle_update_pending(
+                    state,
+                    target.clone(),
+                    config(),
+                    client_config.clone(),
+                    std::sync::Arc::new(alien_infra::DefaultPlatformServiceProvider::default()),
+                )
+            };
+
+            let rolled = update(InitialSetupAuthority::ImportedHandoff)
+                .await
+                .expect("a template setup granted the manager the template");
+            assert_eq!(rolled.state.status, DeploymentStatus::Updating);
+
+            let error = update(InitialSetupAuthority::DirectSetup)
+                .await
+                .expect_err("a direct setup granted the manager nothing on the engine");
+            let cause = error.source.as_deref().expect("the refusal is the cause");
+            assert_eq!(cause.code, "DEPLOYMENT_SETUP_REQUIRED");
+            assert!(
+                cause.message.contains("sandbox 'agents' changes its image"),
                 "{}",
                 cause.message
             );
