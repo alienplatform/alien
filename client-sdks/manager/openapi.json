@@ -1628,6 +1628,94 @@
         ]
       }
     },
+    "/v1/tokens": {
+      "get": {
+        "tags": [
+          "tokens"
+        ],
+        "operationId": "list_tokens",
+        "responses": {
+          "200": {
+            "description": "Tokens",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListTokensResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "tokens"
+        ],
+        "summary": "`POST /v1/tokens` — create a scoped token (admin only).",
+        "operationId": "create_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Token created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedTokenResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/tokens/{id}": {
+      "delete": {
+        "tags": [
+          "tokens"
+        ],
+        "operationId": "delete_token",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Token ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Token revoked"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/whoami": {
       "get": {
         "tags": [
@@ -7253,6 +7341,13 @@
           }
         }
       },
+      "CreatableTokenType": {
+        "type": "string",
+        "description": "Token kinds an admin can create through the API.",
+        "enum": [
+          "tunnel"
+        ]
+      },
       "CreateCommandRequest": {
         "type": "object",
         "description": "Request to create a new command",
@@ -7474,6 +7569,24 @@
         },
         "additionalProperties": false
       },
+      "CreateTokenRequest": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "deploymentGroupId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Limit the token to one deployment group's deployments."
+          },
+          "type": {
+            "$ref": "#/components/schemas/CreatableTokenType"
+          }
+        }
+      },
       "CreateTokenResponse": {
         "type": "object",
         "required": [
@@ -7488,6 +7601,25 @@
             "type": "string"
           }
         }
+      },
+      "CreatedTokenResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TokenResponse"
+          },
+          {
+            "type": "object",
+            "required": [
+              "token"
+            ],
+            "properties": {
+              "token": {
+                "type": "string",
+                "description": "The raw token. Shown once; only its hash is stored."
+              }
+            }
+          }
+        ]
       },
       "CustomCertificateConfig": {
         "type": "object",
@@ -12217,6 +12349,20 @@
               "$ref": "#/components/schemas/ReleaseResponse"
             },
             "description": "Releases the caller may read, newest first."
+          }
+        }
+      },
+      "ListTokensResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TokenResponse"
+            }
           }
         }
       },
@@ -17694,6 +17840,41 @@
           "auto",
           "approval-required"
         ]
+      },
+      "TokenResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "tokenType",
+          "keyPrefix",
+          "createdAt"
+        ],
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "deploymentGroupId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deploymentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "keyPrefix": {
+            "type": "string"
+          },
+          "tokenType": {
+            "type": "string"
+          }
+        }
       },
       "TraceContext": {
         "type": "object",

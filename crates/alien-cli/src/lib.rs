@@ -185,6 +185,8 @@ pub enum Commands {
     Destroy(DestroyArgs),
     /// Manage vault secrets for a deployment
     Vault(commands::VaultRemoteArgs),
+    /// Create and revoke scoped tokens on your manager
+    Tokens(commands::TokensArgs),
     // No doc comment: it would replace the long help defined on `CommandsArgs`.
     #[command(alias = "command")]
     Commands(CommandsArgs),
@@ -1921,6 +1923,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             Some(Commands::Deploy(args)) => deploy_task(args, ctx).await?,
             Some(Commands::Destroy(args)) => destroy_task(args, ctx).await?,
             Some(Commands::Vault(args)) => vault_remote_task(args, ctx).await?,
+            Some(Commands::Tokens(args)) => commands::tokens_task(args, ctx).await?,
             Some(Commands::Commands(args)) => commands_task(args, ctx).await?,
             Some(Commands::Debug(args)) => debug_task(args, ctx).await?,
             Some(Commands::Dev(dev_cmd)) => handle_dev_command(dev_cmd).await?,

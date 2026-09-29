@@ -3994,6 +3994,12 @@ heartbeat:
     nodes:
       enabled: true
 
+tunnel:
+  # Serve requests the control plane sends through the manager to the stack's
+  # declared tunnel endpoints, over the Operator's outbound connection.
+  # false closes the tunnel; nothing else changes.
+  enabled: true
+
 clusterBootstrap:
   metricsServer:
     enabled: false
@@ -4865,6 +4871,13 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             "tenantId": { "type": "string" }
           }
         }
+      }
+    },
+    "tunnel": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" }
       }
     },
     "heartbeat": {
@@ -6375,6 +6388,8 @@ spec:
             {{- end }}
             - name: SYNC_INTERVAL
               value: "30"
+            - name: TUNNEL_ENABLED
+              value: {{ dig "enabled" true (default dict .Values.tunnel) | quote }}
             - name: OTLP_PORT
               value: {{ .Values.runtime.api.port | quote }}
             - name: OTLP_HOST

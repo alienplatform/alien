@@ -38,6 +38,9 @@ impl Modify for BearerSecurity {
         // Identity
         crate::routes::whoami::whoami,
         crate::routes::manager_info::manager_info,
+        crate::routes::tokens::list_tokens,
+        crate::routes::tokens::create_token,
+        crate::routes::tokens::delete_token,
         // Deployments
         crate::routes::deployments::create_deployment,
         crate::routes::deployments::list_deployments,
@@ -138,6 +141,11 @@ impl Modify for BearerSecurity {
         crate::routes::whoami::WhoamiResponse,
         crate::routes::manager_info::ManagerInfoResponse,
         crate::routes::manager_info::ManagerCapabilities,
+        crate::routes::tokens::TokenResponse,
+        crate::routes::tokens::ListTokensResponse,
+        crate::routes::tokens::CreateTokenRequest,
+        crate::routes::tokens::CreatableTokenType,
+        crate::routes::tokens::CreatedTokenResponse,
         // Health types
         crate::routes::health::HealthResponse,
         // Core types

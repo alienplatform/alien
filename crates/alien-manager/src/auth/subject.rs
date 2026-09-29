@@ -357,6 +357,12 @@ pub enum Role {
     /// from another repository, provision, or any other project access. Paired with
     /// [`Scope::Project`]; covers every repository of the project unless `Authz` narrows by it.
     SandboxImagePusher,
+    /// Exact capability for sending requests through deployment tunnels.
+    ///
+    /// Paired with [`Scope::Project`] (every deployment) or
+    /// [`Scope::DeploymentGroup`] (one customer's deployments). Grants no
+    /// other read or write access.
+    TunnelCaller,
 }
 
 #[cfg(test)]

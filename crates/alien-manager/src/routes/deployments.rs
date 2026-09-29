@@ -661,12 +661,17 @@ async fn list_deployments(
         ..Default::default()
     };
 
-    let deployments = match state
+    // The store narrows by scope; authz decides per item, as for deployment
+    // groups, so capability tokens (e.g. tunnel callers) see nothing.
+    let deployments: Vec<_> = match state
         .deployment_store
         .list_deployments(&subject, &filter)
         .await
     {
-        Ok(d) => d,
+        Ok(d) => d
+            .into_iter()
+            .filter(|deployment| state.authz.can_read_deployment(&subject, deployment))
+            .collect(),
         Err(e) => return e.into_response(),
     };
 

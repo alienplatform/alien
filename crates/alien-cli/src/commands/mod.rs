@@ -24,6 +24,7 @@ pub mod release;
 pub mod releases;
 pub mod render;
 pub mod status;
+pub mod tokens;
 pub mod upgrade;
 #[cfg(feature = "platform")]
 pub mod usage;
@@ -78,6 +79,7 @@ pub use release::{release_command, ReleaseArgs};
 pub use releases::{releases_task, ReleasesArgs};
 pub use render::{render_task, RenderArgs};
 pub use status::{status_task, StatusArgs};
+pub use tokens::{tokens_task, TokensArgs};
 pub use upgrade::{upgrade_task, UpgradeArgs};
 #[cfg(feature = "platform")]
 pub use usage::{usage_task, UsageArgs};
