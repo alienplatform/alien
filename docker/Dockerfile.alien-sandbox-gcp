@@ -50,7 +50,7 @@ ENV ALIEN_SANDBOX_ROOT=/sandbox \
 # filter discards the startup warning saying this image serves requests without a capability.
 ENV RUST_LOG=info
 
-EXPOSE 8080
+EXPOSE 8080/tcp
 # Explicit gid so a runtime that does not read /etc/passwd cannot start the agent in group 0, which
 # makes the exec drop a privilege crossing whose setgroups needs a CAP_SETGID this image lacks, so
 # every exec fails.

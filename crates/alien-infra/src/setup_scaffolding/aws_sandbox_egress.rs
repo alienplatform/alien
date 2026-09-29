@@ -15,13 +15,12 @@ use alien_aws_clients::ec2::{
 use alien_aws_clients::iam::{CreateRoleRequest, IamApi};
 use alien_aws_clients::AwsClientConfig;
 use alien_core::sandbox_egress::{
-    sandbox_egress_connector_name, sandbox_egress_name, sandbox_egress_network,
-    sandbox_egress_operator_policy, sandbox_egress_operator_trust_policy, SandboxEgressConnector,
-    LOOPBACK_ONLY_CIDR, NETWORK_CONNECTOR_TYPE_NAME, SANDBOX_EGRESS_POLICY_NAME,
+    sandbox_egress_connector_name, sandbox_egress_name, sandbox_egress_operator_policy,
+    sandbox_egress_operator_trust_policy, SandboxEgressConnector, LOOPBACK_ONLY_CIDR,
+    NETWORK_CONNECTOR_TYPE_NAME, SANDBOX_EGRESS_POLICY_NAME,
 };
-use alien_core::{
-    AwsSandboxEgressScaffolding, ResourceLifecycle, ResourceStatus, Sandbox, Stack, StackState,
-};
+use alien_core::sandbox_setup_inputs::aws_sandbox_egress_network_id;
+use alien_core::{AwsSandboxEgressScaffolding, ResourceStatus, Sandbox, Stack, StackState};
 use alien_error::{AlienError, Context, IntoAlienError};
 use serde_json::Value;
 use tracing::info;
@@ -39,29 +38,16 @@ const IAM_ROLE_NAME_MAX_LEN: usize = 64;
 
 /// The network a deny sandbox's connector attaches to, or `None` for a sandbox that needs none.
 ///
-/// Refuses what the template emitters refuse (see [`sandbox_egress_network`]), and a network only
+/// Refuses what the template emitters refuse (see [`alien_core::sandbox_egress::sandbox_egress_network`]), and a network only
 /// the runtime creates: setup waits for the network to run before creating the connector, and
 /// that one would never run during setup.
 pub(super) fn egress_network<'a>(stack: &'a Stack, sandbox: &Sandbox) -> Result<Option<&'a str>> {
-    let refuse = |message: String| {
-        Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+    aws_sandbox_egress_network_id(stack, sandbox).map_err(|message| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
             message,
             resource_id: Some(sandbox.id.clone()),
-        }))
-    };
-    let network = match sandbox_egress_network(stack, &sandbox.egress) {
-        Ok(Some(network)) => network,
-        Ok(None) => return Ok(None),
-        Err(refusal) => return refuse(refusal.to_string()),
-    };
-    if network.entry.lifecycle != ResourceLifecycle::Frozen {
-        return refuse(
-            "an AWS sandbox routes session traffic through a VPC egress connector; its network \
-             must be created by setup, and this one is created at runtime"
-                .to_string(),
-        );
-    }
-    Ok(Some(network.id))
+        })
+    })
 }
 
 pub(super) async fn reconcile(

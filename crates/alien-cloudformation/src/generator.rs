@@ -1,6 +1,6 @@
 use crate::{
     emitters::enabled,
-    inline_policy::consolidate_role_inline_policies,
+    inline_policy::{consolidate_role_inline_policies, expression_references},
     registry::CfRegistry,
     template::{
         CfExpression, CfMapping, CfOutput, CfParameter, CfResource, CfRule, CfRuleAssertion,
@@ -491,6 +491,7 @@ pub fn generate_cloudformation_template(
         access_only,
     );
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
+    apply_network_iam_dependencies(stack, &emitted_resource_ids, &mut template);
     consolidate_role_inline_policies(&mut template)?;
 
     if let Some(service_token) = options.registration.service_token(&mut template)? {
@@ -940,6 +941,112 @@ fn insert_resource(template: &mut CfTemplate, resource: CfResource) -> Result<()
         .resources
         .insert(resource.logical_id.clone(), resource);
     Ok(())
+}
+
+/// Lambda deletes a worker's Hyperplane ENI with the function's execution
+/// role and its permissions. If those are deleted first, the ENI stays and the
+/// private subnets and security group it sits in can never be deleted. The
+/// created network's private subnets and security group therefore depend on
+/// every IAM role and policy, so CloudFormation deletes IAM last. Skipped:
+/// conditional IAM resources (`DependsOn` cannot name a resource whose
+/// condition is false) and IAM resources that already depend on the network,
+/// such as an IRSA role trusting a cluster placed in it.
+fn apply_network_iam_dependencies(
+    stack: &Stack,
+    emitted_resource_ids: &IndexMap<String, Vec<String>>,
+    template: &mut CfTemplate,
+) {
+    const IAM_TYPES: [&str; 3] = [
+        "AWS::IAM::Role",
+        "AWS::IAM::Policy",
+        "AWS::IAM::ManagedPolicy",
+    ];
+    let Some(network_id) = stack
+        .resources()
+        .find_map(|(id, entry)| entry.config.downcast_ref::<Network>().map(|_| id))
+    else {
+        return;
+    };
+    let targets: Vec<String> = emitted_resource_ids
+        .get(network_id)
+        .into_iter()
+        .flatten()
+        .filter(|logical_id| {
+            template.resources.get(*logical_id).is_some_and(|resource| {
+                match resource.resource_type.as_str() {
+                    "AWS::EC2::Subnet" => logical_id.contains("PrivateSubnet"),
+                    "AWS::EC2::SecurityGroup" => true,
+                    _ => false,
+                }
+            })
+        })
+        .cloned()
+        .collect();
+    if targets.is_empty() {
+        return;
+    }
+
+    let logical_ids: Vec<&String> = template.resources.keys().collect();
+    let direct_dependencies: IndexMap<&String, Vec<&String>> = template
+        .resources
+        .iter()
+        .map(|(logical_id, resource)| {
+            let dependencies = logical_ids
+                .iter()
+                .copied()
+                .filter(|other| {
+                    *other != logical_id
+                        && (resource.depends_on.contains(other)
+                            || resource
+                                .properties
+                                .values()
+                                .any(|expression| expression_references(expression, other)))
+                })
+                .collect();
+            (logical_id, dependencies)
+        })
+        .collect();
+    let reaches_target = |start: &String| -> bool {
+        let mut pending = vec![start];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(logical_id) = pending.pop() {
+            if !seen.insert(logical_id) {
+                continue;
+            }
+            if targets.contains(logical_id) {
+                return true;
+            }
+            pending.extend(
+                direct_dependencies
+                    .get(logical_id)
+                    .into_iter()
+                    .flatten()
+                    .copied(),
+            );
+        }
+        false
+    };
+    let iam_logical_ids: Vec<String> = template
+        .resources
+        .iter()
+        .filter(|(logical_id, resource)| {
+            IAM_TYPES.contains(&resource.resource_type.as_str())
+                && resource.condition.is_none()
+                && !reaches_target(logical_id)
+        })
+        .map(|(logical_id, _)| logical_id.clone())
+        .collect();
+
+    for target in &targets {
+        let Some(resource) = template.resources.get_mut(target) else {
+            continue;
+        };
+        for logical_id in &iam_logical_ids {
+            if !resource.depends_on.contains(logical_id) {
+                resource.depends_on.push(logical_id.clone());
+            }
+        }
+    }
 }
 
 fn apply_resource_dependencies(

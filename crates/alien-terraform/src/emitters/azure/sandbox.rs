@@ -15,7 +15,8 @@ use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
         downcast, emit_remote_bindings_role_definitions, permission_context,
-        remote_bindings_role_label, required_label, tags,
+        remote_bindings_role_label, remote_stack_management_label, required_label,
+        setup_management_role_label, tags,
     },
     expr,
 };
@@ -118,6 +119,7 @@ impl TfEmitter for AzureSandboxEmitter {
         ));
 
         emit_remote_access(ctx, label, &mut fragment)?;
+        emit_image_management(ctx, label, &mut fragment)?;
         Ok(fragment)
     }
 
@@ -134,7 +136,9 @@ impl TfEmitter for AzureSandboxEmitter {
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let _ = required_label(ctx)?;
-        let disk_image = sandbox.azure_catalog_image()?.to_string();
+        // The declared value as is: the provider resolves a registry image to the disk image the
+        // controller built from it.
+        let disk_image = sandbox.azure_image()?.as_str().to_string();
         let mut fields = vec![
             ("service", Expression::String("sandbox-azure".to_string())),
             ("sandboxGroup", sandbox_group(ctx)),
@@ -245,6 +249,110 @@ fn emit_remote_access(ctx: &EmitContext<'_>, label: &str, fragment: &mut TfFragm
                     expr::traversal([
                         "azurerm_user_assigned_identity",
                         access_label,
+                        "principal_id",
+                    ]),
+                ),
+            ],
+        ));
+    }
+
+    Ok(())
+}
+
+/// Lets the stack's management identity build and delete this sandbox's disk images, on its
+/// group only. The role definition is rendered with the other setup-owned management roles; this
+/// adds the assignment, which has to follow the group it names.
+fn emit_image_management(
+    ctx: &EmitContext<'_>,
+    label: &str,
+    fragment: &mut TfFragment,
+) -> Result<()> {
+    const IMAGES: &str = "sandbox/images";
+    let granted = ctx
+        .stack
+        .management()
+        .profile()
+        .and_then(|profile| profile.0.get(ctx.resource_id))
+        // By registry name, never by `id()`: an inline set carries whatever id its author typed.
+        .is_some_and(|refs| {
+            refs.iter().any(|reference| {
+                matches!(reference, alien_core::permissions::PermissionSetReference::Name(name) if name == IMAGES)
+            })
+        });
+    // No management resource means no remote manager identity: the deploying credentials run the
+    // controller, so there is no member to bind.
+    let Some(management_label) = granted
+        .then(|| remote_stack_management_label(ctx))
+        .flatten()
+    else {
+        return Ok(());
+    };
+    let permission_set = alien_permissions::get_permission_set(IMAGES).ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: format!("{IMAGES} permission set is not registered"),
+        })
+    })?;
+
+    let context = permission_context(label).with_resource_name(sandbox_group_name(ctx));
+    let plan = AzureRuntimePermissionsGenerator::new()
+        .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+        .context(ErrorData::GenericError {
+            message: "failed to generate Azure sandbox image permissions".to_string(),
+        })?;
+
+    // Each assignment below hard-codes the group scope, so any other binding count is refused
+    // rather than rendered at a scope the set did not declare.
+    if plan.bindings.len() != 1 {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: format!(
+                "{IMAGES} must bind exactly once, on the sandbox group; it binds {} times",
+                plan.bindings.len()
+            ),
+        }));
+    }
+    for (index, binding) in plan.bindings.iter().enumerate() {
+        let AzureRoleDefinitionRef::Custom { key } = &binding.role_definition else {
+            return Err(AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "{IMAGES} must use a custom role: no predefined one is narrow enough"
+                ),
+            }));
+        };
+        let custom_index = plan
+            .custom_roles
+            .iter()
+            .position(|role| &role.key == key)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: format!("missing generated Azure role '{key}'"),
+                })
+            })?;
+        let role_label = setup_management_role_label(&binding.role_name, custom_index);
+        fragment.resource_blocks.push(resource_block(
+            "azurerm_role_assignment",
+            &format!("{label}_images_{index}"),
+            [
+                attr(
+                    "name",
+                    expr::raw(format!(
+                        "uuidv5(\"oid\", \"deployment:azure:sandbox-images:${{local.resource_prefix}}:{label}:{index}\")"
+                    )),
+                ),
+                // The created group, which orders the assignment after it as the remote grant's is.
+                attr("scope", expr::traversal(["azapi_resource", label, "id"])),
+                attr(
+                    "role_definition_id",
+                    expr::traversal([
+                        "azurerm_role_definition",
+                        role_label.as_str(),
+                        "role_definition_resource_id",
+                    ]),
+                ),
+                attr(
+                    "principal_id",
+                    expr::traversal([
+                        "azurerm_user_assigned_identity",
+                        management_label,
                         "principal_id",
                     ]),
                 ),

@@ -358,6 +358,9 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(
             compile_time::sandbox_template_permissions::SandboxTemplatePermissionsCheck,
         ));
+        registry.add_compile_time_check(Box::new(
+            compile_time::sandbox_image_permissions::SandboxImagePermissionsCheck,
+        ));
         registry.add_compile_time_check(Box::new(compile_time::PermissionProfilesExistCheck));
         registry.add_compile_time_check(Box::new(compile_time::PermissionSetsExistCheck));
         registry.add_compile_time_check(Box::new(compile_time::SingleExposedPortCheck));
@@ -405,7 +408,7 @@ impl PreflightRegistry {
 
         // Add compatibility checks
         registry.add_compatibility_check(Box::new(compatibility::PermissionProfilesUnchangedCheck));
-        registry.add_compatibility_check(Box::new(compatibility::FrozenResourcesUnchangedCheck));
+        registry.add_compatibility_check(Box::new(compatibility::SandboxSetupInputsUnchangedCheck));
 
         // Add runtime checks
         #[cfg(feature = "runtime-checks")]

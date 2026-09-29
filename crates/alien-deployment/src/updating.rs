@@ -204,7 +204,8 @@ pub async fn handle_update_pending(
     if current.runtime_metadata.as_ref().is_some_and(|metadata| {
         metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup
     }) {
-        // With nothing installed to compare against, every scaffolded resource counts as new.
+        // With nothing installed to compare against, every scaffolded resource and Frozen GCP
+        // sandbox counts as new.
         let nothing_installed = Stack::new(mutated_stack.id.clone()).build();
         let nothing_recorded = BTreeMap::new();
         refuse_changes_requiring_setup(
@@ -239,9 +240,9 @@ pub async fn handle_update_pending(
     })
 }
 
-/// A direct setup's scaffolding is created with the deployer's credentials, which an update
-/// does not hold; applying the update anyway would serve a sandbox without it, such as a newly
-/// denied one with open egress.
+/// A direct setup's scaffolding and a Frozen GCP sandbox's template are made with the
+/// deployer's credentials, which an update does not hold; applying the update anyway would serve
+/// a sandbox without them, such as a newly denied one with open egress.
 fn refuse_changes_requiring_setup(
     client_config: &alien_core::ClientConfig,
     installed_stack: &Stack,
@@ -612,6 +613,7 @@ mod tests {
             ReleaseInfo, RuntimeMetadata, Sandbox, SandboxCode, SandboxEgress,
             SandboxLifecyclePolicy, StackSettings,
         };
+        use alien_gcp_clients::{GcpClientConfig, GcpClientConfigExt as _};
 
         const BUNDLE: &str = "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip";
 
@@ -785,7 +787,7 @@ mod tests {
                     "s3://other-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
                     None,
                 ),
-                Some("sandbox 'agents' changes its build role policy. Run the deployment's setup again"),
+                Some("changes its build role policy"),
             )
             .await;
         }
@@ -847,9 +849,21 @@ mod tests {
             assert!(cause.message.contains("is new"), "{}", cause.message);
         }
 
+        /// A template setup renders the same build role, so it rolls a new bundle version and is
+        /// held to the same setup inputs, which its runtime never re-reads.
         #[tokio::test]
-        async fn a_template_setup_is_not_held_to_direct_setup_scaffolding() {
+        async fn a_template_setup_rolls_a_new_bundle_but_waits_for_setup_on_a_new_bucket() {
             assert_updates(
+                InitialSetupAuthority::ImportedHandoff,
+                sandbox(SandboxEgress::Allow, BUNDLE, None),
+                sandbox(
+                    SandboxEgress::Allow,
+                    "s3://acme-artifacts/sandbox-bundle/0ddba11/bundle.zip",
+                    None,
+                ),
+            )
+            .await;
+            let error = update(
                 InitialSetupAuthority::ImportedHandoff,
                 sandbox(SandboxEgress::Allow, BUNDLE, None),
                 sandbox(
@@ -858,7 +872,120 @@ mod tests {
                     None,
                 ),
             )
-            .await;
+            .await
+            .expect_err("a new bucket needs setup to regrant the build role");
+            let cause = error.source.as_deref().expect("the refusal is the cause");
+            assert_eq!(cause.code, "DEPLOYMENT_SETUP_REQUIRED");
+            assert!(
+                cause.message.contains("build role policy"),
+                "{}",
+                cause.message
+            );
+        }
+
+        /// Only a Terraform setup grants the manager what replacing a Frozen GCP sandbox's
+        /// template takes, so the same image-only release rolls after one and not after a
+        /// direct setup.
+        #[tokio::test]
+        async fn a_gcp_frozen_image_waits_for_a_direct_setup_but_rolls_after_a_template_setup() {
+            let frozen = |image: &str| {
+                Stack::new("acme".to_string())
+                    .add(
+                        Sandbox::new("agents".to_string())
+                            .code(SandboxCode::Image {
+                                image: image.to_string(),
+                            })
+                            .egress(SandboxEgress::Deny)
+                            .lifecycle(SandboxLifecyclePolicy {
+                                max_lifetime_seconds: Some(3600),
+                                idle_pause_seconds: None,
+                            })
+                            .build(),
+                        ResourceLifecycle::Frozen,
+                    )
+                    .build()
+            };
+            let client_config = ClientConfig::Gcp(Box::new(GcpClientConfig::mock()));
+            let stack_state = StackState::with_resource_prefix(Platform::Gcp, "test".to_string());
+            let installed = alien_preflights::runner::PreflightRunner::new()
+                .run_deployment_time_preflights(
+                    frozen("us-docker.pkg.dev/acme/agents/sandbox:v1"),
+                    &stack_state,
+                    &config(),
+                    &client_config,
+                    None,
+                    None,
+                    Some(InitialSetupAuthority::DirectSetup),
+                )
+                .await
+                .expect("the installed stack passes preflights")
+                .0;
+            let update_from = |authority, prepared_stack: Option<Stack>, target: Stack| {
+                let state = DeploymentState {
+                    status: DeploymentStatus::UpdatePending,
+                    platform: Platform::Gcp,
+                    current_release: None,
+                    target_release: Some(release(target.clone(), "rel_target")),
+                    stack_state: Some(stack_state.clone()),
+                    error: None,
+                    environment_info: None,
+                    runtime_metadata: Some(RuntimeMetadata {
+                        initial_setup_authority: authority,
+                        prepared_stack,
+                        ..Default::default()
+                    }),
+                    retry_requested: false,
+                    protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                };
+                handle_update_pending(
+                    state,
+                    target.clone(),
+                    config(),
+                    client_config.clone(),
+                    std::sync::Arc::new(alien_infra::DefaultPlatformServiceProvider::default()),
+                )
+            };
+            let update =
+                |authority, target| update_from(authority, Some(installed.clone()), target);
+
+            let unchanged = update(
+                InitialSetupAuthority::DirectSetup,
+                frozen("us-docker.pkg.dev/acme/agents/sandbox:v1"),
+            )
+            .await
+            .expect("the same image needs nothing on the engine");
+            assert_eq!(unchanged.state.status, DeploymentStatus::Updating);
+
+            let target = || frozen("us-docker.pkg.dev/acme/agents/sandbox:v2");
+            let rolled = update(InitialSetupAuthority::ImportedHandoff, target())
+                .await
+                .expect("a template setup granted the manager the template");
+            assert_eq!(rolled.state.status, DeploymentStatus::Updating);
+
+            let error = update(InitialSetupAuthority::DirectSetup, target())
+                .await
+                .expect_err("a direct setup granted the manager nothing on the engine");
+            let cause = error.source.as_deref().expect("the refusal is the cause");
+            assert_eq!(cause.code, "DEPLOYMENT_SETUP_REQUIRED");
+            assert!(
+                cause.message.contains("sandbox 'agents' changes its image"),
+                "{}",
+                cause.message
+            );
+
+            // With no installed stack to compare against, the sandbox counts as new.
+            let error = update_from(InitialSetupAuthority::DirectSetup, None, target())
+                .await
+                .expect_err("a direct setup never granted the manager this template");
+            let cause = error.source.as_deref().expect("the refusal is the cause");
+            assert_eq!(cause.code, "DEPLOYMENT_SETUP_REQUIRED");
+            assert!(
+                cause
+                    .message
+                    .contains("sandbox 'agents' is new, and setup creates its template"),
+                "{}",
+                cause.message
+            );
         }
     }
 
