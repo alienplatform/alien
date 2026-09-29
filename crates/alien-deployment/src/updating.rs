@@ -249,7 +249,7 @@ fn refuse_changes_requiring_setup(
     target_stack: &Stack,
     platform: Platform,
 ) -> Result<()> {
-    let mut changes = alien_infra::setup_scaffolding::changes_requiring_setup(
+    let changes = alien_infra::setup_scaffolding::changes_requiring_setup(
         client_config,
         installed_stack,
         records,
@@ -260,11 +260,6 @@ fn refuse_changes_requiring_setup(
         message: "Failed to compare the release with the deployment's setup scaffolding"
             .to_string(),
     })?;
-    changes.extend(gcp_frozen_sandbox_image_changes(
-        installed_stack,
-        target_stack,
-        platform,
-    ));
     if changes.is_empty() {
         return Ok(());
     }
@@ -278,33 +273,6 @@ fn refuse_changes_requiring_setup(
         },
     ))
     .context(ErrorData::PreflightChecksFailed)
-}
-
-/// A new image for a Frozen GCP sandbox replaces its template, which takes `sandbox/templates` on
-/// its engine. Only a Terraform setup grants that to the manager, so after a direct setup the
-/// replace needs the deployer's credentials.
-fn gcp_frozen_sandbox_image_changes(
-    installed_stack: &Stack,
-    target_stack: &Stack,
-    platform: Platform,
-) -> Vec<String> {
-    if platform != Platform::Gcp {
-        return Vec::new();
-    }
-    target_stack
-        .resources()
-        .filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Frozen)
-        .filter_map(|(resource_id, entry)| {
-            let target = entry.config.downcast_ref::<alien_core::Sandbox>()?;
-            let installed = installed_stack
-                .resources
-                .get(resource_id)?
-                .config
-                .downcast_ref::<alien_core::Sandbox>()?;
-            (installed.code != target.code)
-                .then(|| format!("sandbox '{resource_id}' changes its image"))
-        })
-        .collect()
 }
 
 /// Handle Updating status (update live resources)
@@ -644,6 +612,7 @@ mod tests {
             ReleaseInfo, RuntimeMetadata, Sandbox, SandboxCode, SandboxEgress,
             SandboxLifecyclePolicy, StackSettings,
         };
+        use alien_gcp_clients::{GcpClientConfig, GcpClientConfigExt as _};
 
         const BUNDLE: &str = "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip";
 
@@ -918,8 +887,6 @@ mod tests {
         /// direct setup.
         #[tokio::test]
         async fn a_gcp_frozen_image_waits_for_a_direct_setup_but_rolls_after_a_template_setup() {
-            use alien_gcp_clients::{GcpClientConfig, GcpClientConfigExt as _};
-
             let frozen = |image: &str| {
                 Stack::new("acme".to_string())
                     .add(
@@ -952,7 +919,7 @@ mod tests {
                 .await
                 .expect("the installed stack passes preflights")
                 .0;
-            let update = |authority, target: Stack| {
+            let update_from = |authority, prepared_stack: Option<Stack>, target: Stack| {
                 let state = DeploymentState {
                     status: DeploymentStatus::UpdatePending,
                     platform: Platform::Gcp,
@@ -963,7 +930,7 @@ mod tests {
                     environment_info: None,
                     runtime_metadata: Some(RuntimeMetadata {
                         initial_setup_authority: authority,
-                        prepared_stack: Some(installed.clone()),
+                        prepared_stack,
                         ..Default::default()
                     }),
                     retry_requested: false,
@@ -977,6 +944,8 @@ mod tests {
                     std::sync::Arc::new(alien_infra::DefaultPlatformServiceProvider::default()),
                 )
             };
+            let update =
+                |authority, target| update_from(authority, Some(installed.clone()), target);
 
             let unchanged = update(
                 InitialSetupAuthority::DirectSetup,
@@ -999,6 +968,20 @@ mod tests {
             assert_eq!(cause.code, "DEPLOYMENT_SETUP_REQUIRED");
             assert!(
                 cause.message.contains("sandbox 'agents' changes its image"),
+                "{}",
+                cause.message
+            );
+
+            // With no installed stack to compare against, the sandbox counts as new.
+            let error = update_from(InitialSetupAuthority::DirectSetup, None, target())
+                .await
+                .expect_err("a direct setup never granted the manager this template");
+            let cause = error.source.as_deref().expect("the refusal is the cause");
+            assert_eq!(cause.code, "DEPLOYMENT_SETUP_REQUIRED");
+            assert!(
+                cause
+                    .message
+                    .contains("sandbox 'agents' is new, and setup creates its template"),
                 "{}",
                 cause.message
             );

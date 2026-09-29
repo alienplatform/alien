@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use alien_core::{
     import::ImportContext, ownership_policy_for_resource_type, ClientConfig, ManagementConfig,
-    Platform, ResourceEntry, SetupScaffolding, Stack, StackSettings, StackState,
+    Platform, ResourceEntry, ResourceLifecycle, SetupScaffolding, Stack, StackSettings, StackState,
 };
 use alien_error::{AlienError, Context};
 
@@ -64,8 +64,8 @@ pub async fn reconcile(
 }
 
 /// Why an update from `installed` to `target` needs setup to run first: a scaffolded resource that
-/// is new, or whose scaffolding would change. An update acts with the runtime identity, which is
-/// never granted what creating or changing scaffolding takes.
+/// is new, or whose scaffolding would change, or a Frozen GCP sandbox's new image. An update acts
+/// with the runtime identity, which is never granted what creating or changing either takes.
 ///
 /// A resource `records` holds nothing for counts as new whatever `installed` says: the stack is
 /// what was declared, the record what setup made.
@@ -119,7 +119,34 @@ pub fn changes_requiring_setup(
             Scaffolded::AwsSandbox(_) => return Err(aws_not_built()),
         }
     }
+    if platform == Platform::Gcp {
+        changes.extend(gcp_frozen_sandbox_image_changes(installed, target));
+    }
     Ok(changes)
+}
+
+/// A new image for a Frozen GCP sandbox replaces its template, which takes `sandbox/templates` on
+/// its engine. A Terraform setup is taken to grant that to the manager and a direct setup never
+/// does, so after a direct setup the replace needs the deployer's credentials.
+fn gcp_frozen_sandbox_image_changes(installed: &Stack, target: &Stack) -> Vec<String> {
+    target
+        .resources()
+        .filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Frozen)
+        .filter_map(|(resource_id, entry)| {
+            let target = entry.config.downcast_ref::<alien_core::Sandbox>()?;
+            let Some(installed) = installed
+                .resources
+                .get(resource_id)
+                .and_then(|installed| installed.config.downcast_ref::<alien_core::Sandbox>())
+            else {
+                return Some(format!(
+                    "sandbox '{resource_id}' is new, and setup creates its template"
+                ));
+            };
+            (installed.code != target.code)
+                .then(|| format!("sandbox '{resource_id}' changes its image"))
+        })
+        .collect()
 }
 
 /// The resources a direct setup scaffolds on `platform`; the template setups render the rest.

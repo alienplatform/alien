@@ -52,7 +52,7 @@ fn runtime_managed_frozen_change(old: &Resource, new: &Resource) -> bool {
 
 /// On Azure and GCP only the runtime controller reads the image and setup renders no grant from
 /// it, so only `code.image` may differ; AWS setup renders the build role from it. A GCP direct
-/// setup is still refused at update by alien-deployment's `refuse_changes_requiring_setup`.
+/// setup is still refused at update by alien-infra's `changes_requiring_setup`.
 fn runtime_managed_sandbox_image(platform: Platform, old: &Resource, new: &Resource) -> bool {
     if !matches!(platform, Platform::Azure | Platform::Gcp) {
         return false;
