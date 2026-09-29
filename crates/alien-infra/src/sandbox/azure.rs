@@ -504,7 +504,7 @@ impl AzureSandboxController {
                 debug!(sandbox_id = %config.id, %reference, "disk image is still building");
                 let building = ours
                     .iter()
-                    .filter(|image| !failed(image))
+                    .filter(|image| !failed(image) && !self.is_retired(&image.id))
                     .map(|image| image.id.clone())
                     .collect();
                 return self.poll_build(building, &reference, &config.id);
@@ -561,7 +561,11 @@ impl AzureSandboxController {
                         reference: reference.clone(),
                         id: created.id.clone(),
                     });
-                    return self.poll_build(vec![created.id], &reference, &config.id);
+                    // Re-entered so this build's polls are counted from zero.
+                    return Ok(AzureSandboxHandlerAction::Continue {
+                        state: self.state.clone(),
+                        suggested_delay: Some(DISK_IMAGE_POLL_INTERVAL),
+                    });
                 }
                 created
             }
@@ -1604,6 +1608,10 @@ mod tests {
 
             let error = executor.step().await.expect_err("the last poll gives up");
             assert!(error.to_string().contains("stuck"), "{error}");
+            assert!(
+                !error.retryable,
+                "the executor must not rebuild on its own: {error}"
+            );
             assert_eq!(retired_ids(state_of(&executor)), vec!["stuck"]);
 
             let mut resumed = state_of(&executor).clone();
@@ -1798,7 +1806,7 @@ mod tests {
                     created_at: String::new(),
                 })
                 .external_bindings(alien_core::ExternalBindings::default())
-                .allow_frozen_changes(true)
+                .allow_frozen_changes(false)
                 .build();
             let executor = StackExecutor::builder(
                 &stack,

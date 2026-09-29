@@ -1228,16 +1228,12 @@ async fn validate_pull_access(
 
         let proxy_host = state.config.base_url();
         let proxy_host = alien_core::image_rewrite::strip_url_scheme(&proxy_host);
-        // A sandbox image in another project's repository never enters the list, so naming one
-        // in a release cannot open that project's images to this deployment's token. An
-        // unattributable repo counts as "default", as a push to it does.
         let routes = &state.registry_routing_table;
-        let not_another_project =
-            |repo: &str| routes.project_id_for_repo(repo).unwrap_or("default") == own_project;
+        let own_repo = |repo: &str| sandbox_repo_in_own_project(routes, repo, own_project);
         let repos = release
             .stacks
             .values()
-            .flat_map(|stack| extract_repo_names(stack, proxy_host, &not_another_project))
+            .flat_map(|stack| extract_repo_names(stack, proxy_host, &own_repo))
             .collect::<Vec<_>>();
 
         // Cache the result.
@@ -1260,6 +1256,17 @@ async fn validate_pull_access(
     }
 
     Ok(())
+}
+
+/// A sandbox image in another project's repository never enters a release's list, so naming one
+/// cannot open that project's images to this deployment's token. An unattributable repo counts
+/// as "default", as a push to it does.
+fn sandbox_repo_in_own_project(
+    routes: &RegistryRoutingTable,
+    repo: &str,
+    own_project: &str,
+) -> bool {
+    routes.project_id_for_repo(repo).unwrap_or("default") == own_project
 }
 
 /// Extract the set of repo names from a release's stack. `proxy_host` is this manager's own
@@ -1689,6 +1696,26 @@ mod tests {
             repo != "artifacts/prj_other"
         })
         .is_empty());
+    }
+
+    #[test]
+    fn a_sandbox_repo_counts_only_in_its_own_project() {
+        let routes =
+            RegistryRoutingTable::new(vec![registry_route("artifacts", Platform::Aws, "aws")])
+                .unwrap();
+
+        assert!(sandbox_repo_in_own_project(
+            &routes,
+            "artifacts/prj_a",
+            "prj_a"
+        ));
+        assert!(!sandbox_repo_in_own_project(
+            &routes,
+            "artifacts/prj_b",
+            "prj_a"
+        ));
+        assert!(!sandbox_repo_in_own_project(&routes, "elsewhere", "prj_a"));
+        assert!(sandbox_repo_in_own_project(&routes, "elsewhere", "default"));
     }
 
     #[test]

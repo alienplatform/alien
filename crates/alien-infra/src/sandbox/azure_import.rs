@@ -108,7 +108,13 @@ impl ResourceImporter for AzureSandboxImporter {
         let same_group = imported_controller.sandbox_group == existing_controller.sandbox_group
             && imported_controller.region == existing_controller.region
             && imported_controller.resource_group == existing_controller.resource_group;
-        if !same_group {
+        // A torn-down entry holds nothing to keep; keeping it would re-create from an empty
+        // controller that has lost the group.
+        let torn_down = matches!(
+            existing.status,
+            ResourceStatus::Deleted | ResourceStatus::Deleting
+        );
+        if !same_group || torn_down {
             return Ok(imported);
         }
         let merged = existing_controller;
@@ -260,8 +266,8 @@ mod tests {
     }
 
     /// Rerunning setup re-imports the group. The built disk image is the controller's, so a
-    /// re-import of the same group keeps it serving, while one naming another group, which holds
-    /// none of its images, starts the build over there.
+    /// re-import of the same group keeps it serving. One naming another group, or replacing a
+    /// torn-down entry, starts the build over.
     #[test]
     fn a_reimport_keeps_the_built_disk_image_only_in_the_same_group() {
         const PYTHON: &str = "docker.io/library/python:3.14-slim";
@@ -330,6 +336,18 @@ mod tests {
         assert!(matches!(fresh.state, AzureSandboxState::EnsureDiskImage));
         assert_eq!(fresh.resource_group.as_deref(), Some("rg-2"));
         assert!(fresh.disk_image_id.is_none());
+
+        let mut deleted = serving();
+        deleted.status = ResourceStatus::Deleted;
+        let rebuilt = AzureSandboxImporter
+            .merge_reimport(
+                deleted,
+                AzureSandboxImporter.import(import_data(), &ctx).unwrap(),
+                &ctx,
+            )
+            .expect("the re-import replaces a torn-down entry");
+        assert_eq!(rebuilt.status, ResourceStatus::Provisioning);
+        assert_eq!(controller_of(rebuilt).sandbox_group.as_deref(), Some("sbg"));
     }
 
     /// Azure creates a sandbox only from a catalog image, so a source-built sandbox is refused at
