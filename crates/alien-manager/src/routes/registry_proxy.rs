@@ -465,11 +465,11 @@ async fn proxy_push(
         if let Err(e) = require_push_auth(&state, &subject, &repo_name) {
             return e;
         }
-        let may_mount = match query.get(MOUNT_SOURCE_PARAM) {
-            Some(source) => validate_pull_access(&state, &subject, source).await.is_ok(),
-            None => true,
+        let source_pullable = match query.get(MOUNT_SOURCE_PARAM) {
+            Some(source) => Some(validate_pull_access(&state, &subject, source).await.is_ok()),
+            None => None,
         };
-        (repo_name, query_for_mount_access(query, may_mount))
+        (repo_name, query_for_mount_access(query, source_pullable))
     };
     let qs = query_string(&upstream_query);
     let oci_path = format!("{}{}", oci_path_str, qs);
@@ -484,18 +484,21 @@ async fn proxy_push(
     .await
 }
 
+/// The digest a cross-repository blob mount copies.
+const MOUNT_PARAM: &str = "mount";
 /// The repository a cross-repository blob mount copies from.
 const MOUNT_SOURCE_PARAM: &str = "from";
 
-/// Upstream push credentials reach every repository, so a mount from one the caller may not pull
-/// would copy, and reveal, another project's blob. Without the parameters the registry opens a
-/// plain upload session, which the OCI spec also answers a failed mount with.
+/// Upstream push credentials reach every repository, so a mount is forwarded only from a named
+/// source the caller may pull (`source_pullable`); a mount naming none could reach any. Without
+/// the parameters the registry opens a plain upload session, as it does after a failed mount.
 fn query_for_mount_access(
     mut query: HashMap<String, String>,
-    may_mount: bool,
+    source_pullable: Option<bool>,
 ) -> HashMap<String, String> {
-    if !may_mount {
-        query.retain(|key, _| key != "mount" && key != MOUNT_SOURCE_PARAM);
+    let mounting = query.contains_key(MOUNT_PARAM) || source_pullable.is_some();
+    if mounting && source_pullable != Some(true) {
+        query.retain(|key, _| key != MOUNT_PARAM && key != MOUNT_SOURCE_PARAM);
     }
     query
 }
@@ -1594,10 +1597,20 @@ mod tests {
             ("digest".to_string(), "sha256:abc".to_string()),
         ]);
 
-        assert_eq!(query_for_mount_access(query.clone(), true), query);
+        let plain_upload = HashMap::from([("digest".to_string(), "sha256:abc".to_string())]);
+
+        assert_eq!(query_for_mount_access(query.clone(), Some(true)), query);
         assert_eq!(
-            query_for_mount_access(query, false),
-            HashMap::from([("digest".to_string(), "sha256:abc".to_string())])
+            query_for_mount_access(query.clone(), Some(false)),
+            plain_upload
+        );
+
+        let mut unsourced = query;
+        unsourced.remove("from");
+        assert_eq!(query_for_mount_access(unsourced, None), plain_upload);
+        assert_eq!(
+            query_for_mount_access(plain_upload.clone(), None),
+            plain_upload
         );
     }
 
