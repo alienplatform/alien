@@ -51,7 +51,11 @@ class LookupTests(unittest.TestCase):
         lookup.Config.assert_called_once_with(connect_timeout=5, read_timeout=10,
                                              retries={"mode": "standard", "total_max_attempts": 1})
         boto3.client.assert_called_once_with("ec2", config=lookup.Config.return_value)
-        self.assertEqual(response["Data"], {"ZoneIds": ["use1-az1", "use1-az4"], "ZoneNames": ["us-east-1c", "us-east-1a"]})
+        self.assertEqual(response["Data"], {"ZoneIds": "use1-az1,use1-az4", "ZoneNames": "us-east-1c,us-east-1a"})
+        # Model Fn::Split followed by Fn::Select using the transmitted JSON strings.
+        self.assertEqual(list(zip(response["Data"]["ZoneIds"].split(","),
+                                  response["Data"]["ZoneNames"].split(","))),
+                         [("use1-az1", "us-east-1c"), ("use1-az4", "us-east-1a")])
         boto3.client.return_value.describe_availability_zones.assert_called_once_with(
             Filters=[{"Name": "state", "Values": ["available"]}, {"Name": "zone-type", "Values": ["availability-zone"]}],
             AllAvailabilityZones=False,

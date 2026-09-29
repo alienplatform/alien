@@ -306,7 +306,7 @@ pub fn subnet_refs(prefix: &str, kind: &str) -> CfExpression {
 /// Per-AZ availability-zone names with the same `Fn::If` masking.
 pub fn availability_zone_names(ctx: &EmitContext<'_>) -> CfExpression {
     let zones = if super::eks_availability_zones::required(ctx) {
-        CfExpression::get_att(super::eks_availability_zones::LOOKUP_ID, "ZoneNames")
+        super::eks_availability_zones::zones("ZoneNames")
     } else {
         get_azs()
     };

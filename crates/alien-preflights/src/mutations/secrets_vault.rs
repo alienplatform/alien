@@ -116,13 +116,6 @@ impl StackMutation for SecretsVaultMutation {
             link_vault_to_worker_runtimes(&mut stack, secrets_vault_id)?;
             add_vault_read_permissions_to_worker_profiles(&mut stack, secrets_vault_id)?;
         }
-        if runs_on_platform_or_base(stack_state, config, Platform::Azure) {
-            add_azure_postgres_vault_read_permissions(
-                &mut stack,
-                secrets_vault_id,
-                stack_state.platform,
-            );
-        }
         add_vault_dependency_to_compute_clusters(
             &mut stack,
             secrets_vault_id,
@@ -292,45 +285,6 @@ fn add_vault_read_permissions_to_worker_profiles(
     }
 
     Ok(())
-}
-
-/// Azure Postgres bindings retrieve their password from the setup vault. Only
-/// profiles that explicitly request database data access receive this vault read.
-/// The existing vault binding model scopes Azure reads to a vault, not a secret.
-fn add_azure_postgres_vault_read_permissions(
-    stack: &mut Stack,
-    vault_id: &str,
-    platform: Platform,
-) {
-    let databases: Vec<String> = stack
-        .resources()
-        .filter_map(|(id, entry)| {
-            (entry.config.downcast_ref::<Postgres>().is_some()
-                && (platform != Platform::Kubernetes
-                    || entry.lifecycle == ResourceLifecycle::Frozen))
-                .then(|| id.clone())
-        })
-        .collect();
-    for profile in stack.permissions.profiles.values_mut() {
-        let database_access = databases.iter().any(|id| {
-            profile
-                .0
-                .get(id)
-                .into_iter()
-                .chain(profile.0.get("*"))
-                .flatten()
-                .any(|permission| permission.id() == "postgres/data-access")
-        });
-        if database_access {
-            let permissions = profile.0.entry(vault_id.to_string()).or_default();
-            if !permissions
-                .iter()
-                .any(|permission| permission.id() == "vault/data-read")
-            {
-                permissions.push(PermissionSetReference::from_name("vault/data-read"));
-            }
-        }
-    }
 }
 
 /// Author explicit vault data permissions into the management profile for this vault.
@@ -1472,7 +1426,7 @@ mod tests {
         ));
     }
     #[tokio::test]
-    async fn azure_postgres_secret_reads_follow_explicit_database_data_access_profiles() {
+    async fn azure_postgres_data_access_never_grants_shared_vault_reads() {
         for platform in [Platform::Azure, Platform::Kubernetes] {
             let mut stack = Stack::new("database".to_string())
                 .add(
@@ -1514,12 +1468,12 @@ mod tests {
                 .mutate(prepared, &state, &config)
                 .await
                 .unwrap();
-            for (name, expected) in [
-                ("database-client", true),
-                ("all-databases", true),
-                ("observer", false),
-                ("unrelated", false),
-                ("database-admin", false),
+            for name in [
+                "database-client",
+                "all-databases",
+                "observer",
+                "unrelated",
+                "database-admin",
             ] {
                 let count = repeated.permissions.profiles[name]
                     .0
@@ -1528,11 +1482,7 @@ mod tests {
                     .flatten()
                     .filter(|permission| permission.id() == "vault/data-read")
                     .count();
-                assert_eq!(
-                    count,
-                    usize::from(expected),
-                    "profile {name}, platform {platform:?}"
-                );
+                assert_eq!(count, 0, "profile {name}, platform {platform:?}");
             }
             let ManagementPermissions::Auto = repeated.permissions.management else {
                 panic!("database-client access must not change management grants without remote management");

@@ -10,6 +10,17 @@ use alien_core::{
 pub(crate) const LOOKUP_ID: &str = "EksAvailabilityZones";
 const HANDLER: &str = include_str!("eks_availability_zones.py");
 
+/// Custom-resource attributes are strings; split the CSV response before selection.
+pub(crate) fn zones(attribute: &str) -> CfExpression {
+    CfExpression::object([(
+        "Fn::Split",
+        CfExpression::list([
+            CfExpression::from(","),
+            CfExpression::get_att(LOOKUP_ID, attribute),
+        ]),
+    )])
+}
+
 pub(crate) fn required(ctx: &EmitContext<'_>) -> bool {
     ctx.targets_kubernetes
         && ctx.stack.resources().any(|(_, entry)| {

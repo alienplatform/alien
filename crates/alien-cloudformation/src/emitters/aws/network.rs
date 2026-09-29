@@ -157,7 +157,7 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
     let prefix = required_logical_id(ctx)?;
     let eks = super::eks_availability_zones::required(ctx);
     let zones = if eks {
-        CfExpression::get_att(super::eks_availability_zones::LOOKUP_ID, "ZoneIds")
+        super::eks_availability_zones::zones("ZoneIds")
     } else {
         get_azs()
     };

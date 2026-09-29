@@ -37,7 +37,7 @@ def handler(event, context):
             selected = sorted(zones)[:count]
             if len(selected) < count or len({zones[z] for z in selected}) != count:
                 raise ValueError("Not enough distinct supported EKS Availability Zones")
-            data = {"ZoneIds": selected, "ZoneNames": [zones[z] for z in selected]}
+            data = {"ZoneIds": ",".join(selected), "ZoneNames": ",".join(zones[z] for z in selected)}
     except Exception as error:
         status, reason = "FAILED", str(error)[:1000]
     finally:

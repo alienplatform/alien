@@ -562,10 +562,7 @@ fn cidr_block(vpc_id: &str, index: usize) -> CfExpression {
 }
 
 fn availability_zone(index: usize) -> CfExpression {
-    super::helpers::select(
-        index,
-        CfExpression::get_att(super::eks_availability_zones::LOOKUP_ID, "ZoneIds"),
-    )
+    super::helpers::select(index, super::eks_availability_zones::zones("ZoneIds"))
 }
 
 fn resource_id(prefix: &str, suffix: &str) -> String {
