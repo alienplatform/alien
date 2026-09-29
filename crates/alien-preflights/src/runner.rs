@@ -857,18 +857,22 @@ mod setup_update_authorization_tests {
             .expect("checks run");
         assert!(!on_aws.success, "an AWS Frozen image change needs setup");
 
-        runner
-            .run_deployment_time_preflights(
-                target.clone(),
-                &StackState::new(Platform::Azure),
-                &config,
-                &client,
-                Some(&old),
-                None,
-                None,
-            )
-            .await
-            .expect("an Azure deployment rolls the image");
+        for platform in [Platform::Azure, Platform::Gcp] {
+            runner
+                .run_deployment_time_preflights(
+                    target.clone(),
+                    &StackState::new(platform),
+                    &config,
+                    &client,
+                    Some(&old),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("a {platform} deployment rolls the image: {error:?}")
+                });
+        }
         let error = runner
             .run_deployment_time_preflights(
                 target,
@@ -880,7 +884,7 @@ mod setup_update_authorization_tests {
                 None,
             )
             .await
-            .expect_err("the deployment's own platform is not Azure");
+            .expect_err("the deployment's own platform is neither Azure nor GCP");
         assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
     }
 }

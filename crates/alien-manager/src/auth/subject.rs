@@ -353,8 +353,8 @@ pub enum Role {
     /// This role is paired with [`Scope::Project`] and must not imply image push
     /// or any other project access.
     ImageRepositoryProvisioner,
-    /// Exact capability for pushing one project's sandbox image through the
-    /// registry proxy.
+    /// Exact capability for pushing a sandbox image into one project's
+    /// repository through the registry proxy.
     ///
     /// Paired with [`Scope::Project`]. Push only: it must not pull, provision a
     /// repository, or imply any other project access.

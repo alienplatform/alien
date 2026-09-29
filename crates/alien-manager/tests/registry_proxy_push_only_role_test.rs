@@ -11,8 +11,10 @@ use alien_error::AlienError;
 use alien_manager::auth::{Authz, DeploymentCreateCtx, Role, Scope, Subject, SubjectKind};
 use alien_manager::config::ManagerConfig;
 use alien_manager::providers::OssAuthz;
+use alien_manager::stores::sqlite::{SqliteDatabase, SqliteDeploymentStore};
 use alien_manager::traits::{
-    AuthValidator, DeploymentGroupRecord, DeploymentRecord, ReleaseRecord, TelemetrySignal,
+    AuthValidator, CreateDeploymentGroupParams, CreateDeploymentParams, DeploymentFilter,
+    DeploymentGroupRecord, DeploymentRecord, DeploymentStore, ReleaseRecord, TelemetrySignal,
 };
 use alien_manager::AlienManagerBuilder;
 use async_trait::async_trait;
@@ -39,7 +41,7 @@ impl AuthValidator for PusherValidator {
             .expect("tests send pusher tokens only");
         Ok(Some(Subject {
             kind: SubjectKind::ServiceAccount {
-                id: "platform".to_string(),
+                id: "sandbox-image-pusher".to_string(),
             },
             workspace_id: "default".to_string(),
             scope: Scope::Project {
@@ -120,12 +122,48 @@ impl Authz for PusherAuthz {
     }
 }
 
+fn admin() -> Subject {
+    Subject {
+        kind: SubjectKind::ServiceAccount {
+            id: "test".to_string(),
+        },
+        workspace_id: "default".to_string(),
+        scope: Scope::Workspace,
+        role: Role::WorkspaceAdmin,
+        bearer_token: String::new(),
+    }
+}
+
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
         .unwrap()
         .port()
+}
+
+/// Fails with the server's own error when it exits early, e.g. when another test took its port.
+async fn wait_for_health(
+    client: &reqwest::Client,
+    url: &str,
+    server: &mut tokio::task::JoinHandle<()>,
+) {
+    for _ in 0..50 {
+        if server.is_finished() {
+            panic!("Manager exited before becoming healthy: {:?}", server.await);
+        }
+        if client
+            .get(format!("{url}/health"))
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("Manager did not become healthy at {url}");
 }
 
 #[tokio::test]
@@ -147,12 +185,49 @@ async fn a_push_only_credential_pushes_but_cannot_pull_or_cross_projects() {
     );
 
     let state_dir = tempfile::tempdir().unwrap();
+    let db_path = state_dir.path().join("test.db");
+    // A deployment in the pusher's own project, so the refused reads below have something to leak.
+    let store = SqliteDeploymentStore::new(Arc::new(
+        SqliteDatabase::new(&db_path.to_string_lossy())
+            .await
+            .unwrap(),
+    ));
+    let group = store
+        .create_deployment_group(
+            &admin(),
+            CreateDeploymentGroupParams {
+                name: "group".to_string(),
+                max_deployments: 10,
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .create_deployment(
+            &admin(),
+            CreateDeploymentParams {
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                name: "deployment".to_string(),
+                deployment_group_id: group.id,
+                platform: alien_core::Platform::Local,
+                base_platform: None,
+                stack_settings: Default::default(),
+                stack_state: None,
+                environment_variables: None,
+                public_subdomain: None,
+                input_values: Default::default(),
+                setup_item: None,
+                deployment_token: None,
+            },
+        )
+        .await
+        .unwrap();
     let port = free_port();
     let manager_url = format!("http://127.0.0.1:{port}");
     let config = ManagerConfig {
         port,
         host: "127.0.0.1".to_string(),
-        db_path: Some(state_dir.path().join("test.db")),
+        db_path: Some(db_path),
         state_dir: Some(state_dir.path().to_path_buf()),
         deployment_interval_secs: 999,
         heartbeat_interval_secs: 999,
@@ -180,20 +255,9 @@ async fn a_push_only_credential_pushes_but_cannot_pull_or_cross_projects() {
         .await
         .unwrap();
     let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
-    tokio::spawn(async move { manager.start(addr).await.unwrap() });
+    let mut server = tokio::spawn(async move { manager.start(addr).await.unwrap() });
     let client = reqwest::Client::new();
-    for _ in 0..50 {
-        if client
-            .get(format!("{manager_url}/health"))
-            .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
-        {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    wait_for_health(&client, &manager_url, &mut server).await;
 
     // No route matches `artifacts/...` here, so the proxy attributes it to "default".
     let own = format!("{PUSHER_PREFIX}default");
@@ -230,11 +294,11 @@ async fn a_push_only_credential_pushes_but_cannot_pull_or_cross_projects() {
         .push(&target, &push(own.clone()))
         .await
         .expect("the push-only credential must complete a real push");
-    // Pushed again: every layer now exists, so dockdash takes its mount-only path.
+    // Pushed again over layers that already exist, as a rebuild of the same image does.
     image
         .push(&target, &push(own.clone()))
         .await
-        .expect("a repeat push must also complete without a read");
+        .expect("a repeat push must also complete");
 
     let err = image
         .push(&target, &push(other.clone()))
@@ -277,6 +341,39 @@ async fn a_push_only_credential_pushes_but_cannot_pull_or_cross_projects() {
     )
     .await;
     assert_eq!(got, 405);
+
+    let listed = store
+        .list_deployments(&admin(), &DeploymentFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].project_id, "default");
+    let deployments: serde_json::Value = client
+        .get(format!("{manager_url}/v1/deployments"))
+        .bearer_auth(&own)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(deployments["items"], serde_json::json!([]), "{deployments}");
+    let got = status(
+        client
+            .post(format!("{manager_url}/v1/initialize"))
+            .bearer_auth(&own)
+            .json(&serde_json::json!({ "initialDesiredRelease": "none" })),
+    )
+    .await;
+    assert_eq!(got, 403, "the pusher must not be assigned to a deployment");
+    let got = status(
+        client
+            .post(format!("{manager_url}/v1/image-repositories"))
+            .bearer_auth(&own)
+            .json(&serde_json::json!({ "projectId": "default", "platform": "aws" })),
+    )
+    .await;
+    assert_eq!(got, 403, "the pusher must not provision a repository");
 
     drop(running);
 }

@@ -452,7 +452,10 @@ fn preflight_error(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{AzureStorageAccount, ResourceLifecycle, Stack, Storage};
+    use alien_core::{
+        AzureStorageAccount, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
+        SandboxLifecyclePolicy, Stack, Storage,
+    };
 
     #[tokio::test]
     async fn render_preflights_inject_azure_auxiliary_resources() {
@@ -481,7 +484,6 @@ mod tests {
 
     /// A remote sandbox must allow egress, so the deny fixture is the one without remote access.
     fn frozen_gcp_sandbox(image: &str, remote: bool) -> Stack {
-        use alien_core::{Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
         let sandbox = Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: image.to_string(),
