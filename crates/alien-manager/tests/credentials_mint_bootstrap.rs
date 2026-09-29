@@ -110,6 +110,7 @@ async fn build() -> Fixture {
             CreateDeploymentGroupParams {
                 name: "bootstrap-group".to_string(),
                 max_deployments: 100,
+                setup: Default::default(),
             },
         )
         .await
@@ -194,6 +195,7 @@ async fn build() -> Fixture {
         ),
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
         tunnels: None,
+        charts: None,
     };
 
     Fixture {

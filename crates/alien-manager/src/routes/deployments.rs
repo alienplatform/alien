@@ -1204,6 +1204,7 @@ mod tests {
             ),
             import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
             tunnels: None,
+            charts: None,
         };
         let response = router()
             .with_state(state)

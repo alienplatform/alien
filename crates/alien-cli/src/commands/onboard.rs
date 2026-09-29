@@ -11,8 +11,8 @@ use std::str::FromStr;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
-    about = "Onboard a customer and generate a deployment link or token",
-    long_about = "Create a deployment group for a customer and generate a deployment link (platform) or CLI command (standalone) to share with their admin."
+    about = "Onboard a customer and get the setup command to send them",
+    long_about = "Create a deployment group for a customer and print what their admin runs to set up the deployment: a setup link, a Helm install command for Kubernetes, or a CLI command."
 )]
 pub struct OnboardArgs {
     /// Customer name
@@ -298,7 +298,6 @@ fn onboard_setup_item_name(item: &OnboardSetupItem) -> &'static str {
     }
 }
 
-#[cfg(feature = "platform")]
 struct ActiveReleaseStackInputs {
     supported_platforms: Vec<Platform>,
     inputs_by_platform: Vec<(Platform, Vec<StackInputDefinition>)>,
@@ -585,7 +584,6 @@ async fn fetch_active_release_stack_inputs(
     active_release_stack_inputs_from_values(&stack_values)
 }
 
-#[cfg(feature = "platform")]
 fn active_release_stack_inputs_from_values(
     stack_values: &[(Platform, Option<&serde_json::Value>)],
 ) -> Result<ActiveReleaseStackInputs> {
@@ -612,7 +610,6 @@ fn active_release_stack_inputs_from_values(
     })
 }
 
-#[cfg(feature = "platform")]
 fn select_onboard_platforms(
     requested: &[String],
     supported: &[Platform],
@@ -682,7 +679,6 @@ fn select_onboard_platforms(
     Ok(selected)
 }
 
-#[cfg(feature = "platform")]
 fn developer_inputs_for_platforms(
     release_inputs: &ActiveReleaseStackInputs,
     platforms: &[Platform],
@@ -718,7 +714,6 @@ fn developer_inputs_for_platforms(
     inputs
 }
 
-#[cfg(feature = "platform")]
 fn collect_stack_input_values(
     inputs: &[StackInputDefinition],
     input_values: &[String],
@@ -801,7 +796,6 @@ fn collect_stack_input_values(
     Ok(types::StackInputValuesRequest(values))
 }
 
-#[cfg(feature = "platform")]
 fn narrowing_hint(input: &StackInputDefinition, selected_platforms: &[Platform]) -> String {
     let Some(input_platforms) = &input.platforms else {
         return ".".to_string();
@@ -821,7 +815,6 @@ fn narrowing_hint(input: &StackInputDefinition, selected_platforms: &[Platform])
     }
 }
 
-#[cfg(feature = "platform")]
 fn parse_stack_input_arg(input: &str, flag: &str) -> Result<(String, String)> {
     let Some((id, value)) = input.split_once('=') else {
         return Err(AlienError::new(ErrorData::ValidationError {
@@ -838,7 +831,6 @@ fn parse_stack_input_arg(input: &str, flag: &str) -> Result<(String, String)> {
     Ok((id.trim().to_string(), value.to_string()))
 }
 
-#[cfg(feature = "platform")]
 fn parse_stack_input_value(
     input: &StackInputDefinition,
     value: &str,
@@ -889,7 +881,6 @@ fn parse_stack_input_value(
     }
 }
 
-#[cfg(feature = "platform")]
 fn validate_string_stack_input(input: &StackInputDefinition, value: &str) -> Result<()> {
     if let Some(validation) = &input.validation {
         if let Some(values) = &validation.values {
@@ -920,7 +911,6 @@ fn validate_string_stack_input(input: &StackInputDefinition, value: &str) -> Res
     Ok(())
 }
 
-#[cfg(feature = "platform")]
 fn print_required_developer_inputs(inputs: &[StackInputDefinition]) {
     let required = inputs
         .iter()
@@ -1019,24 +1009,91 @@ fn platform_setup_environment_variables(
         .collect()
 }
 
-/// Standalone/Dev mode: use manager API, show CLI command.
+/// Self-hosted and local managers: create the deployment group on the
+/// manager and print the setup command for each selected platform.
 async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String) -> Result<()> {
-    use alien_manager_api::types::CreateDeploymentGroupRequest;
+    use alien_manager_api::types::{
+        CreateDeploymentGroupRequest, EnvironmentVariable, EnvironmentVariableType,
+    };
     use alien_manager_api::SdkResultExt;
 
-    if !args.env_vars.is_empty() || !args.secret_vars.is_empty() {
-        return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "`alien onboard --env/--secret` is only supported in platform mode because standalone deployment-group tokens do not carry setup config.".to_string(),
-        }));
-    }
-
     let (project_id, _project_link) = ctx.resolve_project(None, !args.json).await?;
-
-    // Resolve manager (known in Standalone/Dev mode)
     let mgr = ctx.resolve_manager(&project_id, "local").await?;
 
+    // Developer inputs come from the latest release, like a setup link.
+    let latest = mgr
+        .client
+        .get_latest_release()
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to fetch the latest release. Run `alien release` first.".to_string(),
+            url: None,
+        })?;
+    let stack_by_platform = serde_json::to_value(&latest.stack)
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "serialize".to_string(),
+            reason: "release stacks".to_string(),
+        })?;
+    let stack_values: Vec<(Platform, Option<&serde_json::Value>)> = [
+        Platform::Aws,
+        Platform::Gcp,
+        Platform::Azure,
+        Platform::Kubernetes,
+        Platform::Machines,
+        Platform::Local,
+    ]
+    .into_iter()
+    .map(|platform| {
+        let value = stack_by_platform
+            .get(platform.as_str())
+            .filter(|value| !value.is_null());
+        (platform, value)
+    })
+    .collect();
+    let release_inputs = active_release_stack_inputs_from_values(&stack_values)?;
+    let selected_platforms = select_onboard_platforms(
+        &args.platforms,
+        &release_inputs.supported_platforms,
+        args.json,
+    )?;
+    let developer_inputs = developer_inputs_for_platforms(&release_inputs, &selected_platforms);
+    let input_values = collect_stack_input_values(
+        &developer_inputs,
+        &args.input_values,
+        &args.secret_input_values,
+        &selected_platforms,
+        args.json,
+    )?;
+    let environment_variables =
+        crate::parse_env_and_secret_vars(&args.env_vars, &args.secret_vars)?
+            .into_iter()
+            .map(|variable| EnvironmentVariable {
+                name: variable.name,
+                value: variable.value,
+                type_: if variable.is_secret {
+                    EnvironmentVariableType::Secret
+                } else {
+                    EnvironmentVariableType::Plain
+                },
+                target_resources: variable.target_resources,
+            })
+            .collect::<Vec<_>>();
+    let manager = fetch_manager_info(&mgr).await?;
+
     if !args.json {
-        println!("{}", contextual_heading("Onboarding", &name, &[]));
+        let platforms_label = selected_platforms
+            .iter()
+            .map(|platform| platform.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(
+            "{}",
+            contextual_heading("Onboarding", &name, &[("platforms", &platforms_label)])
+        );
+        print_required_developer_inputs(&developer_inputs);
     }
     let steps = if args.json {
         None
@@ -1047,12 +1104,28 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
     };
 
     let deployment_group_name = customer_environment_name(&name);
+    let input_values = match serde_json::to_value(&input_values)
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "serialize".to_string(),
+            reason: "stack input values".to_string(),
+        })? {
+        serde_json::Value::Object(values) => values,
+        other => {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "input".to_string(),
+                message: format!("stack input values must be an object, got {other}"),
+            }))
+        }
+    };
     let response = mgr
         .client
         .create_deployment_group()
         .body(CreateDeploymentGroupRequest {
-            name: deployment_group_name,
+            name: deployment_group_name.clone(),
             max_deployments: Some(args.max_deployments as i64),
+            input_values,
+            environment_variables,
         })
         .send()
         .await
@@ -1061,7 +1134,6 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
             message: "Failed to create deployment group".to_string(),
             url: None,
         })?;
-
     let deployment_group_id = response.id.clone();
 
     if let Some(steps) = &steps {
@@ -1069,7 +1141,7 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
         steps.activate(1, Some("Creating deployment token".to_string()));
     }
 
-    let token_response = mgr
+    let token = mgr
         .client
         .create_deployment_group_token()
         .id(&deployment_group_id)
@@ -1079,14 +1151,54 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to create deployment group token".to_string(),
             url: None,
+        })?
+        .token
+        .clone();
+
+    let kubernetes_stack = stack_values
+        .iter()
+        .find(|(platform, _)| *platform == Platform::Kubernetes)
+        .and_then(|(_, value)| *value)
+        .filter(|_| selected_platforms.contains(&Platform::Kubernetes))
+        .map(|value| serde_json::from_value::<Stack>(value.clone()))
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "parse".to_string(),
+            reason: "release Kubernetes stack".to_string(),
         })?;
+    let helm = kubernetes_stack
+        .as_ref()
+        .filter(|_| manager.capabilities.charts)
+        .map(|stack| {
+            HelmInstall::new(
+                stack,
+                &manager.registry_host,
+                &deployment_group_name,
+                &token,
+            )
+        });
+    let cli_platforms: Vec<&str> = selected_platforms
+        .iter()
+        .filter(|platform| **platform != Platform::Kubernetes || helm.is_none())
+        .map(|platform| platform.as_str())
+        .collect();
 
     if args.json {
         print_json(&serde_json::json!({
             "deploymentGroupId": deployment_group_id,
             "name": name,
-            "token": token_response.token,
+            "token": token,
             "maxDeployments": args.max_deployments,
+            "managerUrl": manager.url,
+            "platforms": selected_platforms.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
+            "helm": helm.as_ref().map(|helm| serde_json::json!({
+                "chart": helm.chart,
+                "release": helm.release,
+                "namespace": helm.release,
+                "command": helm.command(),
+                "values": helm.values_example(),
+            })),
         }))?;
         return Ok(());
     }
@@ -1098,20 +1210,34 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
 
     println!("{}", success_line("Ready to deploy."));
     println!("{} {}", dim_label("Customer"), name);
-    println!("{} {}", dim_label("Token"), accent(&token_response.token));
-    println!();
-    println!("{}", dim_label("Share with the customer's admin:"));
-    println!(
-        "  curl -fsSL {}/install | sh -s -- deploy \\",
-        mgr.manager_url.trim_end_matches('/')
-    );
-    println!("    --token {} \\", token_response.token);
-    println!("    --name <deployment-name> \\");
-    println!("    --platform <aws|gcp|azure> \\");
-    println!(
-        "    --manager-url {}",
-        mgr.manager_url.trim_end_matches('/')
-    );
+    println!("{} {}", dim_label("Token"), accent(&token));
+
+    if let Some(helm) = &helm {
+        println!();
+        println!("{}", dim_label("Send to the customer's Kubernetes admin:"));
+        println!();
+        for line in helm.command().lines() {
+            println!("  {line}");
+        }
+        println!();
+        println!(
+            "{}",
+            dim_label("values.yaml connects the environment's own infrastructure:")
+        );
+        println!();
+        for line in helm.values_example().lines() {
+            println!("  {line}");
+        }
+    }
+    if !cli_platforms.is_empty() {
+        println!();
+        println!("{}", dim_label("Send to the customer's cloud admin:"));
+        println!("  curl -fsSL {}/install | sh -s -- deploy \\", manager.url);
+        println!("    --token {} \\", token);
+        println!("    --name <deployment-name> \\");
+        println!("    --platform <{}> \\", cli_platforms.join("|"));
+        println!("    --manager-url {}", manager.url);
+    }
     println!();
     println!(
         "{} {}",
@@ -1120,6 +1246,110 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
     );
 
     Ok(())
+}
+
+/// Manager identity as deployments see it (`GET /v1/manager`).
+struct ManagerInfo {
+    url: String,
+    registry_host: String,
+    capabilities: ManagerCapabilities,
+}
+
+struct ManagerCapabilities {
+    charts: bool,
+}
+
+async fn fetch_manager_info(mgr: &crate::execution_context::ManagerContext) -> Result<ManagerInfo> {
+    use alien_manager_api::SdkResultExt;
+
+    let info = mgr
+        .client
+        .manager_info()
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to read manager information".to_string(),
+            url: None,
+        })?;
+    Ok(ManagerInfo {
+        url: info.url.trim_end_matches('/').to_string(),
+        registry_host: info.registry_host.clone(),
+        capabilities: ManagerCapabilities {
+            charts: info.capabilities.charts,
+        },
+    })
+}
+
+/// The Helm command a customer's Kubernetes admin runs once.
+struct HelmInstall {
+    chart: String,
+    release: String,
+    customer: String,
+    token: String,
+    infrastructure: Vec<(String, String)>,
+}
+
+impl HelmInstall {
+    fn new(stack: &Stack, registry_host: &str, customer: &str, token: &str) -> Self {
+        let infrastructure = stack
+            .resources()
+            .filter(|(_, entry)| {
+                matches!(
+                    entry.config.resource_type().as_ref(),
+                    "storage" | "kv" | "queue" | "vault"
+                )
+            })
+            .map(|(id, entry)| {
+                (
+                    id.clone(),
+                    entry.config.resource_type().as_ref().to_string(),
+                )
+            })
+            .collect();
+        Self {
+            chart: format!("oci://{registry_host}/charts/{}", stack.id()),
+            release: stack.id().to_string(),
+            customer: customer.to_string(),
+            token: token.to_string(),
+            infrastructure,
+        }
+    }
+
+    fn command(&self) -> String {
+        let mut command = format!(
+            "helm install {release} {chart} \\\n  --namespace {release} --create-namespace \\\n  --username {customer} --password {token} \\\n  --set management.token={token} \\\n  --set management.name={customer}",
+            release = self.release,
+            chart = self.chart,
+            customer = self.customer,
+            token = self.token,
+        );
+        if !self.infrastructure.is_empty() {
+            command.push_str(" \\\n  --values values.yaml");
+        }
+        command
+    }
+
+    fn values_example(&self) -> String {
+        if self.infrastructure.is_empty() {
+            return String::new();
+        }
+        let mut yaml = String::from("infrastructure:\n");
+        for (id, resource_type) in &self.infrastructure {
+            match resource_type.as_str() {
+                "storage" => yaml.push_str(&format!(
+                    "  {id}:\n    type: storage\n    service: s3\n    bucketName: <bucket>\n    # S3-compatible stores (MinIO, Ceph, ...): endpoint and keys.\n    # Omit them to use the pod's AWS identity with Amazon S3.\n    endpoint: https://<s3-endpoint>\n    accessKeyId: <access-key-id>\n    secretAccessKey: <secret-access-key>\n"
+                )),
+                "kv" => yaml.push_str(&format!(
+                    "  {id}:\n    type: kv\n    service: redis\n    connectionUrl: redis://<host>:6379\n"
+                )),
+                other => yaml.push_str(&format!(
+                    "  {id}:\n    type: {other}\n    # See `helm show values` for this resource's fields.\n"
+                )),
+            }
+        }
+        yaml
+    }
 }
 
 /// Turn a customer-facing name into the stable internal Deployment Group name.

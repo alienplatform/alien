@@ -52,6 +52,8 @@ pub struct AlienManagerBuilder {
     import_registry: Option<Arc<alien_infra::ImporterRegistry>>,
     /// Open tunnel connections; `Some` mounts the tunnel routes.
     tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
+    /// Chart settings; `Some` serves Helm charts from the registry.
+    charts: Option<Arc<crate::routes::charts::ChartSettings>>,
 }
 
 impl AlienManagerBuilder {
@@ -76,7 +78,16 @@ impl AlienManagerBuilder {
             target_bindings_providers_override: None,
             import_registry: None,
             tunnels: None,
+            charts: None,
         }
+    }
+
+    /// Serve an installable Helm chart for every release with a Kubernetes
+    /// stack at `oci://<manager>/charts/<stack-id>`, pre-wired to this
+    /// manager.
+    pub fn charts(mut self, settings: crate::routes::charts::ChartSettings) -> Self {
+        self.charts = Some(Arc::new(settings));
+        self
     }
 
     /// Accept tunnel connections from operators and serve
@@ -687,6 +698,7 @@ impl AlienManagerBuilder {
             self.dev_status_tx,
             self.import_registry,
             self.tunnels,
+            self.charts,
         )
         .await
     }
@@ -781,6 +793,7 @@ async fn finalize(
     dev_status_tx: Option<tokio::sync::watch::Sender<()>>,
     import_registry_override: Option<Arc<alien_infra::ImporterRegistry>>,
     tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
+    charts: Option<Arc<crate::routes::charts::ChartSettings>>,
 ) -> crate::error::Result<AlienManager> {
     use alien_commands::server::CommandServer;
 
@@ -821,6 +834,7 @@ async fn finalize(
         import_registry: import_registry_override
             .unwrap_or_else(|| Arc::new(alien_infra::ImporterRegistry::built_in())),
         tunnels,
+        charts,
     };
 
     // --- Router ---

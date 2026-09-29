@@ -51,6 +51,7 @@ members = [
   "examples/custom-operations",
   "examples/endpoint-agent",
   "examples/byoc-database",
+  "examples/kubernetes-data-plane",
   "examples/slatedb-trace-store",
   "crates/alien-test",
   "tests/e2e/test-apps/comprehensive-rust",

@@ -74,6 +74,8 @@ pub(crate) enum DeploymentGroups {
     CreatedAt,
     WorkspaceId,
     ProjectId,
+    /// JSON `DeploymentGroupSetup`; NULL means no setup values.
+    Setup,
 }
 
 #[derive(Iden, Clone, Copy)]
@@ -355,6 +357,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "ALTER TABLE commands ADD COLUMN target_resource_type TEXT",
         "ALTER TABLE deployments ADD COLUMN input_values TEXT",
         "ALTER TABLE deployments ADD COLUMN next_step_after TEXT",
+        "ALTER TABLE deployment_groups ADD COLUMN setup TEXT",
     ];
     for sql in alter_statements {
         if let Err(e) = conn.execute(sql, ()).await {

@@ -2,6 +2,7 @@
 
 pub mod bindings;
 pub mod build_config;
+pub mod charts;
 pub mod commands;
 pub mod credentials;
 pub mod deployment_groups;
@@ -9,6 +10,7 @@ pub mod deployments;
 pub mod health;
 pub mod image_repositories;
 pub mod install;
+pub mod manager_info;
 pub mod platforms;
 pub mod registry_proxy;
 pub mod releases;
@@ -82,6 +84,8 @@ pub struct AppState {
     /// Open tunnel connections. `None` when tunnels are not enabled; the
     /// tunnel routes are mounted only when this is `Some`.
     pub tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
+    /// Chart settings; `Some` serves Helm charts at `/v2/charts/...`.
+    pub charts: Option<Arc<charts::ChartSettings>>,
 }
 
 impl HasCommandServer for AppState {
@@ -166,6 +170,7 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         .route("/health", get(health::health))
         // Identity
         .merge(whoami::router())
+        .merge(manager_info::router())
         // Deployments
         .merge(deployments::router())
         // Releases

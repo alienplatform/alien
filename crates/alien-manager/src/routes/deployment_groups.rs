@@ -7,12 +7,16 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use std::collections::HashMap;
+
+use alien_core::EnvironmentVariable;
 use serde::{Deserialize, Serialize};
 
 use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::{
-    CreateDeploymentGroupParams, CreateTokenParams, DeploymentGroupRecord, TokenType,
+    CreateDeploymentGroupParams, CreateTokenParams, DeploymentGroupRecord, DeploymentGroupSetup,
+    TokenType,
 };
 
 use super::{auth, AppState};
@@ -26,6 +30,13 @@ pub struct CreateDeploymentGroupRequest {
     pub name: String,
     #[serde(default = "default_max_deployments")]
     pub max_deployments: i64,
+    /// Stack input values applied to each deployment the group creates.
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Object))]
+    pub input_values: HashMap<String, serde_json::Value>,
+    /// Environment variables applied to each deployment the group creates.
+    #[serde(default)]
+    pub environment_variables: Vec<EnvironmentVariable>,
 }
 
 fn default_max_deployments() -> i64 {
@@ -139,6 +150,10 @@ async fn create_deployment_group(
             CreateDeploymentGroupParams {
                 name: req.name,
                 max_deployments: req.max_deployments,
+                setup: DeploymentGroupSetup {
+                    input_values: req.input_values,
+                    environment_variables: req.environment_variables,
+                },
             },
         )
         .await

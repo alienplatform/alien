@@ -1,0 +1,72 @@
+//! `GET /v1/manager` — what this manager is and what it serves.
+//!
+//! Clients use it to address the manager the way deployments reach it (its
+//! public URL) and to decide which features to offer, instead of guessing
+//! from how they connected.
+
+use axum::{
+    extract::State,
+    http::HeaderMap,
+    response::{IntoResponse, Response},
+    routing::get,
+    Json, Router,
+};
+use serde::Serialize;
+
+use super::{auth, AppState};
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ManagerInfoResponse {
+    /// Public URL deployments and customers use to reach this manager.
+    pub url: String,
+    /// Registry host (`host[:port]`) release images and charts are pulled from.
+    pub registry_host: String,
+    /// Manager version.
+    pub version: String,
+    /// Features this manager serves.
+    pub capabilities: ManagerCapabilities,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ManagerCapabilities {
+    /// Requests into deployments through `/v1/deployments/{id}/tunnels/...`.
+    pub tunnels: bool,
+    /// Helm charts at `oci://<registryHost>/charts/<stack>`.
+    pub charts: bool,
+}
+
+pub fn router() -> Router<AppState> {
+    Router::new().route("/v1/manager", get(manager_info))
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/v1/manager",
+    tag = "manager",
+    responses(
+        (status = 200, description = "Manager information", body = ManagerInfoResponse)
+    ),
+    security(
+        ("bearer" = [])
+    )
+))]
+async fn manager_info(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(e) = auth::require_auth(&state, &headers).await {
+        return e.into_response();
+    }
+    let url = state.config.base_url();
+    Json(ManagerInfoResponse {
+        registry_host: alien_core::image_rewrite::strip_url_scheme(&url).to_string(),
+        url,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        capabilities: ManagerCapabilities {
+            tunnels: state.tunnels.is_some(),
+            charts: state.charts.is_some(),
+        },
+    })
+    .into_response()
+}

@@ -267,6 +267,7 @@ impl TestManager {
             commands,
             impersonation,
             ..ManagerTomlConfig::default()
+            operator: Default::default(),
         };
 
         // Validate round-trip: the TOML config we built must serialize and

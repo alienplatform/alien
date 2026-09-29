@@ -1244,6 +1244,31 @@
         ]
       }
     },
+    "/v1/manager": {
+      "get": {
+        "tags": [
+          "manager"
+        ],
+        "operationId": "manager_info",
+        "responses": {
+          "200": {
+            "description": "Manager information",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagerInfoResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/releases": {
       "get": {
         "tags": [
@@ -1875,6 +1900,13 @@
                 "description": "Bundles the Operator should download to catch up to the target\nenabled-plugin-set hash. Opaque passthrough from the embedder's\n`DeploymentStore::reconcile`; `None` in OSS."
               }
             ]
+          },
+          "tunnelUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Base URL operators open tunnel connections to. Absent when this manager\ndoes not accept tunnels; operators then never dial."
           }
         }
       },
@@ -7320,6 +7352,17 @@
           "name"
         ],
         "properties": {
+          "environmentVariables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentVariable"
+            },
+            "description": "Environment variables applied to each deployment the group creates."
+          },
+          "inputValues": {
+            "type": "object",
+            "description": "Stack input values applied to each deployment the group creates."
+          },
           "maxDeployments": {
             "type": "integer",
             "format": "int64"
@@ -13505,6 +13548,50 @@
           }
         ],
         "description": "Management configuration for different cloud platforms.\n\nPlatform-derived configuration for cross-account/cross-tenant access.\nThis is NOT user-specified - it's derived from the Manager's ServiceAccount."
+      },
+      "ManagerCapabilities": {
+        "type": "object",
+        "required": [
+          "tunnels",
+          "charts"
+        ],
+        "properties": {
+          "charts": {
+            "type": "boolean",
+            "description": "Helm charts at `oci://<registryHost>/charts/<stack>`."
+          },
+          "tunnels": {
+            "type": "boolean",
+            "description": "Requests into deployments through `/v1/deployments/{id}/tunnels/...`."
+          }
+        }
+      },
+      "ManagerInfoResponse": {
+        "type": "object",
+        "required": [
+          "url",
+          "registryHost",
+          "version",
+          "capabilities"
+        ],
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/ManagerCapabilities",
+            "description": "Features this manager serves."
+          },
+          "registryHost": {
+            "type": "string",
+            "description": "Registry host (`host[:port]`) release images and charts are pulled from."
+          },
+          "url": {
+            "type": "string",
+            "description": "Public URL deployments and customers use to reach this manager."
+          },
+          "version": {
+            "type": "string",
+            "description": "Manager version."
+          }
+        }
       },
       "MetricSample": {
         "type": "object",

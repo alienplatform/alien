@@ -2368,6 +2368,27 @@ async fn initialize(
                 .and_then(|s| s.strip_prefix("Bearer "))
                 .map(|t| t.to_string());
 
+            // Developer-provided setup on the group applies to every deployment
+            // it creates; values supplied by the deployer at install win.
+            let group_setup = match state
+                .deployment_store
+                .get_deployment_group(&subject, &dg_id)
+                .await
+            {
+                Ok(Some(group)) => group.setup,
+                Ok(None) => {
+                    return AlienError::new(ErrorData::DeploymentGroupNotFound {
+                        deployment_group_id: dg_id.clone(),
+                    })
+                    .into_response()
+                }
+                Err(e) => return e.into_response(),
+            };
+            let mut input_values = group_setup.input_values;
+            input_values.extend(req.input_values);
+            let environment_variables = (!group_setup.environment_variables.is_empty())
+                .then_some(group_setup.environment_variables);
+
             let deployment = match state
                 .deployment_store
                 .create_deployment(
@@ -2381,9 +2402,9 @@ async fn initialize(
                         base_platform,
                         stack_settings: settings,
                         stack_state,
-                        environment_variables: None,
+                        environment_variables,
                         public_subdomain: None,
-                        input_values: req.input_values,
+                        input_values,
                         setup_item: req.setup_item,
                         deployment_token: dep_token,
                     },

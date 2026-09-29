@@ -1064,6 +1064,20 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
     let server = AlienManager::builder(config.clone())
         .token_store(token_store)
         .tunnels()
+        .charts(
+            toml_config
+                .operator
+                .image
+                .clone()
+                .map(
+                    |operator_image| alien_manager::routes::charts::ChartSettings {
+                        operator_image,
+                    },
+                )
+                .unwrap_or_else(
+                    alien_manager::routes::charts::ChartSettings::with_default_operator_image,
+                ),
+        )
         .with_standalone_defaults(&toml_config)
         .await
         .context(ErrorData::ServerStartFailed {

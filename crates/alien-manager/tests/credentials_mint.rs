@@ -404,6 +404,7 @@ async fn build(
             CreateDeploymentGroupParams {
                 name: "mint-group".to_string(),
                 max_deployments: 100,
+                setup: Default::default(),
             },
         )
         .await
@@ -495,6 +496,7 @@ async fn build(
         ),
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
         tunnels: None,
+        charts: None,
     };
 
     Fixture {

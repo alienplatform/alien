@@ -52,6 +52,17 @@ pub struct ManagerTomlConfig {
     pub impersonation: ImpersonationSection,
     #[serde(default)]
     pub telemetry: TelemetryConfig,
+    #[serde(default)]
+    pub operator: OperatorSection,
+}
+
+/// The Operator that Helm charts served by this manager install.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct OperatorSection {
+    /// Operator image, `repository:tag`. Defaults to the published image
+    /// matching this manager's version.
+    pub image: Option<String>,
 }
 
 // ── Section configs ─────────────────────────────────────────────────────────
@@ -227,6 +238,7 @@ impl Default for ManagerTomlConfig {
             commands: CommandsSection::default(),
             impersonation: ImpersonationSection::default(),
             telemetry: TelemetryConfig::default(),
+            operator: OperatorSection::default(),
         }
     }
 }

@@ -104,6 +104,7 @@ async fn make_fixture_for_platform(platform: Platform, seeded_stack: Option<Stac
             CreateDeploymentGroupParams {
                 name: "imported-group".to_string(),
                 max_deployments: 100,
+                setup: Default::default(),
             },
         )
         .await
@@ -195,6 +196,7 @@ async fn make_fixture_for_platform(platform: Platform, seeded_stack: Option<Stac
         ),
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
         tunnels: None,
+        charts: None,
     };
 
     Fixture {

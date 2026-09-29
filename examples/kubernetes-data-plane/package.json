@@ -1,0 +1,9 @@
+{
+  "name": "kubernetes-data-plane",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@alienplatform/core": "^1.7.0"
+  }
+}

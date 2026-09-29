@@ -83,6 +83,7 @@ reqwest = { workspace = true, features = ["json"] }
 
 # URL
 url = { workspace = true }
+alien-helm = { workspace = true }
 alien-tunnel = { workspace = true, features = ["manager"] }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
