@@ -300,8 +300,8 @@ fn emit_image_management(
             message: "failed to generate Azure sandbox image permissions".to_string(),
         })?;
 
-    // Every assignment below is scoped to the group, so a binding the set places elsewhere
-    // would be rendered at the wrong scope rather than refused.
+    // Each assignment below hard-codes the group scope, so any other binding count is refused
+    // rather than rendered at a scope the set did not declare.
     if plan.bindings.len() != 1 {
         return Err(AlienError::new(ErrorData::GenericError {
             message: format!(

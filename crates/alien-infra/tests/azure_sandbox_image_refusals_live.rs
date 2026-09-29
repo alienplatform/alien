@@ -120,6 +120,7 @@ async fn live_controller_proxy_host_image_keeps_the_token_out() {
         .unwrap_or_else(|_| "test-manager.alien.dev/artifacts/prj_test/app:v1".to_string());
     let mut executor = executor(&image).await;
     let mut errors = 0;
+    let mut settled = false;
     for step in 0..40 {
         let result = executor.step().await;
         let state = serde_json::to_value(
@@ -146,8 +147,11 @@ async fn live_controller_proxy_host_image_keeps_the_token_out() {
         );
         assert!(!text.contains(DEPLOYMENT_TOKEN), "{text}");
         if errors >= 2 || (result.is_ok() && state["state"] == "ready") {
+            settled = true;
             break;
         }
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     }
+    // Otherwise no create answered, and the token check above proved nothing.
+    assert!(settled, "the build neither failed nor reached Ready");
 }

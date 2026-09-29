@@ -1,6 +1,6 @@
 {
   "id": "sandbox/images",
-  "description": "Allows building, reading and deleting the disk images a sandbox starts from, under its setup-created parent (no access to sandbox contents)",
+  "description": "Allows building, reading and deleting the disk images under a sandbox's setup-created parent, including ones committed from its sessions (no access into a running sandbox)",
   "platforms": {
     "azure": [
       {

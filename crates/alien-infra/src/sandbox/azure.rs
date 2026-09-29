@@ -189,7 +189,8 @@ impl AzureSandboxController {
                 "the declaration did not capture, so the binding keeps the one it has"
             ),
         }
-        // A build left running by a failed update the declaration has since reverted.
+        // A build the declaration no longer names (a switch to a catalog name, or a revert to
+        // the served image) is retired here; the transitions into Ready leave it for this tick.
         if self.pending_image(&config).is_none() {
             self.abandon_pending_build(None);
         }
@@ -420,7 +421,6 @@ impl AzureSandboxController {
                 if let Some(replaced) = self.disk_image_id.take() {
                     self.retire(replaced, true);
                 }
-                self.abandon_pending_build(None);
             }
             // Published by the build once its disk image is Ready; until then the binding keeps
             // naming the image sessions can start from now.
@@ -449,8 +449,8 @@ impl AzureSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<AzureSandboxHandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        // Nothing to build: `Ready` abandons any build left in flight.
         let Some(reference) = self.pending_image(config) else {
-            self.abandon_pending_build(None);
             return Ok(AzureSandboxHandlerAction::Continue {
                 state: AzureSandboxState::Ready,
                 suggested_delay: None,
@@ -604,11 +604,8 @@ impl AzureSandboxController {
         for other in ours.iter().filter(|other| other.id != image.id) {
             self.retire(other.id.clone(), other.state() == Some("Ready"));
         }
-        if let Some(pending) = self.pending_disk_image.take() {
-            if pending.id != image.id {
-                self.retire(pending.id, false);
-            }
-        }
+        // The pending build is in `ours` by now (listed, or read by id), so the loop covered it.
+        self.pending_disk_image = None;
         if let Some(replaced) = self.disk_image_id.replace(image.id.clone()) {
             if replaced != image.id {
                 self.retire(replaced, true);
