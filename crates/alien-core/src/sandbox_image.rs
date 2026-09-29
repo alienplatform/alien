@@ -188,6 +188,9 @@ pub fn gcp_agent_platform_env() -> Vec<(&'static str, String)> {
 }
 
 /// The image every default sandbox builds on, by index digest so both architectures are pinned.
+///
+/// Bumped by hand, then regenerated: Renovate skips the generated Dockerfiles and does not read
+/// this file.
 pub const DEFAULT_SANDBOX_BASE_IMAGE: &str = "public.ecr.aws/docker/library/buildpack-deps:26.04@sha256:159ea382e6fb39e62480ee932113f885f7bd787cd4895fc4dc71aebb175077fd";
 
 /// The image uv and uvx are copied out of, by index digest.
@@ -417,9 +420,8 @@ fn gcp_dockerfile(title: &str, base: GcpBase, base_setup: &str) -> String {
         GcpBase::BuildArg(name) => (
             "# check=skip=InvalidDefaultArgInFrom\n".to_string(),
             format!(
-                "# No default: the builder passes the digest of the default base it published, \
-                 which this\n# repository cannot know. The check directive on line 1 is for \
-                 this.\nARG {name}\n\n"
+                "# No default: the base's digest exists only once it is built, so whoever builds \
+                 this image\n# passes it. The check directive on line 1 is for this.\nARG {name}\n\n"
             ),
             format!("${{{name}}}"),
         ),
