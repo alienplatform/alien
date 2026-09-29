@@ -572,9 +572,13 @@ impl AuthInfo {
                             cmd.env("AWS_SESSION_TOKEN", session_token);
                             cmd.env("AWS_REGION", &aws_config.region);
                         }
-                        alien_aws_clients::AwsCredentials::Imds { .. } => {
+                        alien_aws_clients::AwsCredentials::Imds { .. }
+                        | alien_aws_clients::AwsCredentials::Container { .. } => {
+                            // The exec command inherits this process's
+                            // environment, which carries the metadata or
+                            // container credentials endpoint.
                             tracing::debug!(
-                                "Using AWS IMDS credentials for kubeconfig exec command"
+                                "Using AWS instance or container credentials for kubeconfig exec command"
                             );
                             cmd.env("AWS_REGION", &aws_config.region);
                         }

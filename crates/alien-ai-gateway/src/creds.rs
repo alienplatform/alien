@@ -303,7 +303,7 @@ impl AwsSigV4Cred {
                     SharedCredentialsProvider::new(creds),
                 ))
             }
-            // Imds / Profile: the SDK default chain resolves the projected identity.
+            // Imds / Container / Profile: the SDK default chain resolves the projected identity.
             _ => Self::new(region).await,
         }
     }
