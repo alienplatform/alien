@@ -602,8 +602,8 @@ async fn saved_remote_sandbox_settings(
 }
 
 /// A flag replaces the saved value. Without either, the API picks the default images and the
-/// lifetime is `DEFAULT_REMOTE_SANDBOX_LIFETIME_SECONDS`. The saved Azure idle time is dropped when
-/// a custom image is set: the API refuses the two together.
+/// lifetime is `DEFAULT_REMOTE_SANDBOX_LIFETIME_SECONDS`. No flag sets the Azure idle time, so the
+/// saved one is always resent, with or without a custom image.
 fn remote_sandbox_request(
     custom_image: Option<&str>,
     max_lifetime_seconds: Option<NonZeroU64>,
@@ -619,18 +619,14 @@ fn remote_sandbox_request(
                 })
         })
         .transpose()?;
-    let custom_image = custom_image.or(saved.custom_image);
-    let azure_idle_suspend_seconds = saved
-        .azure_idle_suspend_seconds
-        .filter(|_| custom_image.is_none());
     Ok(ConfigureRemoteSandboxRequest {
-        custom_image,
+        custom_image: custom_image.or(saved.custom_image),
         max_lifetime_seconds: Some(
             max_lifetime_seconds
                 .or(saved.max_lifetime_seconds)
                 .unwrap_or(DEFAULT_REMOTE_SANDBOX_LIFETIME_SECONDS),
         ),
-        azure_idle_suspend_seconds,
+        azure_idle_suspend_seconds: saved.azure_idle_suspend_seconds,
     })
 }
 
@@ -1363,7 +1359,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_sandbox_request_keeps_the_saved_azure_idle_time_only_without_a_custom_image() {
+    fn remote_sandbox_request_keeps_the_saved_azure_idle_time_with_or_without_a_custom_image() {
         let saved_defaults = || -> ConfigureRemoteSandboxRequest {
             serde_json::from_value(serde_json::json!({
                 "maxLifetimeSeconds": 1200,
@@ -1389,6 +1385,7 @@ mod tests {
             serde_json::json!({
                 "customImage": "public.ecr.aws/example/analysis:v1",
                 "maxLifetimeSeconds": 1200,
+                "azureIdleSuspendSeconds": 900,
             }),
         );
 
@@ -1403,6 +1400,7 @@ mod tests {
             serde_json::json!({
                 "customImage": "registry.example.com/acme-sandbox@sha256:abc",
                 "maxLifetimeSeconds": 3600,
+                "azureIdleSuspendSeconds": 900,
             }),
         );
     }
