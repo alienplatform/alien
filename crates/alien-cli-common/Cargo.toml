@@ -10,7 +10,7 @@ default = []
 deployment = ["dep:alien-deployment"]
 
 [dependencies]
-alien-core = { workspace = true }
+alien-core = { workspace = true, features = ["bundle-signature"] }
 alien-error = { workspace = true }
 alien-preflights = { workspace = true }
 alien-deployment = { workspace = true, optional = true }

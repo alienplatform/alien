@@ -1161,12 +1161,18 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
         .clone();
 
     if args.airgapped {
+        let signing_key = manager.bundle_signing_key.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: "This manager doesn't sign air-gapped bundles".to_string(),
+            })
+        })?;
         return register_airgapped(
             &args,
             &mgr.manager_url,
             &name,
             &deployment_group_name,
             &token,
+            &signing_key,
         )
         .await;
     }
@@ -1192,7 +1198,6 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
                 &manager.url,
                 &manager.registry_host,
                 &deployment_group_name,
-                &token,
             )
         });
     let cli_platforms: Vec<&str> = selected_platforms
@@ -1281,6 +1286,7 @@ async fn register_airgapped(
     name: &str,
     group_name: &str,
     group_token: &str,
+    signing_key: &str,
 ) -> Result<()> {
     let response = reqwest::Client::new()
         .post(format!(
@@ -1327,11 +1333,18 @@ async fn register_airgapped(
             "deploymentId": deployment_id,
             "reference": reference,
             "airgapped": true,
+            "bundleSigningKey": signing_key,
         }));
     }
     println!("{}", success_line("Registered for air-gapped delivery."));
     println!("{} {}", dim_label("Customer"), name);
     println!("{} {}", dim_label("Deployment"), deployment_id);
+    println!("{} {}", dim_label("Bundle key"), accent(signing_key));
+    println!();
+    println!(
+        "{}",
+        dim_label("Give the site this key separately from the bundles. Its first `alien-deploy airgap apply` takes it as --trusted-key, and every later bundle must be signed with it.")
+    );
     println!();
     println!(
         "{} {}",
@@ -1348,6 +1361,8 @@ struct ManagerInfo {
     url: String,
     registry_host: String,
     capabilities: ManagerCapabilities,
+    /// Public key air-gapped sites verify bundles with.
+    bundle_signing_key: Option<String>,
 }
 
 struct ManagerCapabilities {
@@ -1373,6 +1388,7 @@ async fn fetch_manager_info(mgr: &crate::execution_context::ManagerContext) -> R
         capabilities: ManagerCapabilities {
             charts: info.capabilities.charts,
         },
+        bundle_signing_key: info.bundle_signing_key.clone(),
     })
 }
 
@@ -1383,18 +1399,11 @@ struct HelmInstall {
     plain_http: bool,
     release: String,
     customer: String,
-    token: String,
     infrastructure: Vec<(String, String)>,
 }
 
 impl HelmInstall {
-    fn new(
-        stack: &Stack,
-        manager_url: &str,
-        registry_host: &str,
-        customer: &str,
-        token: &str,
-    ) -> Self {
+    fn new(stack: &Stack, manager_url: &str, registry_host: &str, customer: &str) -> Self {
         let infrastructure = stack
             .resources()
             .filter(|(_, entry)| {
@@ -1415,7 +1424,6 @@ impl HelmInstall {
             plain_http: manager_url.starts_with("http://"),
             release: stack.id().to_string(),
             customer: customer.to_string(),
-            token: token.to_string(),
             infrastructure,
         }
     }
@@ -1438,24 +1446,33 @@ impl HelmInstall {
         self.plain_http && !matches!(host, "localhost" | "127.0.0.1")
     }
 
+    /// The commands for the customer's admin. The token is read once with
+    /// `read -s` and piped into Helm, so it stays out of shell history and
+    /// process arguments.
     fn command(&self) -> String {
         let (login_flags, install_flags) = if self.plain_http {
             (" --insecure", " --plain-http")
         } else {
             ("", "")
         };
-        let mut command = format!(
-            "helm registry login {registry}{login_flags} --username {customer} --password {token}\n\nhelm install {release} {chart}{install_flags} \\\n  --namespace {release} --create-namespace \\\n  --set management.token={token} \\\n  --set management.name={customer}",
+        let values = if self.infrastructure.is_empty() {
+            ""
+        } else {
+            " \\\n  --values values.yaml"
+        };
+        format!(
+            "read -rs ALIEN_TOKEN  # paste {customer}'s token, then Enter\n\
+             printf '%s' \"$ALIEN_TOKEN\" | helm registry login {registry}{login_flags} --username {customer} --password-stdin\n\n\
+             printf 'management:\\n  token: %s\\n' \"$ALIEN_TOKEN\" | \\\n\
+             helm install {release} {chart}{install_flags} \\\n  \
+             --namespace {release} --create-namespace \\\n  \
+             --set management.name={customer}{values} \\\n  \
+             --values -",
             registry = self.registry(),
             release = self.release,
             chart = self.chart,
             customer = self.customer,
-            token = self.token,
-        );
-        if !self.infrastructure.is_empty() {
-            command.push_str(" \\\n  --values values.yaml");
-        }
-        command
+        )
     }
 
     fn values_example(&self) -> String {
@@ -1557,38 +1574,56 @@ mod tests {
     fn helm_command_follows_the_manager_scheme() {
         let stack: Stack = serde_json::from_value(minimal_stack()).unwrap();
 
-        let https = HelmInstall::new(
-            &stack,
-            "https://m.example.com",
-            "m.example.com",
-            "c1",
-            "ax_dg_x",
-        );
+        let https = HelmInstall::new(&stack, "https://m.example.com", "m.example.com", "c1");
+        let command = https.command();
         assert!(!https.needs_https());
-        assert!(https.command().starts_with(
-            "helm registry login m.example.com --username c1 --password ax_dg_x\n\nhelm install test-stack oci://m.example.com/charts/test-stack \\"
-        ));
-
-        let local = HelmInstall::new(
-            &stack,
-            "http://localhost:5050",
-            "localhost:5050",
-            "c1",
-            "ax_dg_x",
+        assert!(
+            command.contains("helm registry login m.example.com --username c1 --password-stdin")
         );
+        assert!(
+            command.contains("helm install test-stack oci://m.example.com/charts/test-stack \\")
+        );
+        assert!(command.contains("--set management.name=c1"));
+        assert!(command.ends_with("--values -"));
+        assert!(!command.contains("--plain-http"));
+        assert!(
+            !command.contains("ax_dg_"),
+            "the token must not appear in the commands"
+        );
+
+        let local = HelmInstall::new(&stack, "http://localhost:5050", "localhost:5050", "c1");
+        let command = local.command();
         assert!(!local.needs_https());
-        assert!(local.command().starts_with(
-            "helm registry login localhost:5050 --insecure --username c1 --password ax_dg_x\n\nhelm install test-stack oci://localhost:5050/charts/test-stack --plain-http \\"
-        ));
+        assert!(command.contains("helm registry login localhost:5050 --insecure --username c1"));
+        assert!(command.contains("oci://localhost:5050/charts/test-stack --plain-http \\"));
 
-        let remote = HelmInstall::new(
-            &stack,
-            "http://m.example.com",
-            "m.example.com",
-            "c1",
-            "ax_dg_x",
-        );
+        let remote = HelmInstall::new(&stack, "http://m.example.com", "m.example.com", "c1");
         assert!(remote.needs_https());
+    }
+
+    #[test]
+    fn helm_command_runs_in_a_shell() {
+        // The generated commands must install with the token from stdin.
+        let stack: Stack = serde_json::from_value(minimal_stack()).unwrap();
+        let command =
+            HelmInstall::new(&stack, "https://m.example.com", "m.example.com", "c1").command();
+        let install = command
+            .split("\n\n")
+            .nth(1)
+            .expect("login and install are separate paragraphs");
+        let values = install
+            .split(" | ")
+            .next()
+            .expect("the install reads values from printf");
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("ALIEN_TOKEN=ax_dg_secret; {values}"))
+            .output()
+            .expect("sh runs");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "management:\n  token: ax_dg_secret\n"
+        );
     }
 
     fn minimal_stack() -> serde_json::Value {

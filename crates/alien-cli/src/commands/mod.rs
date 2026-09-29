@@ -1,6 +1,5 @@
 #[cfg(feature = "platform")]
 pub mod access_requests;
-#[cfg(feature = "platform")]
 pub mod airgap;
 pub mod api_keys;
 pub mod build;

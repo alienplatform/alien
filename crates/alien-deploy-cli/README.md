@@ -9,7 +9,7 @@ Deployment CLI for customer admins. Deploys, manages, and tears down Alien appli
 - **`alien-deploy status`** — Show deployment status.
 - **`alien-deploy list`** — List all tracked deployments.
 - **`alien-deploy agent`** — Manage the alien-operator background service (install, start, stop, uninstall, status).
-- **`alien-deploy airgap apply`** — Install or update an air-gapped Kubernetes deployment from a bundle made with `alien airgap bundle`: pushes the bundle's images to the site's registry, then installs or upgrades the chart.
+- **`alien-deploy airgap apply`** — Install or update an air-gapped Kubernetes deployment from a bundle made with `alien airgap bundle`: checks the manager's signature against the trusted key (`--trusted-key` on the first install, remembered after), pushes the bundle's images to the site's registry, then installs or upgrades the chart. Registry credentials become the workloads' image pull secret.
 - **`alien-deploy airgap status`** — Export the deployment's state and recent logs to a file the vendor imports with `alien airgap import`.
 
 ## How It Works

@@ -2,7 +2,11 @@
 //! keeps for each deployment (`GET /v1/deployments/{id}/logs`). Long-term
 //! search lives in the OpenTelemetry backend the manager forwards to.
 
-use std::time::Duration as StdDuration;
+use std::{
+    collections::{hash_map::DefaultHasher, HashSet},
+    hash::{Hash, Hasher},
+    time::Duration as StdDuration,
+};
 
 use alien_error::{AlienError, Context};
 use alien_manager_api::SdkResultExt;
@@ -37,6 +41,9 @@ pub async fn manager_logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()>
         crate::deployment_resolver::resolve(&mgr.client, &reference, ctx.is_dev()).await?;
 
     let mut since: DateTime<Utc> = args.from.unwrap_or_else(|| Utc::now() - args.since);
+    // `since` is inclusive: entries at the cursor's timestamp come back on
+    // the next poll, and these fingerprints skip the ones already printed.
+    let mut printed_at_since: HashSet<u64> = HashSet::new();
     loop {
         let response = mgr
             .client
@@ -54,7 +61,14 @@ pub async fn manager_logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()>
             .into_inner();
 
         for entry in response.items {
-            since = since.max(entry.timestamp);
+            let fingerprint = fingerprint(&entry);
+            if entry.timestamp > since {
+                since = entry.timestamp;
+                printed_at_since.clear();
+            }
+            if entry.timestamp == since && !printed_at_since.insert(fingerprint) {
+                continue;
+            }
             if !level_selected(&args.level, &entry.severity)
                 || !query_matches(&args.query, &entry.message)
             {
@@ -83,6 +97,17 @@ pub async fn manager_logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()>
         }
         tokio::time::sleep(StdDuration::from(args.interval)).await;
     }
+}
+
+fn fingerprint(entry: &alien_manager_api::types::RecentLogEntry) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    entry.timestamp.hash(&mut hasher);
+    entry.resource.hash(&mut hasher);
+    entry.message.hash(&mut hasher);
+    let mut attributes: Vec<_> = entry.attributes.iter().collect();
+    attributes.sort();
+    attributes.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn level_selected(levels: &[LogLevel], severity: &str) -> bool {

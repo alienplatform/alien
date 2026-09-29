@@ -50,6 +50,8 @@ pub struct ChartSettings {
     /// to this upstream. Unset for an image without a registry (a local
     /// image), which charts reference as is.
     pub operator_upstream: Option<super::operator_image::UpstreamImage>,
+    /// Signs air-gapped bundles. `None` when this manager doesn't sign them.
+    pub bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
 }
 
 impl ChartSettings {
@@ -73,7 +75,17 @@ impl ChartSettings {
         Self {
             operator_image,
             operator_upstream,
+            bundle_signing_key: None,
         }
+    }
+
+    /// Sign air-gapped bundles with `key`.
+    pub fn with_bundle_signing_key(
+        mut self,
+        key: alien_core::bundle_signature::BundleSigningKey,
+    ) -> Self {
+        self.bundle_signing_key = Some(Arc::new(key));
+        self
     }
 
     /// The Operator image reference deployments run, given this manager's
@@ -100,6 +112,26 @@ struct Blob {
 /// addressed, so entries never go stale.
 static BLOBS: LazyLock<Mutex<HashMap<String, Blob>>> = LazyLock::new(Default::default);
 
+/// Digests of each rendered chart, by release ID and chart version.
+static RENDERED: LazyLock<Mutex<HashMap<(String, String), ChartDigests>>> =
+    LazyLock::new(Default::default);
+
+/// The three blobs that make up one chart version.
+#[derive(Clone)]
+struct ChartDigests {
+    manifest: String,
+    config: String,
+    chart: String,
+}
+
+impl ChartDigests {
+    fn contains(&self, digest: &str) -> bool {
+        [&self.manifest, &self.config, &self.chart]
+            .iter()
+            .any(|known| known.as_str() == digest)
+    }
+}
+
 /// Serve an OCI read for a path under [`CHART_NAMESPACE`].
 pub async fn serve(state: &AppState, subject: &Subject, method: &Method, path: &str) -> Response {
     if matches!(
@@ -122,7 +154,7 @@ pub async fn serve(state: &AppState, subject: &Subject, method: &Method, path: &
         None => return oci_error(StatusCode::NOT_FOUND, "NAME_UNKNOWN", "unknown chart path"),
     };
 
-    let charts = match chart_releases(state, name).await {
+    let charts = match chart_releases(state, subject, name).await {
         Ok(charts) => charts,
         Err(response) => return response,
     };
@@ -142,16 +174,7 @@ pub async fn serve(state: &AppState, subject: &Subject, method: &Method, path: &
 
     if let Some(reference) = operation.strip_prefix("manifests/") {
         if reference.starts_with("sha256:") {
-            if !cached(reference) {
-                // A digest this process hasn't rendered yet: render the
-                // releases' charts so the digest can be found.
-                for (version, release) in &charts {
-                    if let Err(response) = render(state, &settings, release, version) {
-                        return response;
-                    }
-                }
-            }
-            return blob_response(method, reference);
+            return visible_blob(state, &settings, &charts, method, reference);
         }
         let Some((version, release)) = charts.iter().find(|(version, _)| version == reference)
         else {
@@ -162,34 +185,52 @@ pub async fn serve(state: &AppState, subject: &Subject, method: &Method, path: &
             );
         };
         return match render(state, &settings, release, version) {
-            Ok(manifest_digest) => blob_response(method, &manifest_digest),
+            Ok(digests) => blob_response(method, &digests.manifest),
             Err(response) => response,
         };
     }
 
     if let Some(digest) = operation.strip_prefix("blobs/") {
-        if !cached(digest) {
-            for (version, release) in &charts {
-                if let Err(response) = render(state, &settings, release, version) {
-                    return response;
-                }
-            }
-        }
-        return blob_response(method, digest);
+        return visible_blob(state, &settings, &charts, method, digest);
     }
 
     oci_error(StatusCode::NOT_FOUND, "NAME_UNKNOWN", "unknown chart path")
 }
 
-/// Releases whose Kubernetes stack is named `name`, oldest first, with the
-/// chart version each one publishes.
+/// Serve `digest` only if it belongs to one of `charts`, the charts this
+/// caller may read. The blob cache is shared across callers, so a digest
+/// alone must not grant access.
+fn visible_blob(
+    state: &AppState,
+    settings: &ChartSettings,
+    charts: &[(String, ReleaseRecord)],
+    method: &Method,
+    digest: &str,
+) -> Response {
+    for (version, release) in charts {
+        match render(state, settings, release, version) {
+            Ok(digests) if digests.contains(digest) => return blob_response(method, digest),
+            Ok(_) => {}
+            Err(response) => return response,
+        }
+    }
+    oci_error(
+        StatusCode::NOT_FOUND,
+        "BLOB_UNKNOWN",
+        format!("unknown digest {digest}"),
+    )
+}
+
+/// Releases the caller may read whose Kubernetes stack is named `name`,
+/// oldest first, with the chart version each one publishes.
 async fn chart_releases(
     state: &AppState,
+    subject: &Subject,
     name: &str,
 ) -> Result<Vec<(String, ReleaseRecord)>, Response> {
     let mut releases = state
         .release_store
-        .list_releases(&Subject::system())
+        .list_releases(subject)
         .await
         .map_err(|e| {
             oci_error(
@@ -198,6 +239,7 @@ async fn chart_releases(
                 format!("failed to list releases: {e}"),
             )
         })?;
+    releases.retain(|release| state.authz.can_read_release(subject, release));
     releases.sort_by_key(|release| release.created_at);
     Ok(releases
         .into_iter()
@@ -212,13 +254,17 @@ async fn chart_releases(
         .collect())
 }
 
-/// Render a release's chart, cache its blobs, and return the manifest digest.
+/// Render a release's chart once, cache its blobs, and return their digests.
 fn render(
     state: &AppState,
     settings: &ChartSettings,
     release: &ReleaseRecord,
     version: &str,
-) -> Result<String, Response> {
+) -> Result<ChartDigests, Response> {
+    let key = (release.id.clone(), version.to_string());
+    if let Some(digests) = rendered().get(&key) {
+        return Ok(digests.clone());
+    }
     let render_failed =
         |message: String| oci_error(StatusCode::INTERNAL_SERVER_ERROR, "UNKNOWN", message);
     let stack = release
@@ -299,7 +345,19 @@ fn render(
     })
     .to_string()
     .into_bytes();
-    Ok(store(MANIFEST_MEDIA_TYPE, manifest))
+    let digests = ChartDigests {
+        manifest: store(MANIFEST_MEDIA_TYPE, manifest),
+        config: config_digest,
+        chart: chart_digest,
+    };
+    rendered().insert(key, digests.clone());
+    Ok(digests)
+}
+
+fn rendered() -> std::sync::MutexGuard<'static, HashMap<(String, String), ChartDigests>> {
+    RENDERED
+        .lock()
+        .expect("rendered chart index is never held across a panic")
 }
 
 fn store(media_type: &'static str, bytes: Vec<u8>) -> String {
@@ -309,10 +367,6 @@ fn store(media_type: &'static str, bytes: Vec<u8>) -> String {
         bytes: Arc::new(bytes),
     });
     digest
-}
-
-fn cached(digest: &str) -> bool {
-    blobs().contains_key(digest)
 }
 
 fn blob_response(method: &Method, digest: &str) -> Response {

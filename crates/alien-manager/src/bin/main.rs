@@ -158,15 +158,20 @@ async fn build_standalone_server(
     }
     config.response_signing_key = alien_manager::bootstrap::response_signing_key(&state_dir)
         .unwrap_or_else(|e| panic!("Failed to set up the response signing key: {e}"));
+    let bundle_signing_key = alien_manager::bootstrap::bundle_signing_key(&state_dir)
+        .unwrap_or_else(|e| panic!("Failed to set up the bundle signing key: {e}"));
 
     // Build the server with standalone defaults
     let server = AlienManager::builder(config)
         .token_store(token_store)
         .tunnels()
-        .charts(alien_manager::routes::charts::ChartSettings::new(
-            toml_config.operator.image.clone(),
-            toml_config.operator.insecure_registry,
-        ))
+        .charts(
+            alien_manager::routes::charts::ChartSettings::new(
+                toml_config.operator.image.clone(),
+                toml_config.operator.insecure_registry,
+            )
+            .with_bundle_signing_key(bundle_signing_key),
+        )
         .with_standalone_defaults(toml_config)
         .await
         .expect("Failed to set up standalone defaults")

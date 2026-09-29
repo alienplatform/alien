@@ -71,6 +71,8 @@ pub type Result<T> = alien_error::Result<T, ErrorData>;
 pub const FORMAT_VERSION: u32 = 1;
 
 pub const MANIFEST_FILE: &str = "manifest.json";
+/// The manager's signature over `manifest.json`.
+pub const SIGNATURE_FILE: &str = "manifest.sig";
 pub const TARGET_FILE: &str = "target.json";
 pub const OCI_DIR: &str = "oci";
 pub const CHART_DIR: &str = "chart";
@@ -502,7 +504,7 @@ pub async fn checksums(dir: &Path) -> Result<BTreeMap<String, String>> {
                 .expect("walked paths are under the bundle root")
                 .to_string_lossy()
                 .replace('\\', "/");
-            if relative == MANIFEST_FILE {
+            if relative == MANIFEST_FILE || relative == SIGNATURE_FILE {
                 continue;
             }
             let bytes = tokio::fs::read(&path)
@@ -515,20 +517,32 @@ pub async fn checksums(dir: &Path) -> Result<BTreeMap<String, String>> {
     Ok(sums)
 }
 
-/// Check a bundle directory against its manifest.
-pub async fn verify(dir: &Path) -> Result<BundleManifest> {
-    let manifest: BundleManifest = serde_json::from_slice(
-        &tokio::fs::read(dir.join(MANIFEST_FILE))
-            .await
-            .into_alien_error()
-            .context(ErrorData::BundleInvalid {
-                message: "no manifest.json".to_string(),
-            })?,
-    )
-    .into_alien_error()
-    .context(ErrorData::BundleInvalid {
-        message: "manifest.json is not valid".to_string(),
-    })?;
+/// Check a bundle directory: its manifest must be signed by `trusted_key`
+/// (the manager's bundle signing key), and every file must match the
+/// manifest's checksums.
+pub async fn verify(dir: &Path, trusted_key: &str) -> Result<BundleManifest> {
+    let manifest_bytes = tokio::fs::read(dir.join(MANIFEST_FILE))
+        .await
+        .into_alien_error()
+        .context(ErrorData::BundleInvalid {
+            message: "no manifest.json".to_string(),
+        })?;
+    let signature = tokio::fs::read_to_string(dir.join(SIGNATURE_FILE))
+        .await
+        .into_alien_error()
+        .context(ErrorData::BundleInvalid {
+            message: format!("the bundle is not signed (no {SIGNATURE_FILE})"),
+        })?;
+    alien_core::bundle_signature::verify(trusted_key, &manifest_bytes, &signature).context(
+        ErrorData::BundleInvalid {
+            message: "the signature does not match the trusted key".to_string(),
+        },
+    )?;
+    let manifest: BundleManifest = serde_json::from_slice(&manifest_bytes)
+        .into_alien_error()
+        .context(ErrorData::BundleInvalid {
+            message: "manifest.json is not valid".to_string(),
+        })?;
     if manifest.format_version != FORMAT_VERSION {
         return Err(AlienError::new(ErrorData::BundleInvalid {
             message: format!(
@@ -603,6 +617,7 @@ async fn write_json(path: &Path, value: &serde_json::Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::bundle_signature::BundleSigningKey;
 
     #[test]
     fn finds_and_rewrites_image_references() {
@@ -656,19 +671,82 @@ mod tests {
             chart: "chart/app.tgz".to_string(),
             files: checksums(dir.path()).await.unwrap(),
         };
+        let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+        tokio::fs::write(dir.path().join(MANIFEST_FILE), &manifest_bytes)
+            .await
+            .unwrap();
+        let key = BundleSigningKey::from_seed([5; 32]);
+        let trusted = key.public_key();
+
+        let error = verify(dir.path(), &trusted)
+            .await
+            .expect_err("an unsigned bundle fails");
+        assert!(error.message.contains("not signed"), "{}", error.message);
+
+        tokio::fs::write(dir.path().join(SIGNATURE_FILE), key.sign(&manifest_bytes))
+            .await
+            .unwrap();
+        verify(dir.path(), &trusted)
+            .await
+            .expect("untouched bundle verifies");
+
+        let other = BundleSigningKey::from_seed([6; 32]).public_key();
+        let error = verify(dir.path(), &other)
+            .await
+            .expect_err("a bundle signed by another key fails");
+        assert_eq!(error.code, "AIRGAP_BUNDLE_INVALID");
+
+        tokio::fs::write(dir.path().join(TARGET_FILE), b"{\"tampered\":true}")
+            .await
+            .unwrap();
+        let error = verify(dir.path(), &trusted)
+            .await
+            .expect_err("tampered bundle fails");
+        assert_eq!(error.code, "AIRGAP_BUNDLE_INVALID");
+        assert!(error.message.contains(TARGET_FILE));
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_a_manifest_rewritten_to_match_changed_files() {
+        // Someone who changes a file and recomputes the checksums in
+        // manifest.json still can't produce a valid signature.
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(dir.path().join(TARGET_FILE), b"{}")
+            .await
+            .unwrap();
+        let mut manifest = BundleManifest {
+            format_version: FORMAT_VERSION,
+            deployment_id: "dep_1".to_string(),
+            deployment_name: "customer-1".to_string(),
+            release_id: "rel_1".to_string(),
+            sequence: 1,
+            created_at: "now".to_string(),
+            stack_id: "app".to_string(),
+            images: vec![],
+            operator_image: "op".to_string(),
+            chart: "chart/app.tgz".to_string(),
+            files: checksums(dir.path()).await.unwrap(),
+        };
+        let key = BundleSigningKey::from_seed([5; 32]);
+        let signature = key.sign(&serde_json::to_vec(&manifest).unwrap());
+
+        tokio::fs::write(dir.path().join(TARGET_FILE), b"{\"tampered\":true}")
+            .await
+            .unwrap();
+        manifest.files = checksums(dir.path()).await.unwrap();
         tokio::fs::write(
             dir.path().join(MANIFEST_FILE),
             serde_json::to_vec(&manifest).unwrap(),
         )
         .await
         .unwrap();
-        verify(dir.path()).await.expect("untouched bundle verifies");
-
-        tokio::fs::write(dir.path().join(TARGET_FILE), b"{\"tampered\":true}")
+        tokio::fs::write(dir.path().join(SIGNATURE_FILE), signature)
             .await
             .unwrap();
-        let error = verify(dir.path()).await.expect_err("tampered bundle fails");
-        assert_eq!(error.code, "AIRGAP_BUNDLE_INVALID");
-        assert!(error.message.contains(TARGET_FILE));
+
+        let error = verify(dir.path(), &key.public_key())
+            .await
+            .expect_err("a rewritten manifest fails");
+        assert!(error.message.contains("signature"), "{}", error.message);
     }
 }

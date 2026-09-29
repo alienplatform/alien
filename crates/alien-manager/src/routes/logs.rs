@@ -21,7 +21,8 @@ use crate::error::ErrorData;
 pub struct RecentLogsQuery {
     /// Most recent entries to return (default 200, max 5000).
     pub limit: Option<usize>,
-    /// Only entries after this time (RFC 3339).
+    /// Only entries at or after this time (RFC 3339). Inclusive, so a caller
+    /// following logs doesn't miss entries that share its last timestamp.
     pub since: Option<DateTime<Utc>>,
 }
 
@@ -88,7 +89,7 @@ pub(crate) async fn recent_logs(
         .get_entries(Some(&deployment.id), usize::MAX)
         .await;
     if let Some(since) = query.since {
-        entries.retain(|entry| entry.timestamp > since);
+        entries.retain(|entry| entry.timestamp >= since);
     }
     entries.sort_by_key(|entry| entry.timestamp);
     let skip = entries.len().saturating_sub(limit);

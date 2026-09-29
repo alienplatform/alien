@@ -49,16 +49,18 @@ alien release
 alien onboard acme --platforms kubernetes --secret-input accessToken=...
 ```
 
-`alien onboard` prints the one `helm install` command the customer runs. Their cluster pulls the chart and images from your manager, with a token scoped to their deployment:
+`alien onboard` prints a token for the customer and the commands their Kubernetes admin runs once. Their cluster pulls the chart and images from your manager with that token, which stays out of shell history:
 
 ```bash
-helm registry login manager.example.com --username acme --password ax_dg_...
+read -rs ALIEN_TOKEN  # paste acme's token, then Enter
+printf '%s' "$ALIEN_TOKEN" | helm registry login manager.example.com --username acme --password-stdin
 
+printf 'management:\n  token: %s\n' "$ALIEN_TOKEN" | \
 helm install data-plane oci://manager.example.com/charts/data-plane \
   --namespace data-plane --create-namespace \
-  --set management.token=ax_dg_... \
   --set management.name=acme \
-  --values values.yaml
+  --values values.yaml \
+  --values -
 ```
 
 For real customers, run the manager where their clusters can reach it over HTTPS: with the [Helm chart](infra/helm/alien-manager/) on Kubernetes, the [Terraform module](infra/aws-ecs-manager/) on Amazon ECS, or `docker run` on any machine. See [Self-hosting](https://alien.dev/docs/self-hosting).
@@ -132,14 +134,15 @@ Once a customer installs, you don't need access to their environment again:
 
 ## Air-gapped environments
 
-Sites with no connection to your manager get the same app in a file. Package a release, carry the bundle in, and apply it with `alien-deploy`, which pushes the images to the site's registry and installs or updates the chart:
+Sites with no connection to your manager get the same app in a file. Package a release, carry the bundle in, and apply it with `alien-deploy`, which checks the manager's signature, pushes the images to the site's registry and installs or updates the chart:
 
 ```bash
-alien onboard site-7 --platforms kubernetes --airgapped
+alien onboard site-7 --platforms kubernetes --airgapped   # prints the bundle key
 alien airgap bundle site-7/site-7 -o site-7.tar
 
 # inside the site
-alien-deploy airgap apply site-7.tar --registry registry.internal/vendor -f values.yaml
+alien-deploy airgap apply site-7.tar --registry registry.internal/vendor -f values.yaml \
+  --trusted-key ed25519:...   # first install only; later bundles must match it
 alien-deploy airgap status -n data-plane -o status.tar
 
 # back with you

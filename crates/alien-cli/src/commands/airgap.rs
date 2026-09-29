@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use alien_cli_common::airgap::{self, BundleManifest, RegistryAccess, CHART_DIR, OCI_DIR};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::SdkResultExt;
+use base64::Engine as _;
 use clap::{Parser, Subcommand};
 use oci_client::{client::ClientProtocol, secrets::RegistryAuth, Reference};
 
@@ -173,14 +174,27 @@ async fn bundle(
             .await
             .context(file_error("checksumming"))?,
     };
-    std::fs::write(
-        dir.join(airgap::MANIFEST_FILE),
-        serde_json::to_vec_pretty(&manifest)
-            .into_alien_error()
-            .context(file_error("encoding the manifest"))?,
-    )
-    .into_alien_error()
-    .context(file_error("writing the manifest"))?;
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest)
+        .into_alien_error()
+        .context(file_error("encoding the manifest"))?;
+    std::fs::write(dir.join(airgap::MANIFEST_FILE), &manifest_bytes)
+        .into_alien_error()
+        .context(file_error("writing the manifest"))?;
+    let signature = mgr
+        .client
+        .sign_deployment_bundle()
+        .id(&deployment.id)
+        .body(alien_manager_api::types::BundleSignatureRequest {
+            manifest: base64::engine::general_purpose::STANDARD.encode(&manifest_bytes),
+        })
+        .send()
+        .await
+        .into_sdk_error()
+        .context(api_failed("signing the bundle"))?
+        .into_inner();
+    std::fs::write(dir.join(airgap::SIGNATURE_FILE), &signature.signature)
+        .into_alien_error()
+        .context(file_error("writing the signature"))?;
     airgap::pack(dir, &output).context(file_error("writing the bundle"))?;
 
     let size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
@@ -199,9 +213,14 @@ async fn bundle(
     println!(
         "  {}",
         command(&format!(
-            "alien-deploy airgap apply {} --registry <registry>/<path> -f values.yaml",
-            output.display()
+            "alien-deploy airgap apply {} --registry <registry>/<path> -f values.yaml \\\n      --trusted-key {}",
+            output.display(),
+            signature.public_key
         ))
+    );
+    println!(
+        "{}",
+        dim_label("The site keeps the key after the first install and rejects bundles signed by any other.")
     );
     Ok(())
 }

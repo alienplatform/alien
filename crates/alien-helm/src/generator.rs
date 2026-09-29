@@ -3881,6 +3881,8 @@ runtime:
     # Follow the Operator image the manager targets, so upgrades need no helm
     # upgrade. Kubernetes keeps the running pod until the new one is ready.
     selfUpdate: true
+  # Pull secrets for the Operator and for the application's workloads (added
+  # to their ServiceAccounts), for images in a registry that needs credentials.
   imagePullSecrets: []
   podLabels: {}
   podAnnotations: {}
@@ -4009,6 +4011,9 @@ airgapped:
   # `alien-deploy airgap apply`, and state leaves with `alien-deploy airgap
   # status`. Needs management.deploymentId from the bundle.
   enabled: false
+  # Public key (ed25519:...) bundles must be signed with. Set by the first
+  # `alien-deploy airgap apply --trusted-key`, and checked on every later one.
+  bundleSigningKey: ""
 
 tunnel:
   # Serve requests the control plane sends through the manager to the stack's
@@ -4895,7 +4900,8 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" }
+        "enabled": { "type": "boolean" },
+        "bundleSigningKey": { "type": "string" }
       }
     },
     "tunnel": {
@@ -5379,6 +5385,10 @@ metadata:
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+{{- with $.Values.runtime.imagePullSecrets }}
+imagePullSecrets:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
 ---
 {{- end }}
 "#

@@ -1,8 +1,10 @@
 //! First-start setup shared by the `alien-manager` binary and `alien serve`:
-//! the admin token and the key that signs command responses.
+//! the admin token, the key that signs command responses, and the key that
+//! signs air-gapped bundles.
 
 use std::path::Path;
 
+use alien_core::bundle_signature::BundleSigningKey;
 use alien_error::{AlienError, Context, IntoAlienError};
 use sha2::{Digest, Sha256};
 
@@ -18,6 +20,10 @@ const LEGACY_ADMIN_TOKEN_FILE: &str = "admin-token";
 
 /// Key that signs command responses, generated once per state directory.
 const SIGNING_KEY_FILE: &str = "response-signing-key";
+
+/// Seed of the key that signs air-gapped bundles, generated once per state
+/// directory. Environments trust its public key, so it must persist.
+const BUNDLE_SIGNING_KEY_FILE: &str = "bundle-signing-key";
 
 /// How the admin token was established on this start.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,13 +118,25 @@ async fn register(token_store: &dyn TokenStore, token: &str) -> Result<()> {
 /// The key that signs command responses: read from the state directory, or
 /// generated and stored (owner-only) on first start.
 pub fn response_signing_key(state_dir: &Path) -> Result<Vec<u8>> {
-    let path = state_dir.join(SIGNING_KEY_FILE);
-    match std::fs::read(&path) {
-        Ok(key) if key.len() == 32 => return Ok(key),
-        Ok(_) => {
-            return Err(AlienError::new(ErrorData::ServerInitFailed {
-                reason: format!("{} is not a 32-byte key", path.display()),
-            }))
+    secret_file_32(&state_dir.join(SIGNING_KEY_FILE)).map(|key| key.to_vec())
+}
+
+/// The key that signs air-gapped bundles: read from the state directory, or
+/// generated and stored (owner-only) on first start.
+pub fn bundle_signing_key(state_dir: &Path) -> Result<BundleSigningKey> {
+    let seed = secret_file_32(&state_dir.join(BUNDLE_SIGNING_KEY_FILE))?;
+    Ok(BundleSigningKey::from_seed(seed))
+}
+
+/// Read a 32-byte secret from `path`, creating it (owner-only) when missing.
+fn secret_file_32(path: &Path) -> Result<[u8; 32]> {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            return bytes.try_into().map_err(|_| {
+                AlienError::new(ErrorData::ServerInitFailed {
+                    reason: format!("{} is not a 32-byte key", path.display()),
+                })
+            })
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => {
@@ -128,10 +146,10 @@ pub fn response_signing_key(state_dir: &Path) -> Result<Vec<u8>> {
         }
     }
     let key: [u8; 32] = rand::random();
-    alien_core::file_utils::write_secret_file(&path, &key)
+    alien_core::file_utils::write_secret_file(path, &key)
         .into_alien_error()
         .context(ErrorData::ServerInitFailed {
             reason: format!("Failed to write {}", path.display()),
         })?;
-    Ok(key.to_vec())
+    Ok(key)
 }

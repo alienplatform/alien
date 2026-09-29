@@ -1066,6 +1066,11 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
         .context(ErrorData::ServerStartFailed {
             reason: "Failed to set up the response signing key".to_string(),
         })?;
+    let bundle_signing_key = alien_manager::bootstrap::bundle_signing_key(state_dir).context(
+        ErrorData::ServerStartFailed {
+            reason: "Failed to set up the bundle signing key".to_string(),
+        },
+    )?;
 
     // Re-read the admin token record for the prefix (used in subsequent-run display)
     let admin_prefix = if generated_token.is_none() {
@@ -1082,10 +1087,13 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
     let server = AlienManager::builder(config.clone())
         .token_store(token_store)
         .tunnels()
-        .charts(alien_manager::routes::charts::ChartSettings::new(
-            toml_config.operator.image.clone(),
-            toml_config.operator.insecure_registry,
-        ))
+        .charts(
+            alien_manager::routes::charts::ChartSettings::new(
+                toml_config.operator.image.clone(),
+                toml_config.operator.insecure_registry,
+            )
+            .with_bundle_signing_key(bundle_signing_key),
+        )
         .with_standalone_defaults(&toml_config)
         .await
         .context(ErrorData::ServerStartFailed {

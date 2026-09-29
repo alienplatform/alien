@@ -30,6 +30,10 @@ pub struct ManagerInfoResponse {
     /// Operator image the charts this manager serves install.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operator_image: Option<String>,
+    /// Public key (`ed25519:<base64>`) that air-gapped environments verify
+    /// bundles from this manager with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bundle_signing_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -74,6 +78,11 @@ async fn manager_info(State(state): State<AppState>, headers: HeaderMap) -> Resp
             .charts
             .as_ref()
             .map(|charts| charts.deployed_operator_image(&state.config.base_url())),
+        bundle_signing_key: state
+            .charts
+            .as_ref()
+            .and_then(|charts| charts.bundle_signing_key.as_ref())
+            .map(|key| key.public_key()),
     })
     .into_response()
 }

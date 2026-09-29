@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use alien_cli_common::airgap::{self, BundleManifest, RegistryAccess, CHART_DIR, TARGET_FILE};
 use alien_error::{AlienError, Context, IntoAlienError};
+use base64::Engine as _;
 use clap::{Parser, Subcommand};
 use oci_client::secrets::RegistryAuth;
 use tokio::process::Command;
@@ -19,7 +20,7 @@ use crate::error::{ErrorData, Result};
     about = "Run a deployment with no connection to its manager",
     long_about = "Run a deployment with no connection to its manager.\n\nThe vendor builds a bundle with `alien airgap bundle`. `apply` pushes its images to your registry and installs or updates the deployment; `status` exports its state and recent logs for the vendor.",
     after_help = "EXAMPLES:
-    alien-deploy airgap apply data-plane-rel_123.tar --registry registry.internal/vendor -f values.yaml
+    alien-deploy airgap apply data-plane-rel_123.tar --registry registry.internal/vendor -f values.yaml --trusted-key ed25519:...
     alien-deploy airgap status -o status.tar"
 )]
 pub struct AirgapArgs {
@@ -51,6 +52,11 @@ pub struct ApplyArgs {
     /// The registry serves plain HTTP
     #[arg(long)]
     pub insecure_registry: bool,
+    /// Public key (ed25519:...) bundles must be signed with, from the vendor.
+    /// Needed on the first install; later bundles are checked against the key
+    /// the install remembers.
+    #[arg(long, env = "AIRGAP_TRUSTED_KEY")]
+    pub trusted_key: Option<String>,
     /// Namespace (defaults to the application name)
     #[arg(long, short = 'n')]
     pub namespace: Option<String>,
@@ -94,13 +100,23 @@ async fn apply(args: ApplyArgs) -> Result<()> {
         .context(config_error("creating a working directory"))?;
     println!("Checking {}", args.bundle.display());
     airgap::unpack(&args.bundle, work.path()).context(config_error("reading the bundle"))?;
-    let manifest = airgap::verify(work.path())
-        .await
-        .context(config_error("verifying the bundle"))?;
+    // The release name only locates the key this install trusts; nothing
+    // else from the manifest is used before its signature is checked.
+    let unverified: BundleManifest = serde_json::from_slice(
+        &std::fs::read(work.path().join(airgap::MANIFEST_FILE))
+            .into_alien_error()
+            .context(config_error("reading the bundle manifest"))?,
+    )
+    .into_alien_error()
+    .context(config_error("parsing the bundle manifest"))?;
     let namespace = args
         .namespace
         .clone()
-        .unwrap_or_else(|| manifest.stack_id.clone());
+        .unwrap_or_else(|| unverified.stack_id.clone());
+    let trusted_key = trusted_key(&args, &unverified.stack_id, &namespace).await?;
+    let manifest = airgap::verify(work.path(), &trusted_key)
+        .await
+        .context(config_error("verifying the bundle"))?;
 
     println!(
         "Pushing {} images to {}",
@@ -148,6 +164,13 @@ async fn apply(args: ApplyArgs) -> Result<()> {
     );
     let operator_tag = operator.tag.clone().unwrap_or_else(|| "latest".to_string());
 
+    // A registry that needs credentials to push needs them to pull too.
+    let pull_secret = match (&args.registry_username, &args.registry_password) {
+        (Some(username), Some(password)) => {
+            Some(write_pull_secret(&args, &manifest, &namespace, username, password).await?)
+        }
+        _ => None,
+    };
     println!(
         "Installing {} in namespace {}",
         manifest.stack_id, namespace
@@ -159,6 +182,8 @@ async fn apply(args: ApplyArgs) -> Result<()> {
         &namespace,
         &operator_repository,
         &operator_tag,
+        pull_secret.as_deref(),
+        &trusted_key,
     )
     .await?;
     write_target(&args, &manifest, &namespace, &target).await?;
@@ -177,6 +202,8 @@ async fn helm_install(
     namespace: &str,
     operator_repository: &str,
     operator_tag: &str,
+    pull_secret: Option<&str>,
+    trusted_key: &str,
 ) -> Result<()> {
     let mut cmd = Command::new("helm");
     cmd.arg("upgrade")
@@ -205,7 +232,17 @@ async fn helm_install(
         .args(["--set", "runtime.image.selfUpdate=false"])
         .args(["--set", "logCollector.enabled=false"])
         .args(["--set", "tunnel.enabled=false"])
+        .args([
+            "--set-string",
+            &format!("airgapped.bundleSigningKey={trusted_key}"),
+        ])
         .args(["--wait", "--timeout", "300s"]);
+    if let Some(secret) = pull_secret {
+        cmd.args([
+            "--set-string",
+            &format!("runtime.imagePullSecrets[0].name={secret}"),
+        ]);
+    }
     for values in &args.values {
         cmd.arg("-f").arg(values);
     }
@@ -213,6 +250,115 @@ async fn helm_install(
         cmd.arg("--kube-context").arg(context);
     }
     run(cmd, "helm upgrade --install").await.map(|_| ())
+}
+
+/// The key bundles for `release` must be signed with: the one the install
+/// remembers, or `--trusted-key` on the first install. A different
+/// `--trusted-key` for an existing install is refused rather than silently
+/// replacing the trust.
+async fn trusted_key(args: &ApplyArgs, release: &str, namespace: &str) -> Result<String> {
+    let mut cmd = Command::new("helm");
+    cmd.args(["get", "values", release, "-n", namespace, "-o", "json"]);
+    if let Some(context) = &args.kube_context {
+        cmd.arg("--kube-context").arg(context);
+    }
+    let output = cmd
+        .output()
+        .await
+        .into_alien_error()
+        .context(config_error("running helm get values; is it installed?"))?;
+    let stored = if output.status.success() {
+        let values: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .into_alien_error()
+            .context(config_error("parsing the release's values"))?;
+        values["airgapped"]["bundleSigningKey"]
+            .as_str()
+            .filter(|key| !key.is_empty())
+            .map(str::to_string)
+    } else if String::from_utf8_lossy(&output.stderr).contains("not found") {
+        None
+    } else {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "helm get values failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        }));
+    };
+    match (args.trusted_key.as_deref().map(str::trim), stored) {
+        (Some(given), Some(stored)) if given != stored => {
+            Err(AlienError::new(ErrorData::ValidationError {
+                field: "trusted-key".to_string(),
+                message: format!(
+                    "this install already trusts {stored}; bundles must be signed with that key"
+                ),
+            }))
+        }
+        (_, Some(stored)) => Ok(stored),
+        (Some(given), None) => Ok(given.to_string()),
+        (None, None) => Err(AlienError::new(ErrorData::ValidationError {
+            field: "trusted-key".to_string(),
+            message: "the first install needs --trusted-key, the bundle key `alien onboard --airgapped` printed for the vendor".to_string(),
+        })),
+    }
+}
+
+/// Store the registry credentials as an image pull Secret in `namespace` and
+/// return its name. The chart attaches it to the Operator and to the
+/// application's ServiceAccounts.
+async fn write_pull_secret(
+    args: &ApplyArgs,
+    manifest: &BundleManifest,
+    namespace: &str,
+    username: &str,
+    password: &str,
+) -> Result<String> {
+    let secret_name = format!("{}-registry-credentials", manifest.stack_id);
+    let registry_host = args.registry.split('/').next().unwrap_or(&args.registry);
+    let auth = base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
+    let config = serde_json::json!({
+        "auths": { registry_host: { "username": username, "password": password, "auth": auth } }
+    });
+    let dir = tempfile::tempdir()
+        .into_alien_error()
+        .context(config_error("creating a working directory"))?;
+    let config_path = dir.path().join("config.json");
+    alien_core::file_utils::write_secret_file(&config_path, config.to_string().as_bytes())
+        .into_alien_error()
+        .context(config_error("writing registry credentials"))?;
+
+    let mut namespace_yaml = kubectl(args.kube_context.as_deref());
+    namespace_yaml.args([
+        "create",
+        "namespace",
+        namespace,
+        "--dry-run=client",
+        "-o",
+        "yaml",
+    ]);
+    let namespace_yaml = run(namespace_yaml, "kubectl create namespace").await?;
+    let mut secret_yaml = kubectl(args.kube_context.as_deref());
+    secret_yaml
+        .args(["create", "secret", "generic", &secret_name, "-n", namespace])
+        .args(["--type", "kubernetes.io/dockerconfigjson"])
+        .arg(format!(
+            "--from-file=.dockerconfigjson={}",
+            config_path.display()
+        ))
+        .args(["--dry-run=client", "-o", "yaml"]);
+    let secret_yaml = run(secret_yaml, "kubectl create secret").await?;
+
+    let apply_path = dir.path().join("pull-secret.yaml");
+    let mut documents = namespace_yaml;
+    documents.extend_from_slice(b"\n---\n");
+    documents.extend_from_slice(&secret_yaml);
+    alien_core::file_utils::write_secret_file(&apply_path, &documents)
+        .into_alien_error()
+        .context(config_error("writing the pull Secret manifest"))?;
+    let mut apply = kubectl(args.kube_context.as_deref());
+    apply.args(["apply", "-f"]).arg(&apply_path);
+    run(apply, "kubectl apply").await?;
+    Ok(secret_name)
 }
 
 async fn write_target(
@@ -272,11 +418,34 @@ async fn status(args: StatusArgs) -> Result<()> {
     let encoded = run(get, "kubectl get secret").await?;
     let status = base64_decode(String::from_utf8_lossy(&encoded).trim())?;
 
-    let mut pods = kubectl(args.kube_context.as_deref());
-    pods.args(["get", "pods", "-n", &args.namespace, "-o", "name"]);
-    let pods = String::from_utf8_lossy(&run(pods, "kubectl get pods").await?).to_string();
+    // Only this release's pods: its workloads and the chart's own (the
+    // Operator). Other applications in the namespace stay out of the file.
+    let mut pods = std::collections::BTreeSet::new();
+    for selector in [
+        format!("alien.dev/deployment={release}"),
+        format!("app.kubernetes.io/instance={release}"),
+    ] {
+        let mut cmd = kubectl(args.kube_context.as_deref());
+        cmd.args([
+            "get",
+            "pods",
+            "-n",
+            &args.namespace,
+            "-l",
+            &selector,
+            "-o",
+            "name",
+        ]);
+        let names = run(cmd, "kubectl get pods").await?;
+        pods.extend(
+            String::from_utf8_lossy(&names)
+                .lines()
+                .filter(|line| !line.is_empty())
+                .map(str::to_string),
+        );
+    }
     let mut logs = Vec::new();
-    for pod in pods.lines().filter(|line| !line.is_empty()) {
+    for pod in &pods {
         let mut cmd = kubectl(args.kube_context.as_deref());
         cmd.args([
             "logs",
@@ -392,7 +561,6 @@ async fn run(mut cmd: Command, what: &str) -> Result<Vec<u8>> {
 }
 
 fn base64_decode(value: &str) -> Result<Vec<u8>> {
-    use base64::Engine;
     base64::engine::general_purpose::STANDARD
         .decode(value)
         .into_alien_error()

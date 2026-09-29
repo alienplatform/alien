@@ -847,6 +847,52 @@
         }
       }
     },
+    "/v1/deployments/{id}/bundle-signature": {
+      "post": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "sign_deployment_bundle",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BundleSignatureRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signature over the manifest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BundleSignatureResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/deployments/{id}/delete": {
       "post": {
         "tags": [
@@ -5903,6 +5949,37 @@
           },
           "stale": {
             "type": "boolean"
+          }
+        }
+      },
+      "BundleSignatureRequest": {
+        "type": "object",
+        "description": "Body of `POST /v1/deployments/{id}/bundle-signature`.",
+        "required": [
+          "manifest"
+        ],
+        "properties": {
+          "manifest": {
+            "type": "string",
+            "description": "The bundle's `manifest.json`, base64-encoded, exactly as packaged."
+          }
+        }
+      },
+      "BundleSignatureResponse": {
+        "type": "object",
+        "description": "A signature over a bundle manifest.",
+        "required": [
+          "signature",
+          "publicKey"
+        ],
+        "properties": {
+          "publicKey": {
+            "type": "string",
+            "description": "`ed25519:<base64>` public key that verifies it."
+          },
+          "signature": {
+            "type": "string",
+            "description": "`ed25519:<base64>` signature over the manifest bytes."
           }
         }
       },
@@ -12342,6 +12419,11 @@
           "capabilities"
         ],
         "properties": {
+          "bundleSigningKey": {
+            "type": "string",
+            "description": "Public key (`ed25519:<base64>`) that air-gapped environments verify\nbundles from this manager with.",
+            "nullable": true
+          },
           "capabilities": {
             "$ref": "#/components/schemas/ManagerCapabilities",
             "description": "Features this manager serves."
