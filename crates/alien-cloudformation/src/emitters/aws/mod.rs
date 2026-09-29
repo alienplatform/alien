@@ -8,6 +8,7 @@
 pub mod ai;
 pub mod artifact_registry;
 pub mod build;
+mod eks_availability_zones;
 pub mod email;
 pub mod helpers;
 pub mod key;

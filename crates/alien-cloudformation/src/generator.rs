@@ -212,22 +212,63 @@ impl CloudFormationTarget {
     }
 }
 
-/// Generate a CloudFormation template for a stack.
-/// Whether this template will actually emit a sandbox that demands named subnets.
-///
-/// The predicate answers a question about the stack; this answers it about the artifact. On a
-/// Kubernetes target the sandbox is skipped, so nothing forces subnets and withholding the mode
-/// would remove an install option while explaining it with a resource the template never carries.
+/// Setup resources that require subnet IDs cannot use implicit default networking.
+/// EKS also requires explicit subnets: this package does not discover the default VPC.
 fn restricts_network_mode(stack: &Stack, target: CloudFormationTarget) -> bool {
-    alien_core::restricts_network_mode(stack, target.is_kubernetes())
+    target.is_kubernetes() || alien_core::restricts_network_mode(stack, false)
 }
 
+/// Generate a CloudFormation template for a stack.
 pub fn generate_cloudformation_template(
     stack: &Stack,
     options: CloudFormationOptions<'_>,
 ) -> Result<CfTemplate> {
     validate_stack_for_cloudformation(stack)?;
     validate_stack_settings(&options.stack_settings)?;
+    if options.target.is_kubernetes()
+        && (matches!(
+            options.stack_settings.network,
+            Some(NetworkSettings::Create {
+                availability_zones: 1,
+                ..
+            })
+        ) || stack.resources().any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Network>()
+                .is_some_and(|network| {
+                    matches!(
+                        network.settings,
+                        NetworkSettings::Create {
+                            availability_zones: 1,
+                            ..
+                        }
+                    )
+                })
+        }))
+    {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "generate EKS CloudFormation package".to_string(),
+            reason: "EKS requires at least two distinct Availability Zones".to_string(),
+        }));
+    }
+
+    if options.target.is_kubernetes()
+        && (matches!(
+            options.stack_settings.network,
+            Some(NetworkSettings::UseDefault)
+        ) || stack.resources().any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Network>()
+                .is_some_and(|network| matches!(network.settings, NetworkSettings::UseDefault))
+        }))
+    {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "generate EKS CloudFormation package".to_string(),
+            reason: "CloudFormation EKS requires create-new networking or an existing VPC with explicit subnet IDs; automatic default-VPC discovery is not supported".to_string(),
+        }));
+    }
 
     let mut stack_settings = options.stack_settings.clone();
     if options.target.is_kubernetes() {
@@ -1142,11 +1183,15 @@ fn add_network_parameters(
                 number_parameter(
                     "Only used with create-new. Number of availability zones for the new VPC.",
                     u32::from(defaults.availability_zones),
-                    Some(vec![
-                        CfExpression::from(1u8),
-                        CfExpression::from(2u8),
-                        CfExpression::from(3u8),
-                    ]),
+                    Some(if target.is_kubernetes() {
+                        vec![CfExpression::from(2u8), CfExpression::from(3u8)]
+                    } else {
+                        vec![
+                            CfExpression::from(1u8),
+                            CfExpression::from(2u8),
+                            CfExpression::from(3u8),
+                        ]
+                    }),
                 ),
             );
             template.parameters.insert(
@@ -1347,24 +1392,24 @@ fn add_standard_conditions(
                 CONDITION_NETWORK_MODE_USE_EXISTING.to_string(),
                 equals_ref(PARAM_NETWORK_MODE, "use-existing"),
             );
-            if has_created_network
-                && stack.resources().any(|(_id, entry)| {
-                    entry.lifecycle == alien_core::ResourceLifecycle::Frozen
-                        && entry
-                            .config
-                            .downcast_ref::<alien_core::Postgres>()
-                            .is_some()
-                })
-            {
-                template.conditions.insert(
-                    crate::emitters::aws::helpers::CONDITION_NETWORK_MODE_HAS_NAMED_SUBNETS
-                        .to_string(),
-                    CfExpression::or([
-                        equals_ref(PARAM_NETWORK_MODE, "create-new"),
-                        equals_ref(PARAM_NETWORK_MODE, "use-existing"),
-                    ]),
-                );
-            }
+        }
+        if !restricts_network_mode(stack, target)
+            && has_created_network
+            && stack.resources().any(|(_id, entry)| {
+                entry.lifecycle == alien_core::ResourceLifecycle::Frozen
+                    && entry
+                        .config
+                        .downcast_ref::<alien_core::Postgres>()
+                        .is_some()
+            })
+        {
+            template.conditions.insert(
+                crate::emitters::aws::helpers::CONDITION_NETWORK_MODE_HAS_NAMED_SUBNETS.to_string(),
+                CfExpression::or([
+                    equals_ref(PARAM_NETWORK_MODE, "create-new"),
+                    equals_ref(PARAM_NETWORK_MODE, "use-existing"),
+                ]),
+            );
         }
     }
     if has_created_network {
