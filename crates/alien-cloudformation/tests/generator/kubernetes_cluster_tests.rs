@@ -400,3 +400,51 @@ fn eks_cloudformation_rejects_unsupported_network_and_identity_names() {
             .contains("lowercase DNS label of at most 24 characters"));
     }
 }
+
+#[test]
+fn eks_requires_two_zones_while_native_aws_retains_single_zone_networking() {
+    let stack = Stack::new("single-zone".to_string())
+        .add(
+            alien_core::Network::new("network".to_string())
+                .settings(alien_core::NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 1,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let error = super::helpers::try_render_built_ins(
+        &stack,
+        StackSettings {
+            network: Some(alien_core::NetworkSettings::Create {
+                cidr: None,
+                availability_zones: 1,
+            }),
+            ..Default::default()
+        },
+        RegistrationMode::OutputsFallback,
+        CloudFormationTarget::Eks,
+        "kubernetes",
+        "single-zone EKS",
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("at least two distinct Availability Zones"));
+    // Real lint verifies the native AWS one-zone package remains installable.
+    render_built_ins_target(
+        &stack,
+        StackSettings {
+            network: Some(alien_core::NetworkSettings::Create {
+                cidr: None,
+                availability_zones: 1,
+            }),
+            ..Default::default()
+        },
+        RegistrationMode::OutputsFallback,
+        CloudFormationTarget::Aws,
+        "aws",
+        "single-zone AWS network",
+    );
+}

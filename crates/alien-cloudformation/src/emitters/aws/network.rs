@@ -104,7 +104,7 @@ impl CfEmitter for AwsNetworkEmitter {
                             "securityGroupId",
                             CfExpression::get_att(network_id(prefix, "SecurityGroup"), "GroupId"),
                         ),
-                        ("availabilityZones", availability_zone_names()),
+                        ("availabilityZones", availability_zone_names(ctx)),
                         ("isByoVpc", CfExpression::from(false)),
                     ]),
                     {
@@ -155,7 +155,22 @@ impl CfEmitter for AwsNetworkEmitter {
 
 fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
     let prefix = required_logical_id(ctx)?;
-    let mut resources = Vec::new();
+    let eks = super::eks_availability_zones::required(ctx);
+    let zones = if eks {
+        CfExpression::get_att(super::eks_availability_zones::LOOKUP_ID, "ZoneIds")
+    } else {
+        get_azs()
+    };
+    let zone_property = if eks {
+        "AvailabilityZoneId"
+    } else {
+        "AvailabilityZone"
+    };
+    let mut resources = if eks {
+        super::eks_availability_zones::resources(ctx, CfExpression::ref_("AvailabilityZones"))
+    } else {
+        Vec::new()
+    };
 
     let vpc_id = network_id(prefix, "Vpc");
     let mut vpc = CfResource::new(vpc_id.clone(), "AWS::EC2::VPC".to_string());
@@ -205,7 +220,7 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
             .insert("VpcId".to_string(), CfExpression::ref_(&vpc_id));
         public_subnet
             .properties
-            .insert("AvailabilityZone".to_string(), select(index, get_azs()));
+            .insert(zone_property.to_string(), select(index, zones.clone()));
         public_subnet
             .properties
             .insert("CidrBlock".to_string(), select(index, cidr_blocks(&vpc_id)));
@@ -227,7 +242,7 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
             .insert("VpcId".to_string(), CfExpression::ref_(&vpc_id));
         private_subnet
             .properties
-            .insert("AvailabilityZone".to_string(), select(index, get_azs()));
+            .insert(zone_property.to_string(), select(index, zones.clone()));
         private_subnet.properties.insert(
             "CidrBlock".to_string(),
             select(index + 3, cidr_blocks(&vpc_id)),

@@ -304,17 +304,22 @@ pub fn subnet_refs(prefix: &str, kind: &str) -> CfExpression {
 }
 
 /// Per-AZ availability-zone names with the same `Fn::If` masking.
-pub fn availability_zone_names() -> CfExpression {
+pub fn availability_zone_names(ctx: &EmitContext<'_>) -> CfExpression {
+    let zones = if super::eks_availability_zones::required(ctx) {
+        CfExpression::get_att(super::eks_availability_zones::LOOKUP_ID, "ZoneNames")
+    } else {
+        get_azs()
+    };
     CfExpression::list([
-        select(0, get_azs()),
+        select(0, zones.clone()),
         CfExpression::if_(
             CONDITION_NETWORK_AZ2,
-            select(1, get_azs()),
+            select(1, zones.clone()),
             CfExpression::no_value(),
         ),
         CfExpression::if_(
             CONDITION_NETWORK_AZ3,
-            select(2, get_azs()),
+            select(2, zones),
             CfExpression::no_value(),
         ),
     ])

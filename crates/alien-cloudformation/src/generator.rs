@@ -228,6 +228,34 @@ pub fn generate_cloudformation_template(
     if options.target.is_kubernetes()
         && (matches!(
             options.stack_settings.network,
+            Some(NetworkSettings::Create {
+                availability_zones: 1,
+                ..
+            })
+        ) || stack.resources().any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Network>()
+                .is_some_and(|network| {
+                    matches!(
+                        network.settings,
+                        NetworkSettings::Create {
+                            availability_zones: 1,
+                            ..
+                        }
+                    )
+                })
+        }))
+    {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "generate EKS CloudFormation package".to_string(),
+            reason: "EKS requires at least two distinct Availability Zones".to_string(),
+        }));
+    }
+
+    if options.target.is_kubernetes()
+        && (matches!(
+            options.stack_settings.network,
             Some(NetworkSettings::UseDefault)
         ) || stack.resources().any(|(_, entry)| {
             entry
@@ -1155,11 +1183,15 @@ fn add_network_parameters(
                 number_parameter(
                     "Only used with create-new. Number of availability zones for the new VPC.",
                     u32::from(defaults.availability_zones),
-                    Some(vec![
-                        CfExpression::from(1u8),
-                        CfExpression::from(2u8),
-                        CfExpression::from(3u8),
-                    ]),
+                    Some(if target.is_kubernetes() {
+                        vec![CfExpression::from(2u8), CfExpression::from(3u8)]
+                    } else {
+                        vec![
+                            CfExpression::from(1u8),
+                            CfExpression::from(2u8),
+                            CfExpression::from(3u8),
+                        ]
+                    }),
                 ),
             );
             template.parameters.insert(

@@ -51,6 +51,10 @@ fn eks_resources(ctx: &EmitContext<'_>, prefix: &str) -> Vec<CfResource> {
 
     let mut resources = Vec::new();
     if default_network(ctx).is_none() {
+        resources.extend(super::eks_availability_zones::resources(
+            ctx,
+            CfExpression::from(2u8),
+        ));
         resources.extend([
             vpc(ctx, &vpc_id),
             internet_gateway(ctx, &igw_id),
@@ -237,9 +241,10 @@ fn subnet(
     resource
         .properties
         .insert("CidrBlock".to_string(), cidr_block(vpc_id, cidr_index));
-    resource
-        .properties
-        .insert("AvailabilityZone".to_string(), availability_zone(az_index));
+    resource.properties.insert(
+        "AvailabilityZoneId".to_string(),
+        availability_zone(az_index),
+    );
     if id.contains("Public") {
         resource
             .properties
@@ -557,13 +562,10 @@ fn cidr_block(vpc_id: &str, index: usize) -> CfExpression {
 }
 
 fn availability_zone(index: usize) -> CfExpression {
-    CfExpression::object([(
-        "Fn::Select",
-        CfExpression::list([
-            CfExpression::Integer(index as i64),
-            CfExpression::object([("Fn::GetAZs", CfExpression::ref_("AWS::Region"))]),
-        ]),
-    )])
+    super::helpers::select(
+        index,
+        CfExpression::get_att(super::eks_availability_zones::LOOKUP_ID, "ZoneIds"),
+    )
 }
 
 fn resource_id(prefix: &str, suffix: &str) -> String {

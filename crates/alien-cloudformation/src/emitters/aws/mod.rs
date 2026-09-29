@@ -9,6 +9,7 @@ pub mod ai;
 pub mod artifact_registry;
 pub mod build;
 pub mod email;
+mod eks_availability_zones;
 pub mod helpers;
 pub mod key;
 pub mod kubernetes_cluster;
