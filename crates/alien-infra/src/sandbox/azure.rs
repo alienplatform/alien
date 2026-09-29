@@ -502,11 +502,19 @@ impl AzureSandboxController {
                 .any(|image| !failed(&image) && !self.is_retired(&image.id)) =>
             {
                 debug!(sandbox_id = %config.id, %reference, "disk image is still building");
-                let building = ours
+                let building: Vec<String> = ours
                     .iter()
                     .filter(|image| !failed(image) && !self.is_retired(&image.id))
                     .map(|image| image.id.clone())
                     .collect();
+                // One found by label after a lost create response is tracked too, so a change of
+                // declaration mid-build still retires it.
+                if self.pending_disk_image.is_none() {
+                    self.pending_disk_image = building.first().map(|id| PendingDiskImage {
+                        reference: reference.clone(),
+                        id: id.clone(),
+                    });
+                }
                 return self.poll_build(building, &reference, &config.id);
             }
             None => {
@@ -1431,6 +1439,14 @@ mod tests {
             executor.step().await.expect("the tick routes to the build");
             executor.step().await.expect("the build is still running");
             assert!(state_of(&executor).disk_image_id.is_none());
+            assert_eq!(
+                state_of(&executor)
+                    .pending_disk_image
+                    .as_ref()
+                    .map(|pending| pending.id.as_str()),
+                Some("img-1"),
+                "a build found by label is tracked like one this controller started"
+            );
             executor.step().await.expect("the build is Ready");
 
             assert_eq!(state_of(&executor).disk_image_id.as_deref(), Some("img-1"));

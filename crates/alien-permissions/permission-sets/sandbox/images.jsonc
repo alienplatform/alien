@@ -4,8 +4,8 @@
   "platforms": {
     "azure": [
       {
-        // Disk-image verbs only: no sandbox is created, read or reached, so `sandbox/execute`'s
-        // data-plane role stays the only way into a session.
+        // Disk-image verbs only. Committing a session into an image is the separate
+        // `sandboxes/commit/action`, so `sandbox/execute`'s role stays the only way into one.
         "label": "manage-sandbox-disk-images",
         "description": "Allows creating, reading and deleting disk images under the selected sandbox group.",
         "grant": {

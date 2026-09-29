@@ -20,6 +20,10 @@ const SENSITIVE_IMPLICIT_DATA_ACTIONS: &[&str] = &[
     "Microsoft.App/sandboxGroups/sandboxes/files/write",
     "Microsoft.App/sandboxGroups/sandboxes/files/delete",
     "Microsoft.App/sandboxGroups/sandboxes/downloadContentPackage/action",
+    // Each turns a live session's filesystem into an object outside it: a disk image another
+    // sandbox can boot, or a snapshot.
+    "Microsoft.App/sandboxGroups/sandboxes/commit/action",
+    "Microsoft.App/sandboxGroups/sandboxes/snapshot/action",
     "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
     "Microsoft.Storage/storageAccounts/tableServices/tables/entities/read",
     "Microsoft.KeyVault/vaults/secrets/read",

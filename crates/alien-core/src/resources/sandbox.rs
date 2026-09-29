@@ -14,6 +14,7 @@ use crate::Platform;
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::any::Any;
 use std::fmt::Debug;
 
@@ -1115,7 +1116,6 @@ pub fn classify_azure_sandbox_image(image: &str) -> Option<AzureSandboxImage<'_>
 /// The label value naming the disk image built from `reference`: a digest, since a label value
 /// may not carry a reference's `/`, `:` and `@`.
 pub fn azure_disk_image_label(reference: &str) -> String {
-    use sha2::{Digest, Sha256};
     let digest = format!("{:x}", Sha256::digest(reference.trim().as_bytes()));
     digest[..32].to_string()
 }
