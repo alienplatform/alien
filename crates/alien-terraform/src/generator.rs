@@ -335,7 +335,9 @@ fn generate_terraform_module_internal(
         dedupe_gcp_support_resources(&mut per_resource)?;
     }
     apply_resource_dependencies(stack, &mut per_resource);
-    if matches!(platform, alien_core::Platform::Aws) {
+    // EKS uses IAM roles for the cluster and IRSA, not Lambda execution.
+    // Making its subnets depend on those roles creates a Terraform cycle.
+    if target == TerraformTarget::Aws {
         apply_aws_network_iam_dependency(stack, &mut per_resource);
     }
     if matches!(platform, alien_core::Platform::Azure) {
