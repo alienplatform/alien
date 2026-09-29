@@ -87,9 +87,18 @@ pub fn resource_prefix_template(suffix: &str) -> Expression {
 /// the readable deployment-prefixed name when it fits; otherwise retain a
 /// deterministic prefix and append an 8-character hash of the full name.
 pub fn container_registry_task_name_template(suffix: &str) -> Expression {
-    let full_name = format!("${{local.resource_prefix}}-{suffix}");
+    bounded_name(&format!("\"${{local.resource_prefix}}-{suffix}\""), 50)
+}
+
+/// Bound an HCL name expression to `max_len` characters. The readable name is
+/// kept when it fits; otherwise a deterministic prefix is trimmed of trailing
+/// hyphens and an 8-character hash of the full name is appended, so the result
+/// stays unique and never ends in a hyphen.
+pub fn bounded_name(name_expr: &str, max_len: usize) -> Expression {
+    const HASH_LEN: usize = 8;
+    let prefix_len = max_len - HASH_LEN - 1;
     expr::raw(format!(
-        "length(\"{full_name}\") <= 50 ? \"{full_name}\" : format(\"%s-%s\", trim(substr(\"{full_name}\", 0, 41), \"-\"), substr(sha1(\"{full_name}\"), 0, 8))"
+        "length({name_expr}) <= {max_len} ? {name_expr} : format(\"%s-%s\", trim(substr({name_expr}, 0, {prefix_len}), \"-\"), substr(sha1({name_expr}), 0, {HASH_LEN}))"
     ))
 }
 
