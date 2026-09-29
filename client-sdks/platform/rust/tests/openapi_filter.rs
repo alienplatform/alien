@@ -337,6 +337,18 @@ fn removes_additional_properties_false_from_schemas_but_not_from_literal_data() 
                                     "schema": { "$ref": "#/components/schemas/Strict" }
                                 }
                             }
+                        },
+                        "default": {
+                            "description": "error",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": { "code": { "type": "string" } },
+                                        "additionalProperties": false
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -424,7 +436,7 @@ fn package_type_enums_in_responses_become_open_strings() {
                 "DeploymentLinkSetupResponse": {
                     "type": "object",
                     "properties": {
-                        "visiblePackageTypes": { "type": "array", "items": package_type }
+                        "visiblePackageTypes": { "type": "array", "items": package_type.clone() }
                     }
                 }
             }
@@ -454,6 +466,20 @@ fn package_type_enums_in_responses_become_open_strings() {
                 .unwrap(),
             &json!({ "type": "string" })
         );
+    }
+
+    let mut moved = document;
+    *moved
+        .pointer_mut(
+            "/components/schemas/DeploymentLinkSetupResponse/properties/visiblePackageTypes/items",
+        )
+        .unwrap() = json!({ "$ref": "#/components/schemas/PackageType" });
+    moved["components"]["schemas"]["PackageType"] = package_type;
+    for error in [
+        openapi_filter::filter_openapi(&moved, &["kept"]).unwrap_err(),
+        openapi_filter::normalize_openapi(&moved).unwrap_err(),
+    ] {
+        assert!(error.contains("visiblePackageTypes"), "{error}");
     }
 }
 
@@ -561,7 +587,9 @@ fn collect_strict_schemas(value: &Value, pointer: &str, found: &mut Vec<String>)
     match value {
         Value::Object(object) => {
             for (key, child) in object {
-                if matches!(key.as_str(), "example" | "examples" | "default") {
+                let literal = matches!(key.as_str(), "example" | "examples")
+                    || (key == "default" && !pointer.ends_with("/responses"));
+                if literal {
                     continue;
                 }
                 let child_pointer = format!("{pointer}/{key}");

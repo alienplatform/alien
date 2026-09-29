@@ -13,18 +13,18 @@ fn released_remote_sandbox() -> Value {
     })
 }
 
-// Fields a newer server adds to the strict remote sandbox objects: a custom image, a GCP image
-// source, and an Azure registry image next to the catalog image.
+// Fields a newer server may add to the strict remote sandbox objects: a top-level field, a new
+// nested object, and a field inside an object the client already knows.
 fn newer_remote_sandbox() -> Value {
     json!({
         "enabled": true,
-        "customImage": "ghcr.io/acme/img:1",
+        "futureField": "value",
         "baseImage": "ghcr.io/acme/img@sha256:abc",
         "maxLifetimeSeconds": 3600,
-        "gcp": { "image": "us-docker.pkg.dev/x/y@sha256:abc", "maxLifetimeSeconds": 3600 },
+        "futureCloud": { "image": "registry.example.com/img@sha256:abc", "maxLifetimeSeconds": 3600 },
         "azure": {
             "catalogImage": "ubuntu",
-            "registryImage": "ghcr.io/acme/img@sha256:def",
+            "futureImage": "ghcr.io/acme/img@sha256:def",
             "idleSuspendSeconds": 600
         }
     })
@@ -85,23 +85,23 @@ fn decodes_package_types_this_client_does_not_know() {
         },
         "packages": [
             { "type": "sandbox-bundle", "status": "ready" },
-            { "type": "gcp-sandbox-image", "status": "ready" }
+            { "type": "future-package-type", "status": "ready" }
         ]
     }))
     .expect("materialization decodes");
-    assert_eq!(materialization.packages[1].type_, "gcp-sandbox-image");
+    assert_eq!(materialization.packages[1].type_, "future-package-type");
 
     let setup: DeploymentLinkSetupResponse = serde_json::from_value(json!({
         "activeRelease": null,
         "supportedPlatforms": ["aws", "gcp"],
         "setupItems": ["sandbox"],
-        "visiblePackageTypes": ["cloudformation", "gcp-sandbox-image"],
+        "visiblePackageTypes": ["cloudformation", "future-package-type"],
         "visibleSetupMethods": [],
         "setupPackagesStatus": "ready"
     }))
     .expect("deployment link setup decodes");
     assert_eq!(
         setup.visible_package_types,
-        ["cloudformation", "gcp-sandbox-image"]
+        ["cloudformation", "future-package-type"]
     );
 }
