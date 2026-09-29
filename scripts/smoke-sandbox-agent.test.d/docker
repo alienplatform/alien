@@ -71,7 +71,7 @@ case "$command" in
         printf '%s\n' "$all" >> "$state/tools-probes"
         inject tools
         if [ "$mode" = tools-missing ] && [ "$platform" = linux/amd64 ]; then
-          echo "tool probe: 'rg --version' failed"
+          echo "tool probe: rg --version failed"
           exit 1
         fi
         ;;
@@ -122,7 +122,9 @@ case "$command" in
     echo image-rm >> "$state/image-removals"
     ;;
 
-  rm) ;;
+  rm)
+    printf '%s\n' "$all" >> "$state/container-removals"
+    ;;
 
   *)
     echo "stub docker: unrecognised command: $command $all" >&2

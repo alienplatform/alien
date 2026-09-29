@@ -118,8 +118,8 @@ for platform in linux/amd64 linux/arm64; do
     echo "ok   happy: ${platform} probed 6 times"
   fi
 done
-removals=$(wc -l < "$state/image-removals")
-if [ "$removals" -ne 2 ]; then
+removals=$(grep -c . "$state/image-removals" 2>/dev/null || true)
+if [ "$removals" != 2 ]; then
   failed=$((failed + 1))
   echo "FAIL happy: digest reference removed ${removals} times, expected 2"
 else
@@ -132,9 +132,16 @@ tools_list="$here/../docker/sandbox-default-tools.txt"
 flags=(--tools "$tools_list")
 check tools-124 fail "linux/amd64: the tools probe did not finish within 120s"
 check tools-137 fail "linux/amd64: the tools probe did not finish within 120s"
+if grep -q "^-f smoke-tools-[0-9]*-linux-amd64$" "$state/container-removals" 2>/dev/null; then
+  passed=$((passed + 1))
+  echo "ok   tools-137: the timed-out probe container was removed"
+else
+  failed=$((failed + 1))
+  echo "FAIL tools-137: the timed-out probe container was never removed"
+fi
 check tools-error fail "linux/amd64: stub: the tools probe failed"
 check tools-silent fail "linux/amd64: the tools probe did not complete"
-check tools-missing fail "linux/amd64: tool probe: 'rg --version' failed"
+check tools-missing fail "linux/amd64: tool probe: rg --version failed"
 
 check happy pass ""
 for platform in linux/amd64 linux/arm64; do
@@ -150,18 +157,18 @@ done
 missing=""
 while IFS= read -r line; do
   case "$line" in ''|'#'*) continue ;; esac
-  grep -qF "${line} >/dev/null" "$state/tools-probes" || missing+=" '${line}'"
+  grep -qF -- "$line" "$state/tools-probes" || missing+=" '${line}'"
 done < "$tools_list"
 if [ -n "$missing" ]; then
   failed=$((failed + 1))
-  echo "FAIL tools happy: the probe never ran${missing}"
+  echo "FAIL tools happy: the probe never sent${missing}"
 else
   passed=$((passed + 1))
-  echo "ok   tools happy: the probe ran every command in the list"
+  echo "ok   tools happy: the probe sent every command in the list"
 fi
 
 empty_list="$(mktemp)"
-printf '# only a comment\n\n' > "$empty_list"
+printf '# only a comment\n  # indented\n\n' > "$empty_list"
 flags=(--tools "$empty_list")
 check tools-list-empty fail "the tools list ${empty_list} names no tools"
 flags=(--tools "$empty_list.missing")
@@ -171,8 +178,8 @@ flags=(--platforms linux/arm64)
 check happy pass ""
 amd64=$(grep -c "^linux/amd64$" "$state/platforms")
 arm64=$(grep -c "^linux/arm64$" "$state/platforms")
-removals=$(wc -l < "$state/image-removals")
-if [ "$amd64" -ne 0 ] || [ "$arm64" -ne 6 ] || [ "$removals" -ne 1 ]; then
+removals=$(grep -c . "$state/image-removals" 2>/dev/null || true)
+if [ "$amd64" -ne 0 ] || [ "$arm64" -ne 6 ] || [ "$removals" != 1 ]; then
   failed=$((failed + 1))
   echo "FAIL platforms: amd64 probed ${amd64}, arm64 ${arm64}, removals ${removals}; expected 0, 6, 1"
 else
@@ -182,7 +189,8 @@ fi
 flags=()
 
 usage="usage: scripts/smoke-sandbox-agent.sh [--platforms <p1,p2>] [--tools <list-file>] <image-reference>"
-for arguments in "" "--bogus alien-sandbox-agent:stub" "--tools" "one two"; do
+for arguments in "" "--bogus alien-sandbox-agent:stub" "--tools" "one two" \
+  "--platforms ,linux/arm64 alien-sandbox-agent:stub"; do
   # Word splitting is the point: each string is an argument list.
   # shellcheck disable=SC2086
   out="$("$script" $arguments 2>&1)"

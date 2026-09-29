@@ -23,26 +23,32 @@ done
 [ $# -eq 1 ] || { echo "$usage" >&2; exit 2; }
 image="$1"
 
-# One shell script for the whole list, so a tool is probed where every other probe
-# runs: in the image as shipped, under its own user and HOME.
-tools_probe=""
+tools=()
 if [ -n "$tools_file" ]; then
   if [ ! -r "$tools_file" ]; then
     echo "::error::the tools list ${tools_file} is not readable"
     exit 1
   fi
   while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
     case "$line" in ''|'#'*) continue ;; esac
-    tools_probe+="${line} >/dev/null 2>&1 || { echo \"tool probe: '${line}' failed\"; exit 1; }
-"
+    tools+=("$line")
   done < "$tools_file"
-  if [ -z "$tools_probe" ]; then
+  if [ "${#tools[@]}" -eq 0 ]; then
     echo "::error::the tools list ${tools_file} names no tools"
     exit 1
   fi
 fi
+# Each command gets its own shell, so a `#` or a quote in one line cannot swallow the
+# check on it or reach the next one.
+# shellcheck disable=SC2016
+tools_probe='for tool do sh -c "$tool" >/dev/null 2>&1 </dev/null ||
+  { printf "tool probe: %s failed\n" "$tool"; exit 1; }; done'
 
 IFS=, read -r -a platform_list <<< "$platforms"
+for platform in "${platform_list[@]}"; do
+  [ -n "$platform" ] || { echo "$usage" >&2; exit 2; }
+done
 for platform in "${platform_list[@]}"; do
   # Sandbox images are large (wolfi-base plus git's 24 packages, or all of buildpack-deps) and
   # the amd64 half arrives under emulation. Inside a probe's own budget, the pull expires.
@@ -99,17 +105,20 @@ for platform in "${platform_list[@]}"; do
     echo "::error::${platform}: ${identity:-the identity probe did not complete}"
     exit 1
   fi
-  if [ -n "$tools_probe" ]; then
+  if [ "${#tools[@]}" -gt 0 ]; then
+    # timeout kills the docker client, not the container, so a hung probe is removed by name.
+    probe="smoke-tools-$$-${platform//\//-}"
     status=0
-    tools=$(timeout -k 5 120 docker run --rm --platform "$platform" --entrypoint /bin/sh "$image" \
-      -c "$tools_probe" 2>&1) || status=$?
+    tools_out=$(timeout -k 5 120 docker run --rm --name "$probe" --platform "$platform" \
+      --entrypoint /bin/sh "$image" -c "$tools_probe" sh "${tools[@]}" 2>&1) || status=$?
     case "$status" in
       0) ;;
       124|137)
+        docker rm -f "$probe" >/dev/null 2>&1 || true
         echo "::error::${platform}: the tools probe did not finish within 120s"
         exit 1 ;;
       *)
-        echo "::error::${platform}: ${tools:-the tools probe did not complete}"
+        echo "::error::${platform}: ${tools_out:-the tools probe did not complete}"
         exit 1 ;;
     esac
   fi
