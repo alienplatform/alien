@@ -179,6 +179,67 @@ export type ProjectOperatorImage = {
 };
 
 /**
+ * Kubernetes log collection mechanism.
+ */
+export const ProjectMode = {
+  PodApi: "podApi",
+  NodeAgent: "nodeAgent",
+} as const;
+/**
+ * Kubernetes log collection mechanism.
+ */
+export type ProjectMode = ClosedEnum<typeof ProjectMode>;
+
+/**
+ * Default log collection mode in a generated Helm chart.
+ */
+export type ProjectLogCollector = {
+  /**
+   * Whether logs are collected by default; installers can override this value.
+   */
+  enabled: boolean;
+  /**
+   * Kubernetes log collection mechanism.
+   */
+  mode: ProjectMode;
+};
+
+export type ProjectTokenSecret = {
+  key: string;
+  name: string;
+  prefix: string;
+  randomLength: number;
+};
+
+export type ProjectRule = {
+  /**
+   * Kubernetes API group: empty for core resources, apps, or networking.k8s.io.
+   */
+  apiGroup: string;
+  resources: Array<string>;
+};
+
+export type ProjectWorkloadReadAccess = {
+  rules: Array<ProjectRule>;
+  serviceAccountProfile: string;
+};
+
+export type ProjectSetupResources = {
+  tokenSecret: ProjectTokenSecret;
+  workloadReadAccess: ProjectWorkloadReadAccess;
+};
+
+export type ProjectRuntimePersistence = {
+  /**
+   * Persist operator identity across restarts.
+   */
+  enabled: boolean;
+  existingClaim: string;
+  size: string;
+  storageClassName: string;
+};
+
+/**
  * Helm chart package configuration. If null, Helm packages will not be generated.
  */
 export type ProjectHelm = {
@@ -191,9 +252,15 @@ export type ProjectHelm = {
    */
   description: string;
   /**
+   * Default log collection mode in a generated Helm chart.
+   */
+  logCollector?: ProjectLogCollector | undefined;
+  /**
    * Whether Helm chart package generation is enabled
    */
   enabled: boolean;
+  setupResources?: ProjectSetupResources | undefined;
+  runtimePersistence?: ProjectRuntimePersistence | undefined;
 };
 
 /**
@@ -527,11 +594,137 @@ export function projectOperatorImageFromJSON(
 }
 
 /** @internal */
+export const ProjectMode$inboundSchema: z.ZodEnum<typeof ProjectMode> = z.enum(
+  ProjectMode,
+);
+
+/** @internal */
+export const ProjectLogCollector$inboundSchema: z.ZodType<
+  ProjectLogCollector,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  mode: ProjectMode$inboundSchema,
+});
+
+export function projectLogCollectorFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectLogCollector, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectLogCollector$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectLogCollector' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectTokenSecret$inboundSchema: z.ZodType<
+  ProjectTokenSecret,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+  prefix: z.string(),
+  randomLength: z.int(),
+});
+
+export function projectTokenSecretFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectTokenSecret, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectTokenSecret$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectTokenSecret' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectRule$inboundSchema: z.ZodType<ProjectRule, unknown> = z
+  .object({
+    apiGroup: z.string(),
+    resources: z.array(z.string()),
+  });
+
+export function projectRuleFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectRule, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectRule$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectRule' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectWorkloadReadAccess$inboundSchema: z.ZodType<
+  ProjectWorkloadReadAccess,
+  unknown
+> = z.object({
+  rules: z.array(z.lazy(() => ProjectRule$inboundSchema)),
+  serviceAccountProfile: z.string(),
+});
+
+export function projectWorkloadReadAccessFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectWorkloadReadAccess, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectWorkloadReadAccess$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectWorkloadReadAccess' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectSetupResources$inboundSchema: z.ZodType<
+  ProjectSetupResources,
+  unknown
+> = z.object({
+  tokenSecret: z.lazy(() => ProjectTokenSecret$inboundSchema),
+  workloadReadAccess: z.lazy(() => ProjectWorkloadReadAccess$inboundSchema),
+});
+
+export function projectSetupResourcesFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectSetupResources, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectSetupResources$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectSetupResources' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectRuntimePersistence$inboundSchema: z.ZodType<
+  ProjectRuntimePersistence,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  existingClaim: z.string(),
+  size: z.string(),
+  storageClassName: z.string(),
+});
+
+export function projectRuntimePersistenceFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectRuntimePersistence, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectRuntimePersistence$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectRuntimePersistence' from JSON`,
+  );
+}
+
+/** @internal */
 export const ProjectHelm$inboundSchema: z.ZodType<ProjectHelm, unknown> = z
   .object({
     chartName: z.string(),
     description: z.string(),
+    logCollector: z.lazy(() => ProjectLogCollector$inboundSchema).optional(),
     enabled: z.boolean(),
+    setupResources: z.lazy(() => ProjectSetupResources$inboundSchema)
+      .optional(),
+    runtimePersistence: z.lazy(() => ProjectRuntimePersistence$inboundSchema)
+      .optional(),
   });
 
 export function projectHelmFromJSON(
