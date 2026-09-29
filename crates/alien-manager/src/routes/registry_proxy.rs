@@ -115,8 +115,23 @@ impl RegistryRoutingTable {
         self.route_for_platform(platform).map(|r| r.prefix.as_str())
     }
 
+    /// Route that stores images for `platform`.
+    ///
+    /// Cloud platforms use their own registry (ECR, GAR, ACR) when one is
+    /// configured. Pull-delivered platforms (Kubernetes, Machines) have no
+    /// registry of their own: their images live in the primary registry (the
+    /// route registered as `Platform::Local`) and nodes pull them through this
+    /// manager with the deployment's token.
     pub fn route_for_platform(&self, platform: Platform) -> Option<&RegistryRoute> {
-        self.routes.iter().find(|r| r.platform == platform)
+        if let Some(route) = self.routes.iter().find(|r| r.platform == platform) {
+            return Some(route);
+        }
+        match platform {
+            Platform::Kubernetes | Platform::Machines => {
+                self.routes.iter().find(|r| r.platform == Platform::Local)
+            }
+            _ => None,
+        }
     }
 
     /// Return the list of explicitly configured (non-fallback) platforms.

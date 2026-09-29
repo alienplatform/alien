@@ -558,8 +558,30 @@ impl AlienManagerBuilder {
                 }
             }
 
-            // Add local/primary registry as catch-all fallback.
-            if let Some(ref primary) = bindings_provider {
+            // Primary registry: stores images for pull-delivered platforms
+            // (Kubernetes, Machines, Local). `[artifact-registry.default]`
+            // selects a cloud registry for it; otherwise the embedded registry
+            // started above is used.
+            let default_registry = match &toml_config.artifact_registry.default {
+                None | Some(alien_core::ArtifactRegistryBinding::Local(_)) => None,
+                Some(binding) => Some(default_registry_provider(binding).await?),
+            };
+            if let Some(default_provider) = default_registry {
+                let ar = default_provider
+                    .load_artifact_registry("artifacts")
+                    .await
+                    .context(ErrorData::ServerInitFailed {
+                        reason: "Failed to load [artifact-registry.default] registry".to_string(),
+                    })?;
+                let prefix = ar.upstream_repository_prefix();
+                info!(prefix = %prefix, "Registered default artifact registry route");
+                routes.push(crate::routes::registry_proxy::RegistryRoute {
+                    prefix,
+                    platform: Platform::Local,
+                    provider: default_provider,
+                    binding_name: "artifacts".to_string(),
+                });
+            } else if let Some(ref primary) = bindings_provider {
                 if let Ok(ar) = primary.load_artifact_registry("artifact-registry").await {
                     let prefix = ar.upstream_repository_prefix();
                     info!(prefix = %prefix, "Registered local artifact registry route (fallback)");
@@ -681,6 +703,45 @@ fn storage_binding_platform(
         StorageBinding::Blob(_) => alien_core::Platform::Azure,
         StorageBinding::Local(_) => alien_core::Platform::Local,
     }
+}
+
+/// Build the bindings provider for a cloud `[artifact-registry.default]`
+/// registry, with credentials from the manager's environment.
+#[cfg(feature = "sqlite")]
+async fn default_registry_provider(
+    binding: &alien_core::ArtifactRegistryBinding,
+) -> crate::error::Result<std::sync::Arc<dyn alien_bindings::BindingsProviderApi>> {
+    use alien_client_config::ClientConfigExt;
+    use alien_core::{ArtifactRegistryBinding, Platform};
+    use alien_error::{Context, IntoAlienError};
+
+    let platform = match binding {
+        ArtifactRegistryBinding::Ecr(_) => Platform::Aws,
+        ArtifactRegistryBinding::Gar(_) => Platform::Gcp,
+        ArtifactRegistryBinding::Acr(_) => Platform::Azure,
+        ArtifactRegistryBinding::Local(_) => Platform::Local,
+    };
+    let binding_json =
+        serde_json::to_value(binding)
+            .into_alien_error()
+            .context(ErrorData::ServerInitFailed {
+                reason: "Failed to serialize [artifact-registry.default] binding".to_string(),
+            })?;
+    let config = alien_core::ClientConfig::from_std_env(platform)
+        .await
+        .context(ErrorData::ServerInitFailed {
+            reason: format!(
+                "[artifact-registry.default] uses a {platform} registry but {platform} credentials are not available"
+            ),
+        })?;
+    let provider = alien_bindings::BindingsProvider::new(
+        config,
+        std::collections::HashMap::from([("artifacts".to_string(), binding_json)]),
+    )
+    .context(ErrorData::ServerInitFailed {
+        reason: "Failed to create [artifact-registry.default] bindings provider".to_string(),
+    })?;
+    Ok(std::sync::Arc::new(provider))
 }
 
 // ---------------------------------------------------------------------------
