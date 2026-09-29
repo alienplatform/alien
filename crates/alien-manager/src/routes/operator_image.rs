@@ -99,7 +99,9 @@ pub async fn serve(
     loop {
         attempt += 1;
         let mut request = state.http_client.request(method.clone(), &url);
-        if let Some(accept) = headers.get(header::ACCEPT) {
+        // Clients list the manifest types they accept across several Accept
+        // headers; forwarding only one makes registries answer "unknown".
+        for accept in headers.get_all(header::ACCEPT) {
             request = request.header(header::ACCEPT, accept);
         }
         let token = PULL_TOKEN

@@ -1712,125 +1712,17 @@ async fn agent_sync(
             None
         };
 
-        let release_stack_platform = release_stack_platform(deployment.platform);
-        let management_platform =
-            management_platform(deployment.platform, deployment.base_platform);
-
-        // Resolve management config (same pattern as push-mode deployment loop).
-        // 1. From deployment record (platform API / private managers)
-        // 2. From credential resolver (derived from management binding env vars)
-        let management_config = if let Some(mc) = deployment.management_config.clone() {
-            Some(mc)
-        } else {
-            state
-                .credential_resolver
-                .resolve_management_config(management_platform)
-                .await
-                .unwrap_or(None)
-        };
-
-        // Image pull credentials are no longer passed through the sync response.
-        // Pull-model agents pull images through the manager's /v2/ registry proxy.
-        // Push-model Azure Container Apps also use the proxy (they support any registry).
-        // Only AWS Lambda and GCP Cloud Run pull directly from native registries.
-
-        // Extract the agent's deployment token from the Authorization header.
-        // This is reused for pull auth — no new tokens created.
+        // Reused for image pull auth: no new tokens created.
         let agent_token = headers
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.strip_prefix("Bearer "))
             .map(|t| t.to_string());
-
-        let manager_url = state.config.base_url();
-
-        // Derive native image host for Lambda/Cloud Run so controllers
-        // can resolve proxy URIs to native ECR/GAR URIs.
-        let native_image_host = crate::registry_access::derive_native_image_host(
-            &state.bindings_provider,
-            &state.target_bindings_providers,
-            &management_platform,
-        )
-        .await;
-
         match release {
-            Some(r) => {
-                let stack = match r.stacks.get(&release_stack_platform) {
-                    Some(s) => s.clone(),
-                    None => {
-                        return ErrorData::internal(format!(
-                            "Release {} does not contain a stack for platform {}",
-                            r.id, release_stack_platform
-                        ))
-                        .into_response();
-                    }
-                };
-
-                let mut env_vars: Vec<EnvironmentVariable> = deployment
-                    .user_environment_variables
-                    .clone()
-                    .unwrap_or_default();
-                // Inputs mapped to environment variables resolve against the
-                // target release, so a release that adds a mapped input takes
-                // effect without re-onboarding. Explicit variables win.
-                let input_env = match alien_core::resolve_stack_input_environment_variables(
-                    &stack.inputs,
-                    &deployment.input_values,
-                ) {
-                    Ok(variables) => variables,
-                    Err(e) => {
-                        return ErrorData::bad_request(format!(
-                            "Deployment input values do not resolve for release {}: {}",
-                            r.id, e.message
-                        ))
-                        .into_response()
-                    }
-                };
-                for variable in input_env {
-                    if !env_vars
-                        .iter()
-                        .any(|existing| existing.name == variable.name)
-                    {
-                        env_vars.push(variable);
-                    }
-                }
-
-                // Records loaded for sync always carry stack settings; in a
-                // handler, answer with a 500 rather than panic-dropping the
-                // connection if that invariant is ever broken.
-                let stack_settings = match deployment.stack_settings.clone() {
-                    Some(settings) => settings,
-                    None => {
-                        return ErrorData::internal("synced deployment is missing stack_settings")
-                            .into_response();
-                    }
-                };
-                let mut config = build_target_deployment_config(
-                    &deployment,
-                    stack_settings,
-                    management_config,
-                    env_vars,
-                    manager_url,
-                    agent_token,
-                    native_image_host,
-                );
-                // Workloads export OTLP to this manager when it forwards
-                // telemetry, the same wiring push deployments get. Stored
-                // monitoring config from an embedder takes precedence.
-                if config.monitoring.is_none() {
-                    config.monitoring = default_monitoring(&state.config, &deployment);
-                }
-
-                Some(TargetDeployment {
-                    release_info: ReleaseInfo {
-                        release_id: Some(r.id),
-                        version: None,
-                        description: None,
-                        stack,
-                    },
-                    config,
-                })
-            }
+            Some(r) => match build_pull_target(&state, &deployment, r, agent_token).await {
+                Ok(target) => Some(target),
+                Err(response) => return response,
+            },
             None => None,
         }
     } else {
@@ -1960,6 +1852,125 @@ async fn agent_sync(
             .map(|charts| charts.deployed_operator_image(&state.config.base_url())),
     })
     .into_response()
+}
+
+/// The target a pull deployment converges to for `release`: the release's
+/// stack for the deployment's platform and the deployment's configuration.
+/// Sync delivers it to connected Operators; air-gapped bundles carry it.
+pub(crate) async fn build_pull_target(
+    state: &AppState,
+    deployment: &DeploymentRecord,
+    r: crate::traits::ReleaseRecord,
+    agent_token: Option<String>,
+) -> Result<TargetDeployment, Response> {
+    let release_stack_platform = release_stack_platform(deployment.platform);
+    let management_platform = management_platform(deployment.platform, deployment.base_platform);
+
+    // Resolve management config (same pattern as push-mode deployment loop).
+    // 1. From deployment record (platform API / private managers)
+    // 2. From credential resolver (derived from management binding env vars)
+    let management_config = if let Some(mc) = deployment.management_config.clone() {
+        Some(mc)
+    } else {
+        state
+            .credential_resolver
+            .resolve_management_config(management_platform)
+            .await
+            .unwrap_or(None)
+    };
+
+    // Image pull credentials are no longer passed through the sync response.
+    // Pull-model agents pull images through the manager's /v2/ registry proxy.
+    // Push-model Azure Container Apps also use the proxy (they support any registry).
+    // Only AWS Lambda and GCP Cloud Run pull directly from native registries.
+
+    let manager_url = state.config.base_url();
+
+    // Derive native image host for Lambda/Cloud Run so controllers
+    // can resolve proxy URIs to native ECR/GAR URIs.
+    let native_image_host = crate::registry_access::derive_native_image_host(
+        &state.bindings_provider,
+        &state.target_bindings_providers,
+        &management_platform,
+    )
+    .await;
+
+    let stack = match r.stacks.get(&release_stack_platform) {
+        Some(s) => s.clone(),
+        None => {
+            return Err(ErrorData::internal(format!(
+                "Release {} does not contain a stack for platform {}",
+                r.id, release_stack_platform
+            ))
+            .into_response());
+        }
+    };
+
+    let mut env_vars: Vec<EnvironmentVariable> = deployment
+        .user_environment_variables
+        .clone()
+        .unwrap_or_default();
+    // Inputs mapped to environment variables resolve against the
+    // target release, so a release that adds a mapped input takes
+    // effect without re-onboarding. Explicit variables win.
+    let input_env = match alien_core::resolve_stack_input_environment_variables(
+        &stack.inputs,
+        &deployment.input_values,
+    ) {
+        Ok(variables) => variables,
+        Err(e) => {
+            return Err(ErrorData::bad_request(format!(
+                "Deployment input values do not resolve for release {}: {}",
+                r.id, e.message
+            ))
+            .into_response());
+        }
+    };
+    for variable in input_env {
+        if !env_vars
+            .iter()
+            .any(|existing| existing.name == variable.name)
+        {
+            env_vars.push(variable);
+        }
+    }
+
+    // Records loaded for sync always carry stack settings; in a
+    // handler, answer with a 500 rather than panic-dropping the
+    // connection if that invariant is ever broken.
+    let stack_settings = match deployment.stack_settings.clone() {
+        Some(settings) => settings,
+        None => {
+            return Err(
+                ErrorData::internal("synced deployment is missing stack_settings").into_response(),
+            );
+        }
+    };
+    let mut config = build_target_deployment_config(
+        &deployment,
+        stack_settings,
+        management_config,
+        env_vars,
+        manager_url,
+        agent_token,
+        native_image_host,
+    );
+    // Workloads export OTLP to this manager when it forwards
+    // telemetry, the same wiring push deployments get. Stored
+    // monitoring config from an embedder takes precedence.
+    if config.monitoring.is_none() {
+        config.monitoring = default_monitoring(&state.config, &deployment);
+    }
+
+    Ok(TargetDeployment {
+        release_info: ReleaseInfo {
+            release_id: Some(r.id),
+            version: None,
+            description: None,
+            stack,
+        },
+        config,
+    })
 }
 
 fn default_monitoring(
