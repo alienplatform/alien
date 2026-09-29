@@ -246,11 +246,6 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
                     .to_string(),
             }));
         }
-        if config.is_airgapped() {
-            return Err(AlienError::new(error::ErrorData::ConfigurationError {
-                message: "Pod log collection requires a configured telemetry forwarder".to_string(),
-            }));
-        }
     }
 
     // Local runtimes are real child processes owned by LocalBindingsProvider.
@@ -306,6 +301,12 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
     let otlp_db = db.clone();
     let otlp_namespace = config.namespace.clone();
     let otlp_collector_token = config.collector_token.clone();
+    // Air-gapped: telemetry stays buffered and leaves with `alien-deploy
+    // sync`, which reads this token from the status Secret.
+    let airgap_export_token = config
+        .is_airgapped()
+        .then(|| uuid::Uuid::new_v4().simple().to_string());
+    let otlp_export_token = airgap_export_token.clone();
     let sandbox_broker = sandbox_broker_router(
         &config,
         db.clone(),
@@ -320,6 +321,7 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
             otlp_db,
             otlp_namespace,
             otlp_collector_token,
+            otlp_export_token,
             sandbox_broker,
             otlp_cancel,
         )
@@ -407,7 +409,10 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         (Some(secret), true) => Some(tokio::spawn({
             let state = state.clone();
             let secret = secret.clone();
-            async move { loops::airgap::run_airgap_status_loop(state, secret).await }
+            let export_token = airgap_export_token
+                .clone()
+                .expect("air-gapped Operators have an export token");
+            async move { loops::airgap::run_airgap_status_loop(state, secret, export_token).await }
         })),
         _ => None,
     };

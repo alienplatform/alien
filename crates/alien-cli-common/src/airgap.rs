@@ -8,15 +8,17 @@
 //! manifest.json      what the bundle is, and the sha256 of every other file
 //! target.json        the target sync would deliver (release stack + config)
 //! chart/<name>.tgz   the Helm chart that installs the Operator
-//! oci/               OCI image layout: every image in the target + the Operator
+//! oci/               OCI image layout: every image in the target and every
+//!                    image the chart runs (the Operator, its cleanup hooks)
+//! tools/             optional `alien-deploy` builds for the site
 //! ```
 //!
-//! `alien airgap bundle` writes it; `alien-deploy airgap apply` verifies it,
+//! `alien-deploy sync` writes it on the online side and, inside the site, verifies it,
 //! pushes the images to the environment's registry by digest and points the
 //! target at them.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
 };
 
@@ -98,12 +100,21 @@ pub struct BundleManifest {
     /// Chart release name and namespace default.
     pub stack_id: String,
     pub images: Vec<BundleImage>,
-    /// Image the Operator runs (one of `images`).
-    pub operator_image: String,
+    /// Images the chart runs, by the Helm values key that names them (e.g.
+    /// `runtime.image`), as `images` sources.
+    pub chart_images: BTreeMap<String, String>,
     /// Chart archive path inside the bundle.
     pub chart: String,
     /// sha256 of every other file in the bundle, by path.
     pub files: BTreeMap<String, String>,
+    /// Image blobs left out because the site reported having them. Import
+    /// skips them; the site's registry must still hold them.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub omitted_blobs: BTreeSet<String>,
+    /// Highest telemetry batch the vendor has received from the site. The
+    /// Operator frees everything up to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry_ack: Option<i64>,
 }
 
 /// One image in the bundle's OCI layout.
@@ -203,21 +214,23 @@ fn referenced(manifest: &[u8]) -> (Vec<String>, Vec<String>) {
     (children, blobs)
 }
 
-/// Copy `images` from their registries into an OCI image layout at `layout`.
+/// Copy `images`, each pulled with its own registry access, into an OCI image
+/// layout at `layout`. Blobs in `skip_blobs` are left out and returned.
 pub async fn export_images(
     layout: &Path,
-    images: &[String],
-    access: &RegistryAccess,
-) -> Result<Vec<BundleImage>> {
+    images: &[(String, RegistryAccess)],
+    skip_blobs: &BTreeSet<String>,
+) -> Result<(Vec<BundleImage>, BTreeSet<String>)> {
+    let mut omitted = BTreeSet::new();
     tokio::fs::create_dir_all(layout.join("blobs").join("sha256"))
         .await
         .into_alien_error()
         .context(file_failed("creating the OCI layout"))?;
-    let client = client(access);
     let mut exported = Vec::new();
     let mut index_entries = Vec::new();
 
-    for image in images {
+    for (image, access) in images {
+        let client = client(access);
         let reference: Reference = image
             .parse()
             .into_alien_error()
@@ -235,6 +248,8 @@ pub async fn export_images(
             layout,
             &manifest,
             &digest,
+            skip_blobs,
+            &mut omitted,
         )
         .await?;
 
@@ -264,7 +279,7 @@ pub async fn export_images(
         &serde_json::json!({ "imageLayoutVersion": "1.0.0" }),
     )
     .await?;
-    Ok(exported)
+    Ok((exported, omitted))
 }
 
 /// Store a manifest, and everything it references, as blobs.
@@ -275,6 +290,8 @@ async fn write_manifest_tree(
     layout: &Path,
     manifest: &[u8],
     digest: &str,
+    skip_blobs: &BTreeSet<String>,
+    omitted: &mut BTreeSet<String>,
 ) -> Result<()> {
     let image = reference.whole();
     if format!("sha256:{}", sha256_hex(manifest)) != digest {
@@ -307,10 +324,16 @@ async fn write_manifest_tree(
             layout,
             &child_manifest,
             &child_digest,
+            skip_blobs,
+            omitted,
         ))
         .await?;
     }
     for blob in blobs {
+        if skip_blobs.contains(&blob) {
+            omitted.insert(blob);
+            continue;
+        }
         let path = blob_path(layout, &blob)?;
         if tokio::fs::try_exists(&path).await.unwrap_or(false) {
             continue;
@@ -402,12 +425,18 @@ async fn push_manifest_tree(
         .await?;
     }
     for blob in blobs {
-        let bytes = tokio::fs::read(blob_path(layout, &blob)?)
-            .await
-            .into_alien_error()
-            .context(ErrorData::BundleInvalid {
-                message: format!("missing blob {blob}"),
-            })?;
+        let path = blob_path(layout, &blob)?;
+        // A delta bundle leaves out blobs the site already has.
+        if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            continue;
+        }
+        let bytes =
+            tokio::fs::read(&path)
+                .await
+                .into_alien_error()
+                .context(ErrorData::BundleInvalid {
+                    message: format!("unreadable blob {blob}"),
+                })?;
         client
             .push_blob(&by_digest, &bytes, &blob)
             .await
@@ -423,8 +452,165 @@ async fn push_manifest_tree(
         .push_manifest_raw(destination, manifest, content_type)
         .await
         .into_alien_error()
-        .context(copy_failed(&image, "pushing the manifest"))?;
+        .context(copy_failed(
+            &image,
+            "pushing the manifest (if the registry is missing layers this bundle left out, sync again with --full)",
+        ))?;
     Ok(())
+}
+
+/// Every blob the bundle's images reference, whether carried or left out:
+/// what the site's registry holds once the bundle is installed.
+pub async fn blob_inventory(layout: &Path, images: &[BundleImage]) -> Result<BTreeSet<String>> {
+    let mut inventory = BTreeSet::new();
+    let mut pending: Vec<String> = images.iter().map(|image| image.digest.clone()).collect();
+    while let Some(digest) = pending.pop() {
+        let manifest = tokio::fs::read(blob_path(layout, &digest)?)
+            .await
+            .into_alien_error()
+            .context(ErrorData::BundleInvalid {
+                message: format!("missing manifest {digest}"),
+            })?;
+        let (children, blobs) = referenced(&manifest);
+        inventory.insert(digest);
+        pending.extend(children);
+        inventory.extend(blobs);
+    }
+    Ok(inventory)
+}
+
+const HELM_CHART_MEDIA_TYPE: &str = "application/vnd.cncf.helm.chart.content.v1.tar+gzip";
+
+/// Download the Helm chart at `reference` (`registry/repository:version`)
+/// into `<dir>/chart/`, returning its path relative to `dir`.
+pub async fn pull_chart(dir: &Path, reference: &str, access: &RegistryAccess) -> Result<String> {
+    let parsed: Reference = reference
+        .trim_start_matches("oci://")
+        .parse()
+        .into_alien_error()
+        .context(copy_failed(reference, "not a valid chart reference"))?;
+    let client = client(access);
+    let (manifest, _) = client
+        .pull_manifest_raw(&parsed, &access.auth, &[OCI_IMAGE_MEDIA_TYPE])
+        .await
+        .into_alien_error()
+        .context(copy_failed(reference, "pulling the chart manifest"))?;
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest)
+        .into_alien_error()
+        .context(copy_failed(reference, "parsing the chart manifest"))?;
+    let layer = manifest["layers"]
+        .as_array()
+        .and_then(|layers| {
+            layers
+                .iter()
+                .find(|layer| layer["mediaType"] == HELM_CHART_MEDIA_TYPE)
+        })
+        .and_then(|layer| layer["digest"].as_str())
+        .ok_or_else(|| AlienError::new(copy_failed(reference, "not a Helm chart")))?
+        .to_string();
+    let name = parsed
+        .repository()
+        .rsplit('/')
+        .next()
+        .unwrap_or("chart")
+        .to_string();
+    let version = parsed.tag().unwrap_or("latest");
+    tokio::fs::create_dir_all(dir.join(CHART_DIR))
+        .await
+        .into_alien_error()
+        .context(file_failed("creating the chart directory"))?;
+    let file = format!("{CHART_DIR}/{name}-{version}.tgz");
+    let mut out = tokio::fs::File::create(dir.join(&file))
+        .await
+        .into_alien_error()
+        .context(file_failed("creating the chart file"))?;
+    client
+        .pull_blob(&parsed, layer.as_str(), &mut out)
+        .await
+        .into_alien_error()
+        .context(copy_failed(reference, "downloading the chart"))?;
+    Ok(file)
+}
+
+/// Helm values that name an image the chart runs itself. Each holds
+/// `repository` and `tag`.
+pub const CHART_IMAGE_VALUES: [&str; 2] = ["runtime.image", "runtime.cleanup.onUninstall.image"];
+
+/// The images a packaged chart runs by default, by values key, as
+/// `repository:tag` references. The Operator (`runtime.image`) must be
+/// there.
+pub fn chart_images(chart: &Path) -> Result<BTreeMap<String, String>> {
+    let file = std::fs::File::open(chart)
+        .into_alien_error()
+        .context(file_failed(format!("opening {}", chart.display())))?;
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    let mut values = None;
+    for entry in archive
+        .entries()
+        .into_alien_error()
+        .context(invalid("the chart is not a readable archive"))?
+    {
+        let mut entry = entry
+            .into_alien_error()
+            .context(invalid("the chart is not a readable archive"))?;
+        let path = entry
+            .path()
+            .into_alien_error()
+            .context(invalid("the chart has an unreadable path"))?
+            .into_owned();
+        // `<chart>/values.yaml`, not a subchart's.
+        if path.components().count() == 2 && path.ends_with("values.yaml") {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut entry, &mut text)
+                .into_alien_error()
+                .context(invalid("the chart's values.yaml is unreadable"))?;
+            values = Some(text);
+            break;
+        }
+    }
+    let values: serde_yaml::Value = serde_yaml::from_str(
+        &values.ok_or_else(|| AlienError::new(invalid("the chart has no values.yaml")))?,
+    )
+    .into_alien_error()
+    .context(invalid("the chart's values.yaml is not valid YAML"))?;
+
+    let mut images = BTreeMap::new();
+    for key in CHART_IMAGE_VALUES {
+        let image = key
+            .split('.')
+            .try_fold(&values, |value, part| value.get(part));
+        let field = |name: &str| {
+            image
+                .and_then(|image| image.get(name))
+                .and_then(|value| match value {
+                    serde_yaml::Value::String(s) => Some(s.clone()),
+                    serde_yaml::Value::Number(n) => Some(n.to_string()),
+                    _ => None,
+                })
+                .filter(|value| !value.is_empty())
+        };
+        match (field("repository"), field("tag")) {
+            (Some(repository), Some(tag)) => {
+                images.insert(key.to_string(), format!("{repository}:{tag}"));
+            }
+            (Some(repository), None) => {
+                images.insert(key.to_string(), repository);
+            }
+            _ => {}
+        }
+    }
+    if !images.contains_key(CHART_IMAGE_VALUES[0]) {
+        return Err(AlienError::new(invalid(
+            "the chart's values name no Operator image (runtime.image)",
+        )));
+    }
+    Ok(images)
+}
+
+fn invalid(message: &str) -> ErrorData {
+    ErrorData::BundleInvalid {
+        message: message.to_string(),
+    }
 }
 
 /// Replace every string in `value` that equals a key of `mapping`.
@@ -618,6 +804,10 @@ async fn write_json(path: &Path, value: &serde_json::Value) -> Result<()> {
 mod tests {
     use super::*;
     use alien_core::bundle_signature::BundleSigningKey;
+    use alien_helm::{
+        apply_package_defaults, generate_helm_chart, package_chart, HelmOptions, HelmRegistry,
+        LogCollectorDefault, OperatorImageDefault, PackageDefaults,
+    };
 
     #[test]
     fn finds_and_rewrites_image_references() {
@@ -652,6 +842,59 @@ mod tests {
         );
     }
 
+    #[test]
+    fn chart_images_are_the_images_a_packaged_chart_runs() {
+        // A chart packaged the way a manager serves it, with a digest-pinned
+        // Operator the way published charts pin it.
+        let stack = alien_core::Stack::new("app".to_string()).build();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &HelmRegistry::built_in(),
+                stack_settings: Default::default(),
+                chart_name: "app".to_string(),
+            },
+        )
+        .unwrap();
+        let tag = format!("1.2.3@sha256:{}", "a".repeat(64));
+        let chart = apply_package_defaults(
+            chart,
+            &PackageDefaults {
+                version: Some("1.0.0"),
+                management_url: Some("https://manager.example.com"),
+                operator_image: Some(OperatorImageDefault {
+                    repository: "registry.example.com/alien-operator",
+                    tag: &tag,
+                }),
+                log_collector: Some(LogCollectorDefault::PodApi),
+                registry_pull_secret: false,
+            },
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app-1.0.0.tgz");
+        std::fs::write(&path, package_chart(&chart).unwrap()).unwrap();
+
+        let images = chart_images(&path).unwrap();
+        assert_eq!(
+            images,
+            BTreeMap::from([
+                (
+                    "runtime.image".to_string(),
+                    format!("registry.example.com/alien-operator:{tag}")
+                ),
+                (
+                    "runtime.cleanup.onUninstall.image".to_string(),
+                    "alpine/k8s:1.32.0".to_string()
+                ),
+            ])
+        );
+        // Each one is a reference the bundler can pull.
+        for image in images.values() {
+            image.parse::<Reference>().expect(image);
+        }
+    }
+
     #[tokio::test]
     async fn verify_rejects_changed_files() {
         let dir = tempfile::tempdir().unwrap();
@@ -667,9 +910,11 @@ mod tests {
             created_at: "now".to_string(),
             stack_id: "app".to_string(),
             images: vec![],
-            operator_image: "op".to_string(),
+            chart_images: BTreeMap::new(),
             chart: "chart/app.tgz".to_string(),
             files: checksums(dir.path()).await.unwrap(),
+            omitted_blobs: BTreeSet::new(),
+            telemetry_ack: None,
         };
         let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
         tokio::fs::write(dir.path().join(MANIFEST_FILE), &manifest_bytes)
@@ -723,9 +968,11 @@ mod tests {
             created_at: "now".to_string(),
             stack_id: "app".to_string(),
             images: vec![],
-            operator_image: "op".to_string(),
+            chart_images: BTreeMap::new(),
             chart: "chart/app.tgz".to_string(),
             files: checksums(dir.path()).await.unwrap(),
+            omitted_blobs: BTreeSet::new(),
+            telemetry_ack: None,
         };
         let key = BundleSigningKey::from_seed([5; 32]);
         let signature = key.sign(&serde_json::to_vec(&manifest).unwrap());

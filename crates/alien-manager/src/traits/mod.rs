@@ -1,4 +1,5 @@
 pub mod auth_validator;
+pub mod bundle_sources;
 pub mod credential_resolver;
 pub mod deployment_store;
 pub mod release_channel_store;
@@ -16,6 +17,10 @@ pub(crate) fn default_string() -> String {
 }
 
 pub use auth_validator::{AuthValidator, TokenType};
+pub use bundle_sources::{
+    deploy_cli_downloads, BundleSource, BundleSourceResolver, BundleSources, SourceCredentials,
+    ToolDownload,
+};
 pub use credential_resolver::{
     CredentialResolver, RemoteStorageCredentialSource, ResolvedCredentials,
 };

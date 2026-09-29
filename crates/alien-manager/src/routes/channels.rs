@@ -116,18 +116,18 @@ pub struct DeploymentRoutingResponse {
     pub release_id: Option<String>,
 }
 
-/// The release a deployment should run: its pin, else its channel's release,
-/// else the latest release (a manager without channels, or a channel nothing
-/// was released to yet). `deployment_id` is `None` for a deployment being
-/// created, which follows the default channel.
+/// The release a deployment should run: its pin, else its channel's release.
+/// Without channels, the release the manager already chose for it. Else the
+/// latest release. `deployment` is `None` for one being created, which
+/// follows the default channel.
 pub(crate) async fn release_for_deployment(
     state: &AppState,
     subject: &Subject,
-    deployment_id: Option<&str>,
+    deployment: Option<&DeploymentRecord>,
 ) -> Result<Option<ReleaseRecord>, alien_error::AlienError> {
     if let Some(channels) = &state.release_channels {
-        let routing = match deployment_id {
-            Some(id) => channels.deployment_routing(id).await?,
+        let routing = match deployment {
+            Some(deployment) => channels.deployment_routing(&deployment.id).await?,
             None => DeploymentRouting {
                 channel: DEFAULT_CHANNEL.to_string(),
                 pinned_release_id: None,
@@ -143,6 +143,8 @@ pub(crate) async fn release_for_deployment(
         if let Some(release_id) = release_id {
             return state.release_store.get_release(subject, &release_id).await;
         }
+    } else if let Some(release_id) = deployment.and_then(|d| d.desired_release_id.as_deref()) {
+        return state.release_store.get_release(subject, release_id).await;
     }
     state.release_store.get_latest_release(subject).await
 }
@@ -575,7 +577,7 @@ async fn set_pin(
     {
         return e.into_response();
     }
-    let target = match release_for_deployment(&state, &subject, Some(&deployment.id)).await {
+    let target = match release_for_deployment(&state, &subject, Some(&deployment)).await {
         Ok(target) => target,
         Err(e) => return e.into_response(),
     };

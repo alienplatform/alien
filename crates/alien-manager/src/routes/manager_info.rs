@@ -79,9 +79,8 @@ async fn manager_info(State(state): State<AppState>, headers: HeaderMap) -> Resp
             .as_ref()
             .map(|charts| charts.deployed_operator_image(&state.config.base_url())),
         bundle_signing_key: state
-            .charts
+            .bundle_signing_key
             .as_ref()
-            .and_then(|charts| charts.bundle_signing_key.as_ref())
             .map(|key| key.public_key()),
     })
     .into_response()

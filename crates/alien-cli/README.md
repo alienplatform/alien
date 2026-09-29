@@ -19,7 +19,6 @@ connects to your own.
 - **`alien deployments`** — List and inspect deployments
 - **`alien logs`** — Search recent deployment logs
 - **`alien tokens`** — Create and revoke scoped tokens, such as tunnel tokens (`alien tokens create --tunnel`)
-- **`alien airgap bundle`** / **`import`** — Package a release for an air-gapped site and record the status it sends back
 - **`alien deploy`** / **`alien destroy`** — Deploy to or destroy from a cloud platform
 - **`alien vault`** — Manage vault secrets for a deployment
 - **`alien commands`** — Invoke remote commands on deployments

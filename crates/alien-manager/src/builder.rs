@@ -56,6 +56,10 @@ pub struct AlienManagerBuilder {
     charts: Option<Arc<crate::routes::charts::ChartSettings>>,
     /// Release channels; `None` sends every release to every deployment.
     release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
+    /// Signs air-gapped bundles.
+    bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
+    /// Where bundles' charts and Operator images come from.
+    bundle_sources: Option<Arc<dyn crate::traits::BundleSourceResolver>>,
 }
 
 impl AlienManagerBuilder {
@@ -82,7 +86,30 @@ impl AlienManagerBuilder {
             tunnels: None,
             charts: None,
             release_channels: None,
+            bundle_signing_key: None,
+            bundle_sources: None,
         }
+    }
+
+    /// Sign air-gapped bundles with `key`. Environments pin its public key,
+    /// so it must stay the same across restarts and replicas.
+    pub fn bundle_signing_key(
+        mut self,
+        key: alien_core::bundle_signature::BundleSigningKey,
+    ) -> Self {
+        self.bundle_signing_key = Some(Arc::new(key));
+        self
+    }
+
+    /// Resolve bundles' charts and Operator images with `resolver`, for a
+    /// manager whose charts are published elsewhere. Without it, bundles use
+    /// the charts this manager serves (see [`Self::charts`]).
+    pub fn bundle_sources(
+        mut self,
+        resolver: Arc<dyn crate::traits::BundleSourceResolver>,
+    ) -> Self {
+        self.bundle_sources = Some(resolver);
+        self
     }
 
     /// Route releases through channels (see [`crate::traits::ReleaseChannelStore`]).
@@ -725,6 +752,8 @@ impl AlienManagerBuilder {
             self.tunnels,
             self.charts,
             self.release_channels,
+            self.bundle_signing_key,
+            self.bundle_sources,
         )
         .await
     }
@@ -821,6 +850,8 @@ async fn finalize(
     tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
     charts: Option<Arc<crate::routes::charts::ChartSettings>>,
     release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
+    bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
+    bundle_sources: Option<Arc<dyn crate::traits::BundleSourceResolver>>,
 ) -> crate::error::Result<AlienManager> {
     use alien_commands::server::CommandServer;
 
@@ -863,6 +894,8 @@ async fn finalize(
         tunnels,
         charts,
         release_channels,
+        bundle_signing_key,
+        bundle_sources,
         log_buffer: log_buffer.clone(),
     };
 

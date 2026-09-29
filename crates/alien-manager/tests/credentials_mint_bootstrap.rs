@@ -197,6 +197,8 @@ async fn build() -> Fixture {
         tunnels: None,
         charts: None,
         release_channels: None,
+        bundle_signing_key: None,
+        bundle_sources: None,
         log_buffer: std::sync::Arc::new(alien_manager::LogBuffer::new()),
     };
 

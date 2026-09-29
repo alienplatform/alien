@@ -92,6 +92,11 @@ pub struct AppState {
     pub charts: Option<Arc<charts::ChartSettings>>,
     /// Release channels; `None` sends every release to every deployment.
     pub release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
+    /// Signs air-gapped bundles. `None` when this manager doesn't sign them.
+    pub bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
+    /// Where bundles' charts and Operator images come from, for managers
+    /// that don't serve charts themselves.
+    pub bundle_sources: Option<Arc<dyn crate::traits::BundleSourceResolver>>,
     /// Recent deployment logs kept by the manager (see `providers::recent_logs`).
     pub log_buffer: Arc<crate::dev::LogBuffer>,
 }

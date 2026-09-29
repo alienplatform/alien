@@ -165,13 +165,11 @@ async fn build_standalone_server(
     let server = AlienManager::builder(config)
         .token_store(token_store)
         .tunnels()
-        .charts(
-            alien_manager::routes::charts::ChartSettings::new(
-                toml_config.operator.image.clone(),
-                toml_config.operator.insecure_registry,
-            )
-            .with_bundle_signing_key(bundle_signing_key),
-        )
+        .charts(alien_manager::routes::charts::ChartSettings::new(
+            toml_config.operator.image.clone(),
+            toml_config.operator.insecure_registry,
+        ))
+        .bundle_signing_key(bundle_signing_key)
         .with_standalone_defaults(toml_config)
         .await
         .expect("Failed to set up standalone defaults")

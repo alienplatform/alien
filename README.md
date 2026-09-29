@@ -134,22 +134,21 @@ Once a customer installs, you don't need access to their environment again:
 
 ## Air-gapped environments
 
-Sites with no connection to your manager get the same app in a file. Package a release, carry the bundle in, and apply it with `alien-deploy`, which checks the manager's signature, pushes the images to the site's registry and installs or updates the chart:
+Sites with no connection to your manager get the same app through one folder their admin carries in and out. You keep running `alien release`; the site runs `alien-deploy sync` on both sides of the gap:
 
 ```bash
-alien onboard site-7 --platforms kubernetes --airgapped   # prints the bundle key
-alien airgap bundle site-7/site-7 -o site-7.tar
+alien onboard site-7 --platforms kubernetes --airgapped   # the site's token, bundle key and start command
 
-# inside the site
-alien-deploy airgap apply site-7.tar --registry registry.internal/vendor -f values.yaml \
-  --trusted-key ed25519:...   # first install only; later bundles must match it
-alien-deploy airgap status -n data-plane -o status.tar
+# online: sends the site's reports, downloads the next signed update into site-7-sync/
+alien-deploy sync --token ax_... --manager https://manager.example.com
 
-# back with you
-alien airgap import status.tar --deployment site-7/site-7
+# inside the site: verifies the signature, pushes images to the site's registry,
+# installs or upgrades the chart, writes a report for the trip back
+alien-deploy sync --registry registry.internal/vendor -f values.yaml \
+  --trusted-key ed25519:...   # first install only; later updates must match it
 ```
 
-`airgap import` records the deployment's state and its logs in the manager, so `alien deployments ls` and `alien logs` cover those sites too. See [Air-gapped deployments](https://alien.dev/docs/deploying/air-gapped).
+After the first run, `alien-deploy sync` with no options does whatever the side it runs on can do. Updates carry only the image layers the site doesn't have, reports carry the site's state and logs (none are lost between trips), and `alien-deploy rollback` returns to the previous release. See [Air-gapped deployments](https://alien.dev/docs/deploying/air-gapped).
 
 ## Least-privilege permissions
 

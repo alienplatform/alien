@@ -63,8 +63,8 @@ pub struct OnboardArgs {
     #[arg(long)]
     pub subdomain: Option<String>,
 
-    /// The environment can't reach your manager: register its deployment now
-    /// and ship releases as bundles (`alien airgap bundle`).
+    /// The environment can't reach your manager: register its deployment now.
+    /// The site keeps it up to date with `alien-deploy sync`.
     #[arg(long)]
     pub airgapped: bool,
 }
@@ -128,6 +128,13 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
         &release_inputs.supported_platforms,
         args.json,
     )?;
+    if args.airgapped && selected_platforms != [Platform::Kubernetes] {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "platforms".to_string(),
+            message: "Air-gapped environments run on Kubernetes: pass --platforms kubernetes"
+                .to_string(),
+        }));
+    }
     let developer_inputs = developer_inputs_for_platforms(&release_inputs, &selected_platforms);
     let stack_input_values = collect_stack_input_values(
         &developer_inputs,
@@ -245,6 +252,23 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
         })?;
 
     let deployment_group_id = response.deployment_group.id.clone();
+
+    if args.airgapped {
+        drop(steps);
+        let group_name = customer_environment_name(&name);
+        let (manager_url, signing_key) =
+            airgapped_manager(&ctx.base_url(), &response.token).await?;
+        return register_airgapped(
+            &args,
+            &manager_url,
+            &manager_url,
+            &name,
+            &group_name,
+            &response.token,
+            &signing_key,
+        )
+        .await;
+    }
 
     if let Some(steps) = &steps {
         steps.complete(0, Some(deployment_group_id.clone()));
@@ -1169,6 +1193,7 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
         return register_airgapped(
             &args,
             &mgr.manager_url,
+            &manager.url,
             &name,
             &deployment_group_name,
             &token,
@@ -1280,9 +1305,63 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
 
 /// Register the deployment for an environment that can't reach the manager,
 /// the way its Operator would on first contact.
+/// The manager the project's Kubernetes deployments use, and its bundle key,
+/// as the new customer's setup token sees them.
+#[cfg(feature = "platform")]
+async fn airgapped_manager(platform_url: &str, group_token: &str) -> Result<(String, String)> {
+    let failed =
+        |message: String| AlienError::new(ErrorData::ApiRequestFailed { message, url: None });
+    let get = |url: String| async move {
+        let response = reqwest::Client::new()
+            .get(&url)
+            .bearer_auth(group_token)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: format!("GET {url}"),
+                url: None,
+            })?;
+        let status = response.status();
+        let body: serde_json::Value =
+            response
+                .json()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: format!("reading {url}"),
+                    url: None,
+                })?;
+        if !status.is_success() {
+            return Err(failed(format!(
+                "{url} returned {status}: {}",
+                body["message"].as_str().unwrap_or("no message")
+            )));
+        }
+        Ok(body)
+    };
+    let info = get(format!(
+        "{}/v1/deployment-info?platform=kubernetes",
+        platform_url.trim_end_matches('/')
+    ))
+    .await?;
+    let manager_url = info["installContext"]["targets"]["kubernetes"]["managerUrl"]
+        .as_str()
+        .ok_or_else(|| failed("The project has no manager for Kubernetes deployments".to_string()))?
+        .trim_end_matches('/')
+        .to_string();
+    let manager = get(format!("{manager_url}/v1/manager")).await?;
+    let signing_key = manager["bundleSigningKey"]
+        .as_str()
+        .ok_or_else(|| failed(format!("{manager_url} doesn't sign air-gapped bundles")))?
+        .to_string();
+    Ok((manager_url, signing_key))
+}
+
 async fn register_airgapped(
     args: &OnboardArgs,
     manager_url: &str,
+    public_manager_url: &str,
     name: &str,
     group_name: &str,
     group_token: &str,
@@ -1326,32 +1405,50 @@ async fn register_airgapped(
                 url: None,
             })?;
     let deployment_id = registered["deploymentId"].as_str().unwrap_or_default();
-    let reference = format!("{group_name}/{group_name}");
+    // The site's token: `alien-deploy sync` uses it to download updates and
+    // send reports, and it can do nothing else.
+    let site_token = registered["token"].as_str().ok_or_else(|| {
+        AlienError::new(ErrorData::ApiRequestFailed {
+            message: "The manager registered the deployment but returned no token".to_string(),
+            url: None,
+        })
+    })?;
+    let start = format!("alien-deploy sync --token {site_token} --manager {public_manager_url}");
     if args.json {
         return print_json(&serde_json::json!({
             "name": name,
             "deploymentId": deployment_id,
-            "reference": reference,
+            "reference": format!("{group_name}/{group_name}"),
             "airgapped": true,
+            "token": site_token,
+            "managerUrl": public_manager_url,
             "bundleSigningKey": signing_key,
+            "command": start,
         }));
     }
-    println!("{}", success_line("Registered for air-gapped delivery."));
-    println!("{} {}", dim_label("Customer"), name);
-    println!("{} {}", dim_label("Deployment"), deployment_id);
-    println!("{} {}", dim_label("Bundle key"), accent(signing_key));
+    println!(
+        "{}",
+        success_line(&format!("Registered {name} for air-gapped updates."))
+    );
+    println!();
+    println!("{}", dim_label(&format!("Send {name}'s admin:")));
+    println!(
+        "  {} {}   {}",
+        dim_label("Token"),
+        accent(site_token),
+        dim_label("keep on the online machine only")
+    );
+    println!(
+        "  {} {}   {}",
+        dim_label("Key  "),
+        accent(signing_key),
+        dim_label("confirm it with them by phone or email")
+    );
+    println!("  {} {}", dim_label("Start"), command(&start));
     println!();
     println!(
         "{}",
-        dim_label("Give the site this key separately from the bundles. Its first `alien-deploy airgap apply` takes it as --trusted-key, and every later bundle must be signed with it.")
-    );
-    println!();
-    println!(
-        "{} {}",
-        dim_label("Next"),
-        command(&format!(
-            "alien airgap bundle {reference} -o {group_name}.tar"
-        ))
+        dim_label("They run `alien-deploy sync` on both sides of the gap. Every `alien release` reaches the site on its next sync.")
     );
     Ok(())
 }

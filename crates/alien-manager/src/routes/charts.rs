@@ -30,7 +30,7 @@ use sha2::{Digest, Sha256};
 use super::AppState;
 use crate::{
     auth::{Scope, Subject},
-    traits::ReleaseRecord,
+    traits::{deploy_cli_downloads, BundleSource, BundleSources, ReleaseRecord, SourceCredentials},
 };
 
 /// Repository namespace for charts in the manager's registry.
@@ -50,8 +50,6 @@ pub struct ChartSettings {
     /// to this upstream. Unset for an image without a registry (a local
     /// image), which charts reference as is.
     pub operator_upstream: Option<super::operator_image::UpstreamImage>,
-    /// Signs air-gapped bundles. `None` when this manager doesn't sign them.
-    pub bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
 }
 
 impl ChartSettings {
@@ -75,17 +73,7 @@ impl ChartSettings {
         Self {
             operator_image,
             operator_upstream,
-            bundle_signing_key: None,
         }
-    }
-
-    /// Sign air-gapped bundles with `key`.
-    pub fn with_bundle_signing_key(
-        mut self,
-        key: alien_core::bundle_signature::BundleSigningKey,
-    ) -> Self {
-        self.bundle_signing_key = Some(Arc::new(key));
-        self
     }
 
     /// The Operator image reference deployments run, given this manager's
@@ -195,6 +183,44 @@ pub async fn serve(state: &AppState, subject: &Subject, method: &Method, path: &
     }
 
     oci_error(StatusCode::NOT_FOUND, "NAME_UNKNOWN", "unknown chart path")
+}
+
+/// Bundle sources for `release` from this manager's own registry: the chart
+/// version it serves for the release. `None` when this manager doesn't serve
+/// charts.
+pub(crate) async fn served_bundle_sources(
+    state: &AppState,
+    subject: &Subject,
+    release: &ReleaseRecord,
+) -> Result<Option<BundleSources>, Response> {
+    if state.charts.is_none() {
+        return Ok(None);
+    }
+    let Some(stack) = release.stacks.get(&Platform::Kubernetes) else {
+        return Err(oci_error(
+            StatusCode::BAD_REQUEST,
+            "NAME_UNKNOWN",
+            format!("release {} has no Kubernetes stack", release.id),
+        ));
+    };
+    let name = stack.id().to_string();
+    let charts = chart_releases(state, subject, &name).await?;
+    let Some((version, _)) = charts.iter().find(|(_, r)| r.id == release.id) else {
+        return Err(oci_error(
+            StatusCode::NOT_FOUND,
+            "MANIFEST_UNKNOWN",
+            format!("no chart for release {}", release.id),
+        ));
+    };
+    let base_url = state.config.base_url();
+    let host = alien_core::image_rewrite::strip_url_scheme(&base_url);
+    Ok(Some(BundleSources {
+        chart: BundleSource {
+            reference: format!("{host}/{CHART_NAMESPACE}{name}:{version}"),
+            credentials: SourceCredentials::Caller,
+        },
+        deploy_cli: deploy_cli_downloads(&state.config.releases_url()),
+    }))
 }
 
 /// Serve `digest` only if it belongs to one of `charts`, the charts this
