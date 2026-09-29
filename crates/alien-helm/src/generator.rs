@@ -978,6 +978,10 @@ spec:
     spec:
       automountServiceAccountToken: false
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -1041,6 +1045,10 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -1120,6 +1128,10 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.remoteOperatorCleanupName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -1362,6 +1374,10 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -4007,12 +4023,12 @@ heartbeat:
       enabled: true
 
 airgapped:
-  # No connection to the manager: targets arrive in bundles applied with
-  # `alien-deploy airgap apply`, and state leaves with `alien-deploy airgap
-  # status`. Needs management.deploymentId from the bundle.
+  # No connection to the manager: targets arrive in bundles installed with
+  # `alien-deploy sync`, which also carries state and telemetry back. Needs
+  # management.deploymentId from the bundle.
   enabled: false
   # Public key (ed25519:...) bundles must be signed with. Set by the first
-  # `alien-deploy airgap apply --trusted-key`, and checked on every later one.
+  # `alien-deploy sync --trusted-key`, and checked on every later one.
   bundleSigningKey: ""
 
 tunnel:
@@ -5750,6 +5766,10 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -5972,6 +5992,10 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -8404,6 +8428,76 @@ mod tests {
             .assert_ok("helm template registered setup");
         crate::test_utils::helm_template_and_validate(&files, Some(&files["examples/onprem.yaml"]))
             .assert_ok("helm template external-bindings initialize path");
+    }
+
+    #[test]
+    fn cleanup_hooks_pull_with_the_install_pull_secrets() {
+        // A site whose registry needs a password installs with a pull Secret;
+        // the uninstall and upgrade hooks pull the cleanup image from the same
+        // registry, so `helm uninstall` hangs if they don't carry it.
+        let values = r#"
+management:
+  token: ax_dg_example
+  name: prod
+  url: https://manager.example.test
+  deploymentId: null
+runtime:
+  encryption:
+    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  imagePullSecrets:
+    - name: site-registry
+  cleanup:
+    onUninstall:
+      image:
+        repository: registry.site.internal/vendor/alpine/k8s
+        tag: "1.32.0"
+"#;
+        let registry = HelmRegistry::built_in();
+        let plain = generate_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample-stack".to_string(),
+            },
+        )
+        .expect("chart");
+        for (label, chart) in [("chart", plain), ("product chart", sample_product_chart())] {
+            let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
+            rendered.assert_ok(label);
+            let mut cleanup_pods = 0;
+            for document in serde_yaml::Deserializer::from_str(&rendered.stdout) {
+                let document = YamlValue::deserialize(document).expect("valid Kubernetes YAML");
+                let pod = match document["kind"].as_str() {
+                    Some("Pod") => &document["spec"],
+                    Some(_) => &document["spec"]["template"]["spec"],
+                    None => continue,
+                };
+                let runs_cleanup_image =
+                    pod["containers"].as_sequence().is_some_and(|containers| {
+                        containers.iter().any(|container| {
+                            container["image"]
+                                .as_str()
+                                .is_some_and(|image| image.starts_with("registry.site.internal/"))
+                        })
+                    });
+                if !runs_cleanup_image {
+                    continue;
+                }
+                cleanup_pods += 1;
+                let secrets: Vec<&str> = pod["imagePullSecrets"]
+                    .as_sequence()
+                    .map(|secrets| secrets.iter().filter_map(|s| s["name"].as_str()).collect())
+                    .unwrap_or_default();
+                assert!(
+                    secrets.contains(&"site-registry"),
+                    "{label}: {} {} runs the cleanup image without the pull Secret",
+                    document["kind"].as_str().unwrap_or_default(),
+                    document["metadata"]["name"].as_str().unwrap_or_default()
+                );
+            }
+            assert!(cleanup_pods > 0, "{label} rendered no cleanup hooks");
+        }
     }
 
     #[test]

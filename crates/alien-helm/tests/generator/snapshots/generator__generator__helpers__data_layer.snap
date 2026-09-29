@@ -167,12 +167,12 @@ heartbeat:
       enabled: true
 
 airgapped:
-  # No connection to the manager: targets arrive in bundles applied with
-  # `alien-deploy airgap apply`, and state leaves with `alien-deploy airgap
-  # status`. Needs management.deploymentId from the bundle.
+  # No connection to the manager: targets arrive in bundles installed with
+  # `alien-deploy sync`, which also carries state and telemetry back. Needs
+  # management.deploymentId from the bundle.
   enabled: false
   # Public key (ed25519:...) bundles must be signed with. Set by the first
-  # `alien-deploy airgap apply --trusted-key`, and checked on every later one.
+  # `alien-deploy sync --trusted-key`, and checked on every later one.
   bundleSigningKey: ""
 
 tunnel:
@@ -1932,6 +1932,10 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -2151,6 +2155,10 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
