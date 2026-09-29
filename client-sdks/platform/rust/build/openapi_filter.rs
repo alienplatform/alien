@@ -15,6 +15,13 @@ const CONSUMER_NAMED_ANONYMOUS_SCHEMA_POINTERS: &[&str] = &[
     "/paths/~1v1~1projects/post/requestBody/content/application~1json/schema/properties/gitRepository",
 ];
 
+// The server adds package types without a client release. No Alien consumer matches on these
+// two response fields, so they decode as plain strings instead of closed enums.
+const OPEN_STRING_ENUM_SCHEMA_POINTERS: &[&str] = &[
+    "/components/schemas/CapabilityMaterialization/properties/packages/items/properties/type",
+    "/components/schemas/DeploymentLinkSetupResponse/properties/visiblePackageTypes/items",
+];
+
 /// Platform operations used by Alien's production Rust consumers.
 ///
 /// Keep this list explicit: adding a Platform API call should require a review
@@ -153,11 +160,11 @@ pub fn filter_openapi(document: &Value, required_operation_ids: &[&str]) -> Resu
         "components".to_string(),
         reachable_components(document, &filtered)?,
     );
-    deduplicate_anonymous_object_schemas(
-        &mut filtered,
-        required_operation_ids == REQUIRED_OPERATION_IDS,
-    )?;
+    let production_client = required_operation_ids == REQUIRED_OPERATION_IDS;
+    open_string_enums(&mut filtered, production_client)?;
+    deduplicate_anonymous_object_schemas(&mut filtered, production_client)?;
     canonicalize_nullable_enums(&mut filtered);
+    allow_unknown_properties(&mut filtered);
 
     Ok(Value::Object(filtered))
 }
@@ -455,8 +462,98 @@ pub fn normalize_openapi(document: &Value) -> Result<Value, String> {
         .as_object()
         .ok_or_else(|| "OpenAPI document must be a JSON object".to_string())?
         .clone();
+    open_string_enums(&mut root, false)?;
     canonicalize_nullable_enums(&mut root);
+    allow_unknown_properties(&mut root);
     Ok(Value::Object(root))
+}
+
+fn open_string_enums(document: &mut Map<String, Value>, require_all: bool) -> Result<(), String> {
+    for pointer in OPEN_STRING_ENUM_SCHEMA_POINTERS {
+        let (section, rest) = pointer
+            .strip_prefix('/')
+            .and_then(|pointer| pointer.split_once('/'))
+            .expect("open string schema pointers are nested in the document");
+        match document
+            .get_mut(section)
+            .and_then(|value| value.pointer_mut(&format!("/{rest}")))
+        {
+            Some(Value::Object(schema)) => {
+                schema.remove("enum");
+            }
+            Some(_) => {
+                return Err(format!(
+                    "open string schema at `{pointer}` is not an object"
+                ))
+            }
+            None if require_all => {
+                return Err(format!("open string schema is missing at `{pointer}`"))
+            }
+            None => {}
+        }
+    }
+    Ok(())
+}
+
+// typify turns `additionalProperties: false` into `deny_unknown_fields`, which fails a whole
+// response when the server adds an optional field. Serialization is unaffected, so request
+// bodies stay exactly as built; the server still validates them.
+fn allow_unknown_properties(document: &mut Map<String, Value>) {
+    if let Some(paths) = document.get_mut("paths") {
+        allow_unknown_properties_in_openapi(paths);
+    }
+    if let Some(components) = document
+        .get_mut("components")
+        .and_then(Value::as_object_mut)
+    {
+        for (section, value) in components {
+            match (section.as_str(), value.as_object_mut()) {
+                ("schemas", Some(schemas)) => {
+                    for schema in schemas.values_mut() {
+                        allow_unknown_properties_in_schema(schema);
+                    }
+                }
+                _ => allow_unknown_properties_in_openapi(value),
+            }
+        }
+    }
+}
+
+fn allow_unknown_properties_in_openapi(value: &mut Value) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                allow_unknown_properties_in_openapi(value);
+            }
+        }
+        Value::Object(object) => {
+            for (key, value) in object {
+                if key == "schema" {
+                    allow_unknown_properties_in_schema(value);
+                } else if matches!(key.as_str(), "example" | "examples" | "default" | "enum")
+                    || key.starts_with("x-")
+                {
+                    continue;
+                } else {
+                    allow_unknown_properties_in_openapi(value);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn allow_unknown_properties_in_schema(schema: &mut Value) {
+    if let Some(object) = schema.as_object_mut() {
+        if object.get("additionalProperties") == Some(&Value::Bool(false)) {
+            object.remove("additionalProperties");
+        }
+    }
+    for_schema_children_mut(schema, |child| {
+        allow_unknown_properties_in_schema(child);
+        Ok::<(), ()>(())
+    })
+    .expect("opening object schemas is infallible");
 }
 
 fn canonicalize_nullable_enums(document: &mut Map<String, Value>) {
