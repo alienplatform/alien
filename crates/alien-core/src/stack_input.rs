@@ -199,3 +199,158 @@ pub enum GateInputIssue {
     /// The input exists but is not a boolean.
     NotBoolean(StackInputKind),
 }
+
+/// Environment variables produced by stack inputs that declare `env`
+/// mappings, from the deployment's input values (or each input's default).
+///
+/// List values become comma-separated strings. Secret inputs produce secret
+/// variables unless the mapping sets a type. Two mappings resolving to the
+/// same variable name are rejected.
+pub fn resolve_stack_input_environment_variables(
+    inputs: &[StackInputDefinition],
+    values: &std::collections::HashMap<String, serde_json::Value>,
+) -> crate::Result<Vec<crate::EnvironmentVariable>> {
+    let mut variables: Vec<crate::EnvironmentVariable> = Vec::new();
+    for input in inputs.iter().filter(|input| !input.env.is_empty()) {
+        let value = match values.get(&input.id) {
+            Some(serde_json::Value::Null) | None => match &input.default {
+                Some(default) => default_environment_string(default),
+                None => continue,
+            },
+            Some(value) => environment_string(value),
+        };
+        for mapping in &input.env {
+            if variables
+                .iter()
+                .any(|variable| variable.name == mapping.name)
+            {
+                return Err(alien_error::AlienError::new(
+                    crate::ErrorData::GenericError {
+                        message: format!(
+                            "Stack inputs map more than one value to environment variable '{}'",
+                            mapping.name
+                        ),
+                    },
+                ));
+            }
+            let secret = match mapping.var_type {
+                Some(StackInputEnvironmentVariableType::Secret) => true,
+                Some(StackInputEnvironmentVariableType::Plain) => false,
+                None => input.kind == StackInputKind::Secret,
+            };
+            variables.push(crate::EnvironmentVariable {
+                name: mapping.name.clone(),
+                value: value.clone(),
+                var_type: if secret {
+                    crate::EnvironmentVariableType::Secret
+                } else {
+                    crate::EnvironmentVariableType::Plain
+                },
+                target_resources: mapping.target_resources.clone(),
+            });
+        }
+    }
+    Ok(variables)
+}
+
+fn environment_string(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(value) => value.clone(),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .map(environment_string)
+            .collect::<Vec<_>>()
+            .join(","),
+        other => other.to_string(),
+    }
+}
+
+fn default_environment_string(default: &StackInputDefaultValue) -> String {
+    match default {
+        StackInputDefaultValue::String(value) | StackInputDefaultValue::Number(value) => {
+            value.clone()
+        }
+        StackInputDefaultValue::Boolean(value) => value.to_string(),
+        StackInputDefaultValue::StringList(values) => values.join(","),
+    }
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::EnvironmentVariableType;
+
+    fn input(id: &str, kind: StackInputKind, env: &str) -> StackInputDefinition {
+        StackInputDefinition {
+            id: id.to_string(),
+            kind,
+            provided_by: vec![StackInputProvider::Developer],
+            required: false,
+            label: id.to_string(),
+            description: id.to_string(),
+            placeholder: None,
+            default: None,
+            platforms: None,
+            validation: None,
+            env: vec![StackInputEnvironmentMapping {
+                name: env.to_string(),
+                target_resources: Some(vec!["api".to_string()]),
+                var_type: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn maps_values_defaults_and_secrecy() {
+        let mut region = input("region", StackInputKind::String, "REGION");
+        region.default = Some(StackInputDefaultValue::String("eu-west-1".to_string()));
+        let inputs = vec![
+            input("token", StackInputKind::Secret, "ACCESS_TOKEN"),
+            input("zones", StackInputKind::StringList, "ZONES"),
+            region,
+            input("unset", StackInputKind::String, "UNSET"),
+        ];
+        let values = HashMap::from([
+            ("token".to_string(), serde_json::json!("s3cr3t")),
+            ("zones".to_string(), serde_json::json!(["a", "b"])),
+        ]);
+
+        let variables = resolve_stack_input_environment_variables(&inputs, &values).unwrap();
+
+        let by_name: HashMap<_, _> = variables.iter().map(|v| (v.name.as_str(), v)).collect();
+        assert_eq!(
+            variables.len(),
+            3,
+            "unset inputs without defaults produce nothing"
+        );
+        assert_eq!(by_name["ACCESS_TOKEN"].value, "s3cr3t");
+        assert_eq!(
+            by_name["ACCESS_TOKEN"].var_type,
+            EnvironmentVariableType::Secret
+        );
+        assert_eq!(
+            by_name["ACCESS_TOKEN"].target_resources,
+            Some(vec!["api".to_string()])
+        );
+        assert_eq!(by_name["ZONES"].value, "a,b");
+        assert_eq!(by_name["ZONES"].var_type, EnvironmentVariableType::Plain);
+        assert_eq!(by_name["REGION"].value, "eu-west-1");
+    }
+
+    #[test]
+    fn rejects_two_inputs_mapped_to_one_variable() {
+        let inputs = vec![
+            input("a", StackInputKind::String, "SHARED"),
+            input("b", StackInputKind::String, "SHARED"),
+        ];
+        let values = HashMap::from([
+            ("a".to_string(), serde_json::json!("1")),
+            ("b".to_string(), serde_json::json!("2")),
+        ]);
+        let error = resolve_stack_input_environment_variables(&inputs, &values)
+            .expect_err("duplicate names must be rejected");
+        assert!(error.message.contains("SHARED"));
+    }
+}

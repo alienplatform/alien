@@ -1761,10 +1761,34 @@ async fn agent_sync(
                     }
                 };
 
-                let env_vars: Vec<EnvironmentVariable> = deployment
+                let mut env_vars: Vec<EnvironmentVariable> = deployment
                     .user_environment_variables
                     .clone()
                     .unwrap_or_default();
+                // Inputs mapped to environment variables resolve against the
+                // target release, so a release that adds a mapped input takes
+                // effect without re-onboarding. Explicit variables win.
+                let input_env = match alien_core::resolve_stack_input_environment_variables(
+                    &stack.inputs,
+                    &deployment.input_values,
+                ) {
+                    Ok(variables) => variables,
+                    Err(e) => {
+                        return ErrorData::bad_request(format!(
+                            "Deployment input values do not resolve for release {}: {}",
+                            r.id, e.message
+                        ))
+                        .into_response()
+                    }
+                };
+                for variable in input_env {
+                    if !env_vars
+                        .iter()
+                        .any(|existing| existing.name == variable.name)
+                    {
+                        env_vars.push(variable);
+                    }
+                }
 
                 // Records loaded for sync always carry stack settings; in a
                 // handler, answer with a 500 rather than panic-dropping the
@@ -1776,7 +1800,7 @@ async fn agent_sync(
                             .into_response();
                     }
                 };
-                let config = build_target_deployment_config(
+                let mut config = build_target_deployment_config(
                     &deployment,
                     stack_settings,
                     management_config,
@@ -1785,6 +1809,12 @@ async fn agent_sync(
                     agent_token,
                     native_image_host,
                 );
+                // Workloads export OTLP to this manager when it forwards
+                // telemetry, the same wiring push deployments get. Stored
+                // monitoring config from an embedder takes precedence.
+                if config.monitoring.is_none() {
+                    config.monitoring = default_monitoring(&state.config, &deployment);
+                }
 
                 Some(TargetDeployment {
                     release_info: ReleaseInfo {
@@ -1921,6 +1951,24 @@ async fn agent_sync(
         tunnel_url: state.tunnels.as_ref().map(|_| state.config.base_url()),
     })
     .into_response()
+}
+
+fn default_monitoring(
+    config: &crate::config::ManagerConfig,
+    deployment: &DeploymentRecord,
+) -> Option<alien_core::OtlpConfig> {
+    let forwards = config.otlp_endpoint.is_some() || config.enable_local_log_ingest();
+    let token = deployment.deployment_token.as_ref()?;
+    forwards.then(|| alien_core::OtlpConfig {
+        logs_endpoint: format!("{}/v1/logs", config.base_url()),
+        logs_auth_header: format!("authorization=Bearer {token}"),
+        metrics_endpoint: Some(format!("{}/v1/metrics", config.base_url())),
+        metrics_auth_header: Some(format!("authorization=Bearer {token}")),
+        resource_attributes: std::collections::HashMap::from([(
+            "alien.deployment_id".to_string(),
+            deployment.id.clone(),
+        )]),
+    })
 }
 
 fn release_stack_platform(platform: Platform) -> Platform {
@@ -2361,12 +2409,12 @@ async fn initialize(
                     Err(e) => return e.into_response(),
                 };
 
-            // Create deployment with a token (reuse the agent's Bearer token)
-            let dep_token = headers
-                .get("authorization")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.strip_prefix("Bearer "))
-                .map(|t| t.to_string());
+            // The deployment's own token: what its workloads use for image
+            // pulls and telemetry. Never the group token the Operator
+            // registered with, which can create deployments.
+            let (raw_token, key_prefix, key_hash) =
+                ids::generate_token(TokenType::Deployment.prefix());
+            let dep_token = Some(raw_token.clone());
 
             // Developer-provided setup on the group applies to every deployment
             // it creates; values supplied by the deployer at install win.
@@ -2427,9 +2475,7 @@ async fn initialize(
                 }
             }
 
-            // Create a deployment token for the new deployment
-            let (raw_token, key_prefix, key_hash) =
-                ids::generate_token(TokenType::Deployment.prefix());
+            // Record the deployment token minted above.
             match state
                 .token_store
                 .create_token(CreateTokenParams {
