@@ -44,7 +44,7 @@ fi
 
 IFS=, read -r -a platform_list <<< "$platforms"
 for platform in "${platform_list[@]}"; do
-  # Both images are large (wolfi-base plus git's 24 packages, or all of buildpack-deps) and
+  # Sandbox images are large (wolfi-base plus git's 24 packages, or all of buildpack-deps) and
   # the amd64 half arrives under emulation. Inside a probe's own budget, the pull expires.
   status=0
   pull=$(timeout -k 5 300 docker pull --platform "$platform" "$image" 2>&1) || status=$?
