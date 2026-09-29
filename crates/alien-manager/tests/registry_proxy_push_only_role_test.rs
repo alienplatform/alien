@@ -320,7 +320,6 @@ async fn a_push_only_credential_pushes_but_cannot_pull_or_cross_projects() {
             format!("{repo}/blobs/sha256:{}", "0".repeat(64)),
             format!("{repo}/tags/list"),
             format!("{repo}/blobs/uploads/some-session"),
-            "_catalog".to_string(),
         ] {
             let got = status(
                 client
@@ -330,8 +329,16 @@ async fn a_push_only_credential_pushes_but_cannot_pull_or_cross_projects() {
             .await;
             assert_eq!(got, 403, "{method} /v2/{path} must be refused, got {got}");
         }
+        // `_catalog` names no repository, so it is refused for every caller.
+        let got = status(
+            client
+                .request(method.clone(), format!("{manager_url}/v2/_catalog"))
+                .bearer_auth(&own),
+        )
+        .await;
+        assert_eq!(got, 400, "{method} /v2/_catalog must be refused, got {got}");
     }
-    // Decoded by the router, these would authorize one repository and reach another upstream.
+    // Paths the router decodes into separators, or that hold an empty segment, are refused.
     for (method, path) in [
         (
             reqwest::Method::POST,
