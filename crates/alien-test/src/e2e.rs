@@ -926,6 +926,8 @@ pub async fn deploy_test_app(
         .body(alien_manager_api::types::CreateDeploymentGroupRequest {
             name: format!("e2e-group-{}", &uuid::Uuid::new_v4().to_string()[..8]),
             max_deployments: None,
+            environment_variables: Default::default(),
+            input_values: Default::default(),
         })
         .send()
         .await
@@ -1109,6 +1111,8 @@ pub async fn developer_setup(
         .body(alien_manager_api::types::CreateDeploymentGroupRequest {
             name: format!("e2e-group-{}", &uuid::Uuid::new_v4().to_string()[..8]),
             max_deployments: None,
+            environment_variables: Default::default(),
+            input_values: Default::default(),
         })
         .send()
         .await

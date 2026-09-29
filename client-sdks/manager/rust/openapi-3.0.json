@@ -2031,6 +2031,10 @@
               },
               "supportsExecutionClaims": {
                 "type": "boolean"
+              },
+              "supportsTunnels": {
+                "type": "boolean",
+                "description": "Absent for Operators that predate container tunnels."
               }
             }
           },
@@ -2843,6 +2847,36 @@
                 "type": "string",
                 "enum": [
                   "imds"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Container credentials endpoint: ECS task roles and EKS Pod Identity.",
+            "required": [
+              "endpoint",
+              "type"
+            ],
+            "properties": {
+              "authorization_token": {
+                "type": "string",
+                "description": "Authorization header value for the endpoint",
+                "nullable": true
+              },
+              "authorization_token_file": {
+                "type": "string",
+                "description": "File holding the authorization header value, re-read on each\nrefresh because the platform rotates it",
+                "nullable": true
+              },
+              "endpoint": {
+                "type": "string",
+                "description": "Credentials endpoint URL"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "container"
                 ]
               }
             }

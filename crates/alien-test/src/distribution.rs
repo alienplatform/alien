@@ -1121,6 +1121,8 @@ async fn create_deployment_group_token(
                 &uuid::Uuid::new_v4().to_string()[..8]
             ),
             max_deployments: None,
+            environment_variables: Default::default(),
+            input_values: Default::default(),
         })
         .send()
         .await
