@@ -271,10 +271,16 @@ fn free_port() -> u16 {
 
 /// A manager whose only artifact registry is the local binding at `registry_url`.
 pub async fn start_manager(registry_url: String) -> Manager {
+    start_manager_with_binding(registry_url, "ALIEN_ARTIFACT_REGISTRY_BINDING").await
+}
+
+/// Like `start_manager`, with the registry binding set through `binding_env`. A binding named
+/// `artifacts` registers no route, so the manager serves it with an empty routing table.
+pub async fn start_manager_with_binding(registry_url: String, binding_env: &str) -> Manager {
     let binding = alien_core::bindings::ArtifactRegistryBinding::local(registry_url, None);
     let mut env_map: HashMap<String, String> = std::env::vars().collect();
     env_map.insert(
-        "ALIEN_ARTIFACT_REGISTRY_BINDING".to_string(),
+        binding_env.to_string(),
         serde_json::to_string(&binding).unwrap(),
     );
     env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());

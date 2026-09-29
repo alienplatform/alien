@@ -312,6 +312,44 @@ async fn mount_sources_outside_the_pushed_route_are_refused() {
     }
 }
 
+/// With an empty routing table every repository is on the one registry, so a mount follows the
+/// pull rule alone: forwarded for a caller that may pull the source, a plain upload otherwise.
+#[tokio::test]
+async fn mounts_follow_the_pull_rule_with_an_empty_routing_table() {
+    let (upstream, seen) = start_upstream().await;
+    let manager = start_manager_with_binding(upstream, "ALIEN_ARTIFACTS_BINDING").await;
+    let digest = digest();
+    for (token, from, forwarded) in [
+        ("pusher-for-default", OWN, true),
+        ("group-for-default", OWN, false),
+        // A deployment token pulls only its release's repositories.
+        ("deploy-for-default", OTHER, false),
+    ] {
+        let response = send(
+            manager.port,
+            "POST",
+            &format!(
+                "/v2/{OWN}/copy/blobs/uploads/?mount={digest}&from={}",
+                enc(from)
+            ),
+            token,
+        )
+        .await;
+        let reached = seen.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(
+            reached.path,
+            format!("/v2/{OWN}/copy/blobs/uploads/"),
+            "{token}"
+        );
+        assert_eq!(
+            (response.status, reached.has_mount_params()),
+            if forwarded { (201, true) } else { (202, false) },
+            "{token}: {}",
+            response.body
+        );
+    }
+}
+
 /// Outside the upload-init POST the mount parameters carry no meaning and are dropped.
 #[tokio::test]
 async fn mount_parameters_on_a_manifest_put_are_dropped() {

@@ -555,13 +555,11 @@ fn is_mount_source_on_target_route(
     source: &str,
     repo_name: &str,
 ) -> bool {
-    let route_prefix = |repo: &str| table.resolve(repo).map(|route| route.prefix.as_str());
-    is_valid_repository_name(source)
-        && route_prefix(repo_name).is_some_and(|target| route_prefix(source) == Some(target))
+    is_valid_repository_name(source) && same_route(table, source, repo_name)
 }
 
-/// A session's path picks the upstream registry and its credentials, so it must resolve to the
-/// signed repo's registry route. With no routing table there is a single registry.
+/// Whether two repositories reach the same upstream registry, as a mount source and target or a
+/// signed session and its path must. With no routing table there is a single registry.
 fn same_route(table: &RegistryRoutingTable, a: &str, b: &str) -> bool {
     let prefix = |repo: &str| table.resolve(repo).map(|route| route.prefix.as_str());
     table.is_empty() || matches!((prefix(a), prefix(b)), (Some(x), Some(y)) if x == y)
@@ -2073,6 +2071,18 @@ mod tests {
             &table,
             "alien-prj_a",
             "other/prj_a"
+        ));
+        // With no routing table there is one registry, so any valid name shares its route.
+        let single = RegistryRoutingTable::new(vec![]).unwrap();
+        assert!(is_mount_source_on_target_route(
+            &single,
+            "artifacts/prj_b",
+            "artifacts/prj_a"
+        ));
+        assert!(!is_mount_source_on_target_route(
+            &single,
+            "Artifacts/prj_b",
+            "artifacts/prj_a"
         ));
     }
 
