@@ -14,7 +14,6 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::{
     CreateReleaseRequest as ManagerCreateReleaseRequest, StackByPlatform as ManagerStackByPlatform,
 };
-use alien_manager_api::SdkResultExt;
 use alien_manager_api::SdkResultExtReadingBody as _;
 use alien_platform_api::types::GitMetadata;
 use clap::Parser;
@@ -1889,6 +1888,7 @@ async fn push_stack_with_cache(
 ) -> alien_error::Result<Stack, alien_build::error::ErrorData> {
     let platform_str = platform.as_str();
     let mut push_cache = load_push_cache(output_dir, platform_str);
+    drop_images_missing_from_registry(&built_stack, &mut push_cache, push_settings).await?;
     let pre_push_stack = built_stack.clone();
 
     let cache_hits = apply_push_cache(&mut built_stack, &push_cache, &push_settings.repository);
@@ -1915,6 +1915,32 @@ async fn push_stack_with_cache(
     }
 
     Ok(pushed)
+}
+
+/// Forget cached pushes this stack would reuse that the registry no longer
+/// has (a manager whose state was reset, a pruned repository), so they're
+/// pushed again instead of released as references to nothing.
+async fn drop_images_missing_from_registry(
+    stack: &Stack,
+    cache: &mut HashMap<String, String>,
+    push_settings: &PushSettings,
+) -> alien_error::Result<(), alien_build::error::ErrorData> {
+    let mut reused = stack.clone();
+    if apply_push_cache(&mut reused, cache, &push_settings.repository) == 0 {
+        return Ok(());
+    }
+    let mut hits = HashMap::new();
+    collect_push_cache_entries(&reused, stack, &mut hits);
+    for (key, image) in hits {
+        if alien_build::registry::manifest_digest(&image, &push_settings.options)
+            .await?
+            .is_none()
+        {
+            info!("   {image} is no longer in the registry; pushing it again");
+            cache.remove(&key);
+        }
+    }
+    Ok(())
 }
 
 /// Load the push cache for a platform. Returns an empty map on any error.
