@@ -267,7 +267,9 @@ impl Authz for OssAuthz {
                 ..
             } => deployment_group_id == &deployment.deployment_group_id,
             Scope::Workspace => Self::is_workspace_writer(s),
-            Scope::Project { .. } => Self::project_reader(s),
+            Scope::Project { project_id } => {
+                Self::project_reader(s) && project_id == &deployment.project_id
+            }
             Scope::Commands { .. } | Scope::RemoteBindings { .. } | Scope::Telemetry { .. } => {
                 false
             }
@@ -570,6 +572,20 @@ mod tests {
         ));
         assert!(!OssAuthz.can_read_deployment(&subject, &d1));
         assert!(!OssAuthz.can_update_deployment(&subject, &d1));
+    }
+
+    #[test]
+    fn a_project_credential_syncs_only_its_own_projects_deployments() {
+        let mut developer = admin();
+        developer.scope = Scope::Project {
+            project_id: "default".to_string(),
+        };
+        developer.role = Role::ProjectDeveloper;
+        let mut other = deployment("d2", "dg-b");
+        other.project_id = "prj_other".to_string();
+
+        assert!(OssAuthz.can_sync_deployment(&developer, &deployment("d1", "dg-a")));
+        assert!(!OssAuthz.can_sync_deployment(&developer, &other));
     }
 
     #[test]
