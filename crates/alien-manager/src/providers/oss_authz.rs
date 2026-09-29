@@ -86,6 +86,15 @@ impl Authz for OssAuthz {
         self.can_read_release(s, release)
     }
 
+    fn can_manage_release_channels(&self, s: &Subject) -> bool {
+        // Whoever may publish releases may choose where they go.
+        self.can_create_release(s, "default")
+    }
+
+    fn can_read_release_channels(&self, s: &Subject) -> bool {
+        Self::can_act_on_project(s, "default")
+    }
+
     // -- Deployments -------------------------------------------------------
 
     fn can_create_deployment(&self, s: &Subject, _ctx: DeploymentCreateCtx<'_>) -> bool {

@@ -36,6 +36,16 @@ pub trait Authz: Send + Sync {
     fn can_create_release(&self, subject: &Subject, project_id: &str) -> bool;
     fn can_read_release(&self, subject: &Subject, release: &ReleaseRecord) -> bool;
     fn can_export_release(&self, subject: &Subject, release: &ReleaseRecord) -> bool;
+    /// Create, delete, promote to, and assign deployments to release
+    /// channels. Denied unless an implementation decides otherwise, like
+    /// every capability added after the trait shipped.
+    fn can_manage_release_channels(&self, _subject: &Subject) -> bool {
+        false
+    }
+    /// List release channels.
+    fn can_read_release_channels(&self, _subject: &Subject) -> bool {
+        false
+    }
 
     // -- Deployments -------------------------------------------------------
     fn can_create_deployment(&self, subject: &Subject, ctx: DeploymentCreateCtx<'_>) -> bool;

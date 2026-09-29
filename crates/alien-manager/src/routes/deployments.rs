@@ -491,12 +491,14 @@ async fn create_deployment(
         .into_response();
     }
 
-    // Auto-assign latest release if available
-    let desired_release_id = match state.release_store.get_latest_release(&subject).await {
-        Ok(Some(release)) => Some(release.id),
-        Ok(None) => None,
-        Err(e) => return e.into_response(),
-    };
+    // Start at the release the default channel points at (the latest
+    // release on a manager without channels).
+    let desired_release_id =
+        match super::channels::release_for_deployment(&state, &subject, None).await {
+            Ok(Some(release)) => Some(release.id),
+            Ok(None) => None,
+            Err(e) => return e.into_response(),
+        };
 
     // Create the deployment first (token is set after).
     let (raw_token, key_prefix, key_hash) = ids::generate_token(TokenType::Deployment.prefix());
@@ -1233,6 +1235,7 @@ mod tests {
             import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
             tunnels: None,
             charts: None,
+            release_channels: None,
             log_buffer: std::sync::Arc::new(crate::dev::LogBuffer::new()),
         };
         let response = router()

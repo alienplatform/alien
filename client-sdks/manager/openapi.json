@@ -893,6 +893,52 @@
         ]
       }
     },
+    "/v1/deployments/{id}/channel": {
+      "put": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "set_deployment_channel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDeploymentChannelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The deployment follows the channel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentRoutingResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/deployments/{id}/delete": {
       "post": {
         "tags": [
@@ -1015,7 +1061,7 @@
           {
             "name": "since",
             "in": "query",
-            "description": "Only entries after this time (RFC 3339).",
+            "description": "Only entries at or after this time (RFC 3339). Inclusive, so a caller\nfollowing logs doesn't miss entries that share its last timestamp.",
             "required": false,
             "schema": {
               "type": [
@@ -1033,6 +1079,52 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RecentLogsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/deployments/{id}/pin": {
+      "put": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "set_deployment_pin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDeploymentPinRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The deployment's pin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentRoutingResponse"
                 }
               }
             }
@@ -1109,6 +1201,42 @@
             "description": "Not found"
           }
         }
+      }
+    },
+    "/v1/deployments/{id}/routing": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "get_deployment_routing",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Channel and pin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentRoutingResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
       }
     },
     "/v1/deployments/{id}/status-report": {
@@ -1469,6 +1597,93 @@
         ]
       }
     },
+    "/v1/release-channels": {
+      "get": {
+        "tags": [
+          "releases"
+        ],
+        "operationId": "list_manager_release_channels",
+        "responses": {
+          "200": {
+            "description": "Release channels",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListReleaseChannelsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "releases"
+        ],
+        "operationId": "create_manager_release_channel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReleaseChannelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Channel created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseChannelResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/release-channels/{name}": {
+      "delete": {
+        "tags": [
+          "releases"
+        ],
+        "operationId": "delete_manager_release_channel",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Channel name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Channel deleted"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/releases": {
       "get": {
         "tags": [
@@ -1593,6 +1808,52 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/releases/{id}/promote": {
+      "post": {
+        "tags": [
+          "releases"
+        ],
+        "operationId": "promote_manager_release",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Release ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromoteReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The channel now points at the release",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseChannelResponse"
                 }
               }
             }
@@ -7818,6 +8079,26 @@
           }
         }
       },
+      "CreateReleaseChannelRequest": {
+        "type": "object",
+        "description": "Body of `POST /v1/release-channels`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Lowercase letters, digits and hyphens, starting with a letter."
+          },
+          "releaseId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Release the channel starts at."
+          }
+        }
+      },
       "CreateReleaseRequest": {
         "type": "object",
         "required": [
@@ -7825,6 +8106,13 @@
           "projectId"
         ],
         "properties": {
+          "channel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Channel the release advances; `production` when absent. Deployments\nfollowing the channel roll out to it."
+          },
           "gitMetadata": {
             "oneOf": [
               {
@@ -8322,6 +8610,35 @@
           "workspaceId": {
             "type": "string",
             "description": "Required by the platform-SDK Deployment schema."
+          }
+        }
+      },
+      "DeploymentRoutingResponse": {
+        "type": "object",
+        "description": "What a deployment follows and the release that makes it run.",
+        "required": [
+          "deploymentId",
+          "channel"
+        ],
+        "properties": {
+          "channel": {
+            "type": "string"
+          },
+          "deploymentId": {
+            "type": "string"
+          },
+          "pinnedReleaseId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "releaseId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The release the deployment is sent: the pin, else the channel's release."
           }
         }
       },
@@ -12613,6 +12930,20 @@
           }
         }
       },
+      "ListReleaseChannelsResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReleaseChannelResponse"
+            }
+          }
+        }
+      },
       "ListReleasesResponse": {
         "type": "object",
         "required": [
@@ -15047,6 +15378,18 @@
         ],
         "description": "Storage backend representation for different presigned request types"
       },
+      "PromoteReleaseRequest": {
+        "type": "object",
+        "description": "Body of `POST /v1/releases/{id}/promote`.",
+        "required": [
+          "channel"
+        ],
+        "properties": {
+          "channel": {
+            "type": "string"
+          }
+        }
+      },
       "ProviderFleetStatus": {
         "type": "object",
         "required": [
@@ -15475,6 +15818,37 @@
           },
           "success": {
             "type": "boolean"
+          }
+        }
+      },
+      "ReleaseChannelResponse": {
+        "type": "object",
+        "description": "A release channel.",
+        "required": [
+          "name",
+          "updatedAt",
+          "deployments"
+        ],
+        "properties": {
+          "currentReleaseId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Release the channel points at; absent until one is published or promoted to it."
+          },
+          "deployments": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deployments following the channel, pinned or not.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -17524,6 +17898,31 @@
           },
           "stale": {
             "type": "boolean"
+          }
+        }
+      },
+      "SetDeploymentChannelRequest": {
+        "type": "object",
+        "description": "Body of `PUT /v1/deployments/{id}/channel`.",
+        "required": [
+          "channel"
+        ],
+        "properties": {
+          "channel": {
+            "type": "string"
+          }
+        }
+      },
+      "SetDeploymentPinRequest": {
+        "type": "object",
+        "description": "Body of `PUT /v1/deployments/{id}/pin`.",
+        "properties": {
+          "releaseId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Release to pin to; absent unpins and returns to the channel's release."
           }
         }
       },

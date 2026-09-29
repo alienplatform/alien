@@ -15,6 +15,7 @@ use alien_manager_api::types::{
     CreateReleaseRequest as ManagerCreateReleaseRequest, StackByPlatform as ManagerStackByPlatform,
 };
 use alien_manager_api::SdkResultExt;
+use alien_manager_api::SdkResultExtReadingBody as _;
 use alien_platform_api::types::GitMetadata;
 use clap::Parser;
 use dockdash::{ClientProtocol, RegistryAuth};
@@ -195,14 +196,9 @@ pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()
     }
 }
 
+#[cfg_attr(not(feature = "platform"), allow(unused_variables))]
 fn validate_release_channel(channel: &str, ctx: &ExecutionMode) -> Result<()> {
-    if !ctx.is_platform() && channel != "production" {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "channel".to_string(),
-            message: "This manager doesn't support release channels: every release goes to every deployment. Omit --channel.".to_string(),
-        }));
-    }
-
+    // A manager you run checks the name, and that the channel exists, itself.
     #[cfg(feature = "platform")]
     if ctx.is_platform() {
         parse_release_channel_name(channel)?;
@@ -485,6 +481,9 @@ async fn load_release_config(
     } else {
         None
     };
+    if let Some(manager) = &manager {
+        ensure_manager_channel(manager, &args.channel).await?;
+    }
 
     let git_metadata = if args.no_git {
         None
@@ -671,6 +670,7 @@ async fn release_task_core(
             &project_link.project_id,
             stack_by_platform,
             sdk_git_metadata,
+            &args.channel,
         )
         .await?
     } else {
@@ -708,6 +708,35 @@ async fn release_task_core(
     Ok(release_id)
 }
 
+/// Fail before building when a manager you run has no such channel.
+/// `production` always exists: the first release creates it.
+async fn ensure_manager_channel(manager: &ManagerContext, channel: &str) -> Result<()> {
+    if channel == "production" {
+        return Ok(());
+    }
+    let channels = manager
+        .client
+        .list_manager_release_channels()
+        .send()
+        .await
+        .into_sdk_error_reading_body()
+        .await
+        .context(ErrorData::ApiRequestFailed {
+            message: "listing release channels".to_string(),
+            url: None,
+        })?
+        .into_inner();
+    if channels.items.iter().any(|item| item.name == channel) {
+        return Ok(());
+    }
+    Err(AlienError::new(ErrorData::ValidationError {
+        field: "channel".to_string(),
+        message: format!(
+            "No channel named '{channel}'. Create it with `alien releases create-channel {channel}`."
+        ),
+    }))
+}
+
 /// Create a release on the manager
 #[alien_event(AlienEvent::CreatingRelease {
     project: "release".to_string(),
@@ -717,6 +746,7 @@ async fn create_manager_release(
     project_id: &str,
     stack: ManagerStackByPlatform,
     git_metadata: Option<alien_manager_api::types::GitMetadata>,
+    channel: &str,
 ) -> Result<String> {
     info!("Creating release on manager...");
 
@@ -727,10 +757,12 @@ async fn create_manager_release(
             stack,
             git_metadata,
             project_id: project_id.to_string(),
+            channel: Some(channel.to_string()),
         })
         .send()
         .await
-        .into_sdk_error()
+        .into_sdk_error_reading_body()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to create release".to_string(),
             url: None,

@@ -403,6 +403,26 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
     .into_alien_error()
     .map_err(|e| db_error(&format!("Recovered error cleanup failed: {}", e.message)))?;
 
+    // Release channels and each deployment's channel or pin.
+    let channel_statements: &[&str] = &[
+        "CREATE TABLE IF NOT EXISTS release_channels (
+            name TEXT PRIMARY KEY,
+            current_release_id TEXT,
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS deployment_channels (
+            deployment_id TEXT PRIMARY KEY,
+            channel TEXT NOT NULL,
+            pinned_release_id TEXT
+        )",
+    ];
+    for sql in channel_statements {
+        conn.execute(sql, ())
+            .await
+            .into_alien_error()
+            .map_err(|e| db_error(&format!("Release channel tables failed: {}", e.message)))?;
+    }
+
     let post_index_statements: &[&str] = &[
         "CREATE INDEX IF NOT EXISTS idx_releases_project ON releases(workspace_id, project_id)",
         "CREATE INDEX IF NOT EXISTS idx_deployments_project ON deployments(workspace_id, project_id)",

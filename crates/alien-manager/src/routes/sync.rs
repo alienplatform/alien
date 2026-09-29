@@ -2570,7 +2570,9 @@ async fn initialize(
                 // Initialize is the agent's own bootstrap: keep the caller's
                 // subject for reads and writes so embedders can authorize
                 // against the agent's scope rather than a service credential.
-                if let Ok(Some(release)) = state.release_store.get_latest_release(&subject).await {
+                if let Ok(Some(release)) =
+                    super::channels::release_for_deployment(&state, &subject, None).await
+                {
                     let _ = state
                         .deployment_store
                         .set_deployment_desired_release(&subject, &deployment.id, &release.id)

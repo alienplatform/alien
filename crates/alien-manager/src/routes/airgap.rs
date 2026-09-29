@@ -93,7 +93,9 @@ async fn target(
 
     let release = match &query.release_id {
         Some(release_id) => state.release_store.get_release(&subject, release_id).await,
-        None => state.release_store.get_latest_release(&subject).await,
+        None => {
+            super::channels::release_for_deployment(&state, &subject, Some(&deployment.id)).await
+        }
     };
     let release = match release {
         Ok(Some(release)) => release,

@@ -22,6 +22,7 @@ pub mod onboard;
 #[cfg(feature = "platform")]
 pub mod packages;
 pub mod release;
+pub mod release_channels_manager;
 pub mod releases;
 pub mod render;
 pub mod status;

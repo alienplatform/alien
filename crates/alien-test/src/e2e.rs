@@ -911,6 +911,7 @@ pub async fn deploy_test_app(
             stack: stack_by_platform_sdk,
             git_metadata: None,
             project_id: "default".to_string(),
+            channel: None,
         })
         .send()
         .await
@@ -1096,6 +1097,7 @@ pub async fn developer_setup(
             stack: stack_by_platform_sdk,
             git_metadata: None,
             project_id: "default".to_string(),
+            channel: None,
         })
         .send()
         .await

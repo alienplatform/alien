@@ -1,6 +1,7 @@
 pub mod auth_validator;
 pub mod credential_resolver;
 pub mod deployment_store;
+pub mod release_channel_store;
 pub mod release_store;
 pub mod server_bindings;
 pub mod telemetry_backend;
@@ -24,6 +25,9 @@ pub use deployment_store::{
     CreateImportedDeploymentParams, DeploymentAcquireMode, DeploymentFilter, DeploymentGroupRecord,
     DeploymentGroupSetup, DeploymentRecord, DeploymentStore, ReconcileData, ReconcileInput,
     ReconcileInputBuilder, ReconcileOutcome, UpdateImportedDeploymentParams,
+};
+pub use release_channel_store::{
+    DeploymentRouting, ReleaseChannelRecord, ReleaseChannelStore, DEFAULT_CHANNEL,
 };
 pub use release_store::{CreateReleaseParams, ReleaseRecord, ReleaseStore};
 pub use server_bindings::ServerBindings;

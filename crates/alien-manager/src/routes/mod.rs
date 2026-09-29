@@ -29,6 +29,7 @@ pub mod whoami;
 // raw bearer + workspace headers themselves.
 pub mod airgap;
 pub mod auth;
+pub mod channels;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -89,6 +90,8 @@ pub struct AppState {
     pub tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
     /// Chart settings; `Some` serves Helm charts at `/v2/charts/...`.
     pub charts: Option<Arc<charts::ChartSettings>>,
+    /// Release channels; `None` sends every release to every deployment.
+    pub release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
     /// Recent deployment logs kept by the manager (see `providers::recent_logs`).
     pub log_buffer: Arc<crate::dev::LogBuffer>,
 }
@@ -178,6 +181,7 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         .merge(manager_info::router())
         .merge(logs::router())
         .merge(airgap::router())
+        .merge(channels::router())
         // Deployments
         .merge(deployments::router())
         // Releases

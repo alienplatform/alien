@@ -112,7 +112,7 @@ pub async fn releases_task(args: ReleasesArgs, ctx: ExecutionMode) -> Result<()>
             if channel.is_some() || all_channels {
                 return Err(alien_error::AlienError::new(
                     ErrorData::ConfigurationError {
-                        message: "This manager doesn't support release channels, so there is nothing to filter by.".to_string(),
+                        message: "This manager lists every release; `alien releases channels` shows the release each channel points at.".to_string(),
                     },
                 ));
             }
@@ -139,11 +139,21 @@ pub async fn releases_task(args: ReleasesArgs, ctx: ExecutionMode) -> Result<()>
             project,
             json,
         } => {
-            require_release_channels(&ctx)?;
+            if !ctx.is_platform() {
+                let client = manager_client(&ctx, project.as_deref(), json).await?;
+                return crate::commands::release_channels_manager::promote(
+                    &client, &id, &channel, json,
+                )
+                .await;
+            }
             promote_release_task(&ctx, &id, &channel, project.as_deref(), json).await
         }
         ReleasesCmd::Channels { project, json } => {
-            require_release_channels(&ctx)?;
+            if !ctx.is_platform() {
+                let client = manager_client(&ctx, project.as_deref(), json).await?;
+                return crate::commands::release_channels_manager::list_channels(&client, json)
+                    .await;
+            }
             list_channels_task(&ctx, project.as_deref(), json).await
         }
         ReleasesCmd::CreateChannel {
@@ -152,27 +162,35 @@ pub async fn releases_task(args: ReleasesArgs, ctx: ExecutionMode) -> Result<()>
             release,
             json,
         } => {
-            require_release_channels(&ctx)?;
+            if !ctx.is_platform() {
+                let client = manager_client(&ctx, project.as_deref(), json).await?;
+                return crate::commands::release_channels_manager::create_channel(
+                    &client,
+                    &name,
+                    release.as_deref(),
+                    json,
+                )
+                .await;
+            }
             create_channel_task(&ctx, &name, project.as_deref(), release.as_deref(), json).await
         }
         ReleasesCmd::DeleteChannel { name, project } => {
-            require_release_channels(&ctx)?;
+            if !ctx.is_platform() {
+                let client = manager_client(&ctx, project.as_deref(), false).await?;
+                return crate::commands::release_channels_manager::delete_channel(&client, &name)
+                    .await;
+            }
             delete_channel_task(&ctx, &name, project.as_deref()).await
         }
     }
 }
 
-/// Release channels are an alien.dev feature; a manager you run sends every
-/// release to every deployment.
-fn require_release_channels(ctx: &ExecutionMode) -> Result<()> {
-    if ctx.is_platform() {
-        return Ok(());
-    }
-    Err(alien_error::AlienError::new(
-        ErrorData::ConfigurationError {
-            message: "This manager doesn't support release channels: every release goes to every deployment.".to_string(),
-        },
-    ))
+async fn manager_client(
+    ctx: &ExecutionMode,
+    project: Option<&str>,
+    json: bool,
+) -> Result<alien_manager_api::Client> {
+    crate::commands::deployments::resolve_manager_client(ctx, project, !json).await
 }
 
 #[cfg(feature = "platform")]

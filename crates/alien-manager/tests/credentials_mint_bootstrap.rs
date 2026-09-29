@@ -196,6 +196,7 @@ async fn build() -> Fixture {
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
         tunnels: None,
         charts: None,
+        release_channels: None,
         log_buffer: std::sync::Arc::new(alien_manager::LogBuffer::new()),
     };
 

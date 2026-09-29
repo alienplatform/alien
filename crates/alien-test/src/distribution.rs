@@ -1101,6 +1101,7 @@ async fn create_release(
             stack: stack_by_platform_sdk,
             git_metadata: None,
             project_id: "default".to_string(),
+            channel: None,
         })
         .send()
         .await

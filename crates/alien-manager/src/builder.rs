@@ -54,6 +54,8 @@ pub struct AlienManagerBuilder {
     tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
     /// Chart settings; `Some` serves Helm charts from the registry.
     charts: Option<Arc<crate::routes::charts::ChartSettings>>,
+    /// Release channels; `None` sends every release to every deployment.
+    release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
 }
 
 impl AlienManagerBuilder {
@@ -79,7 +81,15 @@ impl AlienManagerBuilder {
             import_registry: None,
             tunnels: None,
             charts: None,
+            release_channels: None,
         }
+    }
+
+    /// Route releases through channels (see [`crate::traits::ReleaseChannelStore`]).
+    /// Standalone defaults set a SQLite store next to the SQLite deployment store.
+    pub fn release_channels(mut self, store: Arc<dyn crate::traits::ReleaseChannelStore>) -> Self {
+        self.release_channels = Some(store);
+        self
     }
 
     /// Serve an installable Helm chart for every release with a Kubernetes
@@ -254,6 +264,13 @@ impl AlienManagerBuilder {
         );
 
         // --- Stores (only set if not already provided) ---
+        // Channel routing joins the deployments table, so it comes with the
+        // SQLite deployment store.
+        if self.deployment_store.is_none() && self.release_channels.is_none() {
+            self.release_channels = Some(Arc::new(
+                crate::stores::sqlite::SqliteReleaseChannelStore::new(db.clone()),
+            ));
+        }
         if self.deployment_store.is_none() {
             self.deployment_store = Some(Arc::new(
                 crate::stores::sqlite::SqliteDeploymentStore::new(db.clone()),
@@ -707,6 +724,7 @@ impl AlienManagerBuilder {
             self.import_registry,
             self.tunnels,
             self.charts,
+            self.release_channels,
         )
         .await
     }
@@ -802,6 +820,7 @@ async fn finalize(
     import_registry_override: Option<Arc<alien_infra::ImporterRegistry>>,
     tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
     charts: Option<Arc<crate::routes::charts::ChartSettings>>,
+    release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
 ) -> crate::error::Result<AlienManager> {
     use alien_commands::server::CommandServer;
 
@@ -843,6 +862,7 @@ async fn finalize(
             .unwrap_or_else(|| Arc::new(alien_infra::ImporterRegistry::built_in())),
         tunnels,
         charts,
+        release_channels,
         log_buffer: log_buffer.clone(),
     };
 

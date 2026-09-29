@@ -543,16 +543,34 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                         .to_string(),
                 }));
             }
+            if !ctx.is_platform() {
+                let client = resolve_manager_client(&ctx, None, !json).await?;
+                let deployment =
+                    crate::deployment_resolver::resolve(&client, &id, ctx.is_dev()).await?;
+                return crate::commands::release_channels_manager::pin(
+                    &client,
+                    &deployment.id,
+                    release_id.as_deref(),
+                    json,
+                )
+                .await;
+            }
             let client = ctx.sdk_client().await?;
             let workspace_name = ctx.resolve_platform_workspace_context(true).await?.name;
             pin_deployment_task(&client, &workspace_name, &id, release_id, json).await
         }
         DeploymentsCmd::SetChannel { id, channel, json } => {
             if !ctx.is_platform() {
-                return Err(AlienError::new(ErrorData::ValidationError {
-                    field: "command".to_string(),
-                    message: "This manager doesn't support release channels: every release goes to every deployment.".to_string(),
-                }));
+                let client = resolve_manager_client(&ctx, None, !json).await?;
+                let deployment =
+                    crate::deployment_resolver::resolve(&client, &id, ctx.is_dev()).await?;
+                return crate::commands::release_channels_manager::set_channel(
+                    &client,
+                    &deployment.id,
+                    &channel,
+                    json,
+                )
+                .await;
             }
             let client = ctx.sdk_client().await?;
             let workspace_name = ctx.resolve_platform_workspace_context(!json).await?.name;

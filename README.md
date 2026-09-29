@@ -118,7 +118,7 @@ The same resources map to each platform's native services: Storage becomes S3, G
 
 Once a customer installs, you don't need access to their environment again:
 
-- **Releases.** `alien release` rolls out to every deployment. The Operator also updates itself to the version the manager runs.
+- **Releases.** `alien release` rolls out to every deployment following its channel (`production` by default). Stage releases on other channels, promote them with `alien releases promote`, and pin a deployment with `alien deployments pin`. The Operator also updates itself to the version the manager runs.
 - **Images.** Clusters pull images through the manager with their deployment token. No registry credentials to hand out.
 - **Logs and traces.** Deployments send OpenTelemetry to the manager, which forwards it to your backend: Datadog, Grafana, Honeycomb, Axiom, Coralogix, or any OTLP endpoint. `alien logs --deployment acme/acme` shows recent logs without one.
 - **Tunnels.** Your backend calls a container inside any deployment through the manager, over the Operator's outbound connection. Request and response bodies stream in both directions, and the app's own `Authorization` header passes through:
