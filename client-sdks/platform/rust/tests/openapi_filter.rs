@@ -297,6 +297,193 @@ fn deduplication_never_rewrites_object_valued_contract_data() {
 }
 
 #[test]
+fn removes_additional_properties_false_from_schemas_but_not_from_literal_data() {
+    let strict = json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" },
+            "nested": {
+                "type": "object",
+                "properties": { "value": { "type": "string" } },
+                "additionalProperties": false
+            },
+            "labels": { "type": "object", "additionalProperties": { "type": "string" } }
+        },
+        "additionalProperties": false
+    });
+    let literal = json!({ "additionalProperties": false });
+    let document = json!({
+        "paths": {
+            "/a": {
+                "post": {
+                    "operationId": "kept",
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": { "body": { "type": "string" } },
+                                    "additionalProperties": false
+                                },
+                                "example": literal.clone()
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "ok",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/Strict" }
+                                }
+                            }
+                        },
+                        "default": {
+                            "description": "error",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": { "code": { "type": "string" } },
+                                        "additionalProperties": false
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "components": {
+            "schemas": {
+                "Strict": {
+                    "allOf": [strict],
+                    "example": literal.clone()
+                }
+            }
+        }
+    });
+
+    for opened in [
+        openapi_filter::filter_openapi(&document, &["kept"]).unwrap(),
+        openapi_filter::normalize_openapi(&document).unwrap(),
+    ] {
+        let mut strict_schemas = Vec::new();
+        collect_strict_schemas(&opened, "", &mut strict_schemas);
+        assert!(strict_schemas.is_empty(), "{strict_schemas:?}");
+        assert_eq!(
+            opened
+                .pointer("/components/schemas/Strict/example")
+                .unwrap(),
+            &literal
+        );
+        assert_eq!(
+            opened
+                .pointer("/paths/~1a/post/requestBody/content/application~1json/example")
+                .unwrap(),
+            &literal
+        );
+        let labels = opened
+            .pointer("/components/schemas/Strict/allOf/0/properties/labels/additionalProperties")
+            .unwrap();
+        assert_eq!(labels, &json!({ "type": "string" }));
+    }
+}
+
+#[test]
+fn package_type_enums_in_responses_become_open_strings() {
+    let package_type = json!({ "type": "string", "enum": ["cloudformation", "terraform"] });
+    let document = json!({
+        "paths": {
+            "/a": {
+                "get": {
+                    "operationId": "kept",
+                    "responses": {
+                        "200": {
+                            "description": "ok",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "allOf": [
+                                            { "$ref": "#/components/schemas/CapabilityMaterialization" },
+                                            { "$ref": "#/components/schemas/DeploymentLinkSetupResponse" }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "components": {
+            "schemas": {
+                "CapabilityMaterialization": {
+                    "type": "object",
+                    "properties": {
+                        "packages": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "type": package_type.clone(),
+                                    "status": { "type": "string", "enum": ["ready", "failed"] }
+                                }
+                            }
+                        }
+                    }
+                },
+                "DeploymentLinkSetupResponse": {
+                    "type": "object",
+                    "properties": {
+                        "visiblePackageTypes": { "type": "array", "items": package_type.clone() }
+                    }
+                }
+            }
+        }
+    });
+
+    for opened in [
+        openapi_filter::filter_openapi(&document, &["kept"]).unwrap(),
+        openapi_filter::normalize_openapi(&document).unwrap(),
+    ] {
+        let packages = "/components/schemas/CapabilityMaterialization/properties/packages/items";
+        assert_eq!(
+            opened
+                .pointer(&format!("{packages}/properties/type"))
+                .unwrap(),
+            &json!({ "type": "string" })
+        );
+        assert_eq!(
+            opened
+                .pointer(&format!("{packages}/properties/status/enum"))
+                .unwrap(),
+            &json!(["ready", "failed"])
+        );
+        assert_eq!(
+            opened
+                .pointer("/components/schemas/DeploymentLinkSetupResponse/properties/visiblePackageTypes/items")
+                .unwrap(),
+            &json!({ "type": "string" })
+        );
+    }
+
+    let mut moved = document;
+    *moved
+        .pointer_mut(
+            "/components/schemas/DeploymentLinkSetupResponse/properties/visiblePackageTypes/items",
+        )
+        .unwrap() = json!({ "$ref": "#/components/schemas/PackageType" });
+    moved["components"]["schemas"]["PackageType"] = package_type;
+    for error in [
+        openapi_filter::filter_openapi(&moved, &["kept"]).unwrap_err(),
+        openapi_filter::normalize_openapi(&moved).unwrap_err(),
+    ] {
+        assert!(error.contains("visiblePackageTypes"), "{error}");
+    }
+}
+
+#[test]
 fn rejects_missing_duplicate_and_unresolved_operations() {
     let duplicate = json!({
         "paths": {
@@ -359,6 +546,18 @@ fn real_spec_contains_every_required_operation_and_shrinks() {
         .filter(|name| name.starts_with("AlienSharedObject"))
         .count();
     assert!(shared_components > 100);
+
+    let mut strict_schemas = Vec::new();
+    collect_strict_schemas(&filtered, "", &mut strict_schemas);
+    assert!(strict_schemas.is_empty(), "{strict_schemas:?}");
+    for pointer in [
+        "/components/schemas/CapabilityMaterialization/properties/packages/items/properties/type",
+        "/components/schemas/DeploymentLinkSetupResponse/properties/visiblePackageTypes/items",
+    ] {
+        let schema = filtered.pointer(pointer).unwrap();
+        assert_eq!(schema["type"], "string");
+        assert!(schema.get("enum").is_none());
+    }
 }
 
 fn operation_ids(document: &Value) -> Vec<&str> {
@@ -382,4 +581,32 @@ fn component_count(document: &Value) -> usize {
         .filter_map(Value::as_object)
         .map(serde_json::Map::len)
         .sum()
+}
+
+fn collect_strict_schemas(value: &Value, pointer: &str, found: &mut Vec<String>) {
+    match value {
+        Value::Object(object) => {
+            for (key, child) in object {
+                let literal = matches!(key.as_str(), "example" | "examples")
+                    || (key == "default"
+                        && !pointer.ends_with("/responses")
+                        && !pointer.ends_with("/properties"));
+                if literal {
+                    continue;
+                }
+                let child_pointer = format!("{pointer}/{key}");
+                if key == "additionalProperties" && child == &Value::Bool(false) {
+                    found.push(child_pointer);
+                } else {
+                    collect_strict_schemas(child, &child_pointer, found);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for (index, child) in values.iter().enumerate() {
+                collect_strict_schemas(child, &format!("{pointer}/{index}"), found);
+            }
+        }
+        _ => {}
+    }
 }
