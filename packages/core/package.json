@@ -16,13 +16,13 @@
     "test": "vitest run",
     "test:ts": "tsc --noEmit",
     "generate": "rm -rf src/generated && cargo run --quiet --bin schema_exporter --features=clap,openapi -p alien-core -- --output openapi.json && kubb generate",
-    "format-and-lint": "biome check .",
-    "format-and-lint:fix": "biome check . --write"
+    "format-and-lint": "oxfmt --check '**/*.{cjs,css,js,json,jsonc,jsx,mjs,ts,tsx}' && oxlint .",
+    "format-and-lint:fix": "oxfmt --write '**/*.{cjs,css,js,json,jsonc,jsx,mjs,ts,tsx}' && oxlint --fix ."
   },
   "keywords": [
     "alien",
-    "deployment",
     "cloud",
+    "deployment",
     "infrastructure"
   ],
   "author": "Alien Software, Inc. <hi@alien.dev>",
@@ -39,7 +39,6 @@
   },
   "devDependencies": {
     "@alienplatform/typescript-config": "workspace:^",
-    "@biomejs/biome": "^2.0.0",
     "@kubb/cli": "^4.35.1",
     "@kubb/core": "^4.35.1",
     "@kubb/oas": "^4.35.1",

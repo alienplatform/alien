@@ -84,7 +84,7 @@ jobs:
               - 'crates/alien-terraform/**'
               - '.github/workflows/ci-fast.yml'
             typescript:
-              # `pnpm format-and-lint` runs Biome from the repository root.
+              # `pnpm format-and-lint` runs Oxfmt and Oxlint from the repository root.
               # Match its source formats repository-wide instead of trying to
               # enumerate every directory that may contain linted files.
               - '**/*.js'
@@ -102,7 +102,9 @@ jobs:
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
               - 'turbo.json'
-              - 'biome.json'
+              - '.oxfmtrc.json'
+              - '.oxlintrc.json'
+              - 'hk.pkl'
               - 'packages/**'
               - 'client-sdks/**'
               - 'examples/**'

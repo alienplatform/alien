@@ -4,9 +4,18 @@ import "package://github.com/jdx/hk/releases/download/v2.1.0/hk@2.1.0#/Builtins.
 stash_untracked = false
 
 local fast_steps = new Mapping<String, Step> {
-    ["biome"] = (Builtins.biome) {
-        check = "pnpm exec biome check --no-errors-on-unmatched {{files}}"
-        fix = "pnpm exec biome check --write --no-errors-on-unmatched {{files}}"
+    ["oxfmt"] = new Step {
+        glob = List("**/*.cjs", "**/*.css", "**/*.js", "**/*.json", "**/*.jsonc", "**/*.jsx", "**/*.mjs", "**/*.ts", "**/*.tsx")
+        batch = true
+        check = "pnpm exec oxfmt --check --no-error-on-unmatched-pattern {{files}}"
+        fix = "pnpm exec oxfmt --write --no-error-on-unmatched-pattern {{files}}"
+    }
+    ["oxlint"] = new Step {
+        glob = List("**/*.cjs", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.ts", "**/*.tsx")
+        batch = true
+        depends = "oxfmt"
+        check = "pnpm exec oxlint --no-error-on-unmatched-pattern {{files}}"
+        fix = "pnpm exec oxlint --fix --no-error-on-unmatched-pattern {{files}}"
     }
     ["check-added-large-files"] = Builtins.check_added_large_files
     ["check-merge-conflict"] = Builtins.check_merge_conflict

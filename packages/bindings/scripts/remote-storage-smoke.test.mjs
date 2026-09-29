@@ -38,13 +38,17 @@ function fakeStorage() {
     }
   })
   const list = vi.fn(async prefix =>
-    [...values.entries()]
-      .filter(([path]) => path.startsWith(prefix ?? ""))
-      .map(([location, value]) => ({
-        location,
-        size: value.data.byteLength,
-        lastModified: "2026-01-01T00:00:00Z",
-      })),
+    [...values.entries()].flatMap(([location, value]) =>
+      location.startsWith(prefix ?? "")
+        ? [
+            {
+              location,
+              size: value.data.byteLength,
+              lastModified: "2026-01-01T00:00:00Z",
+            },
+          ]
+        : [],
+    ),
   )
   const remove = vi.fn(async path => {
     values.delete(path)

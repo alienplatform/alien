@@ -365,7 +365,7 @@ class PullCommandReceiver implements CommandReceiver {
 
     let drainTimer: ReturnType<typeof setTimeout> | undefined
     const drained = await Promise.race([
-      Promise.all([...inFlight]).then(() => true),
+      Promise.all(inFlight).then(() => true),
       new Promise<false>(resolve => {
         drainTimer = setTimeout(() => resolve(false), this.drainTimeoutMs)
       }),
@@ -374,7 +374,7 @@ class PullCommandReceiver implements CommandReceiver {
     if (!drained) {
       for (const active of this.active.values()) active.controller.abort()
     }
-    await Promise.all([...inFlight])
+    await Promise.all(inFlight)
     if (terminalError !== undefined) throw terminalError
   }
 
@@ -782,15 +782,11 @@ export function resolveEnvelopeUrls(envelope: Envelope, leaseEndpoint: string): 
   }
   const resolve = (target: string) => {
     if (target.startsWith("//")) return target
+    if (URL.canParse(target)) return target
     try {
-      new URL(target)
-      return target
+      return new URL(target, base).toString()
     } catch {
-      try {
-        return new URL(target, base).toString()
-      } catch {
-        return target
-      }
+      return target
     }
   }
 

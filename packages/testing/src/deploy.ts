@@ -475,12 +475,8 @@ function findPublicUrl(
     }
   }
 
-  const publicResources = Object.entries(resources).filter(
-    ([_, r]) => (r.resourceType === "container" || r.resourceType === "worker") && r.url,
+  const publicResources = Object.values(resources).filter(
+    r => (r.resourceType === "container" || r.resourceType === "worker") && r.url,
   )
-  if (publicResources.length > 0) {
-    return publicResources[publicResources.length - 1]![1].url
-  }
-
-  return undefined
+  return publicResources.at(-1)?.url
 }

@@ -34,4 +34,5 @@ while (true) {
   await sleep(intervalSeconds * 1000)
 }
 
+// oxlint-disable-next-line unicorn/require-module-specifiers -- marks this top-level-await file as a module
 export {}

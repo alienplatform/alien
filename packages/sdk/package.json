@@ -28,15 +28,15 @@
     "test": "vitest run --passWithNoTests",
     "test:ts": "tsc --noEmit",
     "generate": "./scripts/generate-proto.sh",
-    "format-and-lint": "biome check .",
-    "format-and-lint:fix": "biome check . --write"
+    "format-and-lint": "oxfmt --check '**/*.{cjs,css,js,json,jsonc,jsx,mjs,ts,tsx}' && oxlint .",
+    "format-and-lint:fix": "oxfmt --write '**/*.{cjs,css,js,json,jsonc,jsx,mjs,ts,tsx}' && oxlint --fix ."
   },
   "sideEffects": false,
   "keywords": [
     "alien",
+    "bindings",
     "sdk",
-    "worker",
-    "bindings"
+    "worker"
   ],
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "license": "FSL-1.1-Apache-2.0",
@@ -52,7 +52,6 @@
   },
   "devDependencies": {
     "@alienplatform/typescript-config": "workspace:^",
-    "@biomejs/biome": "^2.0.0",
     "@types/node": "^24.0.15",
     "ts-proto": "^2.7.0",
     "tsdown": "^0.13.0",

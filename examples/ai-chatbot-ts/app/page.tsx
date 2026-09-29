@@ -35,10 +35,9 @@ export default function Chat() {
       .catch(() => {})
   }, [])
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll on every stream update
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages])
+  }, [messages]) // oxlint-disable-line react/exhaustive-effect-dependencies -- scroll on every stream update
 
   function ask(text: string) {
     // Before the picker loads, omit the field and let the server pick a default.
@@ -146,7 +145,7 @@ export default function Chat() {
             ref={composerRef}
             value={input}
             rows={1}
-            // biome-ignore lint/a11y/noAutofocus: a chat app's single input is the page's purpose
+            // oxlint-disable-next-line jsx-a11y/no-autofocus -- the chat input is the page's primary control
             autoFocus
             placeholder="Ask about the company's data…"
             onChange={e => setInput(e.currentTarget.value)}

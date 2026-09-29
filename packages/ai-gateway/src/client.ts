@@ -374,13 +374,12 @@ export class Ai {
   ): Promise<unknown> {
     const { baseUrl, apiKey } = await this.connection()
     const url = `${baseUrl}${path}`
+    const headers = { "Content-Type": "application/json" }
+    if (apiKey) Object.assign(headers, { Authorization: `Bearer ${apiKey}` })
     const response = await this._fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        // Only the BYO-key path authenticates here; ambient credentials are the gateway's.
-        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-      },
+      // Only the BYO-key path authenticates here; ambient credentials are the gateway's.
+      headers,
       body: JSON.stringify(params),
     })
 

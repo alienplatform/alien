@@ -23,14 +23,16 @@
     "version:npm": "changeset version",
     "test:ts": "turbo test:ts --concurrency 15",
     "validate:package-layout": "node --experimental-strip-types packages/scripts/validate-package-layout.ts && pnpm --filter @alienplatform/package-layout check",
-    "format-and-lint": "biome check .",
-    "format-and-lint:fix": "biome check . --write"
+    "format-and-lint": "oxfmt --check '**/*.{cjs,css,js,json,jsonc,jsx,mjs,ts,tsx}' && oxlint .",
+    "format-and-lint:fix": "oxfmt --write '**/*.{cjs,css,js,json,jsonc,jsx,mjs,ts,tsx}' && oxlint --fix ."
   },
   "devDependencies": {
     "@apiture/openapi-down-convert": "^0.14.2",
-    "@biomejs/biome": "2.5.14",
     "@changesets/changelog-github": "^0.7.0",
     "@changesets/cli": "^2.29.7",
+    "@oxlint/plugins": "1.86.0",
+    "oxfmt": "0.71.0",
+    "oxlint": "1.86.0",
     "turbo": "^2.5.8"
   },
   "packageManager": "pnpm@10.34.5",

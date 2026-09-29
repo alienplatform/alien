@@ -1,0 +1,44 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "useTabs": false,
+  "tabWidth": 2,
+  "printWidth": 100,
+  "singleQuote": false,
+  "jsxSingleQuote": false,
+  "quoteProps": "as-needed",
+  "trailingComma": "all",
+  "semi": false,
+  "arrowParens": "avoid",
+  "bracketSameLine": false,
+  "bracketSpacing": true,
+  "singleAttributePerLine": false,
+  "ignorePatterns": [
+    "**/.wrangler/**/*.js",
+    "**/.turbo",
+    "**/.alien",
+    "**/alien-data",
+    "**/dist",
+    "**/client-sdks",
+    "**/openapi.json",
+    "**/openapi",
+    "**/app/.well-known",
+    "**/code-samples-overlay.json",
+    "**/.next",
+    "**/api-v1.d.ts",
+    "**/entrypoint.js",
+    "**/generated",
+    "**/shim.mjs",
+    "**/target",
+    "**/examples/**/github-agent/packages/dashboard",
+    "tools/oxlint/anti-slop/**"
+  ],
+  "overrides": [
+    {
+      "files": ["**/*.json", "**/*.jsonc"],
+      "options": {
+        "trailingComma": "none"
+      }
+    }
+  ],
+  "sortPackageJson": false
+}
