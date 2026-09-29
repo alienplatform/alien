@@ -90,7 +90,7 @@ async fn a_failed_build_is_rebuilt_on_retry() {
         });
 
     let controller: AzureSandboxController = serde_json::from_value(serde_json::json!({
-        "state": "ready",
+        "state": "ensureDiskImage",
         "sandboxGroup": "sbg",
         "region": "westus2",
         "resourceGroup": "rg",
@@ -119,7 +119,6 @@ async fn a_failed_build_is_rebuilt_on_retry() {
         .await
         .unwrap();
 
-    executor.step().await.expect("Ready routes to the build");
     let failure = executor
         .step()
         .await

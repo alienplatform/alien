@@ -509,6 +509,10 @@ mod tests {
         CreateMicrovmImageResponse, MicrovmImage, MicrovmImageVersion, MockLambdaMicrovmsApi,
     };
     use alien_aws_clients::AwsClientConfigExt as _;
+    use alien_azure_clients::azure::sandbox_data_plane::{
+        DiskImage, DiskImageStatus, MockSandboxDataPlaneApi,
+    };
+    use alien_azure_clients::AzureClientConfigExt as _;
     use alien_bindings::{BindingsProvider, BindingsProviderApi};
     use alien_core::{
         ClientConfig, EnvironmentVariablesSnapshot, Platform, RuntimeMetadata, SetupScaffolding,
@@ -1199,10 +1203,6 @@ mod tests {
     /// only reaches Provisioning, where linked workloads deploy, with its binding published.
     #[tokio::test]
     async fn imported_setup_builds_an_azure_registry_image_before_handing_off() {
-        use alien_azure_clients::azure::sandbox_data_plane::{
-            DiskImage, DiskImageStatus, MockSandboxDataPlaneApi,
-        };
-        use alien_azure_clients::AzureClientConfigExt as _;
         const PYTHON: &str = "docker.io/library/python:3.14-slim";
 
         let sandbox = alien_core::Sandbox::new("agents".to_string())

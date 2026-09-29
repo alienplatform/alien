@@ -300,6 +300,16 @@ fn emit_image_management(
             message: "failed to generate Azure sandbox image permissions".to_string(),
         })?;
 
+    // Every assignment below is scoped to the group, so a binding the set places elsewhere
+    // would be rendered at the wrong scope rather than refused.
+    if plan.bindings.len() != 1 {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: format!(
+                "{IMAGES} must bind exactly once, on the sandbox group; it binds {} times",
+                plan.bindings.len()
+            ),
+        }));
+    }
     for (index, binding) in plan.bindings.iter().enumerate() {
         let AzureRoleDefinitionRef::Custom { key } = &binding.role_definition else {
             return Err(AlienError::new(ErrorData::GenericError {

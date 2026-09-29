@@ -104,14 +104,29 @@ impl AzureSandbox {
                     })
                 }
             })?;
-        let id = images
+        let ours: Vec<_> = images
             .into_iter()
-            .find(|image| {
-                image.labels.get(AZURE_DISK_IMAGE_LABEL) == Some(&label)
-                    && image.state() == Some("Ready")
-            })
-            .map(|image| image.id)
-            .ok_or_else(|| self.image_not_ready(reference))?;
+            .filter(|image| image.labels.get(AZURE_DISK_IMAGE_LABEL) == Some(&label))
+            .collect();
+        let Some(id) = ours
+            .iter()
+            .find(|image| image.state() == Some("Ready"))
+            .map(|image| image.id.clone())
+        else {
+            // Only a changed declaration or a retry of the failed resource builds again, so a
+            // caller retrying on its own would wait forever.
+            if !ours.is_empty() && ours.iter().all(|image| image.state() == Some("Failed")) {
+                return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "diskImageFailed".to_string(),
+                    reason: format!(
+                        "the disk image built from '{reference}' in sandbox group '{}' failed; \
+                         the sandbox resource reports why",
+                        self.sandbox_group
+                    ),
+                }));
+            }
+            return Err(self.image_not_ready(reference));
+        };
         *self.disk_image_id.lock().expect("disk image id lock") = Some(id.clone());
         Ok(Some(id))
     }
@@ -1789,6 +1804,27 @@ mod tests {
             .create(CreateSandboxRequest::default())
             .await
             .expect_err("the list is denied");
+
+        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
+        assert!(!error.retryable, "{error}");
+    }
+
+    /// A label holding only Failed builds is not a wait: nothing rebuilds it until the
+    /// declaration changes or the resource is retried, so the caller is told to stop.
+    #[tokio::test]
+    async fn a_label_with_only_failed_builds_is_not_retryable() {
+        let label = azure_disk_image_label("docker.io/library/python:3.14-slim");
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_list_disk_images()
+            .times(1)
+            .returning(move |_| Ok(vec![disk_image("failed", &label, "Failed")]));
+        client.expect_create_sandbox().times(0);
+
+        let error = registry_sandbox(client)
+            .create(CreateSandboxRequest::default())
+            .await
+            .expect_err("the only build failed");
 
         assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
         assert!(!error.retryable, "{error}");

@@ -12,8 +12,9 @@
 //! with its own credential (which lacks Data Owner by design); the execute grant that opens the
 //! data plane is authored on that resource's permission set by a preflight, not verified here.
 //!
-//! The one data-plane object it owns is the disk image a registry image is built into, and the one
-//! a changed reference replaced, which it deletes. `sandbox/images` grants exactly those verbs.
+//! It owns one data-plane object: the disk image built from a registry image, deleted once a
+//! changed reference replaces it; `sandbox/images` grants exactly those verbs. One build per
+//! reference string, so a tag pushed again is not rebuilt: a changed image needs a new tag or digest.
 
 use std::time::Duration;
 
@@ -26,16 +27,18 @@ use alien_azure_clients::azure::sandbox_data_plane::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    azure_disk_image_label, AzureSandboxImage, ResourceOutputs as CoreResourceOutputs,
-    ResourceStatus, Sandbox, SandboxEgress, SandboxLimits, SandboxOutputs, AZURE_DISK_IMAGE_LABEL,
+    azure_disk_image_label, classify_azure_sandbox_image, AzureSandboxImage,
+    ResourceOutputs as CoreResourceOutputs, ResourceStatus, Sandbox, SandboxEgress, SandboxLimits,
+    SandboxOutputs, AZURE_DISK_IMAGE_LABEL,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 
-/// A disk image builds in 10-30s. 60 polls at this interval is at most 5 minutes (the executor
-/// may step sooner), an order of magnitude past a healthy build, so reaching it means it is wedged.
+/// A disk image builds in 10-30s, so a build still running after 5 minutes is wedged. Measured in
+/// time rather than polls: the executor steps every resource whenever any one asks, so a poll
+/// count can run out while a healthy build is still under way.
 const DISK_IMAGE_POLL_INTERVAL: Duration = Duration::from_secs(5);
-const DISK_IMAGE_MAX_POLLS: u32 = 60;
+const DISK_IMAGE_BUILD_TIMEOUT: chrono::Duration = chrono::Duration::minutes(5);
 
 /// How long a disk image a binding named outlives its replacement. Azure caps no session's life,
 /// so this borrows AWS's MicroVM ceiling: long past the rollout that moves every consumer of the
@@ -58,6 +61,9 @@ pub(crate) struct RetiredDiskImage {
 pub(crate) struct PendingDiskImage {
     pub(crate) reference: String,
     pub(crate) id: String,
+    /// When the build was started or first seen, which the wedge timeout counts from.
+    #[serde(default = "chrono::Utc::now")]
+    pub(crate) started_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Azure Sandbox controller.
@@ -84,6 +90,10 @@ pub struct AzureSandboxController {
     /// The build in flight, if any.
     #[serde(default)]
     pub(crate) pending_disk_image: Option<PendingDiskImage>,
+    /// Set once a build has run, so `Ready` sweeps the group's labelled images; a sandbox that
+    /// only ever served catalog names never lists them.
+    #[serde(default)]
+    pub(crate) built_disk_images: bool,
     /// Outbound policy every sandbox is created with, from the declaration.
     #[serde(default)]
     pub(crate) egress: Option<SandboxEgress>,
@@ -156,9 +166,8 @@ impl AzureSandboxController {
         let config = ctx.desired_resource_config::<Sandbox>()?;
         // Refresh the binding inputs against the declaration, but do not gate the heartbeat on
         // them: a bad `code.image` is a declaration error the create and update paths already
-        // fail on, and must not flip a serving sandbox to a terminal RefreshFailed here. The
-        // capture is all-or-nothing, so a refusal cannot pair a new policy or size with an
-        // older image.
+        // fail on, and must not flip a serving sandbox to a terminal RefreshFailed here. A
+        // refused capture changes nothing; a registry image reaches the binding only once built.
         match self.capture_session_inputs(&config) {
             // A Frozen sandbox whose image changed without an update flow arrives serving the old
             // one, and builds as an update so a failed build leaves the served binding alone. One
@@ -184,6 +193,7 @@ impl AzureSandboxController {
         if self.pending_image(&config).is_none() {
             self.abandon_pending_build(None);
         }
+        self.sweep_disk_images(ctx, &config.id).await;
         self.reap_retired_disk_images(ctx, &config.id).await;
 
         // The data plane has no sandbox list operation, so the heartbeat carries the group's ARM
@@ -446,14 +456,9 @@ impl AzureSandboxController {
                 suggested_delay: None,
             });
         };
-        if self.abandon_pending_build(Some(&reference)) {
-            // Re-entered so the new build gets a poll budget of its own.
-            return Ok(AzureSandboxHandlerAction::Continue {
-                state: self.state.clone(),
-                suggested_delay: None,
-            });
-        }
+        self.abandon_pending_build(Some(&reference));
         let (group, client) = self.data_plane(ctx, &config.id)?;
+        self.built_disk_images = true;
         let label = azure_disk_image_label(&reference);
 
         let mut ours: Vec<DiskImage> = client
@@ -470,6 +475,8 @@ impl AzureSandboxController {
             if !ours.iter().any(|image| image.id == pending.id) {
                 match client.get_disk_image(&group, &pending.id).await {
                     Ok(image) => ours.push(image),
+                    // Retired rather than forgotten: a read that lags the create too must not
+                    // leave the build untracked once it appears.
                     Err(error)
                         if matches!(
                             error.error,
@@ -477,6 +484,7 @@ impl AzureSandboxController {
                         ) =>
                     {
                         self.pending_disk_image = None;
+                        self.retire(pending.id, false);
                     }
                     Err(error) => {
                         return Err(error.context(ErrorData::CloudPlatformError {
@@ -508,14 +516,24 @@ impl AzureSandboxController {
                     .map(|image| image.id.clone())
                     .collect();
                 // One found by label after a lost create response is tracked too, so a change of
-                // declaration mid-build still retires it.
-                if self.pending_disk_image.is_none() {
-                    self.pending_disk_image = building.first().map(|id| PendingDiskImage {
-                        reference: reference.clone(),
-                        id: id.clone(),
-                    });
-                }
-                return self.poll_build(building, &reference, &config.id);
+                // declaration mid-build still retires it; a tracked build that ended is replaced
+                // by one still running, whose timeout starts now.
+                let tracked = match self.pending_disk_image.take() {
+                    Some(pending) if building.contains(&pending.id) => pending,
+                    ended => {
+                        if let Some(ended) = ended {
+                            self.retire(ended.id, false);
+                        }
+                        PendingDiskImage {
+                            reference: reference.clone(),
+                            id: building[0].clone(),
+                            started_at: chrono::Utc::now(),
+                        }
+                    }
+                };
+                let started_at = tracked.started_at;
+                self.pending_disk_image = Some(tracked);
+                return self.poll_build(building, started_at, &reference, &config.id);
             }
             None => {
                 self.pending_disk_image = None;
@@ -568,10 +586,10 @@ impl AzureSandboxController {
                     self.pending_disk_image = Some(PendingDiskImage {
                         reference: reference.clone(),
                         id: created.id.clone(),
+                        started_at: chrono::Utc::now(),
                     });
-                    // Re-entered so this build's polls are counted from zero.
-                    return Ok(AzureSandboxHandlerAction::Continue {
-                        state: self.state.clone(),
+                    return Ok(AzureSandboxHandlerAction::Stay {
+                        max_times: None,
                         suggested_delay: Some(DISK_IMAGE_POLL_INTERVAL),
                     });
                 }
@@ -627,32 +645,29 @@ impl AzureSandboxController {
     }
 
     /// Retires a build in flight for anything but `reference`: the declaration moved on, and
-    /// nothing else remembers its id once its label is no longer the one looked up. Returns
-    /// whether one was retired.
-    fn abandon_pending_build(&mut self, reference: Option<&str>) -> bool {
-        match self
+    /// nothing else remembers its id once its label is no longer the one looked up.
+    fn abandon_pending_build(&mut self, reference: Option<&str>) {
+        if let Some(pending) = self
             .pending_disk_image
             .take_if(|pending| Some(pending.reference.as_str()) != reference)
         {
-            Some(pending) => {
-                self.retire(pending.id, false);
-                true
-            }
-            None => false,
+            self.retire(pending.id, false);
         }
     }
 
-    /// Polls a build again, or on the last poll retires it and fails: a retry then builds afresh
-    /// rather than polling a wedged build forever.
+    /// Polls a build again, or once it has run past the timeout retires it and fails: a retry
+    /// then builds afresh rather than polling a wedged build forever. The timeout is the only
+    /// ceiling, so the `Stay` carries none.
     fn poll_build(
         &mut self,
         building: Vec<String>,
+        started_at: chrono::DateTime<chrono::Utc>,
         reference: &str,
         resource_id: &str,
     ) -> Result<AzureSandboxHandlerAction> {
-        if self._internal_stay_count.unwrap_or(0) + 1 < DISK_IMAGE_MAX_POLLS {
+        if chrono::Utc::now() - started_at < DISK_IMAGE_BUILD_TIMEOUT {
             return Ok(AzureSandboxHandlerAction::Stay {
-                max_times: Some(DISK_IMAGE_MAX_POLLS),
+                max_times: None,
                 suggested_delay: Some(DISK_IMAGE_POLL_INTERVAL),
             });
         }
@@ -662,12 +677,53 @@ impl AzureSandboxController {
         }
         Err(AlienError::new(ErrorData::CloudPlatformError {
             message: format!(
-                "the disk image build from '{reference}' ({}) did not finish after \
-                 {DISK_IMAGE_MAX_POLLS} polls; a retry builds it again",
-                building.join(", ")
+                "the disk image build from '{reference}' ({}) did not finish within {} minutes; \
+                 a retry builds it again",
+                building.join(", "),
+                DISK_IMAGE_BUILD_TIMEOUT.num_minutes()
             ),
             resource_id: Some(resource_id.to_string()),
         }))
+    }
+
+    /// Best-effort, like the reap: retires every labelled image in this sandbox's group but the
+    /// served one (a lost create response, or one a lagging list hid until another was adopted).
+    /// Unlabelled images, a session's commits, are never touched.
+    async fn sweep_disk_images(&mut self, ctx: &ResourceControllerContext<'_>, resource_id: &str) {
+        if !self.built_disk_images {
+            return;
+        }
+        let (group, client) = match self.data_plane(ctx, resource_id) {
+            Ok(plane) => plane,
+            Err(error) => {
+                warn!(sandbox_id = %resource_id, %error, "disk images not swept this tick");
+                return;
+            }
+        };
+        let images = match client.list_disk_images(&group).await {
+            Ok(images) => images,
+            Err(error) => {
+                warn!(sandbox_id = %resource_id, %error, "disk images not swept this tick");
+                return;
+            }
+        };
+        let mut labelled = false;
+        for image in images {
+            if !image.labels.contains_key(AZURE_DISK_IMAGE_LABEL) {
+                continue;
+            }
+            labelled = true;
+            if self.disk_image_id.as_deref() == Some(image.id.as_str()) {
+                continue;
+            }
+            // Any Ready one may be what a consumer on this or the previous binding cached.
+            let ready = image.state() == Some("Ready");
+            self.retire(image.id, ready);
+        }
+        // Back on a catalog name with nothing left to delete: stop listing the group.
+        if !labelled && self.disk_image_id.is_none() && self.retired_disk_images.is_empty() {
+            self.built_disk_images = false;
+        }
     }
 
     /// Best-effort, and never fails the heartbeat: a lingering old image does not make a serving
@@ -854,6 +910,7 @@ mod tests {
             disk_image_id: None,
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
+            built_disk_images: false,
             egress: Some(SandboxEgress::Deny),
             idle_pause_seconds: Some(300),
             limits: None,
@@ -901,6 +958,7 @@ mod tests {
             disk_image_id: None,
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
+            built_disk_images: false,
             egress: Some(SandboxEgress::Allow),
             idle_pause_seconds: None,
             limits: None,
@@ -953,8 +1011,19 @@ mod tests {
             "egress": { "mode": "allowDomains", "domains": ["api.example.com"] },
             "idlePauseSeconds": 300,
             "limits": { "cpu": "4000m", "memory": "8192Mi", "disk": "40960Mi" },
+            "diskImageId": "img-1",
+            "retiredDiskImages": [{ "id": "img-0", "deleteAfter": "2026-01-01T00:00:00Z" }],
+            "pendingDiskImage": {
+                "reference": "docker.io/library/python:3.14-slim",
+                "id": "img-2",
+                "startedAt": "2026-01-01T00:00:00Z",
+            },
+            "builtDiskImages": true,
         }))
         .expect("a persisted sandbox row deserializes");
+        let epoch = "2026-01-01T00:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
 
         assert!(matches!(restored.state, AzureSandboxState::Ready));
         assert_eq!(restored.sandbox_group.as_deref(), Some("sbg"));
@@ -977,6 +1046,23 @@ mod tests {
                 max_processes: None,
             })
         );
+        assert_eq!(restored.disk_image_id.as_deref(), Some("img-1"));
+        assert_eq!(
+            restored.retired_disk_images,
+            vec![RetiredDiskImage {
+                id: "img-0".to_string(),
+                delete_after: epoch,
+            }]
+        );
+        assert_eq!(
+            restored.pending_disk_image,
+            Some(PendingDiskImage {
+                reference: "docker.io/library/python:3.14-slim".to_string(),
+                id: "img-2".to_string(),
+                started_at: epoch,
+            })
+        );
+        assert!(restored.built_disk_images);
     }
 
     /// Resolving a controller for a new deployment is a different path from deserializing
@@ -1029,6 +1115,7 @@ mod tests {
             disk_image_id: None,
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
+            built_disk_images: false,
             egress: Some(SandboxEgress::Deny),
             idle_pause_seconds: None,
             limits: None,
@@ -1073,6 +1160,7 @@ mod tests {
             disk_image_id: None,
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
+            built_disk_images: false,
             egress: Some(SandboxEgress::Allow),
             idle_pause_seconds: None,
             limits: None,
@@ -1120,6 +1208,7 @@ mod tests {
             disk_image_id: None,
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
+            built_disk_images: false,
             egress: Some(SandboxEgress::Deny),
             idle_pause_seconds: Some(300),
             limits: Some(SandboxLimits {
@@ -1154,6 +1243,7 @@ mod tests {
             disk_image_id: None,
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
+            built_disk_images: false,
             egress: Some(SandboxEgress::Deny),
             idle_pause_seconds: None,
             limits: None,
@@ -1183,6 +1273,7 @@ mod tests {
             disk_image_id: None,
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
+            built_disk_images: false,
             egress: Some(SandboxEgress::AllowDomains {
                 domains: vec!["api.example.com".to_string()],
             }),
@@ -1231,10 +1322,13 @@ mod tests {
 
     mod disk_images {
         use super::*;
+        use crate::core::{StackExecutor, StackResourceStateExt};
         use alien_azure_clients::azure::sandbox_data_plane::{
             DiskImageStatus, MockSandboxDataPlaneApi,
         };
         use alien_azure_clients::azure::sandbox_groups::MockSandboxGroupsApi;
+        use alien_azure_clients::AzureClientConfigExt as _;
+        use alien_core::{ClientConfig, StackResourceState, StackState};
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         const PYTHON: &str = "docker.io/library/python:3.14-slim";
@@ -1266,6 +1360,7 @@ mod tests {
                 disk_image_id: disk_image_id.map(str::to_string),
                 retired_disk_images: Vec::new(),
                 pending_disk_image: None,
+                built_disk_images: false,
                 egress: Some(SandboxEgress::Allow),
                 idle_pause_seconds: None,
                 limits: None,
@@ -1591,15 +1686,14 @@ mod tests {
             controller.pending_disk_image = Some(PendingDiskImage {
                 reference: PYTHON.to_string(),
                 id: "python-1".to_string(),
+                started_at: chrono::Utc::now(),
             });
             let mut executor = executor(sandbox(NODE), controller, client).await;
 
             executor
                 .step()
                 .await
-                .expect("the abandoned build is retired");
-            assert_eq!(retired_ids(state_of(&executor)), vec!["python-1"]);
-            executor.step().await.expect("the new image builds");
+                .expect("the abandoned build is retired and the new image builds");
 
             let controller = state_of(&executor);
             assert_eq!(controller.disk_image_id.as_deref(), Some("node-1"));
@@ -1607,7 +1701,7 @@ mod tests {
             assert!(!held(controller, "python-1"), "no binding ever named it");
         }
 
-        /// A build still running on the last poll is retired and the step fails. The retry of
+        /// A build still running past the timeout is retired and the step fails. The retry of
         /// the failed resource starts a new build instead of polling the wedged one again.
         #[tokio::test]
         async fn a_wedged_build_is_given_up_and_the_retry_builds_afresh() {
@@ -1619,10 +1713,17 @@ mod tests {
             client.expect_create_disk_image().times(0);
             let mut controller = adopted(None, None);
             controller.state = AzureSandboxState::EnsureDiskImage;
-            controller._internal_stay_count = Some(DISK_IMAGE_MAX_POLLS - 1);
+            controller.pending_disk_image = Some(PendingDiskImage {
+                reference: PYTHON.to_string(),
+                id: "stuck".to_string(),
+                started_at: chrono::Utc::now() - DISK_IMAGE_BUILD_TIMEOUT,
+            });
             let mut executor = executor(sandbox(PYTHON), controller, client).await;
 
-            let error = executor.step().await.expect_err("the last poll gives up");
+            let error = executor
+                .step()
+                .await
+                .expect_err("the timed-out poll gives up");
             assert!(error.to_string().contains("stuck"), "{error}");
             assert!(
                 !error.retryable,
@@ -1630,8 +1731,7 @@ mod tests {
             );
             assert_eq!(retired_ids(state_of(&executor)), vec!["stuck"]);
 
-            let mut resumed = state_of(&executor).clone();
-            resumed._internal_stay_count = None;
+            let resumed = state_of(&executor).clone();
             let mut client = MockSandboxDataPlaneApi::new();
             client
                 .expect_list_disk_images()
@@ -1666,6 +1766,7 @@ mod tests {
             controller.pending_disk_image = Some(PendingDiskImage {
                 reference: NODE.to_string(),
                 id: "node-1".to_string(),
+                started_at: chrono::Utc::now(),
             });
             let mut executor = executor(sandbox(PYTHON), controller, client).await;
 
@@ -1675,6 +1776,128 @@ mod tests {
             assert!(controller.pending_disk_image.is_none());
             assert!(controller.retired_disk_images.is_empty());
             assert_eq!(controller.disk_image_id.as_deref(), Some("python-1"));
+        }
+
+        /// `Ready` retires the labelled images it does not serve: one that is not Ready goes at
+        /// once, a Ready one keeps the window since a consumer may have cached it, and an
+        /// unlabelled image (a session's commit) is left alone.
+        #[tokio::test]
+        async fn ready_sweeps_labelled_images_it_does_not_serve() {
+            let mut client = MockSandboxDataPlaneApi::new();
+            client.expect_list_disk_images().returning(|_| {
+                let mut committed = image("committed", PYTHON, "Ready");
+                committed.labels.clear();
+                Ok(vec![
+                    image("img-1", PYTHON, "Ready"),
+                    image("orphan", NODE, "Failed"),
+                    image("dup", PYTHON, "Ready"),
+                    image("stale", NODE, "Ready"),
+                    committed,
+                ])
+            });
+            client
+                .expect_delete_disk_image()
+                .withf(|_, id| id == "orphan")
+                .times(1)
+                .returning(|_, _| Ok(()));
+            let mut controller = adopted(Some(PYTHON), Some("img-1"));
+            controller.built_disk_images = true;
+            let mut executor = executor(sandbox(PYTHON), controller, client).await;
+
+            executor.step().await.expect("the Ready tick");
+
+            let controller = state_of(&executor);
+            assert_eq!(retired_ids(controller), vec!["dup", "stale"]);
+            assert!(held(controller, "dup") && held(controller, "stale"));
+            assert_eq!(controller.disk_image_id.as_deref(), Some("img-1"));
+            assert!(controller.built_disk_images);
+        }
+
+        /// A tracked build that ended while a duplicate still runs is retired, and the timeout
+        /// follows the running one from when it was first seen, not from the ended build's start.
+        #[tokio::test]
+        async fn a_tracked_build_that_ended_hands_the_timeout_to_one_still_running() {
+            let mut client = MockSandboxDataPlaneApi::new();
+            client.expect_list_disk_images().returning(|_| {
+                Ok(vec![
+                    image("first", PYTHON, "Failed"),
+                    image("second", PYTHON, "Building"),
+                ])
+            });
+            client.expect_create_disk_image().times(0);
+            let mut controller = adopted(None, None);
+            controller.state = AzureSandboxState::EnsureDiskImage;
+            controller.pending_disk_image = Some(PendingDiskImage {
+                reference: PYTHON.to_string(),
+                id: "first".to_string(),
+                started_at: chrono::Utc::now() - DISK_IMAGE_BUILD_TIMEOUT,
+            });
+            let mut executor = executor(sandbox(PYTHON), controller, client).await;
+
+            executor.step().await.expect("the running build is polled");
+
+            let controller = state_of(&executor);
+            let pending = controller
+                .pending_disk_image
+                .as_ref()
+                .expect("still tracked");
+            assert_eq!(pending.id, "second");
+            assert!(chrono::Utc::now() - pending.started_at < chrono::Duration::minutes(1));
+            assert_eq!(retired_ids(controller), vec!["first"]);
+        }
+
+        /// A sandbox back on a catalog name stops listing the group once no labelled image is
+        /// left in it.
+        #[tokio::test]
+        async fn the_sweep_stops_once_a_catalog_sandbox_has_nothing_left() {
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .times(1)
+                .returning(|_| Ok(Vec::new()));
+            let mut controller = adopted(Some("ubuntu"), None);
+            controller.built_disk_images = true;
+            let mut executor = executor(sandbox("ubuntu"), controller, client).await;
+
+            executor.step().await.expect("the Ready tick lists once");
+            assert!(!state_of(&executor).built_disk_images);
+            executor.step().await.expect("the next tick does not list");
+        }
+
+        /// A pending build its id no longer finds is retired rather than forgotten, so if it
+        /// appears later it is still deleted, and the build starts again.
+        #[tokio::test]
+        async fn a_pending_build_not_found_by_id_is_retired() {
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .returning(|_| Ok(Vec::new()));
+            client.expect_get_disk_image().times(1).returning(|_, id| {
+                Err(AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceNotFound {
+                        resource_type: "DiskImage".to_string(),
+                        resource_name: id.to_string(),
+                    },
+                ))
+            });
+            client
+                .expect_create_disk_image()
+                .times(1)
+                .returning(|_, _| Ok(image("img-2", PYTHON, "Ready")));
+            let mut controller = adopted(None, None);
+            controller.state = AzureSandboxState::EnsureDiskImage;
+            controller.pending_disk_image = Some(PendingDiskImage {
+                reference: PYTHON.to_string(),
+                id: "img-1".to_string(),
+                started_at: chrono::Utc::now(),
+            });
+            let mut executor = executor(sandbox(PYTHON), controller, client).await;
+
+            executor.step().await.expect("the build starts again");
+
+            let controller = state_of(&executor);
+            assert_eq!(controller.disk_image_id.as_deref(), Some("img-2"));
+            assert_eq!(retired_ids(controller), vec!["img-1"]);
         }
 
         /// A Frozen sandbox whose image changed without an update flow reaches `Ready` serving the
@@ -1783,10 +2006,6 @@ mod tests {
         /// create, which cannot recover the group.
         #[tokio::test]
         async fn a_failed_first_build_is_repaired_by_a_changed_image() {
-            use crate::core::{StackExecutor, StackResourceStateExt};
-            use alien_azure_clients::AzureClientConfigExt as _;
-            use alien_core::{ClientConfig, StackResourceState, StackState};
-
             let mut failed = StackResourceState::new_pending(
                 Sandbox::RESOURCE_TYPE.to_string(),
                 alien_core::Resource::new(sandbox(PYTHON)),

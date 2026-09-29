@@ -27,7 +27,7 @@ fn region() -> String {
 
 async fn executor(image: &str) -> SingleControllerExecutor {
     let controller: AzureSandboxController = serde_json::from_value(serde_json::json!({
-        "state": "ready",
+        "state": "ensureDiskImage",
         "sandboxGroup": env("AZURE_SANDBOX_GROUP"),
         "region": region(),
         "resourceGroup": env("AZURE_RESOURCE_GROUP"),
@@ -68,7 +68,6 @@ async fn executor(image: &str) -> SingleControllerExecutor {
 
 async fn refused(image: &str, expected: &[&str]) {
     let mut executor = executor(image).await;
-    executor.step().await.expect("Ready routes to the build");
     let error = executor.step().await.expect_err("the build is refused");
     let rendered = error.to_string();
     let serialized = serde_json::to_string(&error).unwrap();
@@ -120,7 +119,6 @@ async fn live_controller_proxy_host_image_keeps_the_token_out() {
     let image = std::env::var("AZURE_PROXY_IMAGE")
         .unwrap_or_else(|_| "test-manager.alien.dev/artifacts/prj_test/app:v1".to_string());
     let mut executor = executor(&image).await;
-    executor.step().await.expect("Ready routes to the build");
     let mut errors = 0;
     for step in 0..40 {
         let result = executor.step().await;

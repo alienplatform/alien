@@ -1258,9 +1258,9 @@ async fn validate_pull_access(
     Ok(())
 }
 
-/// A sandbox image in another project's repository never enters a release's list, so naming one
-/// cannot open that project's images to this deployment's token. An unattributable repo counts
-/// as "default", as a push to it does.
+/// Whether a Sandbox's image repo may enter the release's list: only one in the deployment's own
+/// project, so a Sandbox naming another project's repo cannot open it to this deployment's token.
+/// An unattributable repo counts as "default", as a push to it does.
 fn sandbox_repo_in_own_project(
     routes: &RegistryRoutingTable,
     repo: &str,

@@ -383,9 +383,16 @@ pub trait SandboxDataPlaneApi: Send + Sync + std::fmt::Debug {
     async fn delete_disk_image(&self, group: &str, image_id: &str) -> Result<()>;
 }
 
-/// Azure's answer about the image names the image, not the group. A titled 4xx (`ImageNotFound`,
-/// `RegistryForbidden`, `ImagePlatformNotSupported`) is final. A 502 `DependencyError` is a failed
-/// pull, which a registry outage or rate limit also produces, so it stays retryable.
+const REFUSED_IMAGE_TITLES: &[&str] = &[
+    "ImageNotFound",
+    "RegistryForbidden",
+    "RegistryAuthFailed",
+    "ImagePlatformNotSupported",
+];
+
+/// Azure's answer about the image names the image, not the group. Missing, denied and arm64-only
+/// titles are final; a 502 `DependencyError` may be a registry outage or rate limit, so it stays
+/// retryable. Any other answer keeps the shared per-status mapping.
 fn disk_image_refusal(
     status: reqwest::StatusCode,
     base: &str,
@@ -418,7 +425,8 @@ fn disk_image_refusal(
 
     match serde_json::from_str::<Problem>(body) {
         Ok(problem)
-            if status.is_client_error() && status.as_u16() != 409 && status.as_u16() != 429 =>
+            if status.is_client_error()
+                && REFUSED_IMAGE_TITLES.contains(&problem.title.as_str()) =>
         {
             http_error(status).context(ErrorData::InvalidInput {
                 message: reason(&problem),
@@ -1546,6 +1554,31 @@ mod tests {
             .mock_async(|when, then| {
                 when.method(httpmock::Method::PUT);
                 then.status(403);
+            })
+            .await;
+
+        let error = client
+            .create_disk_image("grp", CreateDiskImage::default())
+            .await
+            .expect_err("a denied caller fails");
+
+        assert!(
+            matches!(error.error, Some(ErrorData::RemoteAccessDenied { .. })),
+            "{error:?}"
+        );
+    }
+
+    /// A titled 4xx that is not one of the image refusals, such as the plane's RBAC answering with
+    /// a body, keeps the shared mapping rather than reading as a refused image.
+    #[tokio::test]
+    async fn an_unknown_titled_refusal_keeps_the_shared_mapping() {
+        let server = MockServer::start_async().await;
+        let client = client_against(&server);
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PUT);
+                then.status(403)
+                    .body(r#"{"title":"AuthorizationFailed","status":403,"detail":"denied"}"#);
             })
             .await;
 
