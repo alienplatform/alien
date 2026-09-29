@@ -1189,6 +1189,7 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
         .map(|stack| {
             HelmInstall::new(
                 stack,
+                &manager.url,
                 &manager.registry_host,
                 &deployment_group_name,
                 &token,
@@ -1229,6 +1230,14 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
     println!("{} {}", dim_label("Token"), accent(&token));
 
     if let Some(helm) = &helm {
+        if helm.needs_https() {
+            println!();
+            println!(
+                "{} {} is served over plain HTTP. Helm and Kubernetes nodes pull charts and images over HTTPS, so put the manager behind TLS before a customer installs.",
+                dim_label("Warning"),
+                manager.url
+            );
+        }
         println!();
         println!("{}", dim_label("Send to the customer's Kubernetes admin:"));
         println!();
@@ -1370,6 +1379,8 @@ async fn fetch_manager_info(mgr: &crate::execution_context::ManagerContext) -> R
 /// The Helm command a customer's Kubernetes admin runs once.
 struct HelmInstall {
     chart: String,
+    /// The manager is served over plain HTTP.
+    plain_http: bool,
     release: String,
     customer: String,
     token: String,
@@ -1377,7 +1388,13 @@ struct HelmInstall {
 }
 
 impl HelmInstall {
-    fn new(stack: &Stack, registry_host: &str, customer: &str, token: &str) -> Self {
+    fn new(
+        stack: &Stack,
+        manager_url: &str,
+        registry_host: &str,
+        customer: &str,
+        token: &str,
+    ) -> Self {
         let infrastructure = stack
             .resources()
             .filter(|(_, entry)| {
@@ -1395,6 +1412,7 @@ impl HelmInstall {
             .collect();
         Self {
             chart: format!("oci://{registry_host}/charts/{}", stack.id()),
+            plain_http: manager_url.starts_with("http://"),
             release: stack.id().to_string(),
             customer: customer.to_string(),
             token: token.to_string(),
@@ -1402,15 +1420,33 @@ impl HelmInstall {
         }
     }
 
-    fn command(&self) -> String {
-        let registry = self
-            .chart
+    fn registry(&self) -> &str {
+        self.chart
             .trim_start_matches("oci://")
             .split('/')
             .next()
-            .unwrap_or_default();
+            .unwrap_or_default()
+    }
+
+    /// Helm reaches plain-HTTP registries only on the local machine; anywhere
+    /// else it (and every Kubernetes node) needs the manager behind HTTPS.
+    fn needs_https(&self) -> bool {
+        let host = self
+            .registry()
+            .rsplit_once(':')
+            .map_or(self.registry(), |(host, _)| host);
+        self.plain_http && !matches!(host, "localhost" | "127.0.0.1")
+    }
+
+    fn command(&self) -> String {
+        let (login_flags, install_flags) = if self.plain_http {
+            (" --insecure", " --plain-http")
+        } else {
+            ("", "")
+        };
         let mut command = format!(
-            "helm registry login {registry} --username {customer} --password {token}\n\nhelm install {release} {chart} \\\n  --namespace {release} --create-namespace \\\n  --set management.token={token} \\\n  --set management.name={customer}",
+            "helm registry login {registry}{login_flags} --username {customer} --password {token}\n\nhelm install {release} {chart}{install_flags} \\\n  --namespace {release} --create-namespace \\\n  --set management.token={token} \\\n  --set management.name={customer}",
+            registry = self.registry(),
             release = self.release,
             chart = self.chart,
             customer = self.customer,
@@ -1515,6 +1551,44 @@ mod tests {
             platforms: Some(platforms),
             ..input(id, kind, required)
         }
+    }
+
+    #[test]
+    fn helm_command_follows_the_manager_scheme() {
+        let stack: Stack = serde_json::from_value(minimal_stack()).unwrap();
+
+        let https = HelmInstall::new(
+            &stack,
+            "https://m.example.com",
+            "m.example.com",
+            "c1",
+            "ax_dg_x",
+        );
+        assert!(!https.needs_https());
+        assert!(https.command().starts_with(
+            "helm registry login m.example.com --username c1 --password ax_dg_x\n\nhelm install test-stack oci://m.example.com/charts/test-stack \\"
+        ));
+
+        let local = HelmInstall::new(
+            &stack,
+            "http://localhost:5050",
+            "localhost:5050",
+            "c1",
+            "ax_dg_x",
+        );
+        assert!(!local.needs_https());
+        assert!(local.command().starts_with(
+            "helm registry login localhost:5050 --insecure --username c1 --password ax_dg_x\n\nhelm install test-stack oci://localhost:5050/charts/test-stack --plain-http \\"
+        ));
+
+        let remote = HelmInstall::new(
+            &stack,
+            "http://m.example.com",
+            "m.example.com",
+            "c1",
+            "ax_dg_x",
+        );
+        assert!(remote.needs_https());
     }
 
     fn minimal_stack() -> serde_json::Value {

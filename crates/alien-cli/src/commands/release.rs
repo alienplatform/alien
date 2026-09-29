@@ -1375,10 +1375,18 @@ pub(crate) fn manager_proxy_push_settings(
     repository: &str,
     manager: &ManagerContext,
 ) -> Result<PushSettings> {
+    // A manager served over plain HTTP (a trial install without a
+    // certificate) must be pushed to over HTTP, whatever its host name.
+    let plain_http = registry_host.starts_with("http://");
     // OCI clients address a registry as host:port, not as a URL.
     let registry_host = alien_core::image_rewrite::strip_url_scheme(registry_host);
     let (registry_host, protocol) =
         translate_registry_url_for_cli(registry_host, &Platform::Local)?;
+    let protocol = if plain_http {
+        ClientProtocol::Http
+    } else {
+        protocol
+    };
     let repository = format!("{registry_host}/{repository}");
 
     // OCI speaks Basic — the token rides in the password slot, the
