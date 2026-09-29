@@ -303,6 +303,9 @@ impl ManagerTomlConfig {
         if let Ok(val) = std::env::var("OTLP_ENDPOINT") {
             self.telemetry.otlp_endpoint = Some(val);
         }
+        if let Ok(val) = std::env::var("STATE_DIR") {
+            self.database.state_dir = PathBuf::from(val);
+        }
     }
 
     /// Convert to the runtime `ManagerConfig` used by `AlienManagerBuilder`.

@@ -1,0 +1,19 @@
+The manager is starting at {{ .Values.baseUrl }}.
+
+1. Read the admin API key:
+
+   kubectl get secret {{ include "alien-manager.adminTokenSecret" . }} -n {{ .Release.Namespace }} \
+     -o jsonpath='{.data.{{ .Values.adminToken.existingSecret.key }}}' | base64 -d
+
+2. Connect the CLI:
+
+   alien login --manager {{ .Values.baseUrl }} --token <admin-token>
+
+3. Ship your application:
+
+   alien release
+   alien onboard <customer>
+{{- if not .Values.persistence.enabled }}
+
+WARNING: persistence is disabled; the database is lost when the pod restarts.
+{{- end }}
