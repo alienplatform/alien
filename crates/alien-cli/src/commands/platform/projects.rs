@@ -582,13 +582,18 @@ async fn saved_remote_sandbox_settings(
     };
     let custom_image = sandbox
         .custom_image
-        .map(|image| ConfigureRemoteSandboxRequestCustomImage::try_from(String::from(image)))
-        .transpose()
-        .into_alien_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "The saved sandbox image could not be carried over".to_string(),
-            url: None,
-        })?;
+        .map(|image| {
+            let image = String::from(image);
+            ConfigureRemoteSandboxRequestCustomImage::try_from(image.as_str())
+                .into_alien_error()
+                .context(ErrorData::ValidationError {
+                    field: "customImage".to_string(),
+                    message: format!(
+                        "The saved sandbox image '{image}' is not a valid image reference"
+                    ),
+                })
+        })
+        .transpose()?;
     Ok(ConfigureRemoteSandboxRequest {
         custom_image,
         max_lifetime_seconds: sandbox.max_lifetime_seconds,
@@ -596,21 +601,24 @@ async fn saved_remote_sandbox_settings(
     })
 }
 
-/// A flag replaces the saved value; without either the API applies its defaults. A custom image
-/// runs on no Azure sandbox, and the API refuses an Azure idle time beside one.
+/// A flag replaces the saved value. Without either, the API picks the default images and the
+/// lifetime is `DEFAULT_REMOTE_SANDBOX_LIFETIME_SECONDS`. The saved Azure idle time is dropped when
+/// a custom image is set: the API refuses the two together.
 fn remote_sandbox_request(
     custom_image: Option<&str>,
     max_lifetime_seconds: Option<NonZeroU64>,
     saved: ConfigureRemoteSandboxRequest,
 ) -> Result<ConfigureRemoteSandboxRequest> {
     let custom_image = custom_image
-        .map(ConfigureRemoteSandboxRequestCustomImage::try_from)
-        .transpose()
-        .into_alien_error()
-        .context(ErrorData::ValidationError {
-            field: "image".to_string(),
-            message: "Invalid image reference".to_string(),
-        })?;
+        .map(|image| {
+            ConfigureRemoteSandboxRequestCustomImage::try_from(image)
+                .into_alien_error()
+                .context(ErrorData::ValidationError {
+                    field: "image".to_string(),
+                    message: format!("'{image}' is not a valid image reference"),
+                })
+        })
+        .transpose()?;
     let custom_image = custom_image.or(saved.custom_image);
     let azure_idle_suspend_seconds = saved
         .azure_idle_suspend_seconds
@@ -1503,7 +1511,6 @@ mod tests {
             "enabled": true,
             "customImage": SAVED_IMAGE,
             "baseImage": "registry.example.com/acme-sandbox@sha256:def",
-            "azure": { "catalogImage": "python-3.12", "idleSuspendSeconds": 900 },
             "maxLifetimeSeconds": 1200,
         });
         assert_eq!(
