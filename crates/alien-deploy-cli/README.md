@@ -9,6 +9,8 @@ Deployment CLI for customer admins. Deploys, manages, and tears down Alien appli
 - **`alien-deploy status`** — Show deployment status.
 - **`alien-deploy list`** — List all tracked deployments.
 - **`alien-deploy agent`** — Manage the alien-operator background service (install, start, stop, uninstall, status).
+- **`alien-deploy airgap apply`** — Install or update an air-gapped Kubernetes deployment from a bundle made with `alien airgap bundle`: pushes the bundle's images to the site's registry, then installs or upgrades the chart.
+- **`alien-deploy airgap status`** — Export the deployment's state and recent logs to a file the vendor imports with `alien airgap import`.
 
 ## How It Works
 
@@ -18,7 +20,7 @@ The CLI talks to the alien-manager API. On `deploy`, it:
 3. Hands off to the manager once provisioning begins
 4. Tracks the deployment locally for future `status`/`destroy` commands
 
-For Kubernetes and Local platforms, `deploy` installs the alien-operator as a background service that syncs with the manager continuously.
+For Kubernetes and Local platforms, `deploy` installs the alien-operator as a background service that syncs with the manager continuously. On Kubernetes, most customers install with the `helm install` command from `alien onboard` instead.
 
 ## Deployment Tracking
 

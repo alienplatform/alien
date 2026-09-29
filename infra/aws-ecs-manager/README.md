@@ -30,7 +30,7 @@ module "alien_manager" {
   # Optional: extra alien-manager.toml sections.
   config = <<-EOT
     [telemetry]
-    endpoint = "https://otlp.example.com"
+    otlp-endpoint = "https://otlp.example.com"
   EOT
 }
 ```

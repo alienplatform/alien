@@ -4,357 +4,192 @@
 [![GitHub Release](https://img.shields.io/github/v/release/alienplatform/alien)](https://github.com/alienplatform/alien/releases)
 [![Slack](https://img.shields.io/badge/Slack-Join-4A154B?logo=slack&logoColor=white)](https://alien.dev/slack)
 
-Alien provides infrastructure to deploy and operate software inside your users' environments, while retaining centralized control over updates, monitoring, and lifecycle management.
+**Infrastructure for software outside your cloud.**
 
-## Why Alien?
+Some of your product has to run where you don't control the infrastructure: a customer's AWS, Google Cloud or Azure account, their Kubernetes cluster, or a site with no internet access at all. Alien runs that piece there (the data plane) and keeps it connected to your control plane: releases roll out on their own, logs come back, and your backend can call into it, all over connections the environment opens outbound.
 
-Self-hosting works - *until someone starts paying for your software*.
-
-Customers run it in their own environment, but they don't actually know how to operate it. They might change something small like Postgres version, environment variables, IAM, firewall rules, and things start failing. From their perspective, your product is broken. And even if the root cause is on their side, it doesn't matter... the customer is always right, you're still the one expected to fix it.
-
-But you can't. You don't have access to their environment. You don't have real visibility. You can't run anything yourself. So you're stuck debugging a system you don't control, through screenshots and copy-pasted logs on a Zoom call. You end up responsible for something you don't control.
-
-Alien provides a better model: **managed self-hosting**.
+The manager is the center of it. Run it yourself from this repository, or let [alien.dev](https://alien.dev) run it for you. The same `alien` CLI works with both.
 
 ## Quickstart
 
 Install the CLI:
 
-```bash title="macOS / Linux"
-curl -fsSL https://alien.dev/install | sh -s -- --login
-```
-
-```powershell title="Windows"
-irm https://alien.dev/install.ps1 | iex
-```
-
-Create a project and start developing:
-
 ```bash
-alien init
-cd alien && alien dev
+curl -fsSL https://alien.dev/install | sh
 ```
 
-Follow the [Quickstart](https://www.alien.dev/docs/quickstart) guide to build an AI worker, test it locally, and deploy it — no cloud account needed to start.
-
-Or [try it with Claude Code, Codex, or Cursor](https://www.alien.dev#prompt).
-
-For local secrets, prefer file or inherited-environment sources so values do not appear in command arguments or shell history:
-
-```bash
-alien dev --secret-file API_TOKEN="$HOME/.config/example/api-token"
-alien dev --secret-env API_TOKEN=SOURCE_API_TOKEN
-```
-
-See the [CLI local-secret reference](crates/alien-cli/README.md#local-secrets) for resource scoping and file handling.
-
-### CLI automation
-
-Every platform workflow has a non-interactive form. Link a directory once, then
-commands use that project unless `--project` is provided explicitly:
+### With alien.dev
 
 ```bash
 alien login
-alien projects list
-alien link --project my-project
-alien projects describe --json
-
-# Configure project capabilities.
-alien projects capabilities enable models \
-  --model byo/claude-opus-5 \
-  --provider anthropic
-
-# Create a least-privileged key and onboard a customer environment.
-alien api-keys create --for ai-gateway --description production-backend --json
-alien onboard acme --external-id customer_123 --setup-items models,keys --json
-
-# Print an executable request for the active environment.
-alien examples ai-gateway --protocol anthropic-messages
-
-# Search structured gateway diagnostics without writing a raw query.
-alien logs --source ai-gateway --status provider-error --provider anthropic --json
-
-# Inspect live rollout state without parsing the raw stack state.
-alien deployments status production/api
-alien deployments resources production/api --json
-alien deployments wait production/api --for ready --timeout 10m --json
-
-# Read privacy-safe aggregate usage.
-alien usage ai --range 7d --json
+alien init && cd alien
+alien dev        # run the app locally, no cloud account needed
+alien release    # build and publish a release
+alien onboard acme --platforms kubernetes
 ```
 
-Resource detail commands accept `get`, `describe`, and `show`; list commands
-accept both `list` and `ls`. JSON mode never prompts and writes structured data
-to stdout, making the same CLI suitable for humans, scripts, and coding agents.
-The normalized resource view intentionally excludes resource configuration,
-internal controller state, environment variables, and arbitrary provider
-outputs.
+The [Quickstart](https://alien.dev/docs/quickstart) walks through it.
 
-## Features
+### With your own manager
 
-- **[AWS, GCP, and Azure support](https://www.alien.dev/docs/how-alien-works)** - Deploy to all major clouds. 
-- **[TypeScript & Rust](https://alien.dev/docs/infrastructure/worker/toolchains)** — First-class source builds, plus Python source containers and arbitrary Docker containers.
-- **[Real-time Heartbeat](https://alien.dev/docs/how-alien-works)** — Know the instant a deployment goes down. 
-- **[Auto Updates & Rollbacks](https://alien.dev/docs/releases)** — Push a release and every remote environment picks it up automatically. 
-- **[Local-first Development](https://alien.dev/docs/local-development)** — Build and test on your machine. Local equivalents for every cloud resource.
-- **[Cloud-agnostic Infrastructure](https://alien.dev/docs/infrastructure)** — Ship to AWS, GCP, and Azure customers without maintaining separate integrations. Alien maps a single API to each cloud's native services at deploy time.
-- **[Remote Commands](https://alien.dev/docs/commands)** — Invoke code on remote deployments from your control plane. Zero inbound networking. Zero open ports. No VPC peering.
-- **[Observability](https://alien.dev/docs/how-alien-works)** — Logs, metrics, and traces from every deployment. Full visibility without touching customer infrastructure.
-- **[Least-privilege Permissions](https://alien.dev/docs/permissions)** — Alien derives the exact IAM permissions required to deploy and manage your app.
-
-## How deployment works
-
-### Push model
-
-**Like sharing a Google Drive folder.** The customer grants least-privilege access to an isolated area in their cloud. You run `alien serve` on your infrastructure and it manages everything through cloud APIs (e.g. AWS `UpdateWorkerCode`). No network connection to their environment needed.
+Start a manager. It prints an admin API key the first time:
 
 ```bash
-alien serve
+docker run -d --name alien-manager -p 8080:8080 -v alien-data:/data \
+  -e BASE_URL=http://localhost:8080 \
+  ghcr.io/alienplatform/alien-manager
+docker logs alien-manager
 ```
 
-```
-                                              ╔═ Customer's Cloud ══════════════════╗
-                                              ║                                     ║
-                                              ║  Their databases, services, infra   ║
-                                              ║                                     ║
-╔═ alien serve ═══════════╗                   ║  ┌─ Isolated Area ──────────────┐   ║
-║                         ║   cloud APIs      ║  │                              │   ║
-║  Push updates    ───────╬───────────────────╬─▶│  ┏━━━━━━━━━━┓                │   ║
-║  Collect telemetry ◀────╬───────────────────╬──│  ┃ Worker ┃                │   ║
-║  Run commands    ───────╬───────────────────╬─▶│  ┗━━━━━━━━━━┛                │   ║
-║                         ║                   ║  │  ┏━━━━━━━━━━┓                │   ║
-║                         ║                   ║  │  ┃ Storage  ┃                │   ║
-╚═════════════════════════╝                   ║  │  ┗━━━━━━━━━━┛                │   ║
-                                              ║  └──────────────────────────────┘   ║
-                                              ║                                     ║
-                                              ╚═════════════════════════════════════╝
-```
-
-### Pull model
-
-**Like an app checking for updates.** For customers that can't or won't allow a cross-account IAM role, they can run `alien-operator` in their environment instead. It connects outbound to the Alien server, fetches releases, and deploys locally. No inbound connections, no open ports.
+Point the CLI at it, release your app, and onboard a customer:
 
 ```bash
-docker run ghcr.io/alienplatform/alien-operator \
-  --sync-url https://alien.example.com \
-  --sync-token <token> \
-  --platform aws
+alien login --manager http://localhost:8080 --token ax_admin_...
+alien release
+alien onboard acme --platforms kubernetes --secret-input accessToken=...
 ```
 
-```
-                                              ╔═ Customer's Cloud ══════════════════╗
-                                              ║                                     ║
-                                              ║  Their databases, services, infra   ║
-                                              ║                                     ║
-╔═ alien serve ═══════════╗     outbound      ║  ┌─ Isolated Area ──────────────┐   ║
-║                         ║      HTTPS        ║  │                              │   ║
-║  Releases        ◀──────╬───────────────────╬──│── alien-operator                │   ║
-║  Telemetry       ◀──────╬───────────────────╬──│──  ┏━━━━━━━━━━┓              │   ║
-║  Worker commands ◀──────╬───────────────────╬──│──  ┃ Worker ┃              │   ║
-║                         ║                   ║  │    ┗━━━━━━━━━━┛              │   ║
-║                         ║                   ║  │    ┏━━━━━━━━━━┓              │   ║
-╚═════════════════════════╝                   ║  │    ┃ Storage  ┃              │   ║
-                                              ║  │    ┗━━━━━━━━━━┛              │   ║
-                                              ║  └──────────────────────────────┘   ║
-                                              ║                                     ║
-                                              ╚═════════════════════════════════════╝
+`alien onboard` prints the one `helm install` command the customer runs. Their cluster pulls the chart and images from your manager, with a token scoped to their deployment:
+
+```bash
+helm registry login manager.example.com --username acme --password ax_dg_...
+
+helm install data-plane oci://manager.example.com/charts/data-plane \
+  --namespace data-plane --create-namespace \
+  --set management.token=ax_dg_... \
+  --set management.name=acme \
+  --values values.yaml
 ```
 
-Both models give you the same capabilities: updates, telemetry, remote commands. See [Deployment Models](https://alien.dev/docs/deploying/deployment-models).
+For real customers, run the manager where their clusters can reach it over HTTPS: with the [Helm chart](infra/helm/alien-manager/) on Kubernetes, the [Terraform module](infra/aws-ecs-manager/) on Amazon ECS, or `docker run` on any machine. See [Self-hosting](https://alien.dev/docs/self-hosting).
 
-The Operator reconciles releases and relays pending Worker commands to the
-targeted Worker runtime; the Worker never polls the command server. Containers
-and Daemons run an app-owned pull receiver. Every command is scoped to one
-target.
+## How it works
 
-## One codebase, every cloud
+```
+  Your cloud                               Customer environment
+ ┌──────────────────────────┐             ┌──────────────────────────────┐
+ │  alien CLI    your       │             │  Operator                    │
+ │      │        backend    │  outbound   │   ├─ deploys each release    │
+ │      ▼          │        │   HTTPS     │   ├─ ships logs and traces   │
+ │   Manager ◀─────┘ ◀──────┼─────────────┼── ├─ relays tunnel requests  │
+ │      │                   │             │   └─ updates itself          │
+ │      ▼                   │             │                              │
+ │  OpenTelemetry backend   │             │  Your containers, storage    │
+ └──────────────────────────┘             └──────────────────────────────┘
+```
 
-Ship to AWS, GCP, and Azure customers without maintaining separate integrations. Alien maps your stack to each cloud's native services at deploy time.
+Alien deploys in two ways:
+
+- **Push.** The customer grants a narrowly scoped role in their cloud account, and the manager deploys through the cloud's APIs.
+- **Pull.** The customer runs the Operator: a Helm chart on Kubernetes, or a container in their cloud. It connects outbound to the manager, fetches releases and deploys them locally. Nothing listens for inbound connections.
+
+Both give you the same things: releases, heartbeats, logs and commands. See [How Alien works](https://alien.dev/docs/how-alien-works).
+
+## Define your app
 
 ```typescript
 import * as alien from "@alienplatform/core"
 
-const data = new alien.Storage("data").build()
-const secrets = new alien.Vault("credentials").build()
+// The customer's S3-compatible bucket, supplied at install time.
+const objects = new alien.Storage("objects").build()
 
-const api = new alien.Worker("api")
-  .code({ type: "source", src: "./api", toolchain: { type: "typescript" } })
-  .link(data)
-  .link(secrets)
-  .commandsEnabled(true)
-  .publicEndpoint("api")
+const api = new alien.Container("api")
+  .code({ type: "source", src: ".", toolchain: { type: "rust", binaryName: "api" } })
+  .cpu(0.5)
+  .memory("512Mi")
+  .tunnel(8080) // reachable from your backend through the manager
+  .link(objects)
+  .permissions("api")
   .build()
 
-export default new alien.Stack("my-app")
+export default new alien.Stack("data-plane")
+  .platforms(["kubernetes"])
+  .add(objects, "frozen")
   .add(api, "live")
-  .add(data, "frozen")
-  .add(secrets, "frozen")
+  .permissions({ profiles: { api: { objects: ["storage/data-read", "storage/data-write"] } } })
   .build()
 ```
 
-At deploy time, each resource maps to the cloud's native service:
+The same resources map to each platform's native services: Storage becomes S3, Google Cloud Storage, Azure Blob Storage, or an S3-compatible store (MinIO, Ceph) on Kubernetes. Workers, queues, key-value stores and vaults work the same way. See [Infrastructure](https://alien.dev/docs/infrastructure).
 
-```
-  ┏━━━━━━━━━━━━┓                    ┏━━━━━━━━━━━━┓
-  ┃  Worker  ┃                    ┃  Storage   ┃
-  ┗━━━━━┯━━━━━━┛                    ┗━━━━━┯━━━━━━┛
-        │                                 │
-        ├── AWS ───▶ Lambda               ├── AWS ───▶ S3
-        ├── GCP ───▶ Cloud Run            ├── GCP ───▶ Google Cloud Storage
-        └── Azure ─▶ Container App        └── Azure ─▶ Azure Blob Storage
-```
+## After one install
 
-The same applies to queues, vaults, and KV stores. One codebase, all clouds. Drop to native SDKs whenever you need to.
+Once a customer installs, you don't need access to their environment again:
 
-Each resource documents its [guarantees, limits, and platform-specific behavior](https://alien.dev/docs/infrastructure) so you know exactly what to expect across clouds.
+- **Releases.** `alien release` rolls out to every deployment. The Operator also updates itself to the version the manager runs.
+- **Images.** Clusters pull images through the manager with their deployment token. No registry credentials to hand out.
+- **Logs and traces.** Deployments send OpenTelemetry to the manager, which forwards it to your backend: Datadog, Grafana, Honeycomb, Axiom, Coralogix, or any OTLP endpoint. `alien logs --deployment acme/acme` shows recent logs without one.
+- **Tunnels.** Your backend calls a container inside any deployment through the manager, over the Operator's outbound connection. HTTP and WebSocket requests stream in both directions, and the app's own `Authorization` header passes through:
 
-## Releases
+  ```bash
+  curl https://manager.example.com/v1/deployments/acme/tunnels/api/objects \
+    -H "Proxy-Authorization: Bearer ax_tunnel_..." \
+    -H "Authorization: Bearer <your app's token>"
+  ```
 
-Push a release and every environment updates automatically.
+  `alien tokens create --tunnel` makes a token that can only call tunnels, optionally for a single customer. Revoke it with `alien tokens revoke`.
+- **Commands.** Invoke handlers inside a deployment from your backend with [Remote Commands](https://alien.dev/docs/commands).
+
+## Air-gapped environments
+
+Sites with no connection to your manager get the same app in a file. Package a release, carry the bundle in, and apply it with `alien-deploy`, which pushes the images to the site's registry and installs or updates the chart:
 
 ```bash
-alien release
+alien onboard site-7 --platforms kubernetes --airgapped
+alien airgap bundle site-7/site-7 -o site-7.tar
+
+# inside the site
+alien-deploy airgap apply site-7.tar --registry registry.internal/vendor -f values.yaml
+alien-deploy airgap status -n data-plane -o status.tar
+
+# back with you
+alien airgap import status.tar --deployment site-7/site-7
 ```
 
-Builds your code, pushes artifacts, and creates a release. Every active deployment picks up the new version.
-
-## What you can build
-
-- **AI Worker** — Operator harness in your cloud, tool execution in theirs. Read files, run commands, query data — all local. ([example](examples/remote-worker-ts))
-- **Data Connector** — Query Snowflake, Postgres, or any private database. No shared credentials, no exposed services. ([example](examples/data-connector-ts))
-- **Browser Automation** — Headless browser inside their network. Navigate Jira, SAP, GitLab, on-prem wikis. 
-- **Security Outpost** — Scan IAM policies, storage, network configs from inside the perimeter. On a schedule or on-demand.
-- **Cloud Actions** — API inside their network. Restart services, rotate credentials, react to infrastructure changes. ([example](examples/webhook-api-ts))
-
-
-## Remote commands
-
-Invoke code inside the customer's environment from your control plane. Zero inbound networking, zero open ports.
-
-Define a handler in the customer's environment:
-
-```typescript
-import { command, storage } from "@alienplatform/sdk"
-
-const files = storage("files")
-
-command("read-file", async ({ path }) => {
-  const data = await files.get(path)
-  return { content: new TextDecoder().decode(data) }
-})
-```
-
-Invoke it from your backend:
-
-```typescript
-import { CommandsClient } from "@alienplatform/commands"
-
-const commands = new CommandsClient({ managerUrl, deploymentId, token })
-const result = await commands.target("api").invoke("read-file", {
-  path: "report.csv"
-})
-```
-
-See [Remote Commands](https://alien.dev/docs/commands).
+`airgap import` records the deployment's state and its logs in the manager, so `alien deployments ls` and `alien logs` cover those sites too. See [Air-gapped deployments](https://alien.dev/docs/air-gapped).
 
 ## Least-privilege permissions
 
-You're deploying to someone else's cloud. Every permission needs justification. Alien derives exactly the permissions needed from your stack definition — for AWS, GCP, and Azure.
+Alien derives the permissions each part needs from the stack definition:
 
-```typescript
-export default new alien.Stack("my-app")
-  .add(data, "frozen")
-  .add(api, "live")
-  .permissions({
-    profiles: {
-      execution: {
-        data: ["storage/data-read", "storage/data-write"],
-      },
-    },
-  })
-  .build()
-```
+- **Provisioning.** The customer's admin sets up the environment once with their own credentials. Alien never holds these.
+- **Management.** What Alien uses day to day. Frozen resources only get health checks. Live resources can be updated, but management never includes data access.
+- **Application.** What your code can reach, as declared in permission profiles. `storage/data-read` becomes `s3:GetObject` on AWS, `storage.objects.get` on Google Cloud and the matching Azure role.
 
-From this definition, Alien derives three layers of permissions:
+See [Permissions](https://alien.dev/docs/permissions) and [Frozen and live](https://alien.dev/docs/frozen-and-live).
 
-**Provisioning** — Creates all resources during initial setup. The customer's admin runs `alien-deploy deploy` once with their own credentials. Alien never holds these permissions.
+## Examples
 
-**Management** — What Alien uses day-to-day to manage the deployment:
+- [kubernetes-data-plane](examples/kubernetes-data-plane): a Rust object service in customer Kubernetes clusters, with S3-compatible storage and a tunnel
+- [remote-worker-ts](examples/remote-worker-ts): tool execution inside the customer's cloud for an AI agent
+- [data-connector-ts](examples/data-connector-ts): query private databases without sharing credentials
+- [webhook-api-ts](examples/webhook-api-ts): an API inside the customer's network
 
-- 🧊 **Frozen** resources: health checks only. No ability to modify, delete, or read data.
-- 🔁 **Live** resources: push code, roll config, redeploy. But still no data access — Alien can call `lambda:UpdateWorkerCode` but never `s3:GetObject`. Management and data access are separate.
+More in [examples/](examples/).
 
-**Application runtime** — What the deployed code can access. Only what's declared in permission profiles. The `execution` profile above grants `storage/data-read` and `storage/data-write` on the `data` bucket — nothing else. No declaration, no access.
+## Repository
 
-Permission sets are portable across clouds:
-
-| | `storage/data-read` |
-|---|---|
-| AWS | `s3:GetObject`, `s3:ListBucket` |
-| GCP | `storage.objects.get`, `storage.objects.list` |
-| Azure | `Microsoft.Storage/.../blobs/read` |
-
-For edge cases, define custom permission sets with cloud-specific actions:
-
-```typescript
-const assumeRole: PermissionSet = {
-  id: "assume-role",
-  platforms: {
-    aws: [{
-      grant: { actions: ["sts:AssumeRole"] },
-      binding: { stack: { resources: ["*"] } }
-    }]
-  }
-}
-```
-
-See [Permissions](https://alien.dev/docs/permissions) and [Frozen & Live](https://alien.dev/docs/frozen-and-live).
-
-## Production deployment
-
-**1. Generate a config template:**
-
-```bash
-alien serve --init   # creates alien-manager.toml
-```
-
-**2. Provision cloud resources for push-mode platforms** (optional — Terraform modules for [AWS](infra/aws/), [GCP](infra/gcp/), [Azure](infra/azure/)):
-
-```hcl
-module "alien_infra" {
-  source = "github.com/aliendotdev/alien//infra/aws"
-
-  name          = "my-project"
-  principal_arn = aws_iam_role.manager.arn
-}
-```
-
-Fill the Terraform outputs into `alien-manager.toml`.
-
-**3. Run the server.** The server must be reachable over HTTPS — deployments and agents connect back to it.
-
-```bash
-docker run -d -p 8080:8080 \
-  -v alien-data:/data \
-  -v ./alien-manager.toml:/app/alien-manager.toml \
-  -e BASE_URL=https://manager.example.com \
-  ghcr.io/alienplatform/alien-manager
-```
-
-See the [Self-Hosting Guide](https://alien.dev/docs/self-hosting) for the full configuration reference and production checklist.
+| Path | What it is |
+|------|------------|
+| [`crates/alien-cli`](crates/alien-cli) | The `alien` CLI |
+| [`crates/alien-manager`](crates/alien-manager) | The manager |
+| [`crates/alien-operator`](crates/alien-operator) | The Operator that runs in pull-mode environments |
+| [`crates/alien-deploy-cli`](crates/alien-deploy-cli) | `alien-deploy`, run by a customer's admin |
+| [`packages/`](packages) | TypeScript SDKs |
+| [`infra/`](infra) | Helm chart and Terraform for running the manager, and cloud modules it uses |
 
 ## Documentation
 
-- [Quickstart](https://alien.dev/docs/quickstart) — build and deploy an AI worker
-- [How Alien Works](https://alien.dev/docs/how-alien-works) — architecture and core concepts
-- [Stacks](https://alien.dev/docs/stacks) — defining your infrastructure
-- [Frozen and Live](https://alien.dev/docs/frozen-and-live) — the security/control tradeoff
-- [Deployment Models](https://alien.dev/docs/deploying/deployment-models) — push vs pull
-- [Remote Commands](https://alien.dev/docs/commands) — invoking code in customer environments
-- [Permissions](https://alien.dev/docs/permissions) — least-privilege access control
+- [Quickstart](https://alien.dev/docs/quickstart)
+- [How Alien works](https://alien.dev/docs/how-alien-works)
+- [Self-hosting](https://alien.dev/docs/self-hosting)
+- [Kubernetes](https://alien.dev/docs/kubernetes)
+- [Tunnels](https://alien.dev/docs/tunnels)
+- [Telemetry](https://alien.dev/docs/telemetry)
+- [Remote commands](https://alien.dev/docs/commands)
 
 ## Community
 
-- [Slack](https://alien.dev/slack) — get help and share feedback
-- [GitHub Issues](https://github.com/alienplatform/alien/issues) — bug reports and feature requests
-- [X](https://x.com/alien) — updates and announcements
+- [Slack](https://alien.dev/slack): help and feedback
+- [GitHub Issues](https://github.com/alienplatform/alien/issues): bugs and feature requests
+- [X](https://x.com/alien): updates
