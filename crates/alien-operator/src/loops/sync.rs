@@ -23,7 +23,7 @@ use chrono::Utc;
 use reqwest::Client;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 /// Run the sync loop
@@ -351,6 +351,12 @@ async fn sync_with_manager(
         .await
     {
         error!(error = %e, "Failed to persist tunnel_url");
+    }
+
+    if let Some(image) = sync_response.target_operator_image.as_deref() {
+        if let Err(e) = crate::self_update::apply(state, image).await {
+            warn!(error = %e, image, "Operator self-update failed; will retry on the next sync");
+        }
     }
 
     // Persist the target bundle set so a restart doesn't lose it for a full

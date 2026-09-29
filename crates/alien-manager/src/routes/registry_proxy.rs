@@ -725,14 +725,20 @@ async fn proxy_pull(
     if let Err(refused) = require_literal_oci_path(&path) {
         return refused;
     }
+    // Every pull passes the same name and reference validation before it
+    // is routed, including charts and the Operator image.
     let oci_path_str = path.trim_start_matches('/');
-    if oci_path_str.starts_with(super::charts::CHART_NAMESPACE) {
-        return super::charts::serve(&state, &subject, &method, oci_path_str).await;
-    }
     let oci = match parse_oci_path(oci_path_str) {
         Ok(oci) => oci,
         Err(refused) => return refused,
     };
+    if oci_path_str.starts_with(super::charts::CHART_NAMESPACE) {
+        return super::charts::serve(&state, &subject, &method, oci_path_str).await;
+    }
+    if oci.repo == super::operator_image::OPERATOR_REPOSITORY {
+        return super::operator_image::serve(&state, &subject, &method, oci_path_str, &headers)
+            .await;
+    }
     if let Err(e) = validate_pull_access(&state, &subject, &oci.repo).await {
         return e;
     }

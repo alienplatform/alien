@@ -122,6 +122,10 @@ pub struct OperatorConfig {
     #[builder(default = true)]
     pub tunnel_enabled: bool,
 
+    /// This Operator's own Deployment (in `namespace`). When set, the
+    /// Operator updates its own image to the one the manager targets.
+    pub self_update_deployment: Option<String>,
+
     /// Allow Local runtime debug commands and shells.
     #[builder(default = false)]
     pub local_debug_enabled: bool,

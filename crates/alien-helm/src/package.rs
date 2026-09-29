@@ -24,6 +24,10 @@ pub struct PackageDefaults<'a> {
     pub operator_image: Option<OperatorImageDefault<'a>>,
     /// Pod log collection (`logCollector.enabled` / `logCollector.mode`).
     pub log_collector: Option<LogCollectorDefault>,
+    /// Pull the Operator image with the install token
+    /// (`runtime.image.pullWithManagementToken`), for an image served by the
+    /// manager itself.
+    pub registry_pull_secret: bool,
 }
 
 /// Operator image reference split the way the chart values expect it.
@@ -84,6 +88,13 @@ pub fn apply_package_defaults(
                 quote(image.repository)?,
                 quote(image.tag)?
             ),
+        )?;
+    }
+    if defaults.registry_pull_secret {
+        replace_once(
+            values,
+            "    pullWithManagementToken: false\n",
+            "    pullWithManagementToken: true\n",
         )?;
     }
     if let Some(collector) = defaults.log_collector {

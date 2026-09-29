@@ -277,6 +277,10 @@ fn generate_helm_chart_internal(
         clusterrolebinding_tpl(),
     );
     files.insert("templates/secret.yaml".to_string(), secret_tpl());
+    files.insert(
+        "templates/registry-secret.yaml".to_string(),
+        registry_secret_tpl(),
+    );
     files.insert("templates/configmap.yaml".to_string(), configmap_tpl());
     files.insert("templates/deployment.yaml".to_string(), deployment_tpl());
     files.insert(
@@ -3871,6 +3875,12 @@ runtime:
     repository: registry.example.com/deployment/operator
     tag: latest
     pullPolicy: IfNotPresent
+    # Pull the Operator image with management.token (for an image served by
+    # the manager this chart connects to).
+    pullWithManagementToken: false
+    # Follow the Operator image the manager targets, so upgrades need no helm
+    # upgrade. Kubernetes keeps the running pod until the new one is ready.
+    selfUpdate: true
   imagePullSecrets: []
   podLabels: {}
   podAnnotations: {}
@@ -4578,7 +4588,9 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
           "properties": {
             "repository": { "type": "string", "minLength": 1 },
             "tag": { "type": "string", "minLength": 1 },
-            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
+            "pullWithManagementToken": { "type": "boolean" },
+            "selfUpdate": { "type": "boolean" }
           }
         },
         "imagePullSecrets": {
@@ -5501,6 +5513,26 @@ roleRef:
     .to_string()
 }
 
+/// Pull credentials for an Operator image served by the manager: the
+/// registry is the image's host and the password is the install token.
+fn registry_secret_tpl() -> String {
+    r#"{{- if and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+{{- $registry := first (splitList "/" .Values.runtime.image.repository) }}
+{{- $auth := printf "%s:%s" (default "deployment" .Values.management.name) .Values.management.token | b64enc }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "deployment.fullname" . }}-registry
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: {{ dict "auths" (dict $registry (dict "auth" $auth)) | toJson | b64enc }}
+{{- end }}
+"#
+    .to_string()
+}
+
 fn secret_tpl() -> String {
     r#"{{- if .Release.IsUpgrade -}}
   {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
@@ -6277,9 +6309,15 @@ spec:
       automountServiceAccountToken: {{ .Values.runtime.automountServiceAccountToken }}
       securityContext:
         {{- toYaml .Values.runtime.security.podSecurityContext | nindent 8 }}
-      {{- with .Values.runtime.imagePullSecrets }}
+      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+      {{- if or .Values.runtime.imagePullSecrets $pullWithToken }}
       imagePullSecrets:
+        {{- with .Values.runtime.imagePullSecrets }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $pullWithToken }}
+        - name: {{ include "deployment.fullname" . }}-registry
+        {{- end }}
       {{- end }}
       {{- with .Values.runtime.scheduling.nodeSelector }}
       nodeSelector:
@@ -6390,6 +6428,10 @@ spec:
               value: "30"
             - name: TUNNEL_ENABLED
               value: {{ dig "enabled" true (default dict .Values.tunnel) | quote }}
+            {{- if dig "selfUpdate" true .Values.runtime.image }}
+            - name: OPERATOR_SELF_UPDATE_DEPLOYMENT
+              value: {{ include "deployment.fullname" . | quote }}
+            {{- end }}
             - name: OTLP_PORT
               value: {{ .Values.runtime.api.port | quote }}
             - name: OTLP_HOST

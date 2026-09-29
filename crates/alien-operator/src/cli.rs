@@ -176,6 +176,11 @@ pub struct Args {
     #[arg(long, env = "TUNNEL_ENABLED", default_value_t = true, action = clap::ArgAction::Set)]
     pub tunnel_enabled: bool,
 
+    /// This Operator's own Deployment; set to let the Operator move itself to
+    /// the image the manager targets.
+    #[arg(long, env = "OPERATOR_SELF_UPDATE_DEPLOYMENT")]
+    pub self_update_deployment: Option<String>,
+
     #[arg(long, env = "ALIEN_ENABLE_LOCAL_DEBUG", default_value_t = false)]
     pub enable_local_debug: bool,
 
@@ -688,6 +693,7 @@ async fn run_operator_cli(
         .stack_settings(stack_settings)
         .local_debug_enabled(args.enable_local_debug)
         .tunnel_enabled(args.tunnel_enabled)
+        .maybe_self_update_deployment(args.self_update_deployment)
         .maybe_local_debug_shell_command(args.local_debug_shell_command)
         .build();
 

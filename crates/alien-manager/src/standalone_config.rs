@@ -61,8 +61,13 @@ pub struct ManagerTomlConfig {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct OperatorSection {
     /// Operator image, `repository:tag`. Defaults to the published image
-    /// matching this manager's version.
+    /// matching this manager's version. Deployments pull it through the
+    /// manager, so they need no access to its registry.
     pub image: Option<String>,
+    /// The Operator image's registry serves plain HTTP (a private registry
+    /// without TLS).
+    #[serde(default)]
+    pub insecure_registry: bool,
 }
 
 // ── Section configs ─────────────────────────────────────────────────────────

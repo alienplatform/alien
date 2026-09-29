@@ -11,6 +11,7 @@ pub mod health;
 pub mod image_repositories;
 pub mod install;
 pub mod manager_info;
+pub mod operator_image;
 pub mod platforms;
 pub mod registry_proxy;
 pub mod releases;

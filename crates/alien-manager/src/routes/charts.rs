@@ -43,18 +43,50 @@ const CHART_MEDIA_TYPE: &str = "application/vnd.cncf.helm.chart.content.v1.tar+g
 /// Chart settings for a manager that serves charts.
 #[derive(Debug, Clone)]
 pub struct ChartSettings {
-    /// Operator image the charts install, `repository:tag`.
+    /// Operator image as configured, `repository:tag`.
     pub operator_image: String,
+    /// When set, deployments pull the Operator image through this manager
+    /// (`<manager>/alien-operator:<tag>`) and the manager passes pulls through
+    /// to this upstream. Unset for an image without a registry (a local
+    /// image), which charts reference as is.
+    pub operator_upstream: Option<super::operator_image::UpstreamImage>,
 }
 
 impl ChartSettings {
-    /// The Operator image matching this manager's version.
-    pub fn with_default_operator_image() -> Self {
-        Self {
-            operator_image: format!(
-                "ghcr.io/alienplatform/alien-operator:{}",
+    /// Settings for `operator_image` (the published Operator image matching
+    /// this manager's version when `None`).
+    pub fn new(operator_image: Option<String>, insecure_registry: bool) -> Self {
+        let operator_image = operator_image.unwrap_or_else(|| {
+            format!(
+                "ghcr.io/alienplatform/alien-operator:v{}",
                 env!("CARGO_PKG_VERSION")
+            )
+        });
+        let has_registry = operator_image.split_once('/').is_some_and(|(host, _)| {
+            host.contains('.') || host.contains(':') || host == "localhost"
+        });
+        let operator_upstream = has_registry
+            .then(|| {
+                super::operator_image::UpstreamImage::parse(&operator_image, insecure_registry)
+            })
+            .flatten();
+        Self {
+            operator_image,
+            operator_upstream,
+        }
+    }
+
+    /// The Operator image reference deployments run, given this manager's
+    /// public URL: through the manager when an upstream is set.
+    pub fn deployed_operator_image(&self, manager_url: &str) -> String {
+        match &self.operator_upstream {
+            Some(upstream) => format!(
+                "{}/{}:{}",
+                alien_core::image_rewrite::strip_url_scheme(manager_url),
+                super::operator_image::OPERATOR_REPOSITORY,
+                upstream.tag
             ),
+            None => self.operator_image.clone(),
         }
     }
 }
@@ -208,8 +240,16 @@ fn render(
     )
     .map_err(|e| render_failed(format!("failed to generate chart: {e}")))?;
 
-    let (repository, tag) = split_image(&settings.operator_image);
     let management_url = state.config.base_url();
+    let registry_host = alien_core::image_rewrite::strip_url_scheme(&management_url).to_string();
+    let proxied_repository = format!(
+        "{registry_host}/{}",
+        super::operator_image::OPERATOR_REPOSITORY
+    );
+    let (repository, tag) = match &settings.operator_upstream {
+        Some(upstream) => (proxied_repository.as_str(), upstream.tag.as_str()),
+        None => split_image(&settings.operator_image),
+    };
     let chart = apply_package_defaults(
         chart,
         &PackageDefaults {
@@ -217,6 +257,8 @@ fn render(
             management_url: Some(&management_url),
             operator_image: Some(OperatorImageDefault { repository, tag }),
             log_collector: Some(LogCollectorDefault::PodApi),
+            // Pulls through the manager authenticate with the install token.
+            registry_pull_secret: settings.operator_upstream.is_some(),
         },
     )
     .map_err(|e| render_failed(format!("failed to apply chart defaults: {e}")))?;

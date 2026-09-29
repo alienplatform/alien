@@ -216,6 +216,11 @@ pub struct AgentSyncResponse {
     /// does not accept tunnels; operators then never dial.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tunnel_url: Option<String>,
+    /// Operator image this manager's charts install. Operators that manage
+    /// their own workload update to it. Absent when the manager serves no
+    /// charts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_operator_image: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -1949,6 +1954,10 @@ async fn agent_sync(
         target_operations_bundle_set,
         target_dynamic_containers,
         tunnel_url: state.tunnels.as_ref().map(|_| state.config.base_url()),
+        target_operator_image: state
+            .charts
+            .as_ref()
+            .map(|charts| charts.deployed_operator_image(&state.config.base_url())),
     })
     .into_response()
 }
