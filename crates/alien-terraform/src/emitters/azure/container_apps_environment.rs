@@ -12,12 +12,19 @@
 //! controller co-creates one; the emitter does the same so the rendered
 //! module is self-contained — pointer at the workspace via
 //! `log_analytics_workspace_id` on the environment block.
+//!
+//! ## Name limits
+//!
+//! `local.resource_prefix` is up to 40 characters, so the prefixed names are
+//! bounded to Azure's limits: 63 for a Log Analytics workspace and 60 for a
+//! managed environment.
 
 use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
-        binding_string_expr, container_apps_environment_binding, downcast, required_label, tags,
+        binding_string_expr, bounded_name, container_apps_environment_binding, downcast,
+        required_label, tags,
     },
     expr,
 };
@@ -25,6 +32,9 @@ use alien_core::{
     import::EmitContext, AzureContainerAppsEnvironment, Network, NetworkSettings, Result,
 };
 use hcl::expr::Expression;
+
+const LOG_ANALYTICS_WORKSPACE_NAME_MAX_LEN: usize = 63;
+const MANAGED_ENVIRONMENT_NAME_MAX_LEN: usize = 60;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AzureContainerAppsEnvironmentEmitter;
@@ -40,17 +50,32 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
         }
         let label = required_label(ctx)?;
         let workspace_label = format!("{label}_logs");
+        let workspace_name_local = format!("{workspace_label}_name");
+        let environment_name_local = format!("{label}_name");
 
         let mut fragment = TfFragment::default();
+        fragment.locals.insert(
+            workspace_name_local.clone(),
+            expr::raw(format!(
+                "replace(lower(\"${{local.resource_prefix}}-{label}-logs\"), \"_\", \"-\")"
+            )),
+        );
+        fragment.locals.insert(
+            environment_name_local.clone(),
+            expr::raw(format!(
+                "replace(lower(\"${{local.resource_prefix}}-{label}\"), \"_\", \"-\")"
+            )),
+        );
         fragment.resource_blocks.push(resource_block(
             "azurerm_log_analytics_workspace",
             &workspace_label,
             [
                 attr(
                     "name",
-                    expr::raw(format!(
-                        "replace(lower(\"${{local.resource_prefix}}-{label}-logs\"), \"_\", \"-\")"
-                    )),
+                    bounded_name(
+                        &format!("local.{workspace_name_local}"),
+                        LOG_ANALYTICS_WORKSPACE_NAME_MAX_LEN,
+                    ),
                 ),
                 attr(
                     "resource_group_name",
@@ -69,9 +94,10 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
         let mut env_body = vec![
             attr(
                 "name",
-                expr::raw(format!(
-                    "replace(lower(\"${{local.resource_prefix}}-{label}\"), \"_\", \"-\")"
-                )),
+                bounded_name(
+                    &format!("local.{environment_name_local}"),
+                    MANAGED_ENVIRONMENT_NAME_MAX_LEN,
+                ),
             ),
             attr(
                 "resource_group_name",

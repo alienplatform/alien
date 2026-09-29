@@ -80,6 +80,69 @@ fn azure_function_basic_container_app() {
 }
 
 #[test]
+fn azure_container_apps_environment_names_stay_within_azure_limits() {
+    let stack = Stack::new("acme-fn".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(container_apps_environment(), ResourceLifecycle::Frozen)
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let mut files: super::helpers::test_utils::LinterFiles = module
+        .iter()
+        .map(|(path, content)| (path.to_string(), content.to_string()))
+        .collect();
+    // A 40-character prefix (the longest `resource_prefix` accepts) plus the
+    // readable suffix exceeds Azure's 63-character Log Analytics workspace and
+    // 60-character managed environment limits.
+    files.insert(
+        "tests/names.tftest.hcl".to_string(),
+        r#"
+mock_provider "azurerm" {}
+variables {
+  name = "test-environment"
+  token = "test-token"
+  azure_subscription_id = "00000000-0000-0000-0000-000000000000"
+  azure_resource_group_name = "example-rg"
+}
+run "long_prefix" {
+  command = plan
+  variables {
+    resource_prefix = "e2e-10-azure-terrafor-w-c2e6a7-98357704a"
+  }
+  assert {
+    condition = length(azurerm_log_analytics_workspace.default_container_apps_environment_logs.name) <= 63 && can(regex("^[a-z0-9][a-z0-9-]+[a-z0-9]$", azurerm_log_analytics_workspace.default_container_apps_environment_logs.name))
+    error_message = "Log Analytics workspace name must be 4-63 characters and end with a letter or digit: ${azurerm_log_analytics_workspace.default_container_apps_environment_logs.name}"
+  }
+  assert {
+    condition = startswith(azurerm_log_analytics_workspace.default_container_apps_environment_logs.name, "e2e-10-azure-terrafor-w-c2e6a7-98357704a-")
+    error_message = "Log Analytics workspace name must keep the deployment prefix: ${azurerm_log_analytics_workspace.default_container_apps_environment_logs.name}"
+  }
+  assert {
+    condition = length(azurerm_container_app_environment.default_container_apps_environment.name) <= 60 && can(regex("^[a-z0-9][a-z0-9-]+[a-z0-9]$", azurerm_container_app_environment.default_container_apps_environment.name))
+    error_message = "Managed environment name must be 2-60 lowercase characters and end with a letter or digit: ${azurerm_container_app_environment.default_container_apps_environment.name}"
+  }
+}
+run "short_prefix" {
+  command = plan
+  variables {
+    resource_prefix = "acme"
+  }
+  assert {
+    condition = azurerm_log_analytics_workspace.default_container_apps_environment_logs.name == "acme-default-container-apps-environment-logs"
+    error_message = "A short prefix must keep the readable workspace name"
+  }
+  assert {
+    condition = azurerm_container_app_environment.default_container_apps_environment.name == "acme-default-container-apps-environment"
+    error_message = "A short prefix must keep the readable environment name"
+  }
+}
+"#
+        .to_string(),
+    );
+    super::helpers::test_utils::terraform_test(&files)
+        .assert_ok("Azure Container Apps environment names");
+}
+
+#[test]
 fn advanced_settings_overlay_preserves_generated_compute_defaults() {
     let stack = Stack::new("acme-overlay".to_string())
         .add(resource_group(), ResourceLifecycle::Frozen)

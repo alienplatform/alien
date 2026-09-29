@@ -49,6 +49,12 @@ use sha2::{Digest, Sha256};
 const GCP_READINESS_PROBE_MAX_ATTEMPTS: u32 = 60;
 
 const CLOUD_RUN_SERVICE_NAME_MAX_LEN: usize = 49;
+/// Public workers wait for the platform to issue their certificate. One ACME
+/// attempt can take up to five minutes and a retry follows after a backoff of
+/// minutes, so the wait covers several attempts (360 polls of 5 seconds, 30
+/// minutes) instead of failing the deployment during the first retry.
+const CERTIFICATE_WAIT_MAX_POLLS: u32 = 360;
+const CERTIFICATE_WAIT_POLL_SECS: u64 = 5;
 const GCP_RESOURCE_NAME_MAX_LEN: usize = 63;
 const GCP_RESOURCE_NAME_HASH_LEN: usize = 8;
 const MAX_IMAGE_PULL_PERMISSION_RETRIES: u8 = 4;
@@ -809,8 +815,8 @@ impl GcpWorkerController {
                 }))
             }
             _ => Ok(HandlerAction::Stay {
-                max_times: Some(60),
-                suggested_delay: Some(Duration::from_secs(5)),
+                max_times: Some(CERTIFICATE_WAIT_MAX_POLLS),
+                suggested_delay: Some(Duration::from_secs(CERTIFICATE_WAIT_POLL_SECS)),
             }),
         }
     }

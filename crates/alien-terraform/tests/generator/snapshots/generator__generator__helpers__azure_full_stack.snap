@@ -306,6 +306,8 @@ locals {
       }
     }
   ]
+  default_container_apps_environment_logs_name = replace(lower("${local.resource_prefix}-default_container_apps_environment-logs"), "_", "-")
+  default_container_apps_environment_name      = replace(lower("${local.resource_prefix}-default_container_apps_environment"), "_", "-")
 }
 
 === default_resource_group.tf ===
@@ -440,7 +442,7 @@ resource "azurerm_servicebus_namespace" "default_service_bus_namespace" {
 
 === default_container_apps_environment.tf ===
 resource "azurerm_log_analytics_workspace" "default_container_apps_environment_logs" {
-  name                = replace(lower("${local.resource_prefix}-default_container_apps_environment-logs"), "_", "-")
+  name                = length(local.default_container_apps_environment_logs_name) <= 63 ? local.default_container_apps_environment_logs_name : format("%s-%s", trim(substr(local.default_container_apps_environment_logs_name, 0, 54), "-"), substr(sha1(local.default_container_apps_environment_logs_name), 0, 8))
   resource_group_name = var.azure_resource_group_name
   location            = var.azure_location
   sku                 = "PerGB2018"
@@ -457,7 +459,7 @@ resource "azurerm_log_analytics_workspace" "default_container_apps_environment_l
 }
 
 resource "azurerm_container_app_environment" "default_container_apps_environment" {
-  name                           = replace(lower("${local.resource_prefix}-default_container_apps_environment"), "_", "-")
+  name                           = length(local.default_container_apps_environment_name) <= 60 ? local.default_container_apps_environment_name : format("%s-%s", trim(substr(local.default_container_apps_environment_name, 0, 51), "-"), substr(sha1(local.default_container_apps_environment_name), 0, 8))
   resource_group_name            = var.azure_resource_group_name
   location                       = var.azure_location
   log_analytics_workspace_id     = azurerm_log_analytics_workspace.default_container_apps_environment_logs.id

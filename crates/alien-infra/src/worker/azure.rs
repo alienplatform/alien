@@ -44,6 +44,12 @@ use alien_macros::controller;
 /// Azure rejects a Container App name over 32 characters, and a deployment prefix may be 40 on
 /// its own, so `{prefix}-{worker}` overflows for names that are otherwise ordinary.
 const CONTAINER_APP_NAME_MAX_LEN: usize = 32;
+/// Public workers wait for the platform to issue their certificate. One ACME
+/// attempt can take up to five minutes and a retry follows after a backoff of
+/// minutes, so the wait covers several attempts (360 polls of 5 seconds, 30
+/// minutes) instead of failing the deployment during the first retry.
+const CERTIFICATE_WAIT_MAX_POLLS: u32 = 360;
+const CERTIFICATE_WAIT_POLL_SECS: u64 = 5;
 
 /// Generates a deterministic Azure Container Apps name for a worker, within Azure's 32-character
 /// limit.
@@ -1145,8 +1151,8 @@ impl AzureWorkerController {
                 }))
             }
             _ => Ok(HandlerAction::Stay {
-                max_times: Some(60),
-                suggested_delay: Some(Duration::from_secs(5)),
+                max_times: Some(CERTIFICATE_WAIT_MAX_POLLS),
+                suggested_delay: Some(Duration::from_secs(CERTIFICATE_WAIT_POLL_SECS)),
             }),
         }
     }
