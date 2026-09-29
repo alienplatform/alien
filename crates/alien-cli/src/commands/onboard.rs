@@ -1317,8 +1317,14 @@ impl HelmInstall {
     }
 
     fn command(&self) -> String {
+        let registry = self
+            .chart
+            .trim_start_matches("oci://")
+            .split('/')
+            .next()
+            .unwrap_or_default();
         let mut command = format!(
-            "helm install {release} {chart} \\\n  --namespace {release} --create-namespace \\\n  --username {customer} --password {token} \\\n  --set management.token={token} \\\n  --set management.name={customer}",
+            "helm registry login {registry} --username {customer} --password {token}\n\nhelm install {release} {chart} \\\n  --namespace {release} --create-namespace \\\n  --set management.token={token} \\\n  --set management.name={customer}",
             release = self.release,
             chart = self.chart,
             customer = self.customer,

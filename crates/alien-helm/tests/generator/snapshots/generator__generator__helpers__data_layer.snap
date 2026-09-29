@@ -874,8 +874,11 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- default "encryption-key" .Values.runtime.encryption.existingSecret.key -}}
 {{- end -}}
 
+{{- /* Cluster-scoped: the namespace hash keeps installs of the same chart in
+different namespaces of one cluster from colliding. */ -}}
 {{- define "deployment.heartbeatNodeClusterRoleName" -}}
-{{- printf "%s-heartbeat-nodes" (include "deployment.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- $suffix := printf "heartbeat-nodes-%s" (sha256sum .Release.Namespace | trunc 8) -}}
+{{- printf "%s-%s" (include "deployment.fullname" . | trunc (int (sub 62 (len $suffix))) | trimSuffix "-") $suffix -}}
 {{- end -}}
 
 === templates/_runtime-identity.tpl ===
