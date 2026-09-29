@@ -28,14 +28,14 @@ use alien_core::import::{
 };
 use alien_core::permissions::PermissionProfile;
 use alien_core::{
-    AwsEnvironmentInfo, AwsManagementConfig, AwsRemoteStackManagementImportData,
-    AwsServiceAccountImportData, AwsStorageImportData, AzureEnvironmentInfo, AzureManagementConfig,
-    AzureRemoteStackManagementImportData, ComputePoolSelection, ComputeSettings, DeploymentState,
-    DeploymentStatus, EnvironmentInfo, GcpEnvironmentInfo, GcpManagementConfig,
-    GcpRemoteStackManagementImportData, KubernetesCluster, KubernetesClusterOwnership,
-    KubernetesClusterProvider, ManagementConfig, Platform, ReleaseInfo, RemoteStackManagement,
-    ResourceLifecycle, ResourceStatus, RuntimeMetadata, ServiceAccount, Stack, StackSettings,
-    StackState, Storage, Worker, WorkerCode,
+    AwsEnvironmentInfo, AwsManagementConfig, AwsNetworkImportData,
+    AwsRemoteStackManagementImportData, AwsServiceAccountImportData, AwsStorageImportData,
+    AzureEnvironmentInfo, AzureManagementConfig, AzureRemoteStackManagementImportData,
+    ComputePoolSelection, ComputeSettings, DeploymentState, DeploymentStatus, EnvironmentInfo,
+    GcpEnvironmentInfo, GcpManagementConfig, GcpRemoteStackManagementImportData, KubernetesCluster,
+    KubernetesClusterOwnership, KubernetesClusterProvider, ManagementConfig, Network, Platform,
+    ReleaseInfo, RemoteStackManagement, ResourceLifecycle, ResourceStatus, RuntimeMetadata,
+    ServiceAccount, Stack, StackSettings, StackState, Storage, Worker, WorkerCode,
 };
 use alien_manager::auth::Authz;
 use alien_manager::config::ManagerConfig;
@@ -386,12 +386,39 @@ fn eks_cluster_import_request(deployment_name: &str, region: &str) -> StackImpor
         })),
         input_values: Default::default(),
         resources: vec![
+            // Managed EKS setup owns the shared cloud network alongside the cluster.
+            ImportedResource {
+                id: "default-network".to_string(),
+                resource_type: Network::RESOURCE_TYPE.into(),
+                import_data: serde_json::to_value(AwsNetworkImportData {
+                    vpc_id: Some("vpc-0123456789abcdef0".to_string()),
+                    cidr_block: Some("10.0.0.0/16".to_string()),
+                    internet_gateway_id: None,
+                    nat_gateway_id: None,
+                    eip_allocation_id: None,
+                    public_subnet_ids: vec![
+                        "subnet-public-a".to_string(),
+                        "subnet-public-b".to_string(),
+                    ],
+                    private_subnet_ids: vec![
+                        "subnet-private-a".to_string(),
+                        "subnet-private-b".to_string(),
+                    ],
+                    public_route_table_id: None,
+                    private_route_table_id: None,
+                    security_group_id: Some("sg-0123456789abcdef0".to_string()),
+                    availability_zones: vec!["us-east-1a".to_string(), "us-east-1b".to_string()],
+                    subnets_by_failure_domain: Default::default(),
+                    is_byo_vpc: false,
+                })
+                .unwrap(),
+            },
             ImportedResource {
                 id: "kubernetes".to_string(),
                 resource_type: KubernetesCluster::RESOURCE_TYPE.into(),
                 import_data: serde_json::to_value(KubernetesClusterImportData {
                     provider: KubernetesClusterProvider::Eks,
-                    ownership: KubernetesClusterOwnership::Existing,
+                    ownership: KubernetesClusterOwnership::Managed,
                     namespace: "alien-e2e".to_string(),
                     cluster_name: Some("alien-e2e".to_string()),
                     cluster_id: None,
@@ -844,6 +871,7 @@ async fn kubernetes_import_resolves_release_stack_by_runtime_platform() {
     let stack_state = persisted.stack_state.expect("stack_state must persist");
 
     assert_eq!(stack_state.platform, Platform::Kubernetes);
+    assert!(stack_state.resources.contains_key("default-network"));
     assert!(
         stack_state.resources.contains_key("kubernetes"),
         "Kubernetes substrate should be present in imported stack state"
