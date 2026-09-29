@@ -204,7 +204,8 @@ pub async fn handle_update_pending(
     if current.runtime_metadata.as_ref().is_some_and(|metadata| {
         metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup
     }) {
-        // With nothing installed to compare against, every scaffolded resource counts as new.
+        // With nothing installed to compare against, every scaffolded resource and Frozen GCP
+        // sandbox counts as new.
         let nothing_installed = Stack::new(mutated_stack.id.clone()).build();
         let nothing_recorded = BTreeMap::new();
         refuse_changes_requiring_setup(
