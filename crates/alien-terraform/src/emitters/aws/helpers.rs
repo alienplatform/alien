@@ -135,23 +135,14 @@ pub fn default_network<'a>(ctx: &EmitContext<'a>) -> Option<(&'a str, &'a Networ
 /// permissions profile name (the `<profile>-sa` convention used across
 /// AWS resources).
 pub fn service_account_role_arn(ctx: &EmitContext<'_>, profile_name: &str) -> Option<Expression> {
-    let label = service_account_role_label(ctx, profile_name)?;
-    Some(expr::traversal(["aws_iam_role", label, "arn"]))
-}
-
-/// Look up the IAM role's Terraform label for a service account by
-/// permissions profile name.
-pub fn service_account_role_label<'a>(
-    ctx: &'a EmitContext<'_>,
-    profile_name: &str,
-) -> Option<&'a str> {
     let service_account_id = format!("{profile_name}-sa");
     let (_id, entry) = ctx
         .stack
         .resources()
         .find(|(id, _entry)| id.as_str() == service_account_id)?;
     entry.config.downcast_ref::<ServiceAccount>()?;
-    ctx.name_for(&service_account_id)
+    let label = ctx.name_for(&service_account_id)?;
+    Some(expr::traversal(["aws_iam_role", label, "arn"]))
 }
 
 /// Build an `assume_role_policy` JSON expression for service principals

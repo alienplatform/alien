@@ -115,8 +115,8 @@ fn aws_full_stack_renders_audit_ready_module() {
     snapshot_module("aws_full_stack", &module);
     assert_terraform_valid(&module, "aws_full_stack");
 
-    // Lambda deletes a worker's Hyperplane ENI with the execution role, so the
-    // role must outlive the subnets and security group the ENI sits in.
+    // Lambda deletes a worker's Hyperplane ENI with the function's role, so
+    // every role must outlive the subnets and security group the ENI sits in.
     let network: hcl::Body = hcl::from_str(
         module
             .get("default_network.tf")
@@ -144,11 +144,13 @@ fn aws_full_stack_renders_audit_ready_module() {
             .attributes()
             .find(|attribute| attribute.key() == "depends_on")
             .unwrap_or_else(|| panic!("{resource_type}.{label} must declare depends_on"));
-        assert_eq!(
-            hcl::format::to_string(depends_on.expr()).expect("depends_on formats"),
-            "[\n  aws_iam_role.execution_sa\n]",
-            "{resource_type}.{label} must be destroyed before the execution role"
-        );
+        let rendered = hcl::format::to_string(depends_on.expr()).expect("depends_on formats");
+        for role in ["aws_iam_role.execution_sa", "aws_iam_role.management"] {
+            assert!(
+                rendered.contains(role),
+                "{resource_type}.{label} must be destroyed before {role}: {rendered}"
+            );
+        }
     }
     assert!(
         !network.blocks().any(|block| block

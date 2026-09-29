@@ -311,6 +311,13 @@ Resources:
         Value: network
     DependsOn:
     - ExecutionSaRole
+    - ManagementRole
+    - ManagementRoleManagementPolicy1
+    - ManagementRoleManagementPolicy2
+    - ManagementRoleManagedPermissions1
+    - MailerRuleSetActivatorRole
+    - RegistryPullRole
+    - RegistryPushRole
     Condition: NetworkModeCreate
   DefaultNetworkPublicSubnet2:
     Type: AWS::EC2::Subnet
@@ -374,6 +381,13 @@ Resources:
         Value: network
     DependsOn:
     - ExecutionSaRole
+    - ManagementRole
+    - ManagementRoleManagementPolicy1
+    - ManagementRoleManagementPolicy2
+    - ManagementRoleManagedPermissions1
+    - MailerRuleSetActivatorRole
+    - RegistryPullRole
+    - RegistryPushRole
     Condition: NetworkCreateUseAz2
   DefaultNetworkPublicSubnet3:
     Type: AWS::EC2::Subnet
@@ -437,6 +451,13 @@ Resources:
         Value: network
     DependsOn:
     - ExecutionSaRole
+    - ManagementRole
+    - ManagementRoleManagementPolicy1
+    - ManagementRoleManagementPolicy2
+    - ManagementRoleManagedPermissions1
+    - MailerRuleSetActivatorRole
+    - RegistryPullRole
+    - RegistryPushRole
     Condition: NetworkCreateUseAz3
   DefaultNetworkPublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -586,6 +607,13 @@ Resources:
         Value: network
     DependsOn:
     - ExecutionSaRole
+    - ManagementRole
+    - ManagementRoleManagementPolicy1
+    - ManagementRoleManagementPolicy2
+    - ManagementRoleManagedPermissions1
+    - MailerRuleSetActivatorRole
+    - RegistryPullRole
+    - RegistryPushRole
     Condition: NetworkModeCreate
   ExecutionSaRole:
     Type: AWS::IAM::Role
