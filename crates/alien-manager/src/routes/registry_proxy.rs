@@ -466,7 +466,15 @@ async fn proxy_push(
             return e;
         }
         let source_pullable = match query.get(MOUNT_SOURCE_PARAM) {
-            Some(source) => Some(validate_pull_access(&state, &subject, source).await.is_ok()),
+            Some(source) => Some(match validate_pull_access(&state, &subject, source).await {
+                Ok(()) => true,
+                Err(refused) => {
+                    if refused.status().is_server_error() {
+                        warn!(%source, status = %refused.status(), "Mount source check failed; forwarding a plain upload");
+                    }
+                    false
+                }
+            }),
             None => None,
         };
         (repo_name, query_for_mount_access(query, source_pullable))
