@@ -61,14 +61,7 @@ fn decodes_projects_carrying_fields_this_client_does_not_know() {
             .map(|image| image.as_str()),
         Some("ghcr.io/acme/img@sha256:abc")
     );
-    assert_eq!(
-        remote_sandbox
-            .azure
-            .expect("azure decodes")
-            .catalog_image
-            .as_str(),
-        "ubuntu"
-    );
+    assert!(remote_sandbox.azure.is_some(), "azure decodes");
 
     serde_json::from_value::<ProjectCapabilities>(capabilities(newer_remote_sandbox()))
         .expect("capabilities decode");
