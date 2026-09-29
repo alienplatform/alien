@@ -478,4 +478,146 @@ mod tests {
             "Azure render should include preflight-injected storage account"
         );
     }
+
+    /// A remote sandbox must allow egress, so the deny fixture is the one without remote access.
+    fn frozen_gcp_sandbox(image: &str, remote: bool) -> Stack {
+        use alien_core::{Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+        let sandbox = Sandbox::new("agents".to_string())
+            .code(SandboxCode::Image {
+                image: image.to_string(),
+            })
+            .egress(if remote {
+                SandboxEgress::Allow
+            } else {
+                SandboxEgress::Deny
+            })
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(3600),
+                idle_pause_seconds: None,
+            })
+            .build();
+        let stack = Stack::new("agents-stack".to_string());
+        if remote {
+            stack.add_with_remote_access(sandbox, ResourceLifecycle::Frozen)
+        } else {
+            stack.add(sandbox, ResourceLifecycle::Frozen)
+        }
+        .build()
+    }
+
+    async fn render_gcp(image: &str, remote: bool) -> (Stack, Vec<(String, String)>) {
+        let stack = prepare_stack_for_render(
+            frozen_gcp_sandbox(image, remote),
+            Platform::Gcp,
+            None,
+            &StackSettings::default(),
+        )
+        .await
+        .expect("render preflights pass");
+        let registry = terraform_registry();
+        let module = alien_terraform::generate_terraform_module(
+            &stack,
+            alien_terraform::TerraformTarget::Gcp,
+            alien_terraform::TerraformOptions {
+                display_name: None,
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                registration: None,
+                helm_install: None,
+                supported_aws_regions: Vec::new(),
+            },
+        )
+        .expect("module renders");
+        let files = module
+            .iter()
+            .map(|(path, contents)| (path.to_string(), contents.to_string()))
+            .collect();
+        (stack, files)
+    }
+
+    /// The Frozen check passes an image-only change on GCP because setup renders nothing from the
+    /// image there. If that stops holding, this fails and the exemption must be narrowed.
+    #[tokio::test]
+    async fn gcp_setup_renders_nothing_from_a_frozen_sandbox_image() {
+        // Same-prefix digest, another registry host, and a public short name.
+        let images = [
+            "us-central1-docker.pkg.dev/proj/agents/sandbox@sha256:aaaa",
+            "ghcr.io/org/sandbox:v2",
+            "python:3.12",
+        ];
+        for remote in [true, false] {
+            let (baseline, baseline_module) = render_gcp(images[0], remote).await;
+            let rendered = baseline_module
+                .iter()
+                .map(|(_, body)| body.as_str())
+                .collect::<String>();
+            assert!(
+                rendered.contains("google_vertex_ai_reasoning_engine_iam_member"),
+                "the fixture must exercise the engine grants:\n{rendered}"
+            );
+            assert!(!rendered.contains("docker.pkg.dev"), "{rendered}");
+
+            for image in &images[1..] {
+                let (target, module) = render_gcp(image, remote).await;
+                assert_eq!(module.len(), baseline_module.len());
+                for ((path, body), (_, baseline_body)) in module.iter().zip(&baseline_module) {
+                    let first_difference = body
+                        .lines()
+                        .zip(baseline_body.lines())
+                        .find(|(line, baseline_line)| line != baseline_line);
+                    assert!(
+                        body == baseline_body,
+                        "GCP setup rendered '{path}' from the image '{image}' (remote: {remote}): \
+                         {first_difference:?}"
+                    );
+                }
+
+                let config = DeploymentConfig {
+                    input_values: Default::default(),
+                    deployment_name: Some("agents-stack".to_string()),
+                    stack_settings: StackSettings::default(),
+                    management_config: render_management_config(Platform::Gcp),
+                    environment_variables: EnvironmentVariablesSnapshot {
+                        variables: Vec::new(),
+                        hash: "empty".to_string(),
+                        created_at: "1970-01-01T00:00:00Z".to_string(),
+                    },
+                    allow_frozen_changes: false,
+                    compute_backend: None,
+                    external_bindings: ExternalBindings::default(),
+                    base_platform: None,
+                    label_domain: None,
+                    observe_label_selector: None,
+                    observe_all_namespaces: false,
+                    public_endpoints: None,
+                    domain_metadata: None,
+                    monitoring: None,
+                    manager_url: None,
+                    deployment_token: None,
+                    native_image_host: None,
+                };
+                let runner = alien_preflights::runner::PreflightRunner::new();
+                let on_gcp = runner
+                    .run_compatibility_checks(&baseline, &target, &config, Platform::Gcp)
+                    .await
+                    .expect("checks run");
+                assert!(on_gcp.success, "{image}: {:?}", on_gcp.results);
+                let on_aws = runner
+                    .run_compatibility_checks(&baseline, &target, &config, Platform::Aws)
+                    .await
+                    .expect("checks run");
+                let errors = on_aws
+                    .results
+                    .iter()
+                    .flat_map(|result| result.errors.iter())
+                    .collect::<Vec<_>>();
+                assert!(
+                    errors
+                        .iter()
+                        .any(|error| error.contains("Frozen resource 'agents'")),
+                    "the same change is refused where setup renders from the image: {errors:?}"
+                );
+            }
+        }
+    }
 }

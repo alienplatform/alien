@@ -831,11 +831,11 @@ mod setup_update_authorization_tests {
         }
     }
 
-    /// The Frozen check is built from the installed stack's platform, so only an Azure install
-    /// may roll a Frozen sandbox's image without setup.
+    /// The Frozen check is built from the installed stack's platform, so only an Azure or GCP
+    /// install may roll a Frozen sandbox's image without setup.
     #[cfg(feature = "runtime-checks")]
     #[tokio::test]
-    async fn only_an_azure_frozen_sandbox_rolls_its_image_without_setup() {
+    async fn azure_and_gcp_frozen_sandboxes_roll_their_image_without_setup() {
         let old = sandbox_stack(alien_core::ResourceLifecycle::Frozen, "ubuntu", None);
         let target = sandbox_stack(alien_core::ResourceLifecycle::Frozen, "debian", None);
         let runner = PreflightRunner::with_registry(crate::PreflightRegistry::new());
@@ -844,11 +844,13 @@ mod setup_update_authorization_tests {
             state_directory: "/unused".to_string(),
         };
 
-        runner
-            .run_compatibility_checks(&old, &target, &config, Platform::Azure)
-            .await
-            .map(|summary| assert!(summary.success, "{:?}", summary.results))
-            .expect("checks run");
+        for platform in [Platform::Azure, Platform::Gcp] {
+            runner
+                .run_compatibility_checks(&old, &target, &config, platform)
+                .await
+                .map(|summary| assert!(summary.success, "{platform}: {:?}", summary.results))
+                .expect("checks run");
+        }
         let on_aws = runner
             .run_compatibility_checks(&old, &target, &config, Platform::Aws)
             .await
