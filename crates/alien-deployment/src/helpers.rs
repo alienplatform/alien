@@ -12,7 +12,7 @@ use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use tracing::{debug, info};
 
 const OTEL_RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
@@ -665,6 +665,32 @@ pub async fn sync_secrets_to_vault(
     Ok(true)
 }
 
+/// Adds the names a sync is about to write to the inventory, and reports whether any were missing.
+/// A caller that gets `true` persists the inventory before syncing, so a deployment with no recorded
+/// names has written nothing of its own to the vault.
+pub(crate) fn record_vault_secret_names(
+    stack: &Stack,
+    platform: Platform,
+    config: &DeploymentConfig,
+    runtime_metadata: &mut alien_core::RuntimeMetadata,
+) -> bool {
+    if platform == Platform::Machines {
+        return false;
+    }
+    let desired = desired_vault_secrets(stack, platform, config);
+    let recorded = &runtime_metadata.last_synced_secret_names;
+    if desired.keys().all(|name| recorded.contains(name)) {
+        return false;
+    }
+    let names = recorded
+        .iter()
+        .chain(desired.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    runtime_metadata.last_synced_secret_names = names.into_iter().collect();
+    true
+}
+
 /// Delete only vault keys that this deployment owns before its runtime resources are destroyed.
 ///
 /// The vault resource is setup-owned and may outlive runtime cleanup. Its contents are not:
@@ -733,7 +759,7 @@ pub async fn delete_deployment_vault_secrets(
     Ok(true)
 }
 
-fn has_secrets_vault(stack_state: &StackState) -> bool {
+pub(crate) fn has_secrets_vault(stack_state: &StackState) -> bool {
     stack_state
         .resources
         .get("secrets")

@@ -88,6 +88,27 @@ pub async fn handle_provisioning(
         )?;
     }
 
+    // Same record-before-write step as initial setup: a vault set up with no management identity
+    // is torn down by setup teardown, which deletes only the recorded names.
+    if crate::helpers::has_secrets_vault(&stack_state)
+        && crate::helpers::record_vault_secret_names(
+            &target_stack,
+            client_config.platform(),
+            &config,
+            &mut runtime_metadata,
+        )
+    {
+        next.stack_state = Some(stack_state);
+        next.runtime_metadata = Some(runtime_metadata);
+        return Ok(DeploymentStepResult {
+            state: next,
+            suggested_delay_ms: None,
+            update_heartbeat: false,
+            heartbeats: vec![],
+            observed_inventory_batches: vec![],
+        });
+    }
+
     // Sync secrets to vault before deploying workload resources.
     // The vault was deployed during InitialSetup and is now Running.
     // Hash check inside sync_secrets_to_vault prevents redundant cloud calls.
@@ -293,4 +314,41 @@ pub async fn handle_provisioning_failed(
         heartbeats: vec![],
         observed_inventory_batches: vec![],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::initial_setup::tests::{setup_with_running_vault, vault_names};
+    use alien_infra::MockPlatformServiceProvider;
+    use std::sync::Arc;
+
+    async fn provisioning_step(
+        mut state: alien_core::DeploymentState,
+        config: &DeploymentConfig,
+    ) -> Result<alien_core::DeploymentState> {
+        state.status = DeploymentStatus::Provisioning;
+        Ok(handle_provisioning(
+            state,
+            config.clone(),
+            alien_core::ClientConfig::Test,
+            Arc::new(MockPlatformServiceProvider::new()),
+        )
+        .await?
+        .state)
+    }
+
+    /// A vault that became Running in setup's last step reaches provisioning with nothing synced.
+    #[tokio::test]
+    async fn provisioning_records_the_secret_names_before_writing_them() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (state, config, vault) = setup_with_running_vault(dir.path());
+
+        let recorded = provisioning_step(state, &config).await.unwrap();
+
+        let metadata = recorded.runtime_metadata.unwrap();
+        assert_eq!(metadata.last_synced_secret_names, vec!["API_TOKEN"]);
+        assert!(metadata.last_synced_env_vars_hash.is_none());
+        assert!(vault_names(&vault).await.is_empty());
+    }
 }
