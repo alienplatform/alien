@@ -67,6 +67,14 @@ case "$command" in
       *"uid=1000(sandbox)"*)
         inject identity
         ;;
+      *"tool probe:"*)
+        printf '%s\n' "$all" >> "$state/tools-probes"
+        inject tools
+        if [ "$mode" = tools-missing ] && [ "$platform" = linux/amd64 ]; then
+          echo "tool probe: 'rg --version' failed"
+          exit 1
+        fi
+        ;;
       *"/sandbox/probe"*)
         inject unlink
         ;;

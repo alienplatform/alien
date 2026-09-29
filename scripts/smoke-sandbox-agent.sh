@@ -1,16 +1,49 @@
 #!/usr/bin/env bash
 #
-# Qualify a published GCP sandbox image (alien-sandbox-agent or alien-sandbox-gcp)
-# on both platforms it ships for: the architecture it actually contains, the
-# identity and filesystem it grants the supervised command, its rejection of an
-# invalid config, and a real run that reaches its listener and stays up.
+# Qualify a published GCP sandbox image on each platform it ships for: the
+# architecture it actually contains, the identity and filesystem it grants the
+# supervised command, its rejection of an invalid config, and a real run that
+# reaches its listener and stays up. With --tools, also that every command in the
+# list file (one per line, `#` comments skipped) runs as the image's user.
 #
-# Usage: scripts/smoke-sandbox-agent.sh <image-reference>
+# Usage: scripts/smoke-sandbox-agent.sh [--platforms <p1,p2>] [--tools <list-file>] <image-reference>
 set -euo pipefail
 
-image="${1:?usage: scripts/smoke-sandbox-agent.sh <image-reference>}"
+usage="usage: scripts/smoke-sandbox-agent.sh [--platforms <p1,p2>] [--tools <list-file>] <image-reference>"
+platforms="linux/amd64,linux/arm64"
+tools_file=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --platforms) platforms="${2:?$usage}"; shift 2 ;;
+    --tools) tools_file="${2:?$usage}"; shift 2 ;;
+    -*) echo "$usage" >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
+[ $# -eq 1 ] || { echo "$usage" >&2; exit 2; }
+image="$1"
 
-for platform in linux/amd64 linux/arm64; do
+# One shell script for the whole list, so a tool is probed where every other probe
+# runs: in the image as shipped, under its own user and HOME.
+tools_probe=""
+if [ -n "$tools_file" ]; then
+  if [ ! -r "$tools_file" ]; then
+    echo "::error::the tools list ${tools_file} is not readable"
+    exit 1
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    tools_probe+="${line} >/dev/null 2>&1 || { echo \"tool probe: '${line}' failed\"; exit 1; }
+"
+  done < "$tools_file"
+  if [ -z "$tools_probe" ]; then
+    echo "::error::the tools list ${tools_file} names no tools"
+    exit 1
+  fi
+fi
+
+IFS=, read -r -a platform_list <<< "$platforms"
+for platform in "${platform_list[@]}"; do
   # Both images are large (wolfi-base plus git's 24 packages, or all of buildpack-deps) and
   # the amd64 half arrives under emulation. Inside a probe's own budget, the pull expires.
   status=0
@@ -65,6 +98,20 @@ for platform in linux/amd64 linux/arm64; do
       ' 2>&1); then
     echo "::error::${platform}: ${identity:-the identity probe did not complete}"
     exit 1
+  fi
+  if [ -n "$tools_probe" ]; then
+    status=0
+    tools=$(timeout -k 5 120 docker run --rm --platform "$platform" --entrypoint /bin/sh "$image" \
+      -c "$tools_probe" 2>&1) || status=$?
+    case "$status" in
+      0) ;;
+      124|137)
+        echo "::error::${platform}: the tools probe did not finish within 120s"
+        exit 1 ;;
+      *)
+        echo "::error::${platform}: ${tools:-the tools probe did not complete}"
+        exit 1 ;;
+    esac
   fi
   # The unlink rather than the file mode: only the directory permission stops the
   # supervised command removing its own supervisor. Removing a file it may remove first,

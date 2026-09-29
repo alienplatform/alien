@@ -35,10 +35,13 @@ report() {
   printf '%s\n' "$out" | sed 's/^/     | /'
 }
 
+# Flags every check passes to the script ahead of the image reference.
+flags=()
+
 check() {
   local mode="$1" expect="$2" annotation="$3" body="${4:-}"
   state="$(mktemp -d)"
-  out="$(SMOKE_STUB_DIR="$state" SMOKE_STUB_MODE="$mode" "$script" alien-sandbox-agent:stub 2>&1)"
+  out="$(SMOKE_STUB_DIR="$state" SMOKE_STUB_MODE="$mode" "$script" ${flags[@]+"${flags[@]}"} alien-sandbox-agent:stub 2>&1)"
   local status=$?
 
   if [ "$expect" = pass ]; then
@@ -124,14 +127,73 @@ else
   echo "ok   happy: digest reference removed between platform pulls"
 fi
 
-out="$("$script" 2>&1)"
-status=$?
-if [ "$status" -eq 0 ] || ! printf '%s\n' "$out" | grep -qF "usage: scripts/smoke-sandbox-agent.sh <image-reference>"; then
-  report no-argument "expected a usage error, exited ${status}"
+# The committed list, so a tool added to the contract is one this harness sends.
+tools_list="$here/../docker/sandbox-default-tools.txt"
+flags=(--tools "$tools_list")
+check tools-124 fail "linux/amd64: the tools probe did not finish within 120s"
+check tools-137 fail "linux/amd64: the tools probe did not finish within 120s"
+check tools-error fail "linux/amd64: stub: the tools probe failed"
+check tools-silent fail "linux/amd64: the tools probe did not complete"
+check tools-missing fail "linux/amd64: tool probe: 'rg --version' failed"
+
+check happy pass ""
+for platform in linux/amd64 linux/arm64; do
+  probes=$(grep -c "^${platform}$" "$state/platforms")
+  if [ "$probes" -ne 7 ]; then
+    failed=$((failed + 1))
+    echo "FAIL tools happy: ${platform} probed ${probes} times, expected 7"
+  else
+    passed=$((passed + 1))
+    echo "ok   tools happy: ${platform} probed 7 times"
+  fi
+done
+missing=""
+while IFS= read -r line; do
+  case "$line" in ''|'#'*) continue ;; esac
+  grep -qF "${line} >/dev/null" "$state/tools-probes" || missing+=" '${line}'"
+done < "$tools_list"
+if [ -n "$missing" ]; then
+  failed=$((failed + 1))
+  echo "FAIL tools happy: the probe never ran${missing}"
 else
   passed=$((passed + 1))
-  echo "ok   no-argument"
+  echo "ok   tools happy: the probe ran every command in the list"
 fi
+
+empty_list="$(mktemp)"
+printf '# only a comment\n\n' > "$empty_list"
+flags=(--tools "$empty_list")
+check tools-list-empty fail "the tools list ${empty_list} names no tools"
+flags=(--tools "$empty_list.missing")
+check tools-list-unreadable fail "the tools list ${empty_list}.missing is not readable"
+
+flags=(--platforms linux/arm64)
+check happy pass ""
+amd64=$(grep -c "^linux/amd64$" "$state/platforms")
+arm64=$(grep -c "^linux/arm64$" "$state/platforms")
+removals=$(wc -l < "$state/image-removals")
+if [ "$amd64" -ne 0 ] || [ "$arm64" -ne 6 ] || [ "$removals" -ne 1 ]; then
+  failed=$((failed + 1))
+  echo "FAIL platforms: amd64 probed ${amd64}, arm64 ${arm64}, removals ${removals}; expected 0, 6, 1"
+else
+  passed=$((passed + 1))
+  echo "ok   platforms: only linux/arm64 probed"
+fi
+flags=()
+
+usage="usage: scripts/smoke-sandbox-agent.sh [--platforms <p1,p2>] [--tools <list-file>] <image-reference>"
+for arguments in "" "--bogus alien-sandbox-agent:stub" "--tools" "one two"; do
+  # Word splitting is the point: each string is an argument list.
+  # shellcheck disable=SC2086
+  out="$("$script" $arguments 2>&1)"
+  status=$?
+  if [ "$status" -eq 0 ] || ! printf '%s\n' "$out" | grep -qF "$usage"; then
+    report "usage '${arguments}'" "expected a usage error, exited ${status}"
+  else
+    passed=$((passed + 1))
+    echo "ok   usage '${arguments}'"
+  fi
+done
 
 echo
 echo "${passed} passed, ${failed} failed"
