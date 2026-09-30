@@ -203,6 +203,16 @@ where
         }
     }
 
+    let failed_checks = find_failed_checks(error);
+    if !failed_checks.is_empty() {
+        rendered.push('\n');
+        rendered.push_str("Failed checks:");
+        for check in failed_checks {
+            rendered.push('\n');
+            rendered.push_str(&format!("  - {check}"));
+        }
+    }
+
     if let Some(build_output) = find_build_output(error) {
         rendered.push('\n');
         rendered.push_str("Build output:");
@@ -262,6 +272,48 @@ fn build_output_from_context(context: Option<&Value>) -> Option<String> {
         .map(ToString::to_string)
 }
 
+/// Every error message of the preflight results carried by the first error in the chain that
+/// has any: a validation failure's own message only counts them.
+fn find_failed_checks<T>(error: &AlienError<T>) -> Vec<String>
+where
+    T: AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+{
+    let own = failed_checks_from_context(error.context.as_ref());
+    if !own.is_empty() {
+        return own;
+    }
+    error
+        .source
+        .as_deref()
+        .map(find_failed_checks_generic)
+        .unwrap_or_default()
+}
+
+fn find_failed_checks_generic(error: &AlienError<GenericError>) -> Vec<String> {
+    let own = failed_checks_from_context(error.context.as_ref());
+    if !own.is_empty() {
+        return own;
+    }
+    error
+        .source
+        .as_deref()
+        .map(find_failed_checks_generic)
+        .unwrap_or_default()
+}
+
+fn failed_checks_from_context(context: Option<&Value>) -> Vec<String> {
+    context
+        .and_then(|context| context.get("results"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|result| result.get("errors").and_then(Value::as_array))
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(ToString::to_string)
+        .collect()
+}
+
 fn request_id_from_context(context: Option<&Value>) -> Option<String> {
     let context = context?;
     context
@@ -287,6 +339,48 @@ mod event_tests {
         let rendered = render_human_error(&error);
 
         assert_eq!(rendered, "Validation failed for platform: unknown platform");
+    }
+
+    #[test]
+    fn render_human_error_lists_every_failed_preflight_check() {
+        let check = |description: &str, errors: &[&str]| alien_preflights::CheckResult {
+            code: None,
+            status: None,
+            check_description: Some(description.to_string()),
+            success: errors.is_empty(),
+            errors: errors.iter().map(ToString::to_string).collect(),
+            warnings: Vec::new(),
+        };
+        let error = Err::<(), _>(AlienError::new(
+            alien_preflights::error::ErrorData::ValidationFailed {
+                error_count: 2,
+                warning_count: 0,
+                results: vec![
+                    check(
+                        "Inputs are provided",
+                        &["Input 'apiKey' is not deployer-provided"],
+                    ),
+                    check("Sandboxes build", &[]),
+                    check(
+                        "Sandbox lifecycle",
+                        &["A source-built sandbox must be Live"],
+                    ),
+                ],
+            },
+        ))
+        .context(crate::error::ErrorData::ConfigurationError {
+            message: "Stack validation failed".to_string(),
+        })
+        .unwrap_err();
+
+        let rendered = render_human_error(&error);
+
+        assert!(
+            rendered.contains(
+                "Failed checks:\n  - Input 'apiKey' is not deployer-provided\n  - A source-built sandbox must be Live"
+            ),
+            "{rendered}"
+        );
     }
 
     #[test]
