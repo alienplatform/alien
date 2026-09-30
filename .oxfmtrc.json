@@ -29,8 +29,7 @@
     "**/generated",
     "**/shim.mjs",
     "**/target",
-    "**/examples/**/github-agent/packages/dashboard",
-    "tools/oxlint/anti-slop/**"
+    "**/examples/**/github-agent/packages/dashboard"
   ],
   "overrides": [
     {

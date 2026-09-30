@@ -14,8 +14,8 @@ local fast_steps = new Mapping<String, Step> {
         glob = List("**/*.cjs", "**/*.cts", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.mts", "**/*.ts", "**/*.tsx")
         batch = true
         depends = "oxfmt"
-        check = "pnpm exec oxlint --no-error-on-unmatched-pattern {{files}}"
-        fix = "pnpm exec oxlint --fix --no-error-on-unmatched-pattern {{files}}"
+        check = "NODE_OPTIONS=--import=tsx pnpm exec oxlint --no-error-on-unmatched-pattern {{files}}"
+        fix = "NODE_OPTIONS=--import=tsx pnpm exec oxlint --fix --no-error-on-unmatched-pattern {{files}}"
     }
     ["check-added-large-files"] = Builtins.check_added_large_files
     ["check-merge-conflict"] = Builtins.check_merge_conflict

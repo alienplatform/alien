@@ -28,8 +28,8 @@
     "test": "vitest run --passWithNoTests",
     "test:ts": "tsc --noEmit",
     "generate": "./scripts/generate-proto.sh",
-    "format-and-lint": "oxfmt --check '**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}' && oxlint .",
-    "format-and-lint:fix": "oxfmt --write '**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}' && oxlint --fix ."
+    "format-and-lint": "oxfmt --check '**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}' && NODE_OPTIONS=--import=tsx oxlint .",
+    "format-and-lint:fix": "oxfmt --write '**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}' && NODE_OPTIONS=--import=tsx oxlint --fix ."
   },
   "sideEffects": false,
   "keywords": [
