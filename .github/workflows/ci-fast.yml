@@ -126,12 +126,9 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      # Leave 25% of the 16-core runner available for large rustc processes.
-      # Full-width parallelism previously starved the runner, but the generated
-      # client graph is now smaller and Azure models compile in five shards.
-      CARGO_BUILD_JOBS: "12"
-      # Keep runtime test concurrency unchanged so this experiment measures
-      # compiler parallelism without increasing database/server test pressure.
+      # Bound peak compiler memory so the runner agent remains responsive
+      # while the workspace's large test binaries compile and link.
+      CARGO_BUILD_JOBS: "8"
       NEXTEST_TEST_THREADS: "8"
 
     steps:

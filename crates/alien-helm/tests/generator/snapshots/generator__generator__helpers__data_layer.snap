@@ -799,11 +799,31 @@ ephemeralStorage:
 {{- printf "%s-logs" ((include "deployment.fullname" .) | trunc 58 | trimSuffix "-") -}}
 {{- end -}}
 
+{{- define "deployment.logCollectorDaemonSetName" -}}
+{{- printf "%s-logs-v2" ((include "deployment.fullname" .) | trunc 55 | trimSuffix "-") -}}
+{{- end -}}
+
 {{- define "deployment.labels" -}}
 app.kubernetes.io/name: {{ include "deployment.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
+{{- end -}}
+
+{{- define "deployment.logCollectorNameLabel" -}}
+{{- ternary "node-log-collector" "log-collector" (eq (include "deployment.name" .) "log-collector") -}}
+{{- end -}}
+
+{{- define "deployment.logCollectorLabels" -}}
+{{- $labels := include "deployment.labels" . | fromYaml -}}
+{{- $_ := set $labels "app.kubernetes.io/name" (include "deployment.logCollectorNameLabel" .) -}}
+{{- toYaml $labels -}}
+{{- end -}}
+
+{{- define "deployment.hookLabels" -}}
+{{- $labels := include "deployment.labels" . | fromYaml -}}
+{{- $_ := set $labels "app.kubernetes.io/name" (ternary "remote-operator-hook" "lifecycle-hook" (eq (include "deployment.name" .) "lifecycle-hook")) -}}
+{{- toYaml $labels -}}
 {{- end -}}
 
 {{- define "deployment.managerServiceAccountName" -}}
@@ -1357,6 +1377,8 @@ spec:
               value: {{ default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue | quote }}
             - name: OPERATOR_POD_LOG_LEGACY_DAEMONSET
               value: {{ include "deployment.logCollectorName" . | quote }}
+            - name: OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET
+              value: {{ include "deployment.logCollectorDaemonSetName" . | quote }}
             - name: OPERATOR_POD_LOG_MAX_STREAMS
               value: {{ default 32 .Values.logCollector.maxStreams | quote }}
             {{- end }}
@@ -1486,7 +1508,7 @@ kind: ServiceAccount
 metadata:
   name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 automountServiceAccountToken: true
 {{- end }}
@@ -1498,7 +1520,7 @@ kind: Role
 metadata:
   name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 rules:
   - apiGroups: [""]
@@ -1513,7 +1535,7 @@ kind: RoleBinding
 metadata:
   name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -1539,7 +1561,7 @@ kind: ConfigMap
 metadata:
   name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 data:
   collector.conf: |
@@ -1607,20 +1629,20 @@ data:
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ include "deployment.logCollectorName" . }}
+  name: {{ include "deployment.logCollectorDaemonSetName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "deployment.name" . }}
+      app.kubernetes.io/name: {{ include "deployment.logCollectorNameLabel" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/component: log-collector
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.logCollectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: log-collector
         alien.dev/log-collector-exclude: "true"
       annotations:
@@ -2039,7 +2061,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
@@ -2933,6 +2955,18 @@ If the Remote Operator uses `nodeAgent` and its setup-owned collector token is
 rotated, set `remoteOperator.collectorTokenRevision` to the new token's
 64-character SHA-256 hex digest during the chart upgrade. This restarts both
 the receiver and the DaemonSet with the new credential.
+
+Node collectors use their own `app.kubernetes.io/name` label so
+receiver selectors do not match collector Pods. Charts generated before this
+label change used the receiver's name label. The collector DaemonSets now have
+a `v2` name so `helm upgrade` creates the new DaemonSet and removes the old one
+without changing its immutable selector. Collector ConfigMap, ServiceAccount
+and RBAC names stay the same. The receiver Deployment keeps its existing
+selector and identity. The replacement collector starts with an empty
+log buffer and reads the selected log files from the beginning. When switching
+from nodeAgent to podApi, the Operator checks both collector names and waits for
+their Pods to stop, including when the chart is rendered without cluster access.
+Use an Operator image built with this chart version for that transition.
 
 === files/stack.json ===
 {
