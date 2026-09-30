@@ -890,8 +890,10 @@ pub async fn list_task(
 /// manifest schema `alien operations check` validates offline — a bundle
 /// with a broken manifest fails here, before spending time uploading it to
 /// S3, rather than only being caught by the platform's own (looser, string
-/// name/version/tier-only) validation after upload. Returns the raw JSON
-/// value (forwarded verbatim) plus the parsed manifest.
+/// name/version/tier-only) validation after upload. Metadata must come from
+/// typed operation definitions, which always declare input and output
+/// schemas. Returns the raw JSON value (forwarded verbatim) plus the parsed
+/// manifest.
 fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, CanonicalPluginManifest)> {
     let reader = std::io::Cursor::new(bytes);
     let mut archive =
@@ -916,12 +918,45 @@ fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, Canonica
             message: "metadata.json is not valid JSON".to_string(),
         },
     )?;
+    let untyped_operations = operations_without_typed_schemas(&value);
+    if !untyped_operations.is_empty() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "bundle '{}' has metadata that was not generated from typed operations: {} \
+                 declare no inputSchema and outputSchema. {} Then rebuild the bundle with \
+                 `alien operations package`.",
+                path.display(),
+                untyped_operations.join(", "),
+                super::check::TYPED_METADATA_HELP
+            ),
+        }));
+    }
     let manifest = super::check::parse_manifest_for_cli(contents.as_bytes()).context(
         ErrorData::ConfigurationError {
             message: format!("bundle '{}' has an invalid manifest", path.display()),
         },
     )?;
     Ok((value, manifest))
+}
+
+/// Names of operations missing either schema a typed definition generates.
+fn operations_without_typed_schemas(metadata: &Value) -> Vec<String> {
+    metadata
+        .get("operations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|operation| {
+            operation.get("inputSchema").is_none() || operation.get("outputSchema").is_none()
+        })
+        .map(|operation| {
+            let name = operation
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("<unnamed>");
+            format!("'{name}'")
+        })
+        .collect()
 }
 
 fn api_url(base_url: &str, path: &str, workspace: &str, project: &str) -> Result<reqwest::Url> {
@@ -956,14 +991,25 @@ mod tests {
         buf
     }
 
+    fn typed_operation(name: &str) -> Value {
+        serde_json::json!({
+            "name": name,
+            "tier": "mutating",
+            "description": "Vacuum a table.",
+            "inputSchema": { "type": "object" },
+            "outputSchema": { "type": "object" },
+            "permissions": []
+        })
+    }
+
     #[test]
-    fn reads_metadata_from_bundle() {
+    fn reads_typed_metadata_from_bundle() {
         let meta = serde_json::json!({
             "name": "postgres-operations",
             "version": "1.0.0",
             "tier": "mutating",
             "binaries": { "amd64": "postgres-operations-linux-amd64" },
-            "operations": [ { "name": "vacuum" } ]
+            "operations": [typed_operation("vacuum")]
         });
         let bytes = bundle_with_metadata(&meta);
         let (value, parsed) =
@@ -972,19 +1018,37 @@ mod tests {
         assert_eq!(parsed.version, "1.0.0");
         assert_eq!(parsed.tier, alien_operations_sdk::RiskTier::Mutating);
         // The full object is forwarded verbatim (operations[] preserved).
-        assert!(value.get("operations").is_some());
+        assert_eq!(value, meta);
     }
 
     #[test]
-    fn reads_released_legacy_metadata_from_bundle() {
-        let meta: Value = serde_json::from_str(super::super::check::legacy_verification_manifest())
-            .expect("legacy fixture JSON");
+    fn rejects_bundle_metadata_not_generated_from_typed_operations() {
+        let mut meta: Value =
+            serde_json::from_str(super::super::check::legacy_verification_manifest())
+                .expect("legacy fixture JSON");
+        meta["operations"]
+            .as_array_mut()
+            .expect("fixture has operations")
+            .push(typed_operation("vacuum"));
         let bytes = bundle_with_metadata(&meta);
 
-        let (_, parsed) = read_bundle_metadata(&bytes, &PathBuf::from("legacy.zip"))
-            .expect("publish must preserve released legacy manifest support");
-        assert!(parsed.operations[0].input_schema.is_some());
-        assert!(parsed.operations[1].output_schema.is_none());
+        let error = read_bundle_metadata(&bytes, &PathBuf::from("legacy.zip"))
+            .expect_err("publish must require metadata generated from typed operations");
+
+        assert_eq!(error.code, "CONFIGURATION_ERROR");
+        for expected in [
+            "bundle 'legacy.zip' has metadata that was not generated from typed operations: \
+             'status', 'restart' declare no inputSchema and outputSchema.",
+            "`TypedOperations`",
+            "src/bin/generate-metadata.rs",
+            "alien operations package",
+        ] {
+            assert!(
+                error.message.contains(expected),
+                "missing {expected:?} in: {}",
+                error.message
+            );
+        }
     }
 
     #[test]

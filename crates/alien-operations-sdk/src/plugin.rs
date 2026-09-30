@@ -11,7 +11,7 @@
 //! implement [`Plugin`] with a handwritten `match` on the operation name and a
 //! separately maintained `metadata.json`; `alien operations init` scaffolds the
 //! typed layout, including the `generate-metadata` binary that
-//! `alien operations check` runs.
+//! `alien operations check` requires.
 //!
 //! ```no_run
 //! use std::process::ExitCode;
@@ -77,8 +77,11 @@ const MAX_INVOCATION_BYTES: usize = COMMANDS_INLINE_MAX_BYTES / 3 * 4 + 4096;
 
 /// Implemented by a plugin binary. `handle` is called once per invocation;
 /// [`run_plugin`] owns everything around it (stdin/stdout, protocol version
-/// checking, result encoding). Use [`TypedOperations`](crate::TypedOperations)
-/// rather than implementing this trait by hand.
+/// checking, result encoding). [`TypedOperations`](crate::TypedOperations)
+/// implements it. Implement it yourself only to wrap
+/// [`TypedOperations::execute`](crate::TypedOperations::execute) with
+/// per-invocation setup; dispatching on `invocation.operation` by hand skips
+/// typed parameter validation and generated metadata.
 #[async_trait]
 pub trait Plugin: Send + Sync {
     /// Run one operation and return its result. Implementations should

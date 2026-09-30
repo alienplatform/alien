@@ -1,6 +1,6 @@
 //! `alien operations check` — validate a plugin's manifest with no platform
-//! account. For a typed plugin it also runs the plugin's `generate-metadata`
-//! binary through `cargo`, unless `--manifest-only` is set.
+//! account. It also runs the plugin's required `generate-metadata` binary
+//! through `cargo`, unless `--manifest-only` is set.
 
 use std::path::Path;
 use std::process::Command;
@@ -49,17 +49,34 @@ pub fn validate_manifest(directory: Option<&str>) -> Result<CanonicalPluginManif
     })
 }
 
-/// A plugin built with `TypedOperations` generates `metadata.json` from its
-/// typed operation registry with a `generate-metadata` binary. When the
-/// plugin has one, run it with `--check` so a hand-edited or stale
-/// `metadata.json` fails instead of drifting from the code that serves it.
+/// Where a plugin's metadata generator lives, relative to the plugin directory.
+const METADATA_GENERATOR_PATH: &str = "src/bin/generate-metadata.rs";
+
+/// What a plugin author adds so its metadata comes from typed definitions.
+pub(super) const TYPED_METADATA_HELP: &str = "Register each operation with \
+    `OperationDefinition` in a `TypedOperations` registry, and add \
+    `src/bin/generate-metadata.rs` (a `[[bin]]` named `generate-metadata`) that writes the \
+    registry's manifest to metadata.json and exits non-zero when run with `--check` and \
+    metadata.json differs. `alien operations init <name>` scaffolds this layout.";
+
+/// Run the plugin's `generate-metadata` binary with `--check`, so a
+/// hand-written, hand-edited, or stale `metadata.json` fails instead of
+/// drifting from the typed operations that serve it. A plugin without the
+/// generator fails with instructions for adding one.
 pub fn ensure_generated_metadata_current(directory: &Path) -> Result<()> {
     ensure_generated_metadata_current_via(directory, Path::new("cargo"))
 }
 
 fn ensure_generated_metadata_current_via(directory: &Path, cargo: &Path) -> Result<()> {
-    if !directory.join("src/bin/generate-metadata.rs").is_file() {
-        return Ok(());
+    if !directory.join(METADATA_GENERATOR_PATH).is_file() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "'{}' has no metadata generator; plugins must generate metadata.json from \
+                 typed operations. {TYPED_METADATA_HELP} Then run \
+                 `cargo run --bin generate-metadata`.",
+                directory.display()
+            ),
+        }));
     }
     let output = Command::new(cargo)
         .args([
@@ -213,7 +230,7 @@ mod tests {
             }"#,
         );
 
-        check_task(Some(temp.path().to_str().expect("utf8 path")), false, false)
+        check_task(Some(temp.path().to_str().expect("utf8 path")), true, false)
             .expect("valid manifest should pass check");
     }
 
@@ -265,9 +282,10 @@ mod tests {
             }"#,
         );
 
-        let err = check_task(Some(temp.path().to_str().expect("utf8 path")), false, false)
+        let err = validate_manifest(Some(temp.path().to_str().expect("utf8 path")))
             .expect_err("duplicate operations must fail check");
         assert_eq!(err.code, "CONFIGURATION_ERROR");
+        assert!(err.to_string().contains("more than once"), "{err}");
     }
 
     #[cfg(unix)]
@@ -321,6 +339,40 @@ mod tests {
     }
 
     #[test]
+    fn requires_a_metadata_generator_and_says_what_to_add() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        write_manifest(
+            temp.path(),
+            r#"{
+                "name": "postgres",
+                "version": "1.0.0",
+                "tier": "read-only",
+                "binaries": { "amd64": "postgres-linux-amd64" },
+                "operations": [{ "name": "health" }]
+            }"#,
+        );
+
+        let error = check_task(Some(temp.path().to_str().expect("utf8 path")), false, false)
+            .expect_err("a plugin without a metadata generator must fail check");
+
+        assert_eq!(error.code, "CONFIGURATION_ERROR");
+        for expected in [
+            "has no metadata generator",
+            "`OperationDefinition`",
+            "`TypedOperations`",
+            "src/bin/generate-metadata.rs",
+            "alien operations init <name>",
+            "cargo run --bin generate-metadata",
+        ] {
+            assert!(
+                error.message.contains(expected),
+                "missing {expected:?} in: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
     fn manifest_only_does_not_build_or_run_plugin_code() {
         let temp = tempfile::tempdir().expect("create temp dir");
         write_manifest(
@@ -350,8 +402,9 @@ mod tests {
     #[test]
     fn rejects_a_missing_manifest() {
         let temp = tempfile::tempdir().expect("create temp dir");
-        let err = check_task(Some(temp.path().to_str().expect("utf8 path")), false, false)
+        let err = check_task(Some(temp.path().to_str().expect("utf8 path")), true, false)
             .expect_err("missing manifest must fail check");
         assert_eq!(err.code, "CONFIGURATION_ERROR");
+        assert!(err.message.contains("could not read"), "{}", err.message);
     }
 }

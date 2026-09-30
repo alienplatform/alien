@@ -427,22 +427,6 @@ mod tests {
     }
 
     #[test]
-    fn package_preflight_and_arch_narrowing_accept_released_legacy_metadata() {
-        let temp = tempfile::tempdir().expect("create temp dir");
-        let manifest_bytes = super::super::check::legacy_verification_manifest().as_bytes();
-        std::fs::write(temp.path().join("metadata.json"), manifest_bytes)
-            .expect("write legacy metadata");
-
-        let manifest = validate_manifest(Some(temp.path().to_str().expect("utf8 path")))
-            .expect("package preflight must preserve released legacy manifest support");
-        let binary_entry = manifest.binaries[&Arch::Amd64].as_str();
-        let narrowed = single_arch_manifest_json(manifest_bytes, Arch::Amd64, binary_entry)
-            .expect("package should narrow released legacy metadata");
-        super::super::check::parse_manifest_for_cli(&narrowed)
-            .expect("packaged legacy metadata must remain consumable");
-    }
-
-    #[test]
     fn binary_artifact_path_finds_the_named_bin_targets_executable() {
         // A realistic slice of `cargo build --message-format=json` output:
         // a lib-target artifact (no `executable`) followed by the bin
