@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use alien_permission_types::PermissionSet;
 
-use super::{invalid, sorted, types::*, Result};
+use super::{catalog, invalid, sorted, types::*, Result};
 
 fn statement_key(statement: &AwsStatement) -> String {
     serde_json::json!({"effect": statement.effect, "actions": statement.actions,
@@ -217,6 +217,17 @@ pub fn compile(
             if action.contains(['*', '?']) {
                 return invalid(
                     format!("AWS action '{action}' is not an exact operation permission"),
+                    action,
+                    &statement.resources.join(","),
+                );
+            }
+            if !catalog()
+                .aws
+                .values()
+                .any(|capability| capability.actions.contains(action))
+            {
+                return invalid(
+                    format!("AWS action '{action}' has no reviewed operation capability"),
                     action,
                     &statement.resources.join(","),
                 );

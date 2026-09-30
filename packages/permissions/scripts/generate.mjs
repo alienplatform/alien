@@ -11,6 +11,7 @@ try {
   execFileSync(
     "cargo",
     [
+      "+1.97.1",
       "build",
       "--locked",
       "--release",
@@ -36,7 +37,7 @@ try {
       },
     },
   )
-  const target = process.env.CARGO_TARGET_DIR ?? resolve(root, "target")
+  const target = resolve(root, process.env.CARGO_TARGET_DIR ?? "target")
   execFileSync(
     "wasm-bindgen",
     [

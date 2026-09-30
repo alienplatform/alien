@@ -44,6 +44,10 @@ fn wildcard_actions_and_unknown_wildcard_resources_fail_closed() {
     for statement in [
         aws_statement(&["s3:*"], &["arn:aws:s3:::example/*"]),
         aws_statement(&["iam:PassRole"], &["*"]),
+        aws_statement(
+            &["iam:PassRole"],
+            &["arn:aws:iam::123456789012:role/administrator"],
+        ),
     ] {
         let result = run(
             json!({"task":"compileAws","statements":[statement],"ceilings":{"s3BucketArns":[],"sqsQueueArns":[]}}),
