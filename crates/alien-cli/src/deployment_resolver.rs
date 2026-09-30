@@ -41,17 +41,25 @@ pub async fn resolve(manager: &Client, spec: &str, is_dev: bool) -> Result<Deplo
 }
 
 async fn resolve_by_id(manager: &Client, id: &str) -> Result<DeploymentResponse> {
-    manager
+    match manager
         .get_deployment()
         .id(id)
         .send()
         .await
         .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!("Deployment '{}' was not found.", id),
-            url: None,
-        })
-        .map(|r| r.into_inner())
+    {
+        Ok(response) => Ok(response.into_inner()),
+        // Only a 404 means the deployment doesn't exist; a server or network error says
+        // nothing about that and keeps its own retryable status for the caller.
+        Err(error) => {
+            let message = if error.http_status_code == Some(404) {
+                format!("Deployment '{id}' was not found.")
+            } else {
+                format!("Failed to read deployment '{id}'")
+            };
+            Err(error).context(ErrorData::ApiRequestFailed { message, url: None })
+        }
+    }
 }
 
 async fn resolve_by_group_and_name(

@@ -1683,7 +1683,19 @@ async fn wait_for_deployment(
     let started = Instant::now();
     let mut last_status = None;
     loop {
-        let deployment = resolve_deployment_reference(client, reference).await?;
+        let deployment = match resolve_deployment_reference(client, reference).await {
+            Ok(deployment) => deployment,
+            // A transient read failure says nothing about the deployment: keep waiting, and
+            // report it only if it lasts until the timeout.
+            Err(error) if error.retryable && started.elapsed() < timeout => {
+                if !json {
+                    eprintln!("{} {}", dim_label("Retrying after:"), error.message);
+                }
+                tokio::time::sleep(interval.min(timeout.saturating_sub(started.elapsed()))).await;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         let status = parse_deployment_status(&deployment.status)?;
         if !json && last_status.as_deref() != Some(deployment.status.as_str()) {
             eprintln!("{} {}", dim_label("Deployment status:"), deployment.status);
@@ -2379,6 +2391,17 @@ mod tests {
     use super::*;
     use alien_manager_api::types::{DeploymentGroupMinimal, Platform};
     use alien_platform_api::types::{DeploymentUpdateOperationStatus, DeploymentUpdateReason};
+    use axum::{
+        extract::State,
+        http::StatusCode,
+        response::{IntoResponse, Response},
+        routing::get,
+        Json, Router,
+    };
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
     fn update_operation(
         id: &str,
@@ -2416,6 +2439,128 @@ mod tests {
             .desired_release_id(desired.map(str::to_string))
             .try_into()
             .expect("valid deployment response")
+    }
+
+    /// Serve `/v1/deployments/dep_1` on loopback, answering each request with the next
+    /// status from `statuses` (the last one repeats).
+    async fn fake_manager(statuses: Vec<u16>) -> alien_manager_api::Client {
+        type ManagerState = (Arc<Vec<u16>>, Arc<AtomicUsize>);
+
+        async fn read_deployment(State((statuses, calls)): State<ManagerState>) -> Response {
+            let call = calls.fetch_add(1, Ordering::SeqCst);
+            let status = statuses[call.min(statuses.len() - 1)];
+            if status == 200 {
+                Json(deployment_with_releases(Some("rel_a"), Some("rel_a"))).into_response()
+            } else {
+                StatusCode::from_u16(status)
+                    .expect("valid status")
+                    .into_response()
+            }
+        }
+
+        let app = Router::new()
+            .route("/v1/deployments/dep_1", get(read_deployment))
+            .with_state((Arc::new(statuses), Arc::new(AtomicUsize::new(0))));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let addr = listener.local_addr().expect("local addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        alien_manager_api::Client::new(&format!("http://{addr}"))
+    }
+
+    #[tokio::test]
+    async fn waiting_rides_out_a_transient_read_failure() {
+        let client = fake_manager(vec![500, 200]).await;
+
+        wait_for_deployment(
+            &client,
+            "dep_1",
+            DeploymentWaitCondition::Ready,
+            Duration::from_secs(5),
+            Duration::from_millis(10),
+            true,
+        )
+        .await
+        .expect("a 500 followed by a running deployment should satisfy the wait");
+    }
+
+    #[tokio::test]
+    async fn waiting_rides_out_an_unreachable_manager_until_the_timeout() {
+        // Nothing listens on a port that was bound and released, so every read is a
+        // connection error.
+        let addr = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback")
+            .local_addr()
+            .expect("local addr");
+        let client = alien_manager_api::Client::new(&format!("http://{addr}"));
+        let timeout = Duration::from_millis(300);
+        let started = Instant::now();
+
+        let error = wait_for_deployment(
+            &client,
+            "dep_1",
+            DeploymentWaitCondition::Ready,
+            timeout,
+            Duration::from_millis(10),
+            true,
+        )
+        .await
+        .expect_err("an unreachable manager must fail once the wait times out");
+
+        assert!(
+            started.elapsed() >= timeout,
+            "a connection error must not end the wait early: {}",
+            error.message
+        );
+        assert!(error.retryable, "{}", error.message);
+    }
+
+    #[tokio::test]
+    async fn a_missing_deployment_is_reported_as_not_found() {
+        let client = fake_manager(vec![404]).await;
+
+        let error = wait_for_deployment(
+            &client,
+            "dep_1",
+            DeploymentWaitCondition::Ready,
+            Duration::from_secs(5),
+            Duration::from_millis(10),
+            true,
+        )
+        .await
+        .expect_err("a 404 must end the wait");
+
+        assert_eq!(
+            error.message,
+            "API request failed: Deployment 'dep_1' was not found."
+        );
+        assert!(!error.retryable);
+    }
+
+    #[tokio::test]
+    async fn a_read_failure_is_not_reported_as_not_found() {
+        let client = fake_manager(vec![500]).await;
+
+        let error = wait_for_deployment(
+            &client,
+            "dep_1",
+            DeploymentWaitCondition::Ready,
+            Duration::from_millis(100),
+            Duration::from_millis(10),
+            true,
+        )
+        .await
+        .expect_err("a persistent 500 must fail once the wait times out");
+
+        assert_eq!(
+            error.message,
+            "API request failed: Failed to read deployment 'dep_1'"
+        );
+        assert_eq!(error.http_status_code, Some(500));
     }
 
     #[test]
