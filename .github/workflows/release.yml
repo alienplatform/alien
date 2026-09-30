@@ -2162,74 +2162,41 @@ jobs:
           SANDBOX_AGENT: ghcr.io/alienplatform/alien-sandbox-agent@${{ steps.publish_sandbox_agent.outputs.digest }}
         run: ./scripts/smoke-sandbox-agent.sh "$SANDBOX_AGENT"
 
-      # The default GCP sandbox, rendered from the same contract as alien-sandbox-agent onto
-      # buildpack-deps. Its own repository, as every other image has, so promotion gives it
-      # v<version> and latest; published digests are never deleted.
-      - name: Metadata (alien-sandbox-gcp)
-        id: meta_sandbox_gcp
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/alienplatform/alien-sandbox-gcp
-          tags: |
-            type=raw,value=qualification-${{ inputs.source_ref }}
-
-      - name: Publish alien-sandbox-gcp
-        id: publish_sandbox_gcp
-        uses: depot/build-push-action@v1
-        with:
-          project: ${{ vars.DEPOT_PROJECT_ID }}
-          context: .
-          file: docker/Dockerfile.alien-sandbox-gcp
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta_sandbox_gcp.outputs.tags }}
-          labels: ${{ steps.meta_sandbox_gcp.outputs.labels }}
-          provenance: true
-          sbom: true
-
-      - name: Smoke-test alien-sandbox-gcp
-        env:
-          SANDBOX_GCP: ghcr.io/alienplatform/alien-sandbox-gcp@${{ steps.publish_sandbox_gcp.outputs.digest }}
-        run: ./scripts/smoke-sandbox-agent.sh "$SANDBOX_GCP"
-
       # Agent Platform pulls a sandbox image with no registry credentials, and GitHub makes a
       # package private on its first push, so this fails until the package is set to public.
-      - name: Check the sandbox images pull anonymously
+      - name: Check the sandbox agent image pulls anonymously
         env:
           SANDBOX_AGENT_DIGEST: ${{ steps.publish_sandbox_agent.outputs.digest }}
-          SANDBOX_GCP_DIGEST: ${{ steps.publish_sandbox_gcp.outputs.digest }}
         run: |
-          for image in "alien-sandbox-agent@${SANDBOX_AGENT_DIGEST}" "alien-sandbox-gcp@${SANDBOX_GCP_DIGEST}"; do
-            name="${image%@*}"
-            digest="${image#*@}"
-            status=$(curl -sS --connect-timeout 10 --max-time 30 -o token.json -w '%{http_code}' \
-              "https://ghcr.io/token?scope=repository:alienplatform/${name}:pull") ||
-              { echo "::error::could not reach ghcr's token endpoint for ${name}"; exit 1; }
-            case "$status" in
-              200) ;;
-              401|403)
-                echo "::error::ghcr.io/alienplatform/${name} is not anonymously pullable (HTTP ${status}); set the package's visibility to public"
-                exit 1 ;;
-              *) echo "::error::ghcr's token endpoint answered HTTP ${status} for ${name}"; exit 1 ;;
-            esac
-            token=$(jq -r '.token' token.json)
-            status=$(curl -sS --connect-timeout 10 --max-time 30 -o /dev/null -w '%{http_code}' \
-              -H "Authorization: Bearer ${token}" \
-              -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
-              "https://ghcr.io/v2/alienplatform/${name}/manifests/${digest}") ||
-              { echo "::error::could not reach ghcr to read ${name}@${digest}"; exit 1; }
-            if [ "$status" != 200 ]; then
-              echo "::error::ghcr answered HTTP ${status} for an anonymous read of ${name}@${digest}"
-              exit 1
-            fi
-          done
+          name=alien-sandbox-agent
+          digest="$SANDBOX_AGENT_DIGEST"
+          status=$(curl -sS --connect-timeout 10 --max-time 30 -o token.json -w '%{http_code}' \
+            "https://ghcr.io/token?scope=repository:alienplatform/${name}:pull") ||
+            { echo "::error::could not reach ghcr's token endpoint for ${name}"; exit 1; }
+          case "$status" in
+            200) ;;
+            401|403)
+              echo "::error::ghcr.io/alienplatform/${name} is not anonymously pullable (HTTP ${status}); set the package's visibility to public"
+              exit 1 ;;
+            *) echo "::error::ghcr's token endpoint answered HTTP ${status} for ${name}"; exit 1 ;;
+          esac
+          token=$(jq -r '.token' token.json)
+          status=$(curl -sS --connect-timeout 10 --max-time 30 -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+            "https://ghcr.io/v2/alienplatform/${name}/manifests/${digest}") ||
+            { echo "::error::could not reach ghcr to read ${name}@${digest}"; exit 1; }
+          if [ "$status" != 200 ]; then
+            echo "::error::ghcr answered HTTP ${status} for an anonymous read of ${name}@${digest}"
+            exit 1
+          fi
 
       - name: Record qualified image digests
         env:
           RELEASE_COMMIT: ${{ inputs.source_ref }}
         run: |
           DIGESTS='{}'
-          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-manager alien-sandbox-agent alien-sandbox-gcp; do
+          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-manager alien-sandbox-agent; do
             qualified="ghcr.io/alienplatform/${name}:qualification-${RELEASE_COMMIT}"
             digest=$(docker buildx imagetools inspect "$qualified" |
               sed -n 's/^Digest:[[:space:]]*//p' | head -n1)
