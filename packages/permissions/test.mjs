@@ -74,6 +74,39 @@ test("committed browser compiler matches native Rust success and rejection behav
       ],
     })),
   )
+  const invalidGrants = [
+    {
+      task: "compileAws",
+      statements: [
+        {
+          ...statements[0],
+          actions: ["iam:PassRole"],
+          resources: ["arn:aws:iam::123456789012:role/administrator"],
+        },
+      ],
+      ceilings: { s3BucketArns: [], sqsQueueArns: [] },
+    },
+    ...[[], ["example-bucket"]].flatMap(gcsBucketNames =>
+      ["iam.serviceAccounts.getAccessToken", "storage.objects.list"].map(permission => ({
+        task: "compileGcp",
+        grants: [{ permission, scope: `projects/\${projectName}`, sources: [] }],
+        ceilings: { gcsBucketNames },
+      })),
+    ),
+    ...["diagnostics", "remediation"].flatMap(mode =>
+      [
+        { resource: "secrets", verbs: ["get"], resourceNames: [] },
+        { resource: "pods/exec", verbs: ["create"], resourceNames: [] },
+        { resource: "pods", verbs: ["*"], resourceNames: [] },
+        { resource: "pods", verbs: ["delete"], resourceNames: ["*"] },
+      ].map(grant => ({
+        task: "compileKubernetes",
+        mode,
+        grants: [{ apiGroup: "", ...grant, sources: [] }],
+      })),
+    ),
+  ]
+  requests.push(...invalidGrants)
   const output = execFileSync(
     "cargo",
     [
@@ -102,6 +135,18 @@ test("committed browser compiler matches native Rust success and rejection behav
   assert.deepEqual(browser, output)
   assert.deepEqual(
     browser.map(result => result.ok),
-    [true, true, false, true, false, true, true, false, true, true],
+    [
+      true,
+      true,
+      false,
+      true,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      ...invalidGrants.map(() => false),
+    ],
   )
 })

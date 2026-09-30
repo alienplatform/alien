@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use super::{invalid, sorted, types::*, Result};
+use super::{catalog, invalid, sorted, types::*, Result};
 
 pub fn collect(plugins: &[CatalogPlugin]) -> Vec<GcpGrant> {
     let mut grants = BTreeMap::<String, GcpGrant>::new();
@@ -70,10 +70,13 @@ pub fn compile(
     }
     if let Some(grant) = grants
         .iter()
-        .find(|grant| grant.scope != GCP_PROJECT_SCOPE && grant.scope != GCP_BUCKET_SCOPE)
+        .find(|grant| catalog().gcp.get(&grant.permission) != Some(&grant.scope))
     {
         return invalid(
-            format!("Unsupported Google Cloud scope '{}'", grant.scope),
+            format!(
+                "Google Cloud permission '{}' is not reviewed for scope '{}'",
+                grant.permission, grant.scope
+            ),
             &grant.permission,
             &grant.scope,
         );

@@ -180,7 +180,7 @@ pub fn execute(request: Request) -> Result<Value> {
         Request::CollectGcp { plugins } => value(gcp::collect(&plugins)),
         Request::CompileGcp { grants, ceilings } => value(gcp::compile(&grants, &ceilings)?),
         Request::CollectKubernetes { plugins } => value(kubernetes::collect(&plugins)),
-        Request::CompileKubernetes { grants, mode } => value(kubernetes::compile(&grants, mode)),
+        Request::CompileKubernetes { grants, mode } => value(kubernetes::compile(&grants, mode)?),
     }
 }
 

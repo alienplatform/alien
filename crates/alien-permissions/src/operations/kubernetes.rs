@@ -59,56 +59,68 @@ pub fn validate(
         );
     }
     for rule in &permissions.rules {
-        let fail = |message| invalid(message, "kubernetes", &rule.resource);
-        if !rule.api_group.is_empty()
-            && (rule.api_group.len() > 253 || !rule.api_group.split('.').all(valid_token))
-        {
-            return fail("Kubernetes API groups must be DNS subdomains");
-        }
-        let mut parts = rule.resource.split('/');
-        let resource = parts.next().unwrap_or_default();
-        let subresource = parts.next();
-        if resource.len() > 63
-            || !valid_token(resource)
-            || resource.contains('.')
-            || !resource
-                .bytes()
-                .next()
-                .is_some_and(|byte| byte.is_ascii_lowercase())
-        {
-            return fail("Kubernetes resources must be DNS-1035 labels");
-        }
-        if resource == "secrets"
-            || parts.next().is_some()
-            || subresource.is_some_and(|sub| !matches!(sub, "log" | "scale" | "status"))
-        {
-            return fail("Kubernetes Secrets and privileged subresources are not supported");
-        }
-        if rule.verbs.is_empty() {
-            return fail("Kubernetes permission verbs must not be empty");
-        }
-        for verb in &rule.verbs {
-            let read = matches!(verb.as_str(), "get" | "list" | "watch");
-            let remediation =
-                (rule.api_group.is_empty() && rule.resource == "pods" && verb == "delete")
-                    || (rule.api_group == "apps"
-                        && matches!(
-                            rule.resource.as_str(),
-                            "deployments/scale" | "statefulsets/scale" | "replicasets/scale"
-                        )
-                        && verb == "patch");
-            if !read && (!remediation || tier == "read-only") {
-                return fail(
-                    "unsupported Kubernetes verb/resource or write in read-only operation",
-                );
-            }
-        }
-        if rule.resource_names.iter().any(|name| !valid_token(name)) {
-            return fail("Kubernetes resourceNames must be concrete names");
-        }
+        validate_grant(
+            &KubernetesGrant {
+                api_group: rule.api_group.clone(),
+                resource: rule.resource.clone(),
+                verbs: rule.verbs.clone(),
+                resource_names: rule.resource_names.clone(),
+                sources: vec![],
+            },
+            tier,
+        )?;
         if !valid_label(&rule.reason) {
-            return fail("Kubernetes permission reason must be nonempty single-line text without template expressions");
+            return invalid("Kubernetes permission reason must be nonempty single-line text without template expressions", "kubernetes", &rule.resource);
         }
+    }
+    Ok(())
+}
+
+fn validate_grant(grant: &KubernetesGrant, tier: &str) -> Result<()> {
+    let fail = |message| invalid(message, "kubernetes", &grant.resource);
+    if !grant.api_group.is_empty()
+        && (grant.api_group.len() > 253 || !grant.api_group.split('.').all(valid_token))
+    {
+        return fail("Kubernetes API groups must be DNS subdomains");
+    }
+    let mut parts = grant.resource.split('/');
+    let resource = parts.next().unwrap_or_default();
+    let subresource = parts.next();
+    if resource.len() > 63
+        || !valid_token(resource)
+        || resource.contains('.')
+        || !resource
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+    {
+        return fail("Kubernetes resources must be DNS-1035 labels");
+    }
+    if resource == "secrets"
+        || parts.next().is_some()
+        || subresource.is_some_and(|sub| !matches!(sub, "log" | "scale" | "status"))
+    {
+        return fail("Kubernetes Secrets and privileged subresources are not supported");
+    }
+    if grant.verbs.is_empty() {
+        return fail("Kubernetes permission verbs must not be empty");
+    }
+    for verb in &grant.verbs {
+        let read = matches!(verb.as_str(), "get" | "list" | "watch");
+        let remediation =
+            (grant.api_group.is_empty() && grant.resource == "pods" && verb == "delete")
+                || (grant.api_group == "apps"
+                    && matches!(
+                        grant.resource.as_str(),
+                        "deployments/scale" | "statefulsets/scale" | "replicasets/scale"
+                    )
+                    && verb == "patch");
+        if !read && (!remediation || tier == "read-only") {
+            return fail("unsupported Kubernetes verb/resource or write in read-only operation");
+        }
+    }
+    if grant.resource_names.iter().any(|name| !valid_token(name)) {
+        return fail("Kubernetes resourceNames must be concrete names");
     }
     Ok(())
 }
@@ -222,13 +234,16 @@ pub fn grants_verb(mode: KubernetesMode, verb: &str) -> bool {
     matches!(mode, KubernetesMode::Remediation) || matches!(verb, "get" | "list" | "watch")
 }
 
-pub fn compile(grants: &[KubernetesGrant], mode: KubernetesMode) -> Vec<KubernetesGrant> {
-    grants
+pub fn compile(grants: &[KubernetesGrant], mode: KubernetesMode) -> Result<Vec<KubernetesGrant>> {
+    for grant in grants {
+        validate_grant(grant, "mutating")?;
+    }
+    Ok(grants
         .iter()
         .filter_map(|grant| {
             let mut grant = grant.clone();
             grant.verbs.retain(|verb| grants_verb(mode, verb));
             (!grant.verbs.is_empty()).then_some(grant)
         })
-        .collect()
+        .collect())
 }

@@ -78,6 +78,23 @@ fn gcs_metadata_grants_stay_on_buckets() {
 }
 
 #[test]
+fn raw_gcp_grants_cannot_bypass_reviewed_permissions_or_bucket_scopes() {
+    for names in [json!([]), json!(["example-bucket"])] {
+        for permission in ["iam.serviceAccounts.getAccessToken", "storage.objects.list"] {
+            let result = run(json!({"task":"compileGcp","grants":[{
+                "permission":permission,"scope":"projects/${projectName}","sources":[]
+            }],"ceilings":{"gcsBucketNames":names}}));
+            assert_eq!(result["ok"], false);
+            assert_eq!(result["error"]["code"], "OPERATION_PERMISSION_INVALID");
+            assert!(result["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(permission));
+        }
+    }
+}
+
+#[test]
 fn named_capability_matches_builtin_grant_but_custom_inline_aws_fails() {
     let inline = json!({"id":"operations/ec2/instances","description":"Inspect instances","platforms":{"aws":[{"effect":"Allow","grant":{"actions":["ec2:DescribeInstances"]},"binding":{"resource":{"resources":["*"]}}}]}});
     let plugin = |permissions: Value| json!({"name":"inspector","tier":"read-only","operations":[{"name":"inspect","permissions":permissions}]});
@@ -118,6 +135,31 @@ fn kubernetes_reads_and_remediation_remain_distinct() {
         run(json!({"task":"validateKubernetes","permissions":invalid,"tier":"read-only"}))["ok"],
         false
     );
+}
+
+#[test]
+fn raw_kubernetes_grants_are_validated_before_mode_filtering() {
+    let grant = |resource: &str, verbs: &[&str], names: &[&str]| json!({"apiGroup":"","resource":resource,"verbs":verbs,"resourceNames":names,"sources":[]});
+    for (mode, verbs) in [
+        ("diagnostics", json!(["get"])),
+        ("remediation", json!(["get", "delete"])),
+    ] {
+        let valid = grant("pods", &["get", "delete"], &["selected"]);
+        let result = run(json!({"task":"compileKubernetes","mode":mode,"grants":[valid]}));
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["value"][0]["verbs"], verbs);
+        assert_eq!(result["value"][0]["resourceNames"], json!(["selected"]));
+        for invalid in [
+            grant("secrets", &["get"], &[]),
+            grant("pods/exec", &["create"], &[]),
+            grant("pods", &["*"], &[]),
+            grant("pods", &["delete"], &["*"]),
+        ] {
+            let result = run(json!({"task":"compileKubernetes","mode":mode,"grants":[invalid]}));
+            assert_eq!(result["ok"], false);
+            assert_eq!(result["error"]["code"], "OPERATION_PERMISSION_INVALID");
+        }
+    }
 }
 
 #[test]

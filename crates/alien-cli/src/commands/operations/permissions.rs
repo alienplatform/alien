@@ -117,13 +117,19 @@ pub fn permissions_task(
         ),
         Cloud::Kubernetes => (
             "kubernetes",
-            serde_json::to_value(operations::kubernetes::compile(
-                &operations::kubernetes::collect(&plugins),
-                match options.permission {
-                    Permission::Diagnostics => KubernetesMode::Diagnostics,
-                    Permission::Remediation => KubernetesMode::Remediation,
-                },
-            )),
+            serde_json::to_value(
+                operations::kubernetes::compile(
+                    &operations::kubernetes::collect(&plugins),
+                    match options.permission {
+                        Permission::Diagnostics => KubernetesMode::Diagnostics,
+                        Permission::Remediation => KubernetesMode::Remediation,
+                    },
+                )
+                .map_err(|error| {
+                    let message = format!("Kubernetes operation permissions: {}", error.message);
+                    error.context(ErrorData::ConfigurationError { message })
+                })?,
+            ),
         ),
         Cloud::Azure => {
             return Err(alien_error::AlienError::new(

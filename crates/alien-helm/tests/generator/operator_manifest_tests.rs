@@ -905,7 +905,7 @@ fn compiled_operation_grants_match_rendered_rbac_in_both_scopes_and_modes() {
             )
             .unwrap();
             let mut expected = role_grants(&baseline);
-            for grant in operations::kubernetes::compile(&grants, mode) {
+            for grant in operations::kubernetes::compile(&grants, mode).unwrap() {
                 for verb in grant.verbs {
                     expected.insert((
                         grant.api_group.clone(),
