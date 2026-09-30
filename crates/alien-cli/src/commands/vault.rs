@@ -353,9 +353,21 @@ pub struct VaultRemoteArgs {
     pub action: VaultAction,
 
     /// Target deployment ID or name (required). Global so it can follow the subcommand; clap
-    /// refuses a required global argument, so the task checks it instead.
+    /// refuses a required global argument, so [`VaultRemoteArgs::deployment`] checks it.
     #[arg(long, global = true)]
     pub deployment: Option<String>,
+}
+
+impl VaultRemoteArgs {
+    /// The target deployment, or the error for a missing `--deployment`.
+    pub fn deployment(&self) -> Result<&str> {
+        self.deployment.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "deployment".to_string(),
+                message: "--deployment is required".to_string(),
+            })
+        })
+    }
 }
 
 /// Execute vault command via the manager API (standalone/platform mode).
@@ -363,12 +375,7 @@ pub async fn vault_remote_task(
     args: VaultRemoteArgs,
     ctx: crate::execution_context::ExecutionMode,
 ) -> Result<()> {
-    let deployment = args.deployment.clone().ok_or_else(|| {
-        AlienError::new(ErrorData::ValidationError {
-            field: "deployment".to_string(),
-            message: "--deployment is required".to_string(),
-        })
-    })?;
+    let deployment = args.deployment()?.to_string();
     let manager_url = ctx.manager_url();
     let http = ctx.auth_http().await?.client;
 

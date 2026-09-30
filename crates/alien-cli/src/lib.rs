@@ -803,7 +803,22 @@ mod tests {
         let Some(Commands::Vault(args)) = cli.command else {
             panic!("expected the vault command");
         };
-        assert_eq!(args.deployment.as_deref(), Some("my-deployment"));
+        assert_eq!(
+            args.deployment().expect("deployment given"),
+            "my-deployment"
+        );
+
+        // clap can't require a global flag, so a missing one is reported by the args.
+        let cli = Cli::try_parse_from(["alien", "vault", "list", "customer-secrets"])
+            .expect("parses without --deployment");
+        let Some(Commands::Vault(args)) = cli.command else {
+            panic!("expected the vault command");
+        };
+        let error = args.deployment().expect_err("--deployment is required");
+        assert!(
+            error.message.contains("--deployment is required"),
+            "{error:?}"
+        );
 
         let cli = Cli::try_parse_from([
             "alien",
@@ -1863,6 +1878,11 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         if args.validate_only {
             return validate_deploy_config(args);
         }
+    }
+
+    // Reported before credentials are resolved, so a missing auth setting can't mask it.
+    if let Some(Commands::Vault(args)) = &cli.command {
+        args.deployment()?;
     }
 
     let ctx = if let Ok(server_url) = env::var("ALIEN_MANAGER_URL") {
