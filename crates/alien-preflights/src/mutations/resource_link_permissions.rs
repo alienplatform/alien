@@ -98,8 +98,10 @@ impl StackMutation for ResourceLinkPermissionsMutation {
                 continue;
             };
 
-            // A stack-wide grant already covers the linked resource. Repeating it on the one
-            // resource adds an exact-resource grant, which AWS refuses for Live resources.
+            // A stack-wide grant of the same built-in set already covers the linked resource.
+            // Repeating it on the one resource adds an exact-resource grant, which AWS refuses
+            // for Live resources. An inline set that reuses the id may grant less, so only a
+            // reference to the built-in set counts.
             let stack_wide = profile.0.get("*");
             let missing: Vec<&str> = grant
                 .permission_set_ids
@@ -107,9 +109,12 @@ impl StackMutation for ResourceLinkPermissionsMutation {
                 .copied()
                 .filter(|permission_set_id| {
                     !stack_wide.is_some_and(|permissions| {
-                        permissions
-                            .iter()
-                            .any(|permission| permission.id() == *permission_set_id)
+                        permissions.iter().any(|permission| {
+                            matches!(
+                                permission,
+                                PermissionSetReference::Name(name) if name == permission_set_id
+                            )
+                        })
                     })
                 })
                 .collect();
@@ -320,13 +325,11 @@ mod tests {
             .any(|permission| permission.id() == "queue/data-read"));
     }
 
-    /// The AWS setup check tells a profile that targets a Live resource to grant stack-wide
-    /// instead. A link must not undo that by adding the same grant on the one resource.
-    #[tokio::test]
-    async fn a_stack_wide_grant_satisfies_a_live_link_on_aws() {
-        use crate::deployment_prerequisites::AwsExactPermissionsSetupOwnedCheck;
-        use crate::DeploymentPrerequisiteCheck;
-
+    /// A Live sandbox linked from a container whose profile is `profile`, after the link
+    /// mutation, with the stack state and config it ran against.
+    async fn mutate_live_sandbox_link(
+        profile: PermissionProfile,
+    ) -> (Stack, StackState, DeploymentConfig) {
         let sandbox = Sandbox::new("agents".to_string())
             .code(alien_core::SandboxCode::Image {
                 image: "example.com/sandbox:latest".to_string(),
@@ -356,10 +359,10 @@ mod tests {
             .add(sandbox, ResourceLifecycle::Live)
             .add(api, ResourceLifecycle::Live)
             .build();
-        stack.permissions.profiles.insert(
-            "execution".to_string(),
-            PermissionProfile::new().global(["sandbox/execute"]),
-        );
+        stack
+            .permissions
+            .profiles
+            .insert("execution".to_string(), profile);
         let stack_state = StackState::new(Platform::Aws);
         let config = DeploymentConfig::builder()
             .stack_settings(StackSettings::default())
@@ -372,6 +375,18 @@ mod tests {
             .mutate(stack, &stack_state, &config)
             .await
             .expect("mutation should succeed");
+        (mutated, stack_state, config)
+    }
+
+    /// The AWS setup check tells a profile that targets a Live resource to grant stack-wide
+    /// instead. A link must not undo that by adding the same grant on the one resource.
+    #[tokio::test]
+    async fn a_stack_wide_grant_satisfies_a_live_link_on_aws() {
+        use crate::deployment_prerequisites::AwsExactPermissionsSetupOwnedCheck;
+        use crate::DeploymentPrerequisiteCheck;
+
+        let (mutated, stack_state, config) =
+            mutate_live_sandbox_link(PermissionProfile::new().global(["sandbox/execute"])).await;
 
         assert!(!mutated.permissions.profiles["execution"]
             .0
@@ -381,6 +396,32 @@ mod tests {
             .await
             .expect("check should run");
         assert!(result.success, "{:?}", result.errors);
+    }
+
+    /// An inline set may reuse a built-in id and grant less, so it doesn't stand in for the
+    /// link's built-in grant.
+    #[tokio::test]
+    async fn an_inline_set_with_a_built_in_id_keeps_the_link_grant() {
+        let inline = alien_core::permissions::PermissionSet {
+            id: "sandbox/execute".to_string(),
+            description: "narrower than the built-in set".to_string(),
+            platforms: alien_core::permissions::PlatformPermissions {
+                aws: None,
+                gcp: None,
+                azure: None,
+            },
+        };
+        let (mutated, _, _) = mutate_live_sandbox_link(
+            PermissionProfile::new().global([PermissionSetReference::from_inline(inline)]),
+        )
+        .await;
+
+        assert!(mutated.permissions.profiles["execution"].0["agents"]
+            .iter()
+            .any(|permission| matches!(
+                permission,
+                PermissionSetReference::Name(name) if name == "sandbox/execute"
+            )));
     }
 
     #[tokio::test]
