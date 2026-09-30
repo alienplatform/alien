@@ -27,11 +27,13 @@
         ],
         "properties": {
           "maxExportsPerMinute": {
+            "description": "Maximum exports the application currently permits per minute.",
             "type": "integer",
             "format": "uint32",
             "minimum": 1.0
           },
           "status": {
+            "description": "Application-reported health status, for example \"healthy\".",
             "type": "string"
           }
         },
@@ -53,6 +55,7 @@
         ],
         "properties": {
           "maxExportsPerMinute": {
+            "description": "Maximum exports the application permits per minute.",
             "type": "integer",
             "format": "uint32",
             "minimum": 1.0
@@ -69,6 +72,7 @@
         ],
         "properties": {
           "maxExportsPerMinute": {
+            "description": "Maximum exports the application permits per minute.",
             "type": "integer",
             "format": "uint32",
             "minimum": 1.0

@@ -19,13 +19,16 @@ struct DoctorParams {}
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DoctorOutput {
+    /// Application-reported health status, for example "healthy".
     status: String,
+    /// Maximum exports the application currently permits per minute.
     max_exports_per_minute: NonZeroU32,
 }
 
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ExportThrottle {
+    /// Maximum exports the application permits per minute.
     max_exports_per_minute: NonZeroU32,
 }
 
