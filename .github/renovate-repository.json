@@ -14,7 +14,7 @@
       "skipArtifactsUpdate": true
     },
     {
-      "description": "Batch stable minor and patch updates into one pull request, same as group:allNonMajor, and automerge it after CI passes. GitHub Actions stay separate because one workflow edit would make GitHub reject the whole batch.",
+      "description": "Batch stable minor and patch updates into one pull request, same as group:allNonMajor, and automerge it after CI passes. GitHub Actions are not included.",
       "matchManagers": ["!github-actions"],
       "matchPackageNames": ["*"],
       "matchUpdateTypes": ["minor", "patch"],
@@ -25,6 +25,11 @@
       "automergeType": "pr",
       "automergeStrategy": "squash",
       "platformAutomerge": false
+    },
+    {
+      "description": "This token cannot push workflow file changes, so GitHub Actions updates are not attempted.",
+      "matchManagers": ["github-actions"],
+      "enabled": false
     },
     {
       "description": "CI installs the pnpm version pinned in the workflow. This token cannot update that pin, so a packageManager bump fails every job.",
