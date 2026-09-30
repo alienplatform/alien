@@ -19,7 +19,8 @@ use alien_platform_api::types::{
     ConfigureProjectRegistryBody, ConfigureProjectRegistryBodyCredentialPolicy,
     ConfigureProjectRegistryBodyRepositoriesItem, ConfigureRemoteSandboxRequest,
     ConfigureRemoteSandboxRequestCustomImage, CreateProjectBody, CreateProjectBodyName,
-    CreateProjectWorkspace, ListProjectsWorkspace, SandboxBaseImageRepository,
+    CreateProjectWorkspace, DeleteProjectWorkspace, ListProjectsWorkspace,
+    ProjectIdOrNamePathParam, SandboxBaseImageRepository,
 };
 use alien_platform_api::SdkResultExt;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -72,6 +73,15 @@ pub enum ProjectCmd {
     Get {
         /// Project ID or name (defaults to the linked project)
         project: Option<String>,
+    },
+    /// Delete a project. The platform refuses while it still has deployments.
+    #[command(visible_alias = "rm")]
+    Delete {
+        /// Project ID or name
+        project: String,
+        /// Skip the confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
     /// Inspect or update installation package settings
     Packages {
@@ -203,6 +213,20 @@ pub async fn project_task(args: ProjectArgs, ctx: ExecutionMode) -> Result<()> {
             create_project_task(&http, workspace_name.as_deref(), &name, args.json).await?
         }
         ProjectCmd::Ls => list_projects_task(&http, workspace_name.as_deref(), args.json).await?,
+        ProjectCmd::Delete { project, yes } => {
+            let confirmation = crate::interaction::InteractionMode::current(args.json)
+                .confirmation_mode(
+                    yes,
+                    "Project deletion requires a real terminal. Re-run with `--yes`.",
+                )?;
+            if matches!(confirmation, crate::interaction::ConfirmationMode::Prompt)
+                && !crate::output::prompt_confirm(&format!("Delete project '{project}'?"), false)?
+            {
+                println!("{}", dim_label("Deletion cancelled."));
+                return Ok(());
+            }
+            delete_project_task(&http, workspace_name.as_deref(), &project, args.json).await?
+        }
         ProjectCmd::Get { project } => {
             let (project_id, _) = ctx.resolve_project(project.as_deref(), !args.json).await?;
             get_project_task(&http, workspace_name.as_deref(), &project_id, args.json).await?
@@ -1045,6 +1069,49 @@ async fn create_project_task(
     Ok(())
 }
 
+async fn delete_project_task(
+    http: &crate::auth::AuthHttp,
+    workspace: Option<&str>,
+    project: &str,
+    json: bool,
+) -> Result<()> {
+    let project_param = ProjectIdOrNamePathParam::try_from(project)
+        .into_alien_error()
+        .context(ErrorData::ValidationError {
+            field: "project".to_string(),
+            message: format!("Invalid project ID or name: '{project}'"),
+        })?;
+    let mut request = http
+        .sdk_client()
+        .delete_project()
+        .id_or_name(&project_param);
+    if let Some(workspace) = workspace {
+        let workspace_param = DeleteProjectWorkspace::try_from(workspace)
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "workspace".to_string(),
+                message: "Invalid workspace name".to_string(),
+            })?;
+        request = request.workspace(&workspace_param);
+    }
+    // The platform's refusal (e.g. the project still has deployments) is the error's cause.
+    request
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("Failed to delete project '{project}'"),
+            url: None,
+        })?;
+
+    if json {
+        print_json(&serde_json::json!({ "deleted": project }))?;
+    } else {
+        println!("{}", success_line("Project deleted."));
+    }
+    Ok(())
+}
+
 async fn list_projects_task(
     http: &crate::auth::AuthHttp,
     workspace: Option<&str>,
@@ -1121,6 +1188,58 @@ mod tests {
                 .into_iter()
                 .chain(flags.iter().copied()),
         )
+    }
+
+    /// The platform's refusal comes back to the user, and a deletion is a DELETE of the
+    /// project in the workspace.
+    #[tokio::test]
+    async fn delete_project_reports_the_platforms_refusal() {
+        use axum::{extract::Query, http::StatusCode, routing::delete, Json, Router};
+        use std::collections::HashMap;
+
+        let app = Router::new().route(
+            "/v1/projects/{project}",
+            delete(
+                |axum::extract::Path(project): axum::extract::Path<String>,
+                 Query(query): Query<HashMap<String, String>>| async move {
+                    assert_eq!(
+                        query.get("workspace").map(String::as_str),
+                        Some("sample-workspace")
+                    );
+                    if project == "sample" {
+                        return (StatusCode::NO_CONTENT, Json(serde_json::Value::Null));
+                    }
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "code": "PROJECT_HAS_DEPLOYMENTS",
+                            "message": "Project still has deployments",
+                            "retryable": false,
+                            "internal": false,
+                        })),
+                    )
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let http = crate::auth::build_auth_http(
+            crate::auth::client_with_header("Bearer test-key").unwrap(),
+            base_url,
+            None,
+        );
+
+        delete_project_task(&http, Some("sample-workspace"), "sample", true)
+            .await
+            .expect("an empty project is deleted");
+        let error = delete_project_task(&http, Some("sample-workspace"), "busy", true)
+            .await
+            .expect_err("a project with deployments is refused");
+        assert!(
+            crate::ui::render_human_error(&error).contains("Project still has deployments"),
+            "{error:?}"
+        );
     }
 
     #[test]

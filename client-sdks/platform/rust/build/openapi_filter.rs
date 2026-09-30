@@ -54,6 +54,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "createWorkspace",
     "deleteDeployment",
     "deleteManager",
+    "deleteProject",
     "deleteReleaseChannel",
     "ensureDeploymentGroupByExternalId",
     "ensureProjectSandboxBaseImageRepository",
