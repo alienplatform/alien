@@ -54,7 +54,7 @@ pub struct SandboxPreviewJs {
     pub headers: std::collections::HashMap<String, String>,
     /// Ports this preview admits; a request to any other port is refused upstream.
     pub allowed_ports: Vec<u32>,
-    /// Seconds until the preview expires.
+    /// Seconds until the preview expires. `0` means it does not expire (the local backend).
     pub expires_in_seconds: i64,
 }
 

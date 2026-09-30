@@ -416,7 +416,8 @@ class JobResult:
 @dataclass(frozen=True)
 class SandboxPreview:
     """Reach a port inside a sandbox: send requests to ``endpoint`` with every
-    header in ``headers``. Request a new one before ``expires_in_seconds``."""
+    header in ``headers``. Request a new one before ``expires_in_seconds``;
+    ``0`` means it does not expire (the local backend)."""
 
     endpoint: str
     headers: Mapping[str, str]
