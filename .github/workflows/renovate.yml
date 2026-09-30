@@ -1,0 +1,42 @@
+name: Renovate
+
+on:
+  schedule:
+    - cron: "47 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: renovate
+  cancel-in-progress: false
+
+jobs:
+  renovate:
+    name: Renovate
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+        with:
+          toolchain: "1.98.1"
+
+      - name: Install Renovate
+        run: npm install --global renovate@44.61.1
+
+      - name: Run Renovate
+        env:
+          RENOVATE_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
+          RENOVATE_CONFIG_FILE: ${{ github.workspace }}/.github/renovate-bot.js
+        run: renovate

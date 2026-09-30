@@ -1,0 +1,41 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "additionalBranchPrefix": "alien-370-",
+  "postUpgradeTasks": {
+    "commands": ["bash scripts/repair-renovate-lockfiles.sh"],
+    "fileFilters": ["**/pnpm-lock.yaml"],
+    "executionMode": "branch"
+  },
+  "packageRules": [
+    {
+      "description": "scripts/repair-renovate-lockfiles.sh refreshes pnpm lockfiles before Renovate commits.",
+      "matchManagers": ["npm"],
+      "skipArtifactsUpdate": true
+    },
+    {
+      "description": "Automerge stable non-major updates independently after CI passes",
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchCurrentVersion": "!/^0/",
+      "automerge": true,
+      "automergeType": "pr",
+      "automergeStrategy": "squash"
+    },
+    {
+      "description": "Do not treat potentially breaking 0.x minor releases as routine updates",
+      "matchUpdateTypes": ["minor"],
+      "matchCurrentVersion": "/^0\\./",
+      "enabled": false
+    },
+    {
+      "description": "Require explicit dashboard approval for major updates",
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "ts-proto updates require regenerated Worker runtime clients",
+      "matchPackageNames": ["ts-proto"],
+      "automerge": false
+    }
+  ]
+}
