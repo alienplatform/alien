@@ -922,8 +922,8 @@ fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, Canonica
     if !untyped_operations.is_empty() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
             message: format!(
-                "bundle '{}' has metadata that was not generated from typed operations; \
-                 operations without inputSchema and outputSchema: {}. {} Then rebuild the \
+                "bundle '{}' has operations without valid inputSchema and outputSchema objects: \
+                 {}. {} Then rebuild the \
                  bundle with `alien operations package`.",
                 path.display(),
                 untyped_operations.join(", "),
@@ -939,7 +939,7 @@ fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, Canonica
     Ok((value, manifest))
 }
 
-/// Names of operations missing either schema a typed definition generates.
+/// Names of operations missing either schema object a typed definition generates.
 fn operations_without_typed_schemas(metadata: &Value) -> Vec<String> {
     metadata
         .get("operations")
@@ -947,7 +947,8 @@ fn operations_without_typed_schemas(metadata: &Value) -> Vec<String> {
         .into_iter()
         .flatten()
         .filter(|operation| {
-            operation.get("inputSchema").is_none() || operation.get("outputSchema").is_none()
+            !operation.get("inputSchema").is_some_and(Value::is_object)
+                || !operation.get("outputSchema").is_some_and(Value::is_object)
         })
         .map(|operation| {
             let name = operation
@@ -1037,8 +1038,8 @@ mod tests {
 
         assert_eq!(error.code, "CONFIGURATION_ERROR");
         for expected in [
-            "bundle 'legacy.zip' has metadata that was not generated from typed operations; \
-             operations without inputSchema and outputSchema: 'status', 'restart'.",
+            "bundle 'legacy.zip' has operations without valid inputSchema and outputSchema objects: \
+             'status', 'restart'.",
             "`TypedOperations`",
             "src/bin/generate-metadata.rs",
             "alien operations package",
@@ -1048,6 +1049,36 @@ mod tests {
                 "missing {expected:?} in: {}",
                 error.message
             );
+        }
+    }
+
+    #[test]
+    fn rejects_bundle_with_null_or_invalid_schema_objects() {
+        for schema in [Value::Null, json!(true), json!([]), json!("schema")] {
+            for field in ["inputSchema", "outputSchema"] {
+                let mut operation = typed_operation("vacuum");
+                operation[field] = schema.clone();
+                let meta = json!({
+                    "name": "postgres-operations",
+                    "version": "1.0.0",
+                    "tier": "mutating",
+                    "binaries": { "amd64": "postgres-operations-linux-amd64" },
+                    "operations": [operation]
+                });
+                let error = read_bundle_metadata(
+                    &bundle_with_metadata(&meta),
+                    &PathBuf::from("invalid-schema.zip"),
+                )
+                .expect_err("publish must require both schema objects");
+                assert_eq!(error.code, "CONFIGURATION_ERROR");
+                assert!(error.message.contains("'vacuum'"), "{error}");
+                assert!(
+                    error
+                        .message
+                        .contains("valid inputSchema and outputSchema objects"),
+                    "{error}"
+                );
+            }
         }
     }
 
