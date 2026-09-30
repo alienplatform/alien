@@ -121,6 +121,7 @@ pub enum Request {
         grants: Vec<KubernetesGrant>,
         mode: KubernetesMode,
     },
+    KubernetesOperatorRuntime {},
 }
 
 fn value(value: impl Serialize) -> Result<Value> {
@@ -181,6 +182,7 @@ pub fn execute(request: Request) -> Result<Value> {
         Request::CompileGcp { grants, ceilings } => value(gcp::compile(&grants, &ceilings)?),
         Request::CollectKubernetes { plugins } => value(kubernetes::collect(&plugins)),
         Request::CompileKubernetes { grants, mode } => value(kubernetes::compile(&grants, mode)?),
+        Request::KubernetesOperatorRuntime {} => value(kubernetes::operator_runtime_rules()),
     }
 }
 
