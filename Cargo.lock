@@ -3557,6 +3557,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "custom-ops"
+version = "0.1.0"
+dependencies = [
+ "alien-operations-sdk",
+ "axum 0.8.9",
+ "reqwest 0.12.28",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
