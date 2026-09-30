@@ -109,13 +109,14 @@ pub enum CapabilityCommand {
         /// Permit registry pushes in addition to pulls.
         #[arg(long)]
         push: bool,
-        /// Prebuilt container image the sandbox starts from, used as is. For a private image,
-        /// use --src. Omit to keep the saved image, or to use the platform's default image when
-        /// none is saved.
+        /// Prebuilt public container image the sandbox starts from, used as is. It needs a
+        /// linux/arm64 variant, which runs on AWS; a linux/amd64 variant also runs it on Azure,
+        /// and on GCP once the platform has built it. For a private image, use --src. Omit to
+        /// keep the saved image, or to use the platform's default images when none is saved.
         #[arg(long = "image", alias = "base-image", conflicts_with = "src")]
         image: Option<String>,
         /// Directory with a Dockerfile. The image is built locally with Docker and pushed to the
-        /// project's private repository.
+        /// project's private repository. A private image runs on AWS only.
         #[arg(long)]
         src: Option<PathBuf>,
         /// Dockerfile path relative to --src (default: Dockerfile).
@@ -1514,6 +1515,29 @@ mod tests {
         assert_eq!(
             configure_with_saved_sandbox(saved).await,
             serde_json::json!({ "customImage": SAVED_IMAGE, "maxLifetimeSeconds": 1200 }),
+        );
+    }
+
+    #[tokio::test]
+    async fn bare_enable_on_a_custom_image_running_on_azure_resends_its_idle_time() {
+        const SAVED_IMAGE: &str = "docker.io/library/python:3.12";
+        let saved = serde_json::json!({
+            "enabled": true,
+            "customImage": SAVED_IMAGE,
+            "baseImage": "docker.io/library/python@sha256:aaa",
+            "maxLifetimeSeconds": 1200,
+            "azure": {
+                "registryImage": "docker.io/library/python@sha256:bbb",
+                "idleSuspendSeconds": 900,
+            },
+        });
+        assert_eq!(
+            configure_with_saved_sandbox(saved).await,
+            serde_json::json!({
+                "customImage": SAVED_IMAGE,
+                "maxLifetimeSeconds": 1200,
+                "azureIdleSuspendSeconds": 900,
+            }),
         );
     }
 
