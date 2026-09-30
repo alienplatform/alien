@@ -5243,15 +5243,19 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
+{{- define "deployment.logCollectorNameLabel" -}}
+{{- ternary "node-log-collector" "log-collector" (eq (include "deployment.name" .) "log-collector") -}}
+{{- end -}}
+
 {{- define "deployment.logCollectorLabels" -}}
 {{- $labels := include "deployment.labels" . | fromYaml -}}
-{{- $_ := set $labels "app.kubernetes.io/name" "log-collector" -}}
+{{- $_ := set $labels "app.kubernetes.io/name" (include "deployment.logCollectorNameLabel" .) -}}
 {{- toYaml $labels -}}
 {{- end -}}
 
 {{- define "deployment.hookLabels" -}}
 {{- $labels := include "deployment.labels" . | fromYaml -}}
-{{- $_ := set $labels "app.kubernetes.io/name" "lifecycle-hook" -}}
+{{- $_ := set $labels "app.kubernetes.io/name" (ternary "remote-operator-hook" "lifecycle-hook" (eq (include "deployment.name" .) "lifecycle-hook")) -}}
 {{- toYaml $labels -}}
 {{- end -}}
 
@@ -6687,7 +6691,7 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: log-collector
+      app.kubernetes.io/name: {{ include "deployment.logCollectorNameLabel" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/component: log-collector
   template:
@@ -7374,7 +7378,7 @@ rotated, set `remoteOperator.collectorTokenRevision` to the new token's
 64-character SHA-256 hex digest during the chart upgrade. This restarts both
 the receiver and the DaemonSet with the new credential.
 
-Node collectors use their own `app.kubernetes.io/name=log-collector` label so
+Node collectors use their own `app.kubernetes.io/name` label so
 receiver selectors do not match collector Pods. Charts generated before this
 label change used the receiver's name label. The collector resources now have
 a `v2` name so `helm upgrade` creates the new DaemonSet and removes the old one
@@ -9845,10 +9849,15 @@ logCollector:
     fn node_collector_selectors_do_not_match_other_workloads() {
         let mut files = sample_product_chart_with_collector(true).files;
         files.shift_remove("templates/remote-operator-checks.yaml");
-        for remote_enabled in [false, true] {
+        for (remote_enabled, runtime_name) in [
+            (false, "operator"),
+            (true, "operator"),
+            (false, "log-collector"),
+            (false, "lifecycle-hook"),
+        ] {
             let values = format!(
                 r#"
-nameOverride: operator
+nameOverride: {runtime_name}
 management:
   url: https://manager.example.test
 logCollector:

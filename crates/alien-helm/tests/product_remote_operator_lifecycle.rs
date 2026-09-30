@@ -2604,7 +2604,7 @@ fn verify_collector_selector_upgrade(temp: &Path, current_chart: &Path, namespac
                 .replace("%s-logs-v2", "%s-logs")
                 .replace("trunc 55 |", "trunc 58 |")
                 .replace(
-                    "set $labels \"app.kubernetes.io/name\" \"log-collector\"",
+                    "set $labels \"app.kubernetes.io/name\" (include \"deployment.logCollectorNameLabel\" .)",
                     "set $labels \"app.kubernetes.io/name\" (include \"deployment.name\" .)",
                 );
         } else if path == "templates/remote-operator.yaml" {
@@ -2614,7 +2614,7 @@ fn verify_collector_selector_upgrade(temp: &Path, current_chart: &Path, namespac
             );
         } else if path == "templates/whitelabeled-log-collector-daemonset.yaml" {
             *contents = contents.replace(
-                "app.kubernetes.io/name: log-collector",
+                "app.kubernetes.io/name: {{ include \"deployment.logCollectorNameLabel\" . }}",
                 "app.kubernetes.io/name: {{ include \"deployment.name\" . }}",
             );
         }
