@@ -209,7 +209,8 @@ where
         rendered.push_str("Failed checks:");
         for check in failed_checks {
             rendered.push('\n');
-            rendered.push_str(&format!("  - {check}"));
+            // A message can span lines; keep them under its bullet.
+            rendered.push_str(&format!("  - {}", check.replace('\n', "\n    ")));
         }
     }
 
@@ -353,7 +354,7 @@ mod event_tests {
         };
         let error = Err::<(), _>(AlienError::new(
             alien_preflights::error::ErrorData::ValidationFailed {
-                error_count: 2,
+                error_count: 3,
                 warning_count: 0,
                 results: vec![
                     check(
@@ -361,6 +362,7 @@ mod event_tests {
                         &["Input 'apiKey' is not deployer-provided"],
                     ),
                     check("Sandboxes build", &[]),
+                    check("Input patterns", &["Input 'region' must match:\n^[a-z]+$"]),
                     check(
                         "Sandbox lifecycle",
                         &["A source-built sandbox must be Live"],
@@ -377,7 +379,7 @@ mod event_tests {
 
         assert!(
             rendered.contains(
-                "Failed checks:\n  - Input 'apiKey' is not deployer-provided\n  - A source-built sandbox must be Live"
+                "Failed checks:\n  - Input 'apiKey' is not deployer-provided\n  - Input 'region' must match:\n    ^[a-z]+$\n  - A source-built sandbox must be Live"
             ),
             "{rendered}"
         );
