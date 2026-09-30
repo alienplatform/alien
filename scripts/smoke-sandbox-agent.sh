@@ -43,8 +43,9 @@ fi
 # Each command gets its own shell, so a `#` or a quote in one line cannot swallow the
 # check on it or reach the next one.
 # shellcheck disable=SC2016
-tools_probe='for tool do echo "probing ${tool}"; out=$(sh -c "$tool" 2>&1 </dev/null) ||
-  { printf "tool probe: %s failed: %s\n" "$tool" "$(printf "%s" "$out" | tail -n 1)"; exit 1; }; done'
+tools_probe='for tool do printf "probing %s\n" "$tool"; out=$(sh -c "$tool" 2>&1 </dev/null) || {
+  last=$(printf "%s" "$out" | tail -n 1)
+  printf "tool probe: %s failed%s\n" "$tool" "${last:+: $last}"; exit 1; }; done'
 
 IFS=, read -r -a platform_list <<< "$platforms"
 for platform in "${platform_list[@]}"; do
@@ -117,14 +118,24 @@ for platform in "${platform_list[@]}"; do
       124|137)
         # The last "probing" line names the tool that hung.
         echo "$tools_out"
-        if ! timeout -k 5 30 docker rm -f "$probe" >/dev/null 2>&1; then
-          echo "::warning::${platform}: container ${probe} could not be removed and may still be running"
-        fi
+        timeout -k 5 30 docker rm -f "$probe" >/dev/null 2>&1 || true
+        # rm races the --rm removal the kill triggers, so whether the container is gone is read
+        # back rather than taken from rm's own status.
+        running=$(timeout -k 5 30 docker inspect -f '{{.State.Running}}' "$probe" 2>&1) || true
+        case "$running" in
+          false|*[Nn]"o such"*) ;;
+          *) echo "::warning::${platform}: container ${probe} could not be removed and may still be running" ;;
+        esac
         echo "::error::${platform}: the tools probe did not finish within 120s"
         exit 1 ;;
       *)
         echo "$tools_out"
-        echo "::error::${platform}: $(printf '%s' "$tools_out" | tail -n 1 | grep . || echo 'the tools probe did not complete')"
+        last=$(printf '%s' "$tools_out" | tail -n 1)
+        case "$last" in
+          '') last="the tools probe did not complete" ;;
+          "probing "*) last="the tools probe stopped while running ${last#probing }" ;;
+        esac
+        echo "::error::${platform}: ${last}"
         exit 1 ;;
     esac
   fi

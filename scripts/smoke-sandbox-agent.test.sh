@@ -132,8 +132,13 @@ tools_list="$here/../docker/sandbox-default-tools.txt"
 flags=(--tools "$tools_list")
 # A timed-out probe's client is killed but its container is not, so each timeout path
 # must remove the container by name.
-for mode in tools-124 tools-137 tools-hang; do
-  check "$mode" fail "linux/amd64: the tools probe did not finish within 120s"
+for mode in tools-124 tools-137 tools-hang tools-hang-rm-fails; do
+  body=""
+  case "$mode" in
+    tools-hang) body="probing sleep 10" ;;
+    tools-hang-rm-fails) body="::warning::linux/amd64: container smoke-tools-" ;;
+  esac
+  check "$mode" fail "linux/amd64: the tools probe did not finish within 120s" "$body"
   if grep -q "^-f smoke-tools-[0-9]*-linux-amd64$" "$state/container-removals" 2>/dev/null; then
     passed=$((passed + 1))
     echo "ok   ${mode}: the timed-out probe container was removed"
@@ -142,11 +147,11 @@ for mode in tools-124 tools-137 tools-hang; do
     echo "FAIL ${mode}: the timed-out probe container was never removed"
   fi
 done
-check tools-hang fail "linux/amd64: the tools probe did not finish within 120s" "probing node --version"
 check tools-error fail "linux/amd64: stub: the tools probe failed"
 check tools-silent fail "linux/amd64: the tools probe did not complete"
 check tools-missing fail "linux/amd64: tool probe: rg --version failed"
-check tools-hidden-failure fail "linux/amd64: tool probe: false # hidden failed"
+check tools-hidden-failure fail "linux/amd64: tool probe: echo boom >&2; false # hidden failed: boom"
+check tools-crash fail "linux/amd64: the tools probe stopped while running node --version"
 
 check happy pass ""
 for platform in linux/amd64 linux/arm64; do
