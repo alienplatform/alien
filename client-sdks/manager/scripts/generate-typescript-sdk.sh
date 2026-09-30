@@ -30,7 +30,7 @@ fi
 
 while IFS= read -r -d '' generated_file; do
   if [[ "$generated_file" == *.md && -f "$repo_root/$generated_file" ]]; then
-    perl -0pi -e 's/[ \t]+(?=\n)//g; s/\n+\z/\n/' "$repo_root/$generated_file"
+    perl -0pi -e 's/[ \t]+(?=\n)//g; s/\n*\z/\n/' "$repo_root/$generated_file"
   fi
 done < <(git -C "$repo_root" ls-files -mo --exclude-standard -z -- "$sdk_dir")
 
