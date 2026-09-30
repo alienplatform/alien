@@ -153,7 +153,7 @@ jobs:
           VERSION: ${{ steps.qualification_version.outputs.version }}
         run: |
           cargo metadata --format-version 1 --locked >/dev/null
-          for pkg in packages/core packages/commands packages/sdk packages/testing \
+          for pkg in packages/core packages/permissions packages/commands packages/sdk packages/testing \
             client-sdks/platform/typescript client-sdks/manager/typescript \
             packages/bindings crates/alien-bindings-node \
             packages/bindings/npm/darwin-arm64 packages/bindings/npm/darwin-x64 \
@@ -218,7 +218,7 @@ jobs:
           # (crate manifest, wrapper, and each npm/<triple> skeleton) that must all
           # carry the release version BEFORE the native build on the runners, so the
           # loader embeds it and publish injects matching optionalDependencies.
-          for pkg in packages/core packages/commands packages/sdk packages/testing \
+          for pkg in packages/core packages/permissions packages/commands packages/sdk packages/testing \
             client-sdks/platform/typescript client-sdks/manager/typescript \
             packages/bindings crates/alien-bindings-node \
             packages/bindings/npm/darwin-arm64 packages/bindings/npm/darwin-x64 \
@@ -309,6 +309,7 @@ jobs:
             Cargo.toml
             Cargo.lock
             packages/core/package.json
+            packages/permissions/package.json
             packages/commands/package.json
             packages/sdk/package.json
             packages/testing/package.json
@@ -373,7 +374,7 @@ jobs:
         run: |
           git checkout --detach "${{ steps.merged_version.outputs.commit }}"
           cargo metadata --format-version 1 --locked >/dev/null
-          for pkg in packages/core packages/commands packages/sdk packages/testing \
+          for pkg in packages/core packages/permissions packages/commands packages/sdk packages/testing \
             client-sdks/platform/typescript client-sdks/manager/typescript \
             packages/bindings crates/alien-bindings-node \
             packages/bindings/npm/darwin-arm64 packages/bindings/npm/darwin-x64 \
@@ -707,7 +708,7 @@ jobs:
         run: |
           if [ "${{ inputs.stable_action }}" = "qualification" ]; then
             mkdir -p qualified/npm
-            for package in core commands sdk testing; do
+            for package in core permissions commands sdk testing; do
               pnpm --filter "@alienplatform/${package}" pack --pack-destination qualified/npm
             done
             exit 0
@@ -731,6 +732,7 @@ jobs:
           }
 
           publish_tarball qualified/npm/alienplatform-core-${{ needs.prepare.outputs.version }}.tgz @alienplatform/core
+          publish_tarball qualified/npm/alienplatform-permissions-${{ needs.prepare.outputs.version }}.tgz @alienplatform/permissions
           publish_tarball qualified/npm/alienplatform-commands-${{ needs.prepare.outputs.version }}.tgz @alienplatform/commands
           publish_tarball qualified/npm/alienplatform-sdk-${{ needs.prepare.outputs.version }}.tgz @alienplatform/sdk
           publish_tarball qualified/npm/alienplatform-testing-${{ needs.prepare.outputs.version }}.tgz @alienplatform/testing

@@ -300,6 +300,7 @@ jobs:
               > "npm-dev-pack-results/${safe_name}.json"
           done <<'EOF'
           packages/core
+          packages/permissions
           packages/commands
           packages/bindings
           packages/ai-gateway

@@ -798,6 +798,7 @@ dependencies = [
  "alien-core",
  "alien-error",
  "alien-operations-sdk",
+ "alien-permissions",
  "alien-terraform",
  "indexmap 2.14.1",
  "insta",
@@ -1065,6 +1066,7 @@ version = "3.3.26"
 dependencies = [
  "alien-core",
  "alien-error",
+ "alien-permissions",
  "async-trait",
  "reqwest 0.12.28",
  "schemars 0.8.22",
@@ -1150,6 +1152,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "wasm-bindgen",
 ]
 
 [[package]]

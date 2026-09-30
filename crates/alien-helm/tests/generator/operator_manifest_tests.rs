@@ -832,3 +832,98 @@ fn operator_manifest_reports_exact_package_image_identity() {
         Some("1.2.3")
     );
 }
+
+#[test]
+fn compiled_operation_grants_match_rendered_rbac_in_both_scopes_and_modes() {
+    use alien_permissions::operations::{self, CatalogPlugin, KubernetesMode};
+
+    let mut operation = custom_operation("inspector");
+    operation.tier = alien_operations_sdk::RiskTier::Mutating;
+    operation
+        .permissions
+        .rules
+        .push(alien_operations_sdk::KubernetesPermissionRule {
+            api_group: "".into(),
+            resource: "pods".into(),
+            verbs: vec!["get".into(), "delete".into()],
+            resource_names: vec!["selected-pod".into()],
+            reason: "Inspect and restart the selected pod".into(),
+        });
+    let catalog: CatalogPlugin = serde_json::from_value(serde_json::json!({
+        "name": operation.plugin, "enabled": true, "operations": [{
+            "name": operation.operation, "kubernetesPermissions": operation.permissions
+        }]
+    }))
+    .unwrap();
+    let grants = operations::kubernetes::collect(&[catalog]);
+    let role_grants = |manifest: &str| {
+        let docs = parse_manifest(manifest);
+        let role = docs
+            .iter()
+            .find(|doc| doc["kind"] == "Role" || doc["kind"] == "ClusterRole")
+            .unwrap();
+        role["rules"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .flat_map(|rule| {
+                let names = rule["resourceNames"]
+                    .as_sequence()
+                    .map(|names| {
+                        names
+                            .iter()
+                            .map(|name| name.as_str().unwrap().to_string())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                rule["verbs"]
+                    .as_sequence()
+                    .unwrap()
+                    .iter()
+                    .map(move |verb| {
+                        (
+                            rule["apiGroups"][0].as_str().unwrap().to_string(),
+                            rule["resources"][0].as_str().unwrap().to_string(),
+                            verb.as_str().unwrap().to_string(),
+                            names.clone(),
+                        )
+                    })
+            })
+            .collect::<BTreeSet<_>>()
+    };
+    for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
+        for (permission, mode) in [
+            (OperatorPermission::Diagnostics, KubernetesMode::Diagnostics),
+            (OperatorPermission::Remediation, KubernetesMode::Remediation),
+        ] {
+            let baseline = rendered_with_custom(
+                scope,
+                permission,
+                false,
+                &[],
+                OperatorOutputFormat::RawManifest,
+            )
+            .unwrap();
+            let mut expected = role_grants(&baseline);
+            for grant in operations::kubernetes::compile(&grants, mode) {
+                for verb in grant.verbs {
+                    expected.insert((
+                        grant.api_group.clone(),
+                        grant.resource.clone(),
+                        verb,
+                        grant.resource_names.clone(),
+                    ));
+                }
+            }
+            let actual = rendered_with_custom(
+                scope,
+                permission,
+                false,
+                &[operation.clone()],
+                OperatorOutputFormat::RawManifest,
+            )
+            .unwrap();
+            assert_eq!(role_grants(&actual), expected);
+        }
+    }
+}
