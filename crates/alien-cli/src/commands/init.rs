@@ -52,8 +52,8 @@ const KNOWN_TEMPLATES: &[(&str, &str)] = &[
         "Process events and data close to the systems that produce them.",
     ),
     (
-        "kubernetes-data-plane",
-        "Run a service in customer Kubernetes clusters, reachable through the manager.",
+        "customer-kubernetes",
+        "Run a service in your customers' Kubernetes clusters, including air-gapped ones.",
     ),
     (
         "webhook-api-ts",

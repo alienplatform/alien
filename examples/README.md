@@ -13,7 +13,7 @@ Each example is a self-contained template you can initialize with `alien init`.
 | [event-pipeline-ts](./event-pipeline-ts) | Process queue, storage, and scheduled events. | TypeScript |
 | [nextjs-app](./nextjs-app) | Deploy a complete Next.js application as a container. | TypeScript |
 | [github-agent](./github-agent) | Build a GitHub integration agent with a Next.js dashboard. | TypeScript |
-| [kubernetes-data-plane](./kubernetes-data-plane) | Run a service in customer Kubernetes clusters, reachable through the manager. | Rust |
+| [customer-kubernetes](./customer-kubernetes) | Run a service in your customers' Kubernetes clusters, including air-gapped ones, from a manager you host. | Rust |
 | [customer-models-ts](./customer-models-ts) | Let each customer connect models from their cloud account. | TypeScript |
 | [byob-storage-ts](./byob-storage-ts) | Provision customer-owned object storage and access it from an external SaaS backend. | TypeScript |
 | [customer-keys-ts](./customer-keys-ts) | Encrypt data with a key controlled by each customer. | TypeScript |

@@ -1,9 +1,9 @@
 {
-  "name": "kubernetes-data-plane",
+  "name": "customer-kubernetes",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "devDependencies": {
-    "@alienplatform/core": "^1.7.0"
+    "@alienplatform/core": "^3.3.26"
   }
 }

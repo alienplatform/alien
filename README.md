@@ -56,8 +56,8 @@ read -rs ALIEN_TOKEN  # paste acme's token, then Enter
 printf '%s' "$ALIEN_TOKEN" | helm registry login manager.example.com --username acme --password-stdin
 
 printf 'management:\n  token: %s\n' "$ALIEN_TOKEN" | \
-helm install data-plane oci://manager.example.com/charts/data-plane \
-  --namespace data-plane --create-namespace \
+helm install files oci://manager.example.com/charts/files \
+  --namespace files --create-namespace \
   --set management.name=acme \
   --values values.yaml \
   --values -
@@ -93,22 +93,22 @@ Both give you the same things: releases, heartbeats, logs and commands. See [How
 import * as alien from "@alienplatform/core"
 
 // The customer's S3-compatible bucket, supplied at install time.
-const objects = new alien.Storage("objects").build()
+const bucket = new alien.Storage("bucket").build()
 
 const api = new alien.Container("api")
   .code({ type: "source", src: ".", toolchain: { type: "rust", binaryName: "api" } })
   .cpu(0.5)
   .memory("512Mi")
   .tunnel(8080) // reachable from your backend through the manager
-  .link(objects)
+  .link(bucket)
   .permissions("api")
   .build()
 
-export default new alien.Stack("data-plane")
+export default new alien.Stack("files")
   .platforms(["kubernetes"])
-  .add(objects, "frozen")
+  .add(bucket, "frozen")
   .add(api, "live")
-  .permissions({ profiles: { api: { objects: ["storage/data-read", "storage/data-write"] } } })
+  .permissions({ profiles: { api: { bucket: ["storage/data-read", "storage/data-write"] } } })
   .build()
 ```
 
@@ -124,7 +124,7 @@ Once a customer installs, you don't need access to their environment again:
 - **Tunnels.** Your backend calls a container inside any deployment through the manager, over the Operator's outbound connection. Request and response bodies stream in both directions, and the app's own `Authorization` header passes through:
 
   ```bash
-  curl https://manager.example.com/v1/deployments/acme/tunnels/api/objects \
+  curl https://manager.example.com/v1/deployments/acme/tunnels/api/files \
     -H "Proxy-Authorization: Bearer ax_tunnel_..." \
     -H "Authorization: Bearer <your app's token>"
   ```
@@ -162,7 +162,7 @@ See [Permissions](https://alien.dev/docs/permissions) and [Frozen and live](http
 
 ## Examples
 
-- [kubernetes-data-plane](examples/kubernetes-data-plane): a Rust object service in customer Kubernetes clusters, with S3-compatible storage and a tunnel
+- [customer-kubernetes](examples/customer-kubernetes): a service in your customers' Kubernetes clusters, including air-gapped ones, from a manager you host
 - [remote-worker-ts](examples/remote-worker-ts): tool execution inside the customer's cloud for an AI agent
 - [data-connector-ts](examples/data-connector-ts): query private databases without sharing credentials
 - [webhook-api-ts](examples/webhook-api-ts): an API inside the customer's network

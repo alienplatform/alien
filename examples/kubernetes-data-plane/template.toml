@@ -1,3 +1,0 @@
-name = "kubernetes-data-plane"
-description = "Run a service in customer Kubernetes clusters, reachable through the manager."
-language = "Rust"

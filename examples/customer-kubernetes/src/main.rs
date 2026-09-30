@@ -1,15 +1,15 @@
-//! Object service that runs in a customer's Kubernetes cluster.
+//! A files service that runs in a customer's Kubernetes cluster.
 //!
-//! Stores objects in the customer's own S3-compatible bucket (the `objects`
+//! Stores files in the customer's own S3-compatible bucket (the `bucket`
 //! binding) and serves them over HTTP. Your control plane calls it through the
-//! manager's tunnel with its own bearer token; nothing listens on the
-//! customer's network for you.
+//! manager's tunnel with the customer's access token; nothing on the
+//! customer's network is exposed to you.
 //!
-//! - `PUT /objects/{key}` streams the body into the bucket. `If-None-Match: *`
+//! - `PUT /files/{key}` streams the body into the bucket. `If-None-Match: *`
 //!   only creates; `If-Match: <etag>` only replaces that exact version.
-//! - `GET /objects/{key}` streams the object back.
-//! - `GET /objects?prefix=` lists objects.
-//! - `DELETE /objects/{key}` removes an object.
+//! - `GET /files/{key}` streams the file back.
+//! - `GET /files?prefix=` lists files.
+//! - `DELETE /files/{key}` removes a file.
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -50,18 +50,18 @@ async fn main() {
     let access_token = std::env::var("ACCESS_TOKEN").expect("ACCESS_TOKEN must be set");
     let bindings = Bindings::from_env().expect("failed to load bindings");
     let storage = bindings
-        .storage("objects")
+        .storage("bucket")
         .await
-        .expect("failed to load the 'objects' storage binding");
-    info!(bucket = %storage.get_url(), "object storage ready");
+        .expect("failed to load the 'bucket' storage binding");
+    info!(bucket = %storage.get_url(), "bucket ready");
 
     let state = AppState {
         storage,
         access_token: access_token.into(),
     };
     let app = Router::new()
-        .route("/objects", get(list))
-        .route("/objects/{*key}", get(download).put(upload).delete(remove))
+        .route("/files", get(list))
+        .route("/files/{*key}", get(download).put(upload).delete(remove))
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize))
         .route("/health", get(|| async { "ok" }))
         .with_state(state);
@@ -78,7 +78,7 @@ async fn main() {
     axum::serve(listener, app).await.expect("server failed");
 }
 
-/// Every object route requires `Authorization: Bearer <ACCESS_TOKEN>`.
+/// Every file route requires `Authorization: Bearer <ACCESS_TOKEN>`.
 async fn authorize(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let presented = request
         .headers()
@@ -169,7 +169,7 @@ async fn upload(
 
     match result {
         Ok(etag) => {
-            info!(key = %key, size, "stored object");
+            info!(key = %key, size, "stored file");
             (StatusCode::CREATED, Json(Stored { key, size, etag })).into_response()
         }
         Err(e) => storage_error(e),
@@ -247,7 +247,7 @@ async fn list(State(state): State<AppState>, Query(query): Query<ListQuery>) -> 
 async fn remove(State(state): State<AppState>, UrlPath(key): UrlPath<String>) -> Response {
     match state.storage.delete(&Path::from(key.as_str())).await {
         Ok(()) => {
-            info!(key = %key, "deleted object");
+            info!(key = %key, "deleted file");
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => storage_error(e),

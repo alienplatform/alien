@@ -12,7 +12,7 @@ packages:
   - webhook-api-ts
   - nextjs-app
   - byoc-database
-  - kubernetes-data-plane
+  - customer-kubernetes
   - slatedb-trace-store
   - endpoint-agent
   - full-stack-microservices

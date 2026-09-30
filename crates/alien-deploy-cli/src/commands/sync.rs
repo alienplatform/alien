@@ -774,8 +774,15 @@ async fn download_update(
         println!("{} is up to date ({release_id}).", site.name);
         return Ok(());
     }
+    // The site already runs this release: the update only carries the
+    // acknowledgement that frees the telemetry the manager received.
+    let what = if site.site_release.as_deref() == Some(release_id.as_str()) {
+        format!("an acknowledgement of the site's reports ({release_id}, already running)")
+    } else {
+        format!("update {release_id}")
+    };
     if dry_run {
-        println!("Would download update {release_id}.");
+        println!("Would download {what}.");
         return Ok(());
     }
 
@@ -822,7 +829,7 @@ async fn download_update(
         .into_alien_error()
         .context(config_error("creating a working directory"))?;
     let dir = work.path();
-    println!("Downloading update {release_id} for {}", site.name);
+    println!("Downloading {what} for {}", site.name);
     let chart_reference = sources["chart"]["reference"].as_str().ok_or_else(|| {
         AlienError::new(ErrorData::ManagerRequestFailed {
             message: "bundle-sources has no chart".to_string(),
@@ -933,7 +940,7 @@ async fn download_update(
         delta.push_str(", without alien-deploy builds");
     }
     println!(
-        "Downloaded update {release_id} ({:.1} MB, signed{delta}).",
+        "Downloaded {what} ({:.1} MB, signed{delta}).",
         size as f64 / 1_000_000.0
     );
     Ok(())
