@@ -53,8 +53,6 @@ jobs:
           echo "short_sha=${git_sha:0:12}" >> "$GITHUB_OUTPUT"
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10.34.5
 
       - uses: actions/setup-node@v7
         with:
@@ -137,8 +135,6 @@ jobs:
         run: rustup target add x86_64-apple-darwin
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10.34.5
 
       - uses: actions/setup-node@v7
         with:
@@ -219,8 +215,6 @@ jobs:
           path: .npm-dev-tools
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10.34.5
 
       - uses: actions/setup-node@v7
         with:
@@ -300,6 +294,7 @@ jobs:
               > "npm-dev-pack-results/${safe_name}.json"
           done <<'EOF'
           packages/core
+          packages/permissions
           packages/commands
           packages/bindings
           packages/ai-gateway

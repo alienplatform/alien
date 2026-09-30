@@ -38,8 +38,6 @@ jobs:
       - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10.34.5
 
       - uses: actions/setup-node@v7
         with:
@@ -99,8 +97,14 @@ jobs:
             --exclude alien-test-server \
             --filter-expr 'not (package(alien-aws-clients) and kind(test)) and not (package(alien-gcp-clients) and kind(test)) and not (package(alien-azure-clients) and kind(test)) and not (package(alien-bindings) and kind(test)) and not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::image_shape_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-worker-runtime::cloudrun) and not binary_id(alien-worker-runtime::lambda) and not binary_id(alien-test::distribution) and not binary_id(alien-test::pull) and not binary_id(alien-test::push) and not binary_id(alien-manager::registry_proxy_cloud_test)'
 
+      - name: Install operation compiler generation tools
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --target wasm32-unknown-unknown
+          VERSION=$(node -e 'const fs = require("node:fs"); console.log(fs.readFileSync("Cargo.lock", "utf8").match(/name = "wasm-bindgen"\nversion = "([^"]+)"/)[1])')
+          cargo +1.97.1 install --locked --version "$VERSION" wasm-bindgen-cli
+
       - name: Regenerate local TypeScript APIs
         run: pnpm generate
 
       - name: Check generated files are committed
-        run: git diff --exit-code -- packages/core packages/sdk
+        run: git diff --exit-code -- packages/core packages/sdk packages/permissions/generated

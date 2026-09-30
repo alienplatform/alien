@@ -8,6 +8,7 @@ description = "Public SDK for authoring Alien operations plugins: manifest schem
 [dependencies]
 alien-core = { workspace = true, features = ["local"] }
 alien-error = { workspace = true }
+alien-permissions = { workspace = true }
 async-trait = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls-webpki-roots"] }
 schemars = { workspace = true }

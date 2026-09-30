@@ -249,6 +249,38 @@ spec:
     };
 
     run_ok("kubectl", ["create", "namespace", &helm_namespace], None);
+    let collector_fixture_dir = temp.path().join("collector-fixture");
+    fs::create_dir_all(&collector_fixture_dir).expect("create collector fixture directory");
+    fs::write(
+        collector_fixture_dir.join("Dockerfile"),
+        format!(
+            "FROM {OPERATOR_FIXTURE_BASE_IMAGE}\nUSER 1000:1000\nENTRYPOINT [\"/bin/sh\", \"-c\", \"exec sleep 3600\", \"collector\"]\n"
+        ),
+    )
+    .expect("write collector fixture Dockerfile");
+    run_ok(
+        "docker",
+        [
+            "build",
+            "--tag",
+            LOG_COLLECTOR_IMAGE,
+            path_str(&collector_fixture_dir),
+        ],
+        None,
+    );
+    run_ok(
+        "kind",
+        [
+            "load",
+            "docker-image",
+            LOG_COLLECTOR_IMAGE,
+            "--name",
+            "alien-product-lifecycle",
+        ],
+        None,
+    );
+    verify_collector_selector_upgrade(temp.path(), &good_chart_dir, &helm_namespace);
+
     let installer_role = temp.path().join("product-installer-role.yaml");
     fs::write(
         &installer_role,
@@ -2556,6 +2588,265 @@ fn terraform_lifecycle_harness_is_formatted_and_parseable_without_a_collector_to
 
 fn product_chart(image: &str) -> HelmChart {
     product_chart_with_scope(image, OperatorScope::Namespace)
+}
+
+fn verify_collector_selector_upgrade(temp: &Path, current_chart: &Path, namespace: &str) {
+    let previous_chart = temp.join("previous-collector-chart");
+    let mut legacy = product_chart(GOOD_OPERATOR_IMAGE);
+    // Reproduce the names and selectors emitted before collector label isolation.
+    for (path, contents) in &mut legacy.files {
+        if path == "templates/_helpers.tpl" {
+            *contents = contents.replace(
+                    "set $labels \"app.kubernetes.io/name\" (include \"deployment.logCollectorNameLabel\" .)",
+                    "set $labels \"app.kubernetes.io/name\" (include \"deployment.name\" .)",
+                );
+        } else if path == "templates/remote-operator.yaml" {
+            let collector_name_label = "'app.kubernetes.io/name': 'log-collector'";
+            assert!(
+                contents.contains(collector_name_label),
+                "legacy collector label must be replaced"
+            );
+            *contents = contents
+                .replace(collector_name_label, "'app.kubernetes.io/name': 'operator'")
+                .replace(
+                    "deployment.remoteOperatorLogCollectorDaemonSetName",
+                    "deployment.remoteOperatorLogCollectorName",
+                );
+        } else if path == "templates/whitelabeled-log-collector-daemonset.yaml" {
+            *contents = contents
+                .replace(
+                    "deployment.logCollectorDaemonSetName",
+                    "deployment.logCollectorName",
+                )
+                .replace(
+                    "app.kubernetes.io/name: {{ include \"deployment.logCollectorNameLabel\" . }}",
+                    "app.kubernetes.io/name: {{ include \"deployment.name\" . }}",
+                );
+        }
+    }
+    write_chart(&previous_chart, &legacy);
+    let previous_chart = std::env::var_os("ALIEN_PREVIOUS_COLLECTOR_CHART_DIR")
+        .map(PathBuf::from)
+        .unwrap_or(previous_chart);
+
+    for remote_enabled in [false, true] {
+        let release = if remote_enabled {
+            "collector-upgrade-remote"
+        } else {
+            "collector-upgrade-runtime"
+        };
+        let credentials = format!("{release}-remote");
+        run_ok(
+            "kubectl",
+            [
+                "create",
+                "secret",
+                "generic",
+                &credentials,
+                "--namespace",
+                namespace,
+                "--from-literal=sync-token=sync-collector-upgrade",
+                &format!("--from-literal=encryption-key={ENCRYPTION_KEY}"),
+                "--from-literal=collector-token=collector-upgrade",
+            ],
+            None,
+        );
+        let mut args = helm_upgrade_args(release, namespace, &previous_chart, true, 0, "2m");
+        args[0] = "install".to_string();
+        args.push("--set=remoteOperator.enabled=false".to_string());
+        args.push("--set=heartbeat.collection.nodes.enabled=false".to_string());
+        run_ok("helm", &args, None);
+        args[0] = "upgrade".to_string();
+        args.push(format!("--set=remoteOperator.enabled={remote_enabled}"));
+        args.push("--set=logCollector.mode=nodeAgent".to_string());
+        args.push(
+            "--set-string=logCollector.image.repository=alien-product-lifecycle-collector"
+                .to_string(),
+        );
+        args.push("--set-string=logCollector.image.tag=local".to_string());
+        args.push("--set=logCollector.image.pullPolicy=IfNotPresent".to_string());
+        run_ok("helm", &args, None);
+        let old_daemonsets = kubernetes_resource_json(namespace, "daemonsets", None);
+        assert_eq!(old_daemonsets["items"].as_array().unwrap().len(), 1);
+        let old_daemonset = &old_daemonsets["items"][0];
+        let old_name = old_daemonset["metadata"]["name"].as_str().unwrap();
+        let collector_resource_name = old_daemonset["spec"]["template"]["spec"]
+            ["serviceAccountName"]
+            .as_str()
+            .unwrap();
+        let dependency_kinds = ["configmap", "serviceaccount", "role", "rolebinding"];
+        let dependencies_before: Vec<_> = dependency_kinds
+            .iter()
+            .map(|kind| kubernetes_resource_json(namespace, kind, Some(collector_resource_name)))
+            .collect();
+        let receiver_name = if remote_enabled {
+            remote_operator_record_name(namespace, release, "remote-operator")
+        } else {
+            release.to_string()
+        };
+        let receiver_before =
+            kubernetes_resource_json(namespace, "deployment", Some(&receiver_name));
+        let selector = receiver_before["spec"]["selector"]["matchLabels"]
+            .as_object()
+            .unwrap();
+        let old_labels = old_daemonset["spec"]["template"]["metadata"]["labels"]
+            .as_object()
+            .unwrap();
+        assert!(
+            selector
+                .iter()
+                .all(|(key, value)| old_labels.get(key) == Some(value)),
+            "previous chart must reproduce the overlapping selector"
+        );
+        let pvc_name = if remote_enabled {
+            format!("{receiver_name}-identity")
+        } else {
+            format!("{release}-runtime-data")
+        };
+        let pvc_before = kubernetes_resource_json(namespace, "pvc", Some(&pvc_name));
+
+        args[2] = path_str(current_chart).to_string();
+        args.push("--set=remoteOperator.bootstrapIdentity=false".to_string());
+        run_ok("helm", &args, None);
+        let receiver_after =
+            kubernetes_resource_json(namespace, "deployment", Some(&receiver_name));
+        assert_eq!(
+            receiver_before["metadata"]["uid"],
+            receiver_after["metadata"]["uid"]
+        );
+        assert_eq!(
+            receiver_before["spec"]["selector"],
+            receiver_after["spec"]["selector"]
+        );
+        let pvc_after = kubernetes_resource_json(namespace, "pvc", Some(&pvc_name));
+        assert_eq!(pvc_before["metadata"]["uid"], pvc_after["metadata"]["uid"]);
+        let new_daemonsets = kubernetes_resource_json(namespace, "daemonsets", None);
+        assert_eq!(new_daemonsets["items"].as_array().unwrap().len(), 1);
+        let new_daemonset = &new_daemonsets["items"][0];
+        let new_name = new_daemonset["metadata"]["name"].as_str().unwrap();
+        assert_ne!(old_name, new_name);
+        assert_eq!(
+            new_daemonset["spec"]["template"]["spec"]["serviceAccountName"],
+            collector_resource_name
+        );
+        for (kind, before) in dependency_kinds.iter().zip(&dependencies_before) {
+            let after = kubernetes_resource_json(namespace, kind, Some(collector_resource_name));
+            assert_eq!(
+                before["metadata"]["uid"], after["metadata"]["uid"],
+                "collector {kind} must be preserved"
+            );
+        }
+        assert_ne!(
+            old_daemonset["spec"]["selector"],
+            new_daemonset["spec"]["selector"]
+        );
+        run_ok(
+            "kubectl",
+            [
+                "rollout",
+                "status",
+                &format!("daemonset/{new_name}"),
+                "--namespace",
+                namespace,
+                "--timeout=2m",
+            ],
+            None,
+        );
+        run_ok("kubectl", ["wait", "--for=delete", "pod", "--namespace", namespace,
+            &format!("--selector=app.kubernetes.io/name={},app.kubernetes.io/instance={},app.kubernetes.io/component={}",
+                old_labels["app.kubernetes.io/name"].as_str().unwrap(),
+                old_labels["app.kubernetes.io/instance"].as_str().unwrap(),
+                old_labels["app.kubernetes.io/component"].as_str().unwrap()), "--timeout=2m"], None);
+        let selector_arg = selector
+            .iter()
+            .map(|(key, value)| format!("{key}={}", value.as_str().unwrap()))
+            .collect::<Vec<_>>()
+            .join(",");
+        let pods = run_ok(
+            "kubectl",
+            [
+                "get",
+                "pods",
+                "--namespace",
+                namespace,
+                &format!("--selector={selector_arg}"),
+                "--output=json",
+            ],
+            None,
+        );
+        let pods: serde_json::Value =
+            serde_json::from_str(&pods.stdout).expect("receiver Pods JSON");
+        assert_eq!(pods["items"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            pods["items"][0]["spec"]["containers"][0]["name"],
+            "operator"
+        );
+        let endpoints = kubernetes_resource_json(namespace, "endpoints", Some(&receiver_name));
+        let addresses = endpoints["subsets"]
+            .as_array()
+            .expect("receiver endpoint subsets");
+        assert_eq!(addresses.len(), 1);
+        assert_eq!(addresses[0]["addresses"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            addresses[0]["addresses"][0]["targetRef"]["name"],
+            pods["items"][0]["metadata"]["name"]
+        );
+        for arg in &mut args {
+            if arg == "--set=logCollector.mode=nodeAgent" {
+                *arg = "--set=logCollector.mode=podApi".to_string();
+            }
+        }
+        run_ok("helm", &args, None);
+        let receiver = kubernetes_resource_json(namespace, "deployment", Some(&receiver_name));
+        let env = receiver["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            env.iter()
+                .find(|entry| entry["name"] == "OPERATOR_POD_LOG_LEGACY_DAEMONSET")
+                .expect("previous collector migration gate")["value"],
+            old_name,
+        );
+        assert_eq!(
+            env.iter()
+                .find(|entry| entry["name"] == "OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET")
+                .expect("replacement collector migration gate")["value"],
+            new_name,
+        );
+        assert!(
+            kubernetes_resource_json(namespace, "daemonsets", None)["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        run_ok(
+            "helm",
+            [
+                "uninstall",
+                release,
+                "--namespace",
+                namespace,
+                "--wait",
+                "--timeout=2m",
+            ],
+            None,
+        );
+        run_ok(
+            "kubectl",
+            ["delete", "secret", &credentials, "--namespace", namespace],
+            None,
+        );
+    }
+    run_ok("kubectl", ["delete", "crd", CRD_NAME], None);
+}
+
+fn kubernetes_resource_json(namespace: &str, kind: &str, name: Option<&str>) -> serde_json::Value {
+    let mut args = vec!["get", kind, "--namespace", namespace, "--output=json"];
+    if let Some(name) = name {
+        args.push(name);
+    }
+    let output = run_ok("kubectl", args, None);
+    serde_json::from_str(&output.stdout).expect("Kubernetes resource JSON")
 }
 
 fn product_chart_with_scope(image: &str, scope: OperatorScope) -> HelmChart {

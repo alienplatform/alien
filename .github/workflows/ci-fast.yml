@@ -25,9 +25,6 @@ jobs:
       startsWith(github.event.head_commit.message, 'chore: release '))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - name: Check Renovate lockfile classification
-        run: bash scripts/repair-renovate-lockfiles.test.sh
       - name: Validate PR title and branch
         if: github.event_name == 'pull_request'
         env:
@@ -40,10 +37,7 @@ jobs:
             echo "  Example: feat: add Azure container deployment support"
             exit 1
           fi
-          # Self-hosted Renovate opens renovate/alien-<issue>-<slug> as the token user.
-          # The slug may contain dots, which the human branch pattern rejects.
           if [[ "$PR_AUTHOR" != "dependabot[bot]" && "$PR_AUTHOR" != "renovate[bot]" ]] &&
-             ! grep -qE '^renovate/alien-[0-9]+-[a-z0-9][a-z0-9._-]*$' <<< "$BRANCH" &&
              ! grep -qE '^[a-z0-9][a-z0-9._-]*/alien-[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$' <<< "$BRANCH"; then
             echo "::error::Branch must include its Linear issue, for example: alon/alien-123-azure-containers"
             exit 1
@@ -132,20 +126,15 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      # Leave 25% of the 16-core runner available for large rustc processes.
-      # Full-width parallelism previously starved the runner, but the generated
-      # client graph is now smaller and Azure models compile in five shards.
-      CARGO_BUILD_JOBS: "12"
-      # Keep runtime test concurrency unchanged so this experiment measures
-      # compiler parallelism without increasing database/server test pressure.
+      # Bound peak compiler memory so the runner agent remains responsive
+      # while the workspace's large test binaries compile and link.
+      CARGO_BUILD_JOBS: "8"
       NEXTEST_TEST_THREADS: "8"
 
     steps:
       - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10.34.5
 
       - uses: actions/setup-node@v7
         with:
@@ -361,8 +350,6 @@ jobs:
               - 'crates/alien-build/**'
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10.34.5
 
       - uses: actions/setup-node@v7
         with:
@@ -447,7 +434,7 @@ jobs:
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: |
-          pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands --filter @alienplatform/ai-gateway test
+          pnpm --filter @alienplatform/core --filter @alienplatform/permissions --filter @alienplatform/bindings --filter @alienplatform/commands --filter @alienplatform/ai-gateway test
 
       - name: Build TypeScript packages
         if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
@@ -465,13 +452,19 @@ jobs:
         # loudly if the server can't build/start (no silent skip).
         run: pnpm -C packages/commands test:integration
 
+      - name: Install operation compiler generation tools
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --target wasm32-unknown-unknown
+          VERSION=$(node -e 'const fs = require("node:fs"); console.log(fs.readFileSync("Cargo.lock", "utf8").match(/name = "wasm-bindgen"\nversion = "([^"]+)"/)[1])')
+          cargo +1.97.1 install --locked --version "$VERSION" wasm-bindgen-cli
+
       - name: Regenerate local TypeScript APIs
         run: pnpm generate
 
       - name: Check generated files are committed
         # Kubb may change insignificant whitespace between environments. Keep
         # the gate focused on generated behavior and schema content.
-        run: git diff --ignore-all-space --exit-code -- packages/core packages/sdk
+        run: git diff --ignore-all-space --exit-code -- packages/core packages/sdk packages/permissions/generated
 
   all-tests-passed:
     name: All tests passed
