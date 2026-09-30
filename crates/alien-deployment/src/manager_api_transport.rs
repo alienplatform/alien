@@ -159,7 +159,9 @@ impl DeploymentLoopTransport for ManagerApiTransport {
             .body(body)
             .send()
             .await
-            .into_sdk_error()
+            // Reads the body so a structured manager error keeps its own retryable flag.
+            .into_sdk_error_reading_body()
+            .await
             // Inherits retryable: the runner retries a checkpoint only on a retryable error,
             // and a network error reaching the manager must not fail the deployment.
             .context(crate::ErrorData::ManagerRequestFailed {
@@ -807,7 +809,8 @@ mod tests {
         server
             .mock_async(|when, then| {
                 when.method(POST).path("/v1/sync/reconcile");
-                then.status(409).json_body(serde_json::json!({
+                // A 5xx status would be retryable by itself: the manager's own flag decides.
+                then.status(500).json_body(serde_json::json!({
                     "code": "DEPLOYMENT_LEASE_LOST",
                     "message": "another session holds the lease",
                     "retryable": false,
@@ -819,7 +822,7 @@ mod tests {
         let error = reconcile_against(&server.base_url()).await;
 
         assert!(!error.retryable, "{error:?}");
-        assert_eq!(error.http_status_code, Some(409));
+        assert_eq!(error.http_status_code, Some(500));
     }
 
     #[tokio::test]
