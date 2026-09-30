@@ -132,7 +132,7 @@ tools_list="$here/../docker/sandbox-default-tools.txt"
 flags=(--tools "$tools_list")
 # A timed-out probe's client is killed but its container is not, so each timeout path
 # must remove the container by name.
-for mode in tools-124 tools-137 tools-hang tools-hang-rm-fails; do
+for mode in tools-124 tools-hang tools-hang-rm-fails; do
   body=""
   case "$mode" in
     tools-hang) body="probing sleep 10" ;;
@@ -147,6 +147,8 @@ for mode in tools-124 tools-137 tools-hang tools-hang-rm-fails; do
     echo "FAIL ${mode}: the timed-out probe container was never removed"
   fi
 done
+# A 137 well inside the budget is a container killed from outside, not our timeout.
+check tools-137 fail "linux/amd64: the tools probe did not complete"
 check tools-error fail "linux/amd64: stub: the tools probe failed"
 check tools-silent fail "linux/amd64: the tools probe did not complete"
 check tools-missing fail "linux/amd64: tool probe: rg --version failed"
@@ -167,6 +169,7 @@ done
 missing=""
 listed=0
 while IFS= read -r line || [ -n "$line" ]; do
+  line="${line%$'\r'}"
   line="${line#"${line%%[![:space:]]*}"}"
   case "$line" in ''|'#'*) continue ;; esac
   listed=$((listed + 1))
@@ -217,7 +220,7 @@ for arguments in "" "--bogus alien-sandbox-agent:stub" "--tools" "one two" \
   # shellcheck disable=SC2086
   out="$("$script" $arguments 2>&1)"
   status=$?
-  if [ "$status" -eq 0 ] || ! printf '%s\n' "$out" | grep -qF "$usage"; then
+  if [ "$status" -ne 2 ] || ! printf '%s\n' "$out" | grep -qF "$usage"; then
     report "usage '${arguments}'" "expected a usage error, exited ${status}"
   else
     passed=$((passed + 1))

@@ -14,8 +14,10 @@ platforms="linux/amd64,linux/arm64"
 tools_file=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --platforms) platforms="${2:?$usage}"; shift 2 ;;
-    --tools) tools_file="${2:?$usage}"; shift 2 ;;
+    --platforms|--tools)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "$usage" >&2; exit 2; }
+      case "$1" in --platforms) platforms="$2" ;; *) tools_file="$2" ;; esac
+      shift 2 ;;
     -*) echo "$usage" >&2; exit 2 ;;
     *) break ;;
   esac
@@ -111,8 +113,14 @@ for platform in "${platform_list[@]}"; do
     # timeout kills the docker client, not the container, so a hung probe is removed by name.
     probe="smoke-tools-$$-${platform//\//-}"
     status=0
+    started=$SECONDS
     tools_out=$(timeout -k 5 120 docker run --rm --name "$probe" --platform "$platform" \
       --entrypoint /bin/sh "$image" -c "$tools_probe" sh "${tools[@]}" 2>&1) || status=$?
+    # The probe itself exits only 0 or 1, but a container killed from outside also exits 137,
+    # so 137 means our deadline only once that deadline has passed.
+    if [ "$status" = 137 ] && [ $((SECONDS - started)) -lt 120 ]; then
+      status=1
+    fi
     case "$status" in
       0) ;;
       124|137)
