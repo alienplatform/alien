@@ -2595,15 +2595,8 @@ fn verify_collector_selector_upgrade(temp: &Path, current_chart: &Path, namespac
     let mut legacy = product_chart(GOOD_OPERATOR_IMAGE);
     // Reproduce the names and selectors emitted before collector label isolation.
     for (path, contents) in &mut legacy.files {
-        if path == "templates/remote-operator-identity-record.yaml" {
-            *contents = contents
-                .replace("trunc 19 |", "trunc 22 |")
-                .replace("%s-log-collector-v2-%s", "%s-log-collector-%s");
-        } else if path == "templates/_helpers.tpl" {
-            *contents = contents
-                .replace("%s-logs-v2", "%s-logs")
-                .replace("trunc 55 |", "trunc 58 |")
-                .replace(
+        if path == "templates/_helpers.tpl" {
+            *contents = contents.replace(
                     "set $labels \"app.kubernetes.io/name\" (include \"deployment.logCollectorNameLabel\" .)",
                     "set $labels \"app.kubernetes.io/name\" (include \"deployment.name\" .)",
                 );
@@ -2613,13 +2606,22 @@ fn verify_collector_selector_upgrade(temp: &Path, current_chart: &Path, namespac
                 contents.contains(collector_name_label),
                 "legacy collector label must be replaced"
             );
-            *contents =
-                contents.replace(collector_name_label, "'app.kubernetes.io/name': 'operator'");
+            *contents = contents
+                .replace(collector_name_label, "'app.kubernetes.io/name': 'operator'")
+                .replace(
+                    "deployment.remoteOperatorLogCollectorDaemonSetName",
+                    "deployment.remoteOperatorLogCollectorName",
+                );
         } else if path == "templates/whitelabeled-log-collector-daemonset.yaml" {
-            *contents = contents.replace(
-                "app.kubernetes.io/name: {{ include \"deployment.logCollectorNameLabel\" . }}",
-                "app.kubernetes.io/name: {{ include \"deployment.name\" . }}",
-            );
+            *contents = contents
+                .replace(
+                    "deployment.logCollectorDaemonSetName",
+                    "deployment.logCollectorName",
+                )
+                .replace(
+                    "app.kubernetes.io/name: {{ include \"deployment.logCollectorNameLabel\" . }}",
+                    "app.kubernetes.io/name: {{ include \"deployment.name\" . }}",
+                );
         }
     }
     write_chart(&previous_chart, &legacy);
@@ -2668,6 +2670,15 @@ fn verify_collector_selector_upgrade(temp: &Path, current_chart: &Path, namespac
         assert_eq!(old_daemonsets["items"].as_array().unwrap().len(), 1);
         let old_daemonset = &old_daemonsets["items"][0];
         let old_name = old_daemonset["metadata"]["name"].as_str().unwrap();
+        let collector_resource_name = old_daemonset["spec"]["template"]["spec"]
+            ["serviceAccountName"]
+            .as_str()
+            .unwrap();
+        let dependency_kinds = ["configmap", "serviceaccount", "role", "rolebinding"];
+        let dependencies_before: Vec<_> = dependency_kinds
+            .iter()
+            .map(|kind| kubernetes_resource_json(namespace, kind, Some(collector_resource_name)))
+            .collect();
         let receiver_name = if remote_enabled {
             remote_operator_record_name(namespace, release, "remote-operator")
         } else {
@@ -2714,6 +2725,17 @@ fn verify_collector_selector_upgrade(temp: &Path, current_chart: &Path, namespac
         let new_daemonset = &new_daemonsets["items"][0];
         let new_name = new_daemonset["metadata"]["name"].as_str().unwrap();
         assert_ne!(old_name, new_name);
+        assert_eq!(
+            new_daemonset["spec"]["template"]["spec"]["serviceAccountName"],
+            collector_resource_name
+        );
+        for (kind, before) in dependency_kinds.iter().zip(&dependencies_before) {
+            let after = kubernetes_resource_json(namespace, kind, Some(collector_resource_name));
+            assert_eq!(
+                before["metadata"]["uid"], after["metadata"]["uid"],
+                "collector {kind} must be preserved"
+            );
+        }
         assert_ne!(
             old_daemonset["spec"]["selector"],
             new_daemonset["spec"]["selector"]

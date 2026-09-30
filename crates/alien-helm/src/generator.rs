@@ -689,6 +689,11 @@ fn remote_operator_identity_record_tpl(
 {{{{- printf "%s-history-check-%s" $releasePrefix $releaseIdentity | trunc 63 | trimSuffix "-" -}}}}
 {{{{- end -}}}}
 {{{{- define "deployment.remoteOperatorLogCollectorName" -}}}}
+{{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 22 | trimAll "-" -}}}}
+{{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
+{{{{- printf "%s-log-collector-%s" $releasePrefix $releaseIdentity }}}}
+{{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorLogCollectorDaemonSetName" -}}}}
 {{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 19 | trimAll "-" -}}}}
 {{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
 {{{{- printf "%s-log-collector-v2-%s" $releasePrefix $releaseIdentity }}}}
@@ -2064,7 +2069,7 @@ fn generate_operator_manifest_inner(
             credentials_secret_name,
             log_collector.image,
             &collector_labels,
-            options.format == OperatorOutputFormat::HelmTemplate,
+            options.format,
         ));
         for doc in node_docs {
             docs.push(format!("{{{{- if and .Values.logCollector.enabled (eq (default \"nodeAgent\" .Values.logCollector.mode) \"nodeAgent\") }}}}\n{doc}{{{{- end }}}}\n"));
@@ -3485,9 +3490,17 @@ fn operator_log_collector_daemonset_doc(
     credentials_secret_name: &str,
     image: &str,
     labels: &BTreeMap<String, String>,
-    include_credential_revision: bool,
+    format: OperatorOutputFormat,
 ) -> String {
-    let mut yaml = operator_metadata_doc("apps/v1", "DaemonSet", namespace, collector_name, labels);
+    let daemonset_name = match format {
+        OperatorOutputFormat::HelmTemplate => {
+            "{{ include \"deployment.remoteOperatorLogCollectorDaemonSetName\" . }}".to_string()
+        }
+        OperatorOutputFormat::RawManifest => format!("{collector_name}-v2"),
+    };
+    let include_credential_revision = format == OperatorOutputFormat::HelmTemplate;
+    let mut yaml =
+        operator_metadata_doc("apps/v1", "DaemonSet", namespace, &daemonset_name, labels);
     yaml.push_str("spec:\n");
     yaml.push_str("  selector:\n");
     yaml.push_str("    matchLabels:\n");
@@ -5233,6 +5246,10 @@ fn helpers_tpl() -> String {
 {{- end -}}
 
 {{- define "deployment.logCollectorName" -}}
+{{- printf "%s-logs" ((include "deployment.fullname" .) | trunc 58 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "deployment.logCollectorDaemonSetName" -}}
 {{- printf "%s-logs-v2" ((include "deployment.fullname" .) | trunc 55 | trimSuffix "-") -}}
 {{- end -}}
 
@@ -6684,7 +6701,7 @@ fn whitelabeled_log_collector_daemonset_tpl() -> String {
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ include "deployment.logCollectorName" . }}
+  name: {{ include "deployment.logCollectorDaemonSetName" . }}
   labels:
     {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
@@ -7380,10 +7397,11 @@ the receiver and the DaemonSet with the new credential.
 
 Node collectors use their own `app.kubernetes.io/name` label so
 receiver selectors do not match collector Pods. Charts generated before this
-label change used the receiver's name label. The collector resources now have
+label change used the receiver's name label. The collector DaemonSets now have
 a `v2` name so `helm upgrade` creates the new DaemonSet and removes the old one
-without changing its immutable selector. The receiver Deployment keeps its
-existing selector and identity. The replacement collector starts with an empty
+without changing its immutable selector. Collector ConfigMap, ServiceAccount
+and RBAC names stay the same. The receiver Deployment keeps its existing
+selector and identity. The replacement collector starts with an empty
 log buffer and reads the selected log files from the beginning.
 "#
     )
@@ -9849,15 +9867,18 @@ logCollector:
     fn node_collector_selectors_do_not_match_other_workloads() {
         let mut files = sample_product_chart_with_collector(true).files;
         files.shift_remove("templates/remote-operator-checks.yaml");
-        for (remote_enabled, runtime_name) in [
-            (false, "operator"),
-            (true, "operator"),
-            (false, "log-collector"),
-            (false, "lifecycle-hook"),
+        let long_fullname = format!("{}-logs-v2", "a".repeat(55));
+        for (remote_enabled, runtime_name, fullname) in [
+            (false, "operator", ""),
+            (true, "operator", ""),
+            (false, "log-collector", ""),
+            (false, "lifecycle-hook", ""),
+            (false, "operator", long_fullname.as_str()),
         ] {
             let values = format!(
                 r#"
 nameOverride: {runtime_name}
+fullnameOverride: "{fullname}"
 management:
   url: https://manager.example.test
 logCollector:
@@ -9885,6 +9906,18 @@ remoteOperator:
             let rendered = crate::test_utils::helm_template(&files, Some(&values));
             rendered.assert_ok("collector selector isolation");
             let docs = parse_manifest_docs(&rendered.stdout);
+            let mut resource_names = BTreeSet::new();
+            for doc in &docs {
+                let resource = (
+                    doc["kind"].as_str().unwrap(),
+                    doc["metadata"]["namespace"].as_str().unwrap_or("default"),
+                    doc["metadata"]["name"].as_str().unwrap(),
+                );
+                assert!(
+                    resource_names.insert(resource),
+                    "duplicate Kubernetes resource: {resource:?}"
+                );
+            }
             let workloads: Vec<_> = docs
                 .iter()
                 .filter(|doc| {

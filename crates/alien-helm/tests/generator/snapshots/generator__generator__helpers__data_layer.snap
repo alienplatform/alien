@@ -796,6 +796,10 @@ ephemeralStorage:
 {{- end -}}
 
 {{- define "deployment.logCollectorName" -}}
+{{- printf "%s-logs" ((include "deployment.fullname" .) | trunc 58 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "deployment.logCollectorDaemonSetName" -}}
 {{- printf "%s-logs-v2" ((include "deployment.fullname" .) | trunc 55 | trimSuffix "-") -}}
 {{- end -}}
 
@@ -1623,7 +1627,7 @@ data:
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ include "deployment.logCollectorName" . }}
+  name: {{ include "deployment.logCollectorDaemonSetName" . }}
   labels:
     {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
@@ -2952,10 +2956,11 @@ the receiver and the DaemonSet with the new credential.
 
 Node collectors use their own `app.kubernetes.io/name` label so
 receiver selectors do not match collector Pods. Charts generated before this
-label change used the receiver's name label. The collector resources now have
+label change used the receiver's name label. The collector DaemonSets now have
 a `v2` name so `helm upgrade` creates the new DaemonSet and removes the old one
-without changing its immutable selector. The receiver Deployment keeps its
-existing selector and identity. The replacement collector starts with an empty
+without changing its immutable selector. Collector ConfigMap, ServiceAccount
+and RBAC names stay the same. The receiver Deployment keeps its existing
+selector and identity. The replacement collector starts with an empty
 log buffer and reads the selected log files from the beginning.
 
 === files/stack.json ===
