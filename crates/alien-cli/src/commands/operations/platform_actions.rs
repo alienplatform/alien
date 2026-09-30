@@ -922,9 +922,9 @@ fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, Canonica
     if !untyped_operations.is_empty() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
             message: format!(
-                "bundle '{}' has metadata that was not generated from typed operations: {} \
-                 declare no inputSchema and outputSchema. {} Then rebuild the bundle with \
-                 `alien operations package`.",
+                "bundle '{}' has metadata that was not generated from typed operations; \
+                 operations without inputSchema and outputSchema: {}. {} Then rebuild the \
+                 bundle with `alien operations package`.",
                 path.display(),
                 untyped_operations.join(", "),
                 super::check::TYPED_METADATA_HELP
@@ -1037,8 +1037,8 @@ mod tests {
 
         assert_eq!(error.code, "CONFIGURATION_ERROR");
         for expected in [
-            "bundle 'legacy.zip' has metadata that was not generated from typed operations: \
-             'status', 'restart' declare no inputSchema and outputSchema.",
+            "bundle 'legacy.zip' has metadata that was not generated from typed operations; \
+             operations without inputSchema and outputSchema: 'status', 'restart'.",
             "`TypedOperations`",
             "src/bin/generate-metadata.rs",
             "alien operations package",
