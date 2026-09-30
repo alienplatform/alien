@@ -694,6 +694,42 @@ pub async fn prepare_dev_session_deployment(
     create_initial_deployment(deployment_name, port, environment_variables).await
 }
 
+/// `alien dev destroy`: delete a local deployment by name and wait until it's gone. Dev
+/// deployments live only in the dev manager, never in the tracker `alien destroy` reads.
+pub async fn destroy_local_deployment(port: u16, deployment_name: &str, force: bool) -> Result<()> {
+    let client = local_dev_client(port);
+    let existing = find_named_local_deployment(&client, deployment_name)
+        .await?
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "name".to_string(),
+                message: format!(
+                    "No local deployment is named '{deployment_name}'. List them with \
+                     `alien dev deployments ls`."
+                ),
+            })
+        })?;
+
+    let action = if force {
+        alien_manager_api::types::DeleteDeploymentAction::Forget
+    } else {
+        alien_manager_api::types::DeleteDeploymentAction::Cleanup
+    };
+    client
+        .delete_deployment()
+        .id(&existing.id)
+        .body(alien_manager_api::types::DeleteDeploymentRequest { action })
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("Failed to delete local deployment '{deployment_name}'"),
+            url: None,
+        })?;
+
+    wait_for_local_deployment_absent(port, deployment_name).await
+}
+
 async fn find_named_local_deployment(
     client: &AlienManagerClient,
     deployment_name: &str,
@@ -1025,6 +1061,84 @@ mod tests {
             .permissions("execution".to_string())
             .code(WorkerCode::Image { image })
             .build()
+    }
+
+    /// `alien dev destroy` finds the deployment by name on the dev manager, asks for a cleanup
+    /// delete, and returns once it's gone. A name the manager doesn't know is an error.
+    #[tokio::test]
+    async fn destroy_local_deployment_deletes_by_name_and_waits() {
+        use axum::{
+            extract::{Path, State},
+            routing::{get, post},
+            Json, Router,
+        };
+        use std::sync::{Arc, Mutex};
+
+        type Deleted = Arc<Mutex<Vec<(String, serde_json::Value)>>>;
+        async fn list(State(deleted): State<Deleted>) -> Json<serde_json::Value> {
+            let items = if deleted.lock().unwrap().is_empty() {
+                serde_json::json!([{
+                    "id": "dep_1",
+                    "name": "api",
+                    "platform": "local",
+                    "status": "provisioning-failed",
+                    "deploymentGroupId": "dg_1",
+                    "deploymentProtocolVersion": 1,
+                    "projectId": "default",
+                    "workspaceId": "default",
+                    "retryRequested": false,
+                    "createdAt": "2026-01-01T00:00:00Z",
+                }])
+            } else {
+                serde_json::json!([])
+            };
+            Json(serde_json::json!({ "items": items }))
+        }
+        async fn delete(
+            State(deleted): State<Deleted>,
+            Path(id): Path<String>,
+            Json(body): Json<serde_json::Value>,
+        ) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+            deleted.lock().unwrap().push((id, body));
+            // The manager answers a delete with 202 Accepted.
+            (
+                axum::http::StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "action": "cleanup",
+                    "message": "Deployment deletion accepted"
+                })),
+            )
+        }
+
+        let deleted: Deleted = Arc::default();
+        let app = Router::new()
+            .route("/v1/deployments", get(list))
+            .route("/v1/deployments/{id}/delete", post(delete))
+            .with_state(deleted.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        destroy_local_deployment(port, "api", false)
+            .await
+            .expect("the named deployment is deleted");
+        assert_eq!(
+            *deleted.lock().unwrap(),
+            vec![(
+                "dep_1".to_string(),
+                serde_json::json!({ "action": "cleanup" })
+            )]
+        );
+
+        let error = destroy_local_deployment(port, "missing", false)
+            .await
+            .expect_err("an unknown name is refused");
+        assert!(
+            error
+                .message
+                .contains("No local deployment is named 'missing'"),
+            "{error:?}"
+        );
     }
 
     #[test]
