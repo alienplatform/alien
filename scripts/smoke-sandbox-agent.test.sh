@@ -132,11 +132,14 @@ tools_list="$here/../docker/sandbox-default-tools.txt"
 flags=(--tools "$tools_list")
 # A timed-out probe's client is killed but its container is not, so each timeout path
 # must remove the container by name.
-for mode in tools-124 tools-137-deadline tools-hang tools-hang-rm-fails; do
+# A daemon that does not answer counts as our deadline and a container that may remain;
+# warnings the docker CLI prints on stderr do not change the answer.
+for mode in tools-124 tools-137-deadline tools-137-noisy tools-137-unknown tools-hang \
+    tools-hang-rm-fails; do
   body=""
   case "$mode" in
     tools-hang) body="probing sleep 10" ;;
-    tools-hang-rm-fails) body="::warning::linux/amd64: container smoke-tools-" ;;
+    tools-hang-rm-fails|tools-137-unknown) body="::warning::linux/amd64: container smoke-tools-" ;;
   esac
   check "$mode" fail "linux/amd64: the tools probe did not finish within 120s" "$body"
   if grep -q "^-f smoke-tools-[0-9]*-linux-amd64$" "$state/container-removals" 2>/dev/null; then

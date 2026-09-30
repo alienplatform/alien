@@ -31,7 +31,7 @@ inject() {
   [ "$platform" = linux/amd64 ] || return 0
   case "$mode" in
     "$1-124") exit 124 ;;
-    "$1-137"|"$1-137-deadline") exit 137 ;;
+    "$1-137"|"$1-137-deadline"|"$1-137-unknown"|"$1-137-noisy") exit 137 ;;
     "$1-error") echo "stub: the $1 probe failed" >&2; exit 7 ;;
     "$1-silent") exit 7 ;;
   esac
@@ -129,6 +129,11 @@ case "$command" in
           tools-hang-rm-fails) echo true; exit 0 ;;
           # Our deadline: the container outlives its killed client until rm removes it.
           tools-137-deadline)
+            [ -s "$state/container-removals" ] || { echo true; exit 0; } ;;
+          tools-137-unknown)
+            echo "Cannot connect to the Docker daemon" >&2; exit 1 ;;
+          tools-137-noisy)
+            echo "WARNING: Error loading config file" >&2
             [ -s "$state/container-removals" ] || { echo true; exit 0; } ;;
         esac
         echo "Error response from daemon: No such object: ${args[${#args[@]} - 1]}" >&2

@@ -49,6 +49,22 @@ tools_probe='for tool do printf "probing %s\n" "$tool"; out=$(sh -c "$tool" 2>&1
   last=$(printf "%s" "$out" | tail -n 1)
   printf "tool probe: %s failed%s\n" "$tool" "${last:+: $last}"; exit 1; }; done'
 
+# Prints true or false for a container that exists, gone for one that does not, and unknown
+# when the daemon does not say. stderr is kept out of the value, since the docker CLI can
+# print warnings there on every call.
+probe_state() {
+  local running error
+  if running=$(timeout -k 5 30 docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null); then
+    printf '%s\n' "$running" | tail -n 1
+    return
+  fi
+  error=$(timeout -k 5 30 docker inspect "$1" 2>&1 >/dev/null) || true
+  case "$error" in
+    *[Nn]"o such"*) echo gone ;;
+    *) echo unknown ;;
+  esac
+}
+
 IFS=, read -r -a platform_list <<< "$platforms"
 for platform in "${platform_list[@]}"; do
   [ -n "$platform" ] || { echo "$usage" >&2; exit 2; }
@@ -118,25 +134,23 @@ for platform in "${platform_list[@]}"; do
       --entrypoint /bin/sh "$image" -c "$tools_probe" sh "${tools[@]}" 2>&1) || status=$?
     if [ "$status" -ne 0 ]; then
       # The probe exits only 0 or 1. A 137 is our deadline when the container outlived its
-      # killed client; a container killed from outside is already gone.
+      # killed client, and an outside kill when it is already gone; unknown stays a deadline.
       if [ "$status" = 137 ]; then
-        running=$(timeout -k 5 30 docker inspect -f '{{.State.Running}}' "$probe" 2>&1) || true
-        [ "$running" = true ] || status=1
+        case "$(probe_state "$probe")" in false|gone) status=1 ;; esac
       fi
       timeout -k 5 30 docker rm -f "$probe" >/dev/null 2>&1 || true
+      # rm races the --rm removal a kill triggers, so whether the container is gone is read
+      # back rather than taken from rm's own status.
+      case "$(probe_state "$probe")" in
+        false|gone) ;;
+        *) echo "::warning::${platform}: container ${probe} could not be removed and may still be running" ;;
+      esac
     fi
     case "$status" in
       0) ;;
       124|137)
         # The last "probing" line names the tool that hung.
         echo "$tools_out"
-        # rm races the --rm removal the kill triggers, so whether the container is gone is read
-        # back rather than taken from rm's own status.
-        running=$(timeout -k 5 30 docker inspect -f '{{.State.Running}}' "$probe" 2>&1) || true
-        case "$running" in
-          false|*[Nn]"o such"*) ;;
-          *) echo "::warning::${platform}: container ${probe} could not be removed and may still be running" ;;
-        esac
         echo "::error::${platform}: the tools probe did not finish within ${tools_budget}s"
         exit 1 ;;
       *)
