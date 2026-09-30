@@ -3186,13 +3186,13 @@ fn operator_deployment_doc(
             };
             yaml.push_str(&format!("              value: {{{{ default (default ({default_scope}) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue | quote }}}}\n"));
             yaml.push_str("            - name: OPERATOR_POD_LOG_LEGACY_DAEMONSET\n");
+            yaml.push_str(&format!(
+                "              value: {{{{ tpl {} . | quote }}}}\n",
+                helm_string(log_collector_name)
+            ));
             if integrated_product_chart {
-                yaml.push_str("              value: {{ include \"deployment.remoteOperatorLogCollectorLegacyDaemonSetName\" . | quote }}\n");
-            } else {
-                yaml.push_str(&format!(
-                    "              value: {{{{ tpl {} . | quote }}}}\n",
-                    helm_string(log_collector_name)
-                ));
+                yaml.push_str("            - name: OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET\n");
+                yaml.push_str("              value: {{ include \"deployment.remoteOperatorLogCollectorDaemonSetName\" . | quote }}\n");
             }
             yaml.push_str("            - name: OPERATOR_POD_LOG_MAX_STREAMS\n");
             yaml.push_str(
@@ -5257,24 +5257,6 @@ fn helpers_tpl() -> String {
 {{- printf "%s-logs-v2" ((include "deployment.fullname" .) | trunc 55 | trimSuffix "-") -}}
 {{- end -}}
 
-{{- define "deployment.remoteOperatorLogCollectorLegacyDaemonSetName" -}}
-{{- $name := include "deployment.remoteOperatorLogCollectorDaemonSetName" . -}}
-{{- if lookup "apps/v1" "DaemonSet" .Release.Namespace $name -}}
-{{- $name -}}
-{{- else -}}
-{{- include "deployment.remoteOperatorLogCollectorName" . -}}
-{{- end -}}
-{{- end -}}
-
-{{- define "deployment.logCollectorLegacyDaemonSetName" -}}
-{{- $name := include "deployment.logCollectorDaemonSetName" . -}}
-{{- if lookup "apps/v1" "DaemonSet" .Release.Namespace $name -}}
-{{- $name -}}
-{{- else -}}
-{{- include "deployment.logCollectorName" . -}}
-{{- end -}}
-{{- end -}}
-
 {{- define "deployment.labels" -}}
 app.kubernetes.io/name: {{ include "deployment.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
@@ -6435,7 +6417,9 @@ spec:
             - name: OPERATOR_POD_LOG_LABEL_VALUE
               value: {{ default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue | quote }}
             - name: OPERATOR_POD_LOG_LEGACY_DAEMONSET
-              value: {{ include "deployment.logCollectorLegacyDaemonSetName" . | quote }}
+              value: {{ include "deployment.logCollectorName" . | quote }}
+            - name: OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET
+              value: {{ include "deployment.logCollectorDaemonSetName" . | quote }}
             - name: OPERATOR_POD_LOG_MAX_STREAMS
               value: {{ default 32 .Values.logCollector.maxStreams | quote }}
             {{- end }}
@@ -7424,7 +7408,10 @@ a `v2` name so `helm upgrade` creates the new DaemonSet and removes the old one
 without changing its immutable selector. Collector ConfigMap, ServiceAccount
 and RBAC names stay the same. The receiver Deployment keeps its existing
 selector and identity. The replacement collector starts with an empty
-log buffer and reads the selected log files from the beginning.
+log buffer and reads the selected log files from the beginning. When switching
+from nodeAgent to podApi, the Operator checks both collector names and waits for
+their Pods to stop, including when the chart is rendered without cluster access.
+Use an Operator image built with this chart version for that transition.
 "#
     )
 }
@@ -9883,6 +9870,61 @@ logCollector:
             operator_env_value(&changed_runtime, "OPERATOR_POD_LOG_LABEL_VALUE"),
             Some("e2e456")
         );
+    }
+
+    #[test]
+    fn offline_pod_api_render_checks_both_collector_generations() {
+        let mut files = sample_product_chart_with_collector(true).files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        for remote_enabled in [false, true] {
+            let values = format!(
+                r#"
+management:
+  url: https://manager.example.test
+logCollector:
+  enabled: true
+  mode: nodeAgent
+remoteOperator:
+  enabled: {remote_enabled}
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#
+            );
+            let node_agent = crate::test_utils::helm_template(&files, Some(&values));
+            node_agent.assert_ok("render node collector offline");
+            let node_docs = parse_manifest_docs(&node_agent.stdout);
+            let collectors = docs_by_kind(&node_docs, "DaemonSet");
+            assert_eq!(collectors.len(), 1);
+            let replacement_name = collectors[0]["metadata"]["name"].as_str().unwrap();
+            let legacy_name = collectors[0]["spec"]["template"]["spec"]["serviceAccountName"]
+                .as_str()
+                .unwrap();
+            assert_ne!(legacy_name, replacement_name);
+            let pod_api = crate::test_utils::helm_template(
+                &files,
+                Some(&values.replace("mode: nodeAgent", "mode: podApi")),
+            );
+            pod_api.assert_ok("render Pod API collector offline");
+            let pod_docs = parse_manifest_docs(&pod_api.stdout);
+            assert!(docs_by_kind(&pod_docs, "DaemonSet").is_empty());
+            let operators = docs_by_kind(&pod_docs, "Deployment");
+            let readers: Vec<_> = operators
+                .iter()
+                .filter(|deployment| {
+                    operator_env_value(deployment, "OPERATOR_POD_LOG_LEGACY_DAEMONSET").is_some()
+                })
+                .collect();
+            assert_eq!(readers.len(), 1);
+            assert_eq!(
+                operator_env_value(readers[0], "OPERATOR_POD_LOG_LEGACY_DAEMONSET"),
+                Some(legacy_name)
+            );
+            assert_eq!(
+                operator_env_value(readers[0], "OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET"),
+                Some(replacement_name)
+            );
+        }
     }
 
     #[test]

@@ -42,6 +42,7 @@ pub struct PodLogCollectionConfig {
     pub label_key: String,
     pub label_value: String,
     pub legacy_daemonset: Option<String>,
+    pub replacement_daemonset: Option<String>,
     pub max_streams: usize,
 }
 
@@ -49,6 +50,7 @@ pub fn config_from_env() -> Result<Option<PodLogCollectionConfig>> {
     let key = env_value("OPERATOR_POD_LOG_LABEL_KEY")?;
     let value = env_value("OPERATOR_POD_LOG_LABEL_VALUE")?;
     let legacy_daemonset = env_value("OPERATOR_POD_LOG_LEGACY_DAEMONSET")?;
+    let replacement_daemonset = env_value("OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET")?;
     let max_streams = match env_value("OPERATOR_POD_LOG_MAX_STREAMS")? {
         Some(value) => value.parse::<usize>().map_err(|_| {
             AlienError::new(ErrorData::ConfigurationError {
@@ -67,7 +69,7 @@ pub fn config_from_env() -> Result<Option<PodLogCollectionConfig>> {
         }));
     }
     match (key, value) {
-        (None, None) if legacy_daemonset.is_none() => Ok(None),
+        (None, None) if legacy_daemonset.is_none() && replacement_daemonset.is_none() => Ok(None),
         (Some(label_key), Some(label_value))
             if valid_label_key(&label_key) && valid_label_value(&label_value) =>
         {
@@ -75,6 +77,7 @@ pub fn config_from_env() -> Result<Option<PodLogCollectionConfig>> {
                 label_key,
                 label_value,
                 legacy_daemonset,
+                replacement_daemonset,
                 max_streams,
             }))
         }
@@ -229,11 +232,18 @@ async fn reconcile(
     completed: &mut HashSet<Source>,
 ) -> Result<()> {
     let selector = format!("{}={}", config.label_key, config.label_value);
-    if let Some(legacy_daemonset) = config.legacy_daemonset.as_deref() {
+    let daemonset_names: Vec<_> = [
+        config.legacy_daemonset.as_deref(),
+        config.replacement_daemonset.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if !daemonset_names.is_empty() {
         // Capture this time before querying the API. The database keeps the
         // first observation across discovery passes and Operator restarts.
         let observed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true);
-        if legacy_collector_running(client, namespace, legacy_daemonset).await? {
+        if legacy_collector_running(client, namespace, &daemonset_names).await? {
             stop_all(tasks).await;
             completed.clear();
             state
@@ -242,7 +252,7 @@ async fn reconcile(
                 .await?;
             if !*legacy_was_running {
                 info!(
-                    legacy_daemonset,
+                    daemonset_names = ?daemonset_names,
                     "Waiting for old node collector to stop before reading Pod logs"
                 );
             }
@@ -251,7 +261,7 @@ async fn reconcile(
         }
         if *legacy_was_running {
             info!(
-                legacy_daemonset,
+                daemonset_names = ?daemonset_names,
                 "Old node collector stopped; reading selected Pod logs"
             );
             *legacy_was_running = false;
@@ -396,23 +406,21 @@ fn selected_sources(
 async fn legacy_collector_running(
     client: &KubernetesClient,
     namespace: &str,
-    daemonset_name: &str,
+    daemonset_names: &[&str],
 ) -> Result<bool> {
     let daemonsets = client
-        .list_daemonsets(
-            namespace,
-            None,
-            Some(format!("metadata.name={daemonset_name}")),
-        )
+        .list_daemonsets(namespace, None, None)
         .await
         .context(ErrorData::PodLogReadFailed {
             message: "could not check the old collector DaemonSet".to_string(),
         })?;
-    if daemonsets
-        .items
-        .iter()
-        .any(|daemonset| daemonset.metadata.name.as_deref() == Some(daemonset_name))
-    {
+    if daemonsets.items.iter().any(|daemonset| {
+        daemonset
+            .metadata
+            .name
+            .as_deref()
+            .is_some_and(|name| daemonset_names.contains(&name))
+    }) {
         return Ok(true);
     }
     let pods = client
@@ -433,9 +441,9 @@ async fn legacy_collector_running(
             .owner_references
             .as_ref()
             .is_some_and(|owners| {
-                owners
-                    .iter()
-                    .any(|owner| owner.kind == "DaemonSet" && owner.name == daemonset_name)
+                owners.iter().any(|owner| {
+                    owner.kind == "DaemonSet" && daemonset_names.contains(&owner.name.as_str())
+                })
             })
     }))
 }
@@ -682,12 +690,110 @@ async fn flush_batch(
 mod tests {
     use super::*;
     use alien_k8s_clients::KubernetesClientConfig;
-    use axum::{extract::Query, routing::get, Router};
+    use axum::{extract::Query, http::StatusCode, routing::get, Json, Router};
     use k8s_openapi::api::core::v1::{Container, PodSpec, PodStatus};
     use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
     use opentelemetry_proto::tonic::common::v1::any_value::Value;
     use prost::Message;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn both_collector_generations_block_cutover_until_their_pods_stop() {
+        let phase = Arc::new(AtomicUsize::new(0));
+        let daemonset_phase = phase.clone();
+        let pod_phase = phase.clone();
+        let app = Router::new()
+            .route(
+                "/apis/apps/v1/namespaces/demo/daemonsets",
+                get(move |Query(query): Query<HashMap<String, String>>| {
+                    let phase = daemonset_phase.load(Ordering::SeqCst);
+                    async move {
+                        assert!(!query.contains_key("fieldSelector"));
+                        if phase == 5 {
+                            return (StatusCode::FORBIDDEN, Json(serde_json::json!({
+                                "apiVersion": "v1", "kind": "Status", "status": "Failure",
+                                "reason": "Forbidden", "message": "access denied", "code": 403
+                            })));
+                        }
+                        let name = match phase {
+                            0 => "collector-logs",
+                            1 => "collector-logs-v2",
+                            _ => "other-release-logs-v2",
+                        };
+                        (StatusCode::OK, Json(serde_json::json!({
+                            "apiVersion": "apps/v1", "kind": "DaemonSetList",
+                            "metadata": {}, "items": [{"metadata": {"name": name}}]
+                        })))
+                    }
+                }),
+            )
+            .route(
+                "/api/v1/namespaces/demo/pods",
+                get(move |Query(query): Query<HashMap<String, String>>| {
+                    let phase = pod_phase.load(Ordering::SeqCst);
+                    async move {
+                        assert_eq!(query.get("labelSelector").map(String::as_str), Some(
+                            "app.kubernetes.io/component in (log-collector,whitelabeled-log-collector)"
+                        ));
+                        let owner = match phase {
+                            2 => "collector-logs",
+                            3 => "collector-logs-v2",
+                            _ => "other-release-logs-v2",
+                        };
+                        Json(serde_json::json!({
+                            "apiVersion": "v1", "kind": "PodList", "metadata": {},
+                            "items": [{"metadata": {
+                                "name": "terminating-collector", "deletionTimestamp": "2026-09-30T00:00:00Z",
+                                "ownerReferences": [{"apiVersion": "apps/v1", "kind": "DaemonSet",
+                                    "name": owner, "uid": "collector-uid"}]
+                            }}]
+                        }))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind fake Kubernetes API");
+        let address = listener.local_addr().expect("fake Kubernetes address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake Kubernetes API");
+        });
+        let client = KubernetesClient::new(KubernetesClientConfig::Manual {
+            server_url: format!("http://{address}"),
+            certificate_authority_data: None,
+            insecure_skip_tls_verify: None,
+            client_certificate_data: None,
+            client_key_data: None,
+            token: Some("test-token".to_string()),
+            username: None,
+            password: None,
+            namespace: Some("demo".to_string()),
+            additional_headers: HashMap::new(),
+        })
+        .await
+        .expect("create fake Kubernetes client");
+        let names = ["collector-logs", "collector-logs-v2"];
+        for state in 0..4 {
+            phase.store(state, Ordering::SeqCst);
+            assert!(
+                legacy_collector_running(&client, "demo", &names)
+                    .await
+                    .unwrap(),
+                "collector generation or terminating Pod must block cutover in state {state}"
+            );
+        }
+        phase.store(4, Ordering::SeqCst);
+        assert!(!legacy_collector_running(&client, "demo", &names)
+            .await
+            .unwrap());
+        phase.store(5, Ordering::SeqCst);
+        assert!(legacy_collector_running(&client, "demo", &names)
+            .await
+            .is_err());
+        server.abort();
+    }
 
     #[tokio::test]
     async fn terminal_pod_api_logs_queue_once_across_reader_restart() {
@@ -819,6 +925,7 @@ mod tests {
             label_key: "example.com/deployment".to_string(),
             label_value: "release-one".to_string(),
             legacy_daemonset: None,
+            replacement_daemonset: None,
             max_streams: 32,
         };
         let mut pod = Pod::default();

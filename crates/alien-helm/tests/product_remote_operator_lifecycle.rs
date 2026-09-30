@@ -2804,7 +2804,13 @@ fn verify_collector_selector_upgrade(temp: &Path, current_chart: &Path, namespac
         assert_eq!(
             env.iter()
                 .find(|entry| entry["name"] == "OPERATOR_POD_LOG_LEGACY_DAEMONSET")
-                .expect("Pod API collector migration gate")["value"],
+                .expect("previous collector migration gate")["value"],
+            old_name,
+        );
+        assert_eq!(
+            env.iter()
+                .find(|entry| entry["name"] == "OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET")
+                .expect("replacement collector migration gate")["value"],
             new_name,
         );
         assert!(

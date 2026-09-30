@@ -809,24 +809,6 @@ ephemeralStorage:
 {{- printf "%s-logs-v2" ((include "deployment.fullname" .) | trunc 55 | trimSuffix "-") -}}
 {{- end -}}
 
-{{- define "deployment.remoteOperatorLogCollectorLegacyDaemonSetName" -}}
-{{- $name := include "deployment.remoteOperatorLogCollectorDaemonSetName" . -}}
-{{- if lookup "apps/v1" "DaemonSet" .Release.Namespace $name -}}
-{{- $name -}}
-{{- else -}}
-{{- include "deployment.remoteOperatorLogCollectorName" . -}}
-{{- end -}}
-{{- end -}}
-
-{{- define "deployment.logCollectorLegacyDaemonSetName" -}}
-{{- $name := include "deployment.logCollectorDaemonSetName" . -}}
-{{- if lookup "apps/v1" "DaemonSet" .Release.Namespace $name -}}
-{{- $name -}}
-{{- else -}}
-{{- include "deployment.logCollectorName" . -}}
-{{- end -}}
-{{- end -}}
-
 {{- define "deployment.labels" -}}
 app.kubernetes.io/name: {{ include "deployment.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
@@ -1400,7 +1382,9 @@ spec:
             - name: OPERATOR_POD_LOG_LABEL_VALUE
               value: {{ default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue | quote }}
             - name: OPERATOR_POD_LOG_LEGACY_DAEMONSET
-              value: {{ include "deployment.logCollectorLegacyDaemonSetName" . | quote }}
+              value: {{ include "deployment.logCollectorName" . | quote }}
+            - name: OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET
+              value: {{ include "deployment.logCollectorDaemonSetName" . | quote }}
             - name: OPERATOR_POD_LOG_MAX_STREAMS
               value: {{ default 32 .Values.logCollector.maxStreams | quote }}
             {{- end }}
@@ -2991,7 +2975,10 @@ a `v2` name so `helm upgrade` creates the new DaemonSet and removes the old one
 without changing its immutable selector. Collector ConfigMap, ServiceAccount
 and RBAC names stay the same. The receiver Deployment keeps its existing
 selector and identity. The replacement collector starts with an empty
-log buffer and reads the selected log files from the beginning.
+log buffer and reads the selected log files from the beginning. When switching
+from nodeAgent to podApi, the Operator checks both collector names and waits for
+their Pods to stop, including when the chart is rendered without cluster access.
+Use an Operator image built with this chart version for that transition.
 
 === files/stack.json ===
 {
