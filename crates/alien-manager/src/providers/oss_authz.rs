@@ -647,6 +647,7 @@ mod tests {
             name: "dg-a".to_string(),
             max_deployments: 10,
             deployment_count: 0,
+            setup: Default::default(),
             created_at: Utc::now(),
         };
 
