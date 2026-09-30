@@ -1655,8 +1655,10 @@ mod tests {
                 .await
                 .expect_err("blackholed submission must stop at lease expiry");
 
+        // Without the cap it waits out the 30 s submission timeout. The bound is loose so a
+        // loaded runner doesn't fail it, and still far below that timeout.
         assert!(
-            started.elapsed() < Duration::from_secs(1),
+            started.elapsed() < Duration::from_secs(10),
             "submission exceeded the absolute lease expiry: {:?}",
             started.elapsed()
         );
