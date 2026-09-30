@@ -786,6 +786,45 @@ mod tests {
         assert_eq!(converted[1].target_resources, Some(vec!["api".to_string()]));
     }
 
+    /// `--deployment` may follow the subcommand, as the vault commands' own examples write it.
+    #[test]
+    fn vault_deployment_flag_parses_after_the_subcommand() {
+        let cli = Cli::try_parse_from([
+            "alien",
+            "vault",
+            "set",
+            "--deployment",
+            "my-deployment",
+            "customer-secrets",
+            "GITHUB_TOKEN",
+            "value",
+        ])
+        .expect("remote vault parses");
+        let Some(Commands::Vault(args)) = cli.command else {
+            panic!("expected the vault command");
+        };
+        assert_eq!(args.deployment.as_deref(), Some("my-deployment"));
+
+        let cli = Cli::try_parse_from([
+            "alien",
+            "dev",
+            "vault",
+            "list",
+            "--deployment",
+            "my-deployment",
+            "customer-secrets",
+        ])
+        .expect("dev vault parses");
+        let Some(Commands::Dev(DevCommand {
+            subcommand: Some(DevSubcommand::Vault(args)),
+            ..
+        })) = cli.command
+        else {
+            panic!("expected the dev vault command");
+        };
+        assert_eq!(args.deployment, "my-deployment");
+    }
+
     #[test]
     fn release_version_flag_parses_when_root_version_is_propagated() {
         Cli::command()
