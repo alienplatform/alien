@@ -2488,6 +2488,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn waiting_rides_out_an_unreachable_manager_until_the_timeout() {
+        // Nothing listens on a port that was bound and released, so every read is a
+        // connection error.
+        let addr = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback")
+            .local_addr()
+            .expect("local addr");
+        let client = alien_manager_api::Client::new(&format!("http://{addr}"));
+        let timeout = Duration::from_millis(300);
+        let started = Instant::now();
+
+        let error = wait_for_deployment(
+            &client,
+            "dep_1",
+            DeploymentWaitCondition::Ready,
+            timeout,
+            Duration::from_millis(10),
+            true,
+        )
+        .await
+        .expect_err("an unreachable manager must fail once the wait times out");
+
+        assert!(
+            started.elapsed() >= timeout,
+            "a connection error must not end the wait early: {}",
+            error.message
+        );
+        assert!(error.retryable, "{}", error.message);
+    }
+
+    #[tokio::test]
     async fn a_missing_deployment_is_reported_as_not_found() {
         let client = fake_manager(vec![404]).await;
 
