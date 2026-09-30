@@ -16,7 +16,7 @@ RUN case "$TARGETARCH" in \
        *)      echo "unsupported TARGETARCH '$TARGETARCH'" >&2; exit 1 ;; \
     esac
 
-FROM docker.io/library/buildpack-deps:26.04
+FROM docker.io/library/buildpack-deps:26.10
 
 # Ubuntu ships `ubuntu` at uid 1000. Appending a second entry for that uid leaves `id` and every
 # tool resolving it to `ubuntu`, so the exec user would not be `sandbox`.
