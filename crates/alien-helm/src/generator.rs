@@ -63,8 +63,9 @@ pub struct ManagerFetchHelmValuesOptions<'a> {
 /// Version of the operator RBAC policy enforced by this generator.
 ///
 /// Renderers expose this value so callers can reject manifests produced by a
-/// generator that predates policy-aware Kubernetes operation permissions.
-pub const OPERATOR_RBAC_POLICY_VERSION: u32 = 2;
+/// generator with a different policy. Version 3 replaced the fixed read-only
+/// baseline with the Operator runtime rules.
+pub const OPERATOR_RBAC_POLICY_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperatorPermission {
