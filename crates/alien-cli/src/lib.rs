@@ -786,6 +786,60 @@ mod tests {
         assert_eq!(converted[1].target_resources, Some(vec!["api".to_string()]));
     }
 
+    /// `--deployment` may follow the subcommand, as the vault commands' own examples write it.
+    #[test]
+    fn vault_deployment_flag_parses_after_the_subcommand() {
+        let cli = Cli::try_parse_from([
+            "alien",
+            "vault",
+            "set",
+            "--deployment",
+            "my-deployment",
+            "customer-secrets",
+            "GITHUB_TOKEN",
+            "value",
+        ])
+        .expect("remote vault parses");
+        let Some(Commands::Vault(args)) = cli.command else {
+            panic!("expected the vault command");
+        };
+        assert_eq!(
+            args.deployment().expect("deployment given"),
+            "my-deployment"
+        );
+
+        // clap can't require a global flag, so a missing one is reported by the args.
+        let cli = Cli::try_parse_from(["alien", "vault", "list", "customer-secrets"])
+            .expect("parses without --deployment");
+        let Some(Commands::Vault(args)) = cli.command else {
+            panic!("expected the vault command");
+        };
+        let error = args.deployment().expect_err("--deployment is required");
+        assert!(
+            error.message.contains("--deployment is required"),
+            "{error:?}"
+        );
+
+        let cli = Cli::try_parse_from([
+            "alien",
+            "dev",
+            "vault",
+            "list",
+            "--deployment",
+            "my-deployment",
+            "customer-secrets",
+        ])
+        .expect("dev vault parses");
+        let Some(Commands::Dev(DevCommand {
+            subcommand: Some(DevSubcommand::Vault(args)),
+            ..
+        })) = cli.command
+        else {
+            panic!("expected the dev vault command");
+        };
+        assert_eq!(args.deployment, "my-deployment");
+    }
+
     #[test]
     fn release_version_flag_parses_when_root_version_is_propagated() {
         Cli::command()
@@ -1824,6 +1878,11 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         if args.validate_only {
             return validate_deploy_config(args);
         }
+    }
+
+    // Reported before credentials are resolved, so a missing auth setting can't mask it.
+    if let Some(Commands::Vault(args)) = &cli.command {
+        args.deployment()?;
     }
 
     let ctx = if let Ok(server_url) = env::var("ALIEN_MANAGER_URL") {
