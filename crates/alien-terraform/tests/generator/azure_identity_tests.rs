@@ -421,3 +421,30 @@ fn azure_sandbox_management_grants_reach_the_module() {
     );
     assert_terraform_valid(&module, "azure_sandbox_management_grants");
 }
+
+#[test]
+fn azure_provider_lets_destroy_sweep_resources_a_failed_apply_left_behind() {
+    // A child resource whose create fails after Azure materialised it (a
+    // Container Apps environment refused for AKS capacity) never enters
+    // Terraform state. With the provider default, `terraform destroy` then
+    // refuses to delete the module-owned resource group because it still
+    // holds that resource, and the deployment can neither finish nor be torn
+    // down. The module opts out so the group delete clears the leftovers.
+    let stack = Stack::new("acme-rg".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let providers = module
+        .get("providers.tf")
+        .expect("providers.tf")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        providers.contains(
+            "features { resource_group { prevent_deletion_if_contains_resources = false } }"
+        ),
+        "azurerm provider should let the resource group delete sweep untracked resources:\n{providers}"
+    );
+    assert_terraform_valid(&module, "azure_provider_resource_group_features");
+}

@@ -147,7 +147,11 @@ variable "azure_oidc_subject" {
 provider "azurerm" {
   resource_provider_registrations = "none"
 
-  features {}
+  features {
+    resource_group {
+      prevent_deletion_if_contains_resources = false
+    }
+  }
 }
 
 provider "azapi" {}

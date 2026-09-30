@@ -2716,7 +2716,24 @@ fn providers_body(
                         "resource_provider_registrations",
                         Expression::String("none".to_string()),
                     ),
-                    Structure::Block(block("features", [])),
+                    // The module creates and owns its resource group. When a
+                    // child create fails after Azure has already materialised
+                    // the resource (a Container Apps environment refused for
+                    // AKS capacity, for example), azurerm never records it in
+                    // state, and the provider's default refuses to delete a
+                    // group that still holds an untracked resource. Let the
+                    // group delete sweep whatever the failed apply left behind
+                    // so `terraform destroy` can finish.
+                    nested(block(
+                        "features",
+                        [nested(block(
+                            "resource_group",
+                            [attr(
+                                "prevent_deletion_if_contains_resources",
+                                Expression::Bool(false),
+                            )],
+                        ))],
+                    )),
                 ]),
             }));
             if include_azapi_provider {
