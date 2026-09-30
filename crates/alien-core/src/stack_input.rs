@@ -203,15 +203,26 @@ pub enum GateInputIssue {
 /// Environment variables produced by stack inputs that declare `env`
 /// mappings, from the deployment's input values (or each input's default).
 ///
-/// List values become comma-separated strings. Secret inputs produce secret
-/// variables unless the mapping sets a type. Two mappings resolving to the
-/// same variable name are rejected.
+/// Only inputs that apply to `platform` count: an input that lists
+/// `platforms` without it produces nothing. List values become
+/// comma-separated strings. Secret inputs produce secret variables unless the
+/// mapping sets a type. Two mappings resolving to the same variable name are
+/// rejected.
 pub fn resolve_stack_input_environment_variables(
     inputs: &[StackInputDefinition],
     values: &std::collections::HashMap<String, serde_json::Value>,
+    platform: Platform,
 ) -> crate::Result<Vec<crate::EnvironmentVariable>> {
     let mut variables: Vec<crate::EnvironmentVariable> = Vec::new();
-    for input in inputs.iter().filter(|input| !input.env.is_empty()) {
+    let applies = |input: &&StackInputDefinition| match &input.platforms {
+        Some(platforms) if !platforms.is_empty() => platforms.contains(&platform),
+        _ => true,
+    };
+    for input in inputs
+        .iter()
+        .filter(|input| !input.env.is_empty())
+        .filter(applies)
+    {
         let value = match values.get(&input.id) {
             Some(serde_json::Value::Null) | None => match &input.default {
                 Some(default) => default_environment_string(default),
@@ -317,7 +328,9 @@ mod environment_tests {
             ("zones".to_string(), serde_json::json!(["a", "b"])),
         ]);
 
-        let variables = resolve_stack_input_environment_variables(&inputs, &values).unwrap();
+        let variables =
+            resolve_stack_input_environment_variables(&inputs, &values, Platform::Kubernetes)
+                .unwrap();
 
         let by_name: HashMap<_, _> = variables.iter().map(|v| (v.name.as_str(), v)).collect();
         assert_eq!(
@@ -349,8 +362,32 @@ mod environment_tests {
             ("a".to_string(), serde_json::json!("1")),
             ("b".to_string(), serde_json::json!("2")),
         ]);
-        let error = resolve_stack_input_environment_variables(&inputs, &values)
-            .expect_err("duplicate names must be rejected");
+        let error =
+            resolve_stack_input_environment_variables(&inputs, &values, Platform::Kubernetes)
+                .expect_err("duplicate names must be rejected");
         assert!(error.message.contains("SHARED"));
+    }
+
+    #[test]
+    fn inputs_for_other_platforms_produce_nothing() {
+        // An AWS-only input with a default must not reach a Kubernetes
+        // workload, and may share a variable name with a Kubernetes one.
+        let mut aws_only = input("aws-region", StackInputKind::String, "REGION");
+        aws_only.platforms = Some(vec![Platform::Aws]);
+        aws_only.default = Some(StackInputDefaultValue::String("us-east-1".to_string()));
+        let mut kubernetes_only = input("zone", StackInputKind::String, "REGION");
+        kubernetes_only.platforms = Some(vec![Platform::Kubernetes]);
+        let values = HashMap::from([("zone".to_string(), serde_json::json!("rack-7"))]);
+
+        let variables = resolve_stack_input_environment_variables(
+            &[aws_only, kubernetes_only],
+            &values,
+            Platform::Kubernetes,
+        )
+        .unwrap();
+
+        assert_eq!(variables.len(), 1);
+        assert_eq!(variables[0].name, "REGION");
+        assert_eq!(variables[0].value, "rack-7");
     }
 }

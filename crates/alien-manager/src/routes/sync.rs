@@ -1995,10 +1995,26 @@ pub(crate) async fn build_pull_target(
         .unwrap_or_default();
     // Inputs mapped to environment variables resolve against the
     // target release, so a release that adds a mapped input takes
-    // effect without re-onboarding. Explicit variables win.
+    // effect without re-onboarding. Variables the deployment already
+    // carries win: embedders that resolve inputs themselves (into the
+    // deployment's variables) keep their values, and their inputs aren't
+    // resolved a second time.
+    let unresolved_inputs: Vec<_> = stack
+        .inputs
+        .iter()
+        .filter(|input| {
+            !input.env.iter().any(|mapping| {
+                env_vars
+                    .iter()
+                    .any(|existing| existing.name == mapping.name)
+            })
+        })
+        .cloned()
+        .collect();
     let input_env = match alien_core::resolve_stack_input_environment_variables(
-        &stack.inputs,
+        &unresolved_inputs,
         &deployment.input_values,
+        deployment.platform,
     ) {
         Ok(variables) => variables,
         Err(e) => {
