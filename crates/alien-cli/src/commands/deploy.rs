@@ -27,7 +27,7 @@ use alien_deployment::manager_api_transport::{
     combine_operation_and_finalization, final_reconcile, ManagerApiTransport,
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use alien_platform_api::Client as SdkClient;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -1880,12 +1880,19 @@ async fn deploy_task_with_environment(
         }
         LoopOutcome::Failure => {
             steps.fail(2, Some(format!("{:?}", loop_result.final_status)));
-            return Err(AlienError::new(ErrorData::DeploymentFailed {
+            let failed = ErrorData::DeploymentFailed {
                 message: format!(
                     "{} failed",
                     describe_failed_status(&loop_result.final_status)
                 ),
-            }));
+            };
+            // The final state's headline error names each failed resource and its cause.
+            return Err(
+                match alien_deployment::deployment_headline_error_from_state(&current) {
+                    Some(cause) => cause.context(failed),
+                    None => AlienError::new(failed),
+                },
+            );
         }
         LoopOutcome::Neutral if loop_result.stop_reason == LoopStopReason::Handoff => {
             steps.complete(2, Some("Resources ready".to_string()));

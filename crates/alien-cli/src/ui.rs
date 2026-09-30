@@ -335,14 +335,15 @@ fn request_id_from_context(context: Option<&Value>) -> Option<String> {
         .map(ToString::to_string)
 }
 
-/// `resource: root cause` for each resource of the first failed deployment in the chain: a
-/// deployment failure's own message only counts them.
+/// `resource: root cause` for each resource of the first error in the chain that lists failed
+/// resources: a deployment failure's own message only counts them.
 fn find_failed_resources<T>(error: &AlienError<T>) -> Vec<String>
 where
     T: AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
 {
-    if error.code == "DEPLOYMENT_FAILED" {
-        return failed_resources_from_context(error.context.as_ref());
+    let own = failed_resources_from_context(error.context.as_ref());
+    if !own.is_empty() {
+        return own;
     }
     error
         .source
@@ -351,7 +352,7 @@ where
         .unwrap_or_default()
 }
 
-/// The failed resources of a `DEPLOYMENT_FAILED` error's context, each with its root cause.
+/// The failed resources in a deployment failure's context, each with its root cause.
 pub(crate) fn failed_resources_from_context(context: Option<&Value>) -> Vec<String> {
     context
         .and_then(|context| context.get("resource_errors"))
@@ -427,15 +428,19 @@ mod event_tests {
         .expect("serialize the deployment error");
         let error: AlienError =
             serde_json::from_value(stored).expect("deserialize the stored deployment error");
+        let listed = "Failed resources:\n  - api: Validation failed for image: the image was not found\n  - worker: Validation failed for image: the image was not found";
 
         let rendered = render_human_error(&error);
+        assert!(rendered.contains(listed), "{rendered}");
 
-        assert!(
-            rendered.contains(
-                "Failed resources:\n  - api: Validation failed for image: the image was not found\n  - worker: Validation failed for image: the image was not found"
-            ),
-            "{rendered}"
-        );
+        // `alien deploy` wraps the state's error in its own summary of the failed phase.
+        let deploy_error = Err::<(), _>(error)
+            .context(crate::error::ErrorData::DeploymentFailed {
+                message: "provisioning failed".to_string(),
+            })
+            .unwrap_err();
+        let rendered = render_human_error(&deploy_error);
+        assert!(rendered.contains(listed), "{rendered}");
     }
 
     #[test]
