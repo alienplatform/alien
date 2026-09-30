@@ -689,9 +689,9 @@ fn remote_operator_identity_record_tpl(
 {{{{- printf "%s-history-check-%s" $releasePrefix $releaseIdentity | trunc 63 | trimSuffix "-" -}}}}
 {{{{- end -}}}}
 {{{{- define "deployment.remoteOperatorLogCollectorName" -}}}}
-{{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 22 | trimAll "-" -}}}}
+{{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 19 | trimAll "-" -}}}}
 {{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
-{{{{- printf "%s-log-collector-%s" $releasePrefix $releaseIdentity }}}}
+{{{{- printf "%s-log-collector-v2-%s" $releasePrefix $releaseIdentity }}}}
 {{{{- end -}}}}
 {{{{- define "deployment.remoteOperatorLifecycleCapabilityName" -}}}}
 {{{{ printf "%s-lifecycle-v2" (include "deployment.remoteOperatorIdentityRecordName" .) | trunc 253 | trimSuffix "-" }}}}
@@ -963,7 +963,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       automountServiceAccountToken: false
       restartPolicy: Never
@@ -1026,7 +1026,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
@@ -1105,7 +1105,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "deployment.remoteOperatorCleanupName" . }}
       restartPolicy: Never
@@ -1347,7 +1347,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
@@ -2019,6 +2019,10 @@ fn generate_operator_manifest_inner(
             )
         };
         let mut collector_labels = labels.clone();
+        collector_labels.insert(
+            "app.kubernetes.io/name".to_string(),
+            "log-collector".to_string(),
+        );
         collector_labels.insert(
             "app.kubernetes.io/component".to_string(),
             "whitelabeled-log-collector".to_string(),
@@ -5229,7 +5233,7 @@ fn helpers_tpl() -> String {
 {{- end -}}
 
 {{- define "deployment.logCollectorName" -}}
-{{- printf "%s-logs" ((include "deployment.fullname" .) | trunc 58 | trimSuffix "-") -}}
+{{- printf "%s-logs-v2" ((include "deployment.fullname" .) | trunc 55 | trimSuffix "-") -}}
 {{- end -}}
 
 {{- define "deployment.labels" -}}
@@ -5237,6 +5241,18 @@ app.kubernetes.io/name: {{ include "deployment.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
+{{- end -}}
+
+{{- define "deployment.logCollectorLabels" -}}
+{{- $labels := include "deployment.labels" . | fromYaml -}}
+{{- $_ := set $labels "app.kubernetes.io/name" "log-collector" -}}
+{{- toYaml $labels -}}
+{{- end -}}
+
+{{- define "deployment.hookLabels" -}}
+{{- $labels := include "deployment.labels" . | fromYaml -}}
+{{- $_ := set $labels "app.kubernetes.io/name" "lifecycle-hook" -}}
+{{- toYaml $labels -}}
 {{- end -}}
 
 {{- define "deployment.managerServiceAccountName" -}}
@@ -5886,7 +5902,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
@@ -6531,7 +6547,7 @@ kind: ServiceAccount
 metadata:
   name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 automountServiceAccountToken: true
 {{- end }}
@@ -6546,7 +6562,7 @@ kind: Role
 metadata:
   name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 rules:
   - apiGroups: [""]
@@ -6564,7 +6580,7 @@ kind: RoleBinding
 metadata:
   name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -6593,7 +6609,7 @@ kind: ConfigMap
 metadata:
   name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 data:
   collector.conf: |
@@ -6666,18 +6682,18 @@ kind: DaemonSet
 metadata:
   name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "deployment.name" . }}
+      app.kubernetes.io/name: log-collector
       app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/component: log-collector
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.logCollectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: log-collector
         alien.dev/log-collector-exclude: "true"
       annotations:
@@ -7357,6 +7373,14 @@ If the Remote Operator uses `nodeAgent` and its setup-owned collector token is
 rotated, set `remoteOperator.collectorTokenRevision` to the new token's
 64-character SHA-256 hex digest during the chart upgrade. This restarts both
 the receiver and the DaemonSet with the new credential.
+
+Node collectors use their own `app.kubernetes.io/name=log-collector` label so
+receiver selectors do not match collector Pods. Charts generated before this
+label change used the receiver's name label. The collector resources now have
+a `v2` name so `helm upgrade` creates the new DaemonSet and removes the old one
+without changing its immutable selector. The receiver Deployment keeps its
+existing selector and identity. The replacement collector starts with an empty
+log buffer and reads the selected log files from the beginning.
 "#
     )
 }
@@ -9815,6 +9839,97 @@ logCollector:
             operator_env_value(&changed_runtime, "OPERATOR_POD_LOG_LABEL_VALUE"),
             Some("e2e456")
         );
+    }
+
+    #[test]
+    fn node_collector_selectors_do_not_match_other_workloads() {
+        let mut files = sample_product_chart_with_collector(true).files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        for remote_enabled in [false, true] {
+            let values = format!(
+                r#"
+nameOverride: operator
+management:
+  url: https://manager.example.test
+logCollector:
+  enabled: true
+  mode: nodeAgent
+runtime:
+  pdb:
+    enabled: true
+  networkPolicy:
+    enabled: true
+heartbeat:
+  collection:
+    nodes:
+      enabled: true
+clusterBootstrap:
+  metricsServer:
+    enabled: true
+remoteOperator:
+  enabled: {remote_enabled}
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#
+            );
+            let rendered = crate::test_utils::helm_template(&files, Some(&values));
+            rendered.assert_ok("collector selector isolation");
+            let docs = parse_manifest_docs(&rendered.stdout);
+            let workloads: Vec<_> = docs
+                .iter()
+                .filter(|doc| {
+                    matches!(
+                        yaml_str(doc, "kind"),
+                        Some("Deployment" | "DaemonSet" | "StatefulSet" | "Job")
+                    )
+                })
+                .collect();
+            assert_eq!(docs_by_kind(&docs, "DaemonSet").len(), 1);
+            for doc in &docs {
+                let selector = match yaml_str(doc, "kind") {
+                    Some("Deployment" | "DaemonSet" | "StatefulSet" | "PodDisruptionBudget") => {
+                        &doc["spec"]["selector"]["matchLabels"]
+                    }
+                    Some("Service") => &doc["spec"]["selector"],
+                    Some("NetworkPolicy") => &doc["spec"]["podSelector"]["matchLabels"],
+                    _ => continue,
+                };
+                let selector = selector.as_mapping().expect("non-empty label selector");
+                assert!(!selector.is_empty());
+                let selected: Vec<_> = workloads
+                    .iter()
+                    .filter(|workload| {
+                        let namespace = |resource: &YamlValue| {
+                            resource["metadata"]["namespace"]
+                                .as_str()
+                                .unwrap_or("default")
+                                .to_string()
+                        };
+                        let labels = &workload["spec"]["template"]["metadata"]["labels"];
+                        namespace(doc) == namespace(workload)
+                            && selector
+                                .iter()
+                                .all(|(key, value)| labels.get(key) == Some(value))
+                    })
+                    .collect();
+                assert_eq!(
+                    selected.len(), 1,
+                    "{}/{} must select exactly its intended workload, remote enabled={remote_enabled}",
+                    doc["kind"].as_str().unwrap(),
+                    doc["metadata"]["name"].as_str().unwrap(),
+                );
+                if matches!(
+                    yaml_str(doc, "kind"),
+                    Some("Deployment" | "DaemonSet" | "StatefulSet")
+                ) {
+                    assert_eq!(
+                        selected[0]["metadata"], doc["metadata"],
+                        "workload must select its own Pods"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
