@@ -10,9 +10,9 @@ management:
   repoURL: https://github.com/alienplatform/alien.git
   repoSubDirectory: client-sdks/manager/typescript
 persistentEdits:
-  generation_id: 6a2c2f29-8e44-4c0b-9372-231515fb3ece
-  pristine_commit_hash: 5ad6a15df20e321a7ab89a9950ac7b1aae66275e
-  pristine_tree_hash: 149a7141edf6b3f4a8f5e3f5c48f519dddc3115a
+  generation_id: 40a9ac88-20bd-42b2-a901-adfa94f19571
+  pristine_commit_hash: 161a456854bc9b3d99db9f906a74392343dab99f
+  pristine_tree_hash: 68ba527b0502c4fa30c28599d9264d75b6671644
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -2008,8 +2008,8 @@ trackedFiles:
     pristine_git_object: 723e0a2fb1655072e6d9e325ee3ede773a1effe6
   package.json:
     id: 7030d0b2f71b
-    last_write_checksum: sha1:0438af6a12d32c0acfc37d31da3cbf6164793343
-    pristine_git_object: 950e6d5773e0298833f16ca145566ea8202431da
+    last_write_checksum: sha1:3c819c6c3c636a1174be0cecf8723c2ab714dfcd
+    pristine_git_object: a18cc99f58691b32e4c52f7c7800fbc04c0b0543
   src/core.ts:
     id: f431fdbcd144
     last_write_checksum: sha1:a3b94f76908a8f9a4857fea8aac869403adb797c
