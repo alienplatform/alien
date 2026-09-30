@@ -36,7 +36,13 @@
       "groupSlug": "all-minor-patch",
       "automerge": true,
       "automergeType": "pr",
-      "automergeStrategy": "squash"
+      "automergeStrategy": "squash",
+      "platformAutomerge": false
+    },
+    {
+      "description": "CI installs the pnpm version pinned in the workflow. This token cannot update that pin, so a packageManager bump fails every job.",
+      "matchPackageNames": ["pnpm"],
+      "enabled": false
     },
     {
       "description": "Do not treat potentially breaking 0.x minor releases as routine updates",
