@@ -2,7 +2,9 @@
 //!
 //! Resource links and triggers are dependency edges. They provide default
 //! data-access grants only when the consumer's profile has no entry for the
-//! resource. Explicit resource grants take precedence over those defaults.
+//! resource. Explicit resource grants take precedence over those defaults, and
+//! a permission set the profile already grants stack-wide (`*`) is not added
+//! again for the one resource.
 
 use std::collections::HashSet;
 
@@ -96,16 +98,35 @@ impl StackMutation for ResourceLinkPermissionsMutation {
                 continue;
             };
 
+            // A stack-wide grant already covers the linked resource. Repeating it on the one
+            // resource adds an exact-resource grant, which AWS refuses for Live resources.
+            let stack_wide = profile.0.get("*");
+            let missing: Vec<&str> = grant
+                .permission_set_ids
+                .iter()
+                .copied()
+                .filter(|permission_set_id| {
+                    !stack_wide.is_some_and(|permissions| {
+                        permissions
+                            .iter()
+                            .any(|permission| permission.id() == *permission_set_id)
+                    })
+                })
+                .collect();
+            if missing.is_empty() {
+                continue;
+            }
+
             let permissions = profile.0.entry(grant.resource_id).or_default();
-            for permission_set_id in grant.permission_set_ids {
+            for permission_set_id in missing {
                 if permissions
                     .iter()
-                    .any(|permission| permission.id() == *permission_set_id)
+                    .any(|permission| permission.id() == permission_set_id)
                 {
                     continue;
                 }
 
-                permissions.push(PermissionSetReference::from_name(*permission_set_id));
+                permissions.push(PermissionSetReference::from_name(permission_set_id));
                 grants_added += 1;
             }
         }
@@ -297,6 +318,69 @@ mod tests {
         assert!(queue_permissions
             .iter()
             .any(|permission| permission.id() == "queue/data-read"));
+    }
+
+    /// The AWS setup check tells a profile that targets a Live resource to grant stack-wide
+    /// instead. A link must not undo that by adding the same grant on the one resource.
+    #[tokio::test]
+    async fn a_stack_wide_grant_satisfies_a_live_link_on_aws() {
+        use crate::deployment_prerequisites::AwsExactPermissionsSetupOwnedCheck;
+        use crate::DeploymentPrerequisiteCheck;
+
+        let sandbox = Sandbox::new("agents".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "example.com/sandbox:latest".to_string(),
+            })
+            .egress(alien_core::SandboxEgress::Allow)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let api = Container::new("api".to_string())
+            .code(ContainerCode::Image {
+                image: "example.com/api:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .permissions("execution".to_string())
+            .link(&sandbox)
+            .build();
+        let mut stack = Stack::new("test-stack".to_string())
+            .add(sandbox, ResourceLifecycle::Live)
+            .add(api, ResourceLifecycle::Live)
+            .build();
+        stack.permissions.profiles.insert(
+            "execution".to_string(),
+            PermissionProfile::new().global(["sandbox/execute"]),
+        );
+        let stack_state = StackState::new(Platform::Aws);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let mutated = ResourceLinkPermissionsMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .expect("mutation should succeed");
+
+        assert!(!mutated.permissions.profiles["execution"]
+            .0
+            .contains_key("agents"));
+        let result = AwsExactPermissionsSetupOwnedCheck
+            .check(&mutated, &stack_state, &config)
+            .await
+            .expect("check should run");
+        assert!(result.success, "{:?}", result.errors);
     }
 
     #[tokio::test]
