@@ -7,9 +7,9 @@
 
 use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
 use alien_core::{
-    AzureResourceGroup, ManagementPermissions, Network, NetworkSettings, PermissionProfile,
-    RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack, StackSettings, Worker,
-    WorkerCode,
+    AzureContainerAppsEnvironment, AzureResourceGroup, Key, ManagementPermissions, Network,
+    NetworkSettings, PermissionProfile, RemoteStackManagement, ResourceLifecycle, ServiceAccount,
+    Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_terraform::TerraformTarget;
 
@@ -423,15 +423,17 @@ fn azure_sandbox_management_grants_reach_the_module() {
 }
 
 #[test]
-fn azure_provider_lets_destroy_sweep_resources_a_failed_apply_left_behind() {
-    // A child resource whose create fails after Azure materialised it (a
-    // Container Apps environment refused for AKS capacity) never enters
-    // Terraform state. With the provider default, `terraform destroy` then
-    // refuses to delete the module-owned resource group because it still
-    // holds that resource, and the deployment can neither finish nor be torn
-    // down. The module opts out so the group delete clears the leftovers.
+fn azure_provider_tracks_partial_creates_and_protects_detached_keys() {
     let stack = Stack::new("acme-rg".to_string())
         .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            AzureContainerAppsEnvironment::new("environment".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Key::new("retained-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
         .build();
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
     let providers = module
@@ -441,10 +443,13 @@ fn azure_provider_lets_destroy_sweep_resources_a_failed_apply_left_behind() {
         .collect::<Vec<_>>()
         .join(" ");
     assert!(
-        providers.contains(
-            "features { resource_group { prevent_deletion_if_contains_resources = false } }"
-        ),
-        "azurerm provider should let the resource group delete sweep untracked resources:\n{providers}"
+        providers.contains("persist_id_on_create_before_polling_for_completion = true"),
+        "accepted creates must remain tracked if polling fails:\n{providers}"
     );
-    assert_terraform_valid(&module, "azure_provider_resource_group_features");
+    assert!(
+        providers.contains("resource_group { prevent_deletion_if_contains_resources = true }"),
+        "group deletion must preserve detached key vaults:\n{providers}"
+    );
+    snapshot_module("azure_partial_create_with_retained_key", &module);
+    assert_terraform_valid(&module, "azure_provider_partial_create_with_retained_key");
 }
