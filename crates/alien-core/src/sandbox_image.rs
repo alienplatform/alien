@@ -315,8 +315,8 @@ const DEFAULT_SANDBOX_DOCKERFILE: &str = "docker/Dockerfile.alien-sandbox-defaul
 #[cfg(test)]
 const DEFAULT_SANDBOX_TOOLS_FILE: &str = "docker/sandbox-default-tools.txt";
 
-/// Set to regenerate every committed file this module renders, not only the agent Dockerfile the
-/// variable is named for, instead of comparing against them. Renaming it would rewrite that file.
+/// Set to regenerate every committed file this module renders instead of comparing against them.
+/// Named for the agent Dockerfile; every generated header prints the name, so a rename rewrites all.
 #[cfg(test)]
 const SANDBOX_FILES_UPDATE: &str = "UPDATE_SANDBOX_AGENT_DOCKERFILE";
 

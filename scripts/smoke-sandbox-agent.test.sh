@@ -165,14 +165,14 @@ for mode in tools-137 tools-137-noisy; do
     passed=$((passed + 1))
     echo "ok   ${mode}: no leftover warning"
   fi
+  if grep -q "^-f smoke-tools-[0-9]*-linux-amd64$" "$state/container-removals" 2>/dev/null; then
+    passed=$((passed + 1))
+    echo "ok   ${mode}: the probe container was removed"
+  else
+    failed=$((failed + 1))
+    echo "FAIL ${mode}: the probe container was never removed"
+  fi
 done
-if grep -q "^-f smoke-tools-[0-9]*-linux-amd64$" "$state/container-removals" 2>/dev/null; then
-  passed=$((passed + 1))
-  echo "ok   tools-137: the probe container was removed"
-else
-  failed=$((failed + 1))
-  echo "FAIL tools-137: the probe container was never removed"
-fi
 check tools-error fail "linux/amd64: stub: the tools probe failed"
 check tools-silent fail "linux/amd64: the tools probe did not complete"
 check tools-missing fail "linux/amd64: tool probe: rg --version failed"
