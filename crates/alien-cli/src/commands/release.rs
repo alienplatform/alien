@@ -211,6 +211,45 @@ fn validate_release_channel(channel: &str, ctx: &ExecutionMode) -> Result<()> {
     Ok(())
 }
 
+/// Fails unless `channel` exists in the project.
+#[cfg(feature = "platform")]
+async fn ensure_release_channel_exists(
+    http: &crate::auth::AuthHttp,
+    workspace: Option<&str>,
+    project_id: &str,
+    channel: &str,
+) -> Result<()> {
+    use alien_platform_api::SdkResultExt as _;
+
+    let client = http.sdk_client();
+    let mut request = client.list_release_channels().project(project_id);
+    if let Some(workspace) = workspace {
+        request = request.workspace(workspace);
+    }
+    let channels = request
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "listing release channels".to_string(),
+            url: None,
+        })?;
+    if channels
+        .items
+        .iter()
+        .any(|existing| existing.name.as_str() == channel)
+    {
+        return Ok(());
+    }
+    Err(AlienError::new(ErrorData::ValidationError {
+        field: "channel".to_string(),
+        message: format!(
+            "Release channel '{channel}' does not exist in this project. Create it with \
+             `alien releases create-channel {channel}`."
+        ),
+    }))
+}
+
 #[cfg(feature = "platform")]
 fn parse_release_channel_name(
     channel: &str,
@@ -311,6 +350,20 @@ async fn load_release_config(
         .resolve_project(args.project.as_deref(), allow_bootstrap)
         .await?;
     let workspace_name = project_link.workspace.clone();
+
+    // A release is created only after every image is pushed, which can take many minutes, so a
+    // channel the project doesn't have is refused before any of that work.
+    #[cfg(feature = "platform")]
+    if ctx.is_platform() {
+        let workspace = ctx.resolve_workspace_query_with_bootstrap(false).await?;
+        ensure_release_channel_exists(
+            &ctx.auth_http().await?,
+            workspace.as_deref(),
+            &project_link.project_id,
+            &args.channel,
+        )
+        .await?;
+    }
 
     let is_dev = ctx.is_dev();
 
@@ -816,6 +869,13 @@ async fn release_declare(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<Decl
     #[cfg(feature = "platform")]
     {
         let workspace_query = ctx.resolve_workspace_query_with_bootstrap(false).await?;
+        ensure_release_channel_exists(
+            &ctx.auth_http().await?,
+            workspace_query.as_deref(),
+            &project_link.project_id,
+            &args.channel,
+        )
+        .await?;
         let release_id = declare_platform_release(
             ctx,
             &project_link.project_id,
@@ -2444,5 +2504,85 @@ mod tests {
             ContainerCode::Image { image } => image,
             ContainerCode::Source { .. } => panic!("expected image container"),
         }
+    }
+
+    /// A release is created only after every image is pushed, so the release flow must refuse a
+    /// missing channel before it loads the stack. The test runs in a directory with no stack:
+    /// an existing channel gets past the check and fails on the stack, a missing one fails on
+    /// the channel.
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn a_missing_release_channel_fails_before_the_stack_is_loaded() {
+        use axum::{extract::Query, routing::get, Json, Router};
+
+        let project = || {
+            serde_json::json!({
+                "id": "prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "name": "sample",
+                "workspaceId": "ws_aaaaaaaaaaaaaaaaaaaaaaaa",
+                "createdAt": "2026-01-01T00:00:00Z",
+            })
+        };
+        let app = Router::new()
+            .route(
+                "/v1/projects/sample",
+                get(move || async move { Json(project()) }),
+            )
+            .route(
+                "/v1/release-channels",
+                get(|Query(query): Query<HashMap<String, String>>| async move {
+                    assert_eq!(
+                        query.get("project").map(String::as_str),
+                        Some("prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                    );
+                    assert_eq!(
+                        query.get("workspace").map(String::as_str),
+                        Some("sample-workspace")
+                    );
+                    Json(serde_json::json!({ "items": [{
+                        "workspaceId": "ws_aaaaaaaaaaaaaaaaaaaaaaaa",
+                        "projectId": "prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "name": "production",
+                        "currentReleaseId": null,
+                        "createdAt": "2026-01-01T00:00:00Z",
+                        "updatedAt": "2026-01-01T00:00:00Z",
+                    }] }))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let ctx = ExecutionMode::Platform {
+            base_url,
+            api_key: Some("test-key".to_string()),
+            no_browser: true,
+            workspace: Some("sample-workspace".to_string()),
+            project: Some("sample".to_string()),
+        };
+        let release = |channel: &str| {
+            ReleaseArgs::try_parse_from(["release", "--channel", channel]).expect("valid args")
+        };
+
+        let missing = load_release_config(&release("canary"), &ctx, false, false)
+            .await
+            .err()
+            .expect("a missing channel is refused");
+        assert!(
+            missing
+                .message
+                .contains("`alien releases create-channel canary`"),
+            "{}",
+            missing.message
+        );
+
+        let existing = load_release_config(&release("production"), &ctx, false, false)
+            .await
+            .err()
+            .expect("there is no stack to release here");
+        assert!(
+            existing.message.contains("Failed to load configuration"),
+            "an existing channel passes the check and the flow reaches the stack: {}",
+            existing.message
+        );
     }
 }
