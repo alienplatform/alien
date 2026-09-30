@@ -14,9 +14,12 @@
       "skipArtifactsUpdate": true
     },
     {
-      "description": "Automerge stable non-major updates independently after CI passes",
+      "description": "Batch stable minor and patch updates into one pull request, same as group:allNonMajor, and automerge it after CI passes",
+      "matchPackageNames": ["*"],
       "matchUpdateTypes": ["minor", "patch"],
       "matchCurrentVersion": "!/^0/",
+      "groupName": "all non-major dependencies",
+      "groupSlug": "all-minor-patch",
       "automerge": true,
       "automergeType": "pr",
       "automergeStrategy": "squash"
@@ -36,6 +39,13 @@
       "description": "ts-proto updates require regenerated Worker runtime clients",
       "matchPackageNames": ["ts-proto"],
       "automerge": false
+    },
+    {
+      "description": "Keep ts-proto minor and patch updates in their own pull request",
+      "matchPackageNames": ["ts-proto"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "ts-proto",
+      "groupSlug": "ts-proto"
     }
   ]
 }
