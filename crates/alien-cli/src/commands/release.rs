@@ -869,6 +869,13 @@ async fn release_declare(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<Decl
     #[cfg(feature = "platform")]
     {
         let workspace_query = ctx.resolve_workspace_query_with_bootstrap(false).await?;
+        ensure_release_channel_exists(
+            &ctx.auth_http().await?,
+            workspace_query.as_deref(),
+            &project_link.project_id,
+            &args.channel,
+        )
+        .await?;
         let release_id = declare_platform_release(
             ctx,
             &project_link.project_id,
