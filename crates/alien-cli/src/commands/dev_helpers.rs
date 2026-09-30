@@ -601,17 +601,16 @@ pub async fn create_initial_deployment(
         .iter()
         .find(|d| d.name == deployment_name)
     {
-        // Inputs are fixed when a deployment is created, so an existing one would silently
-        // ignore them.
+        // Inputs are fixed when a deployment is created, and the manager doesn't return them
+        // (they may be secrets), so a rerun can't tell whether they changed: say so instead of
+        // dropping them silently.
         if !input_values.is_empty() {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "input".to_string(),
-                message: format!(
-                    "Local deployment '{deployment_name}' already exists, and its inputs are \
-                     set at creation. Destroy it with `alien dev destroy --name \
-                     {deployment_name} --platform local` to create it with these inputs."
-                ),
-            }));
+            eprintln!(
+                "{} local deployment '{deployment_name}' already exists; its inputs are set at \
+                 creation and were not changed. Destroy it with `alien dev destroy --name \
+                 {deployment_name}` to create it with new inputs.",
+                crate::ui::dim_label("Warning:")
+            );
         }
         info!("Deployment '{}' already exists", deployment_name);
         return Ok(existing.id.clone());
@@ -1041,8 +1040,8 @@ mod tests {
             .build()
     }
 
-    /// `alien dev deploy --input` reaches the dev manager with the create request, and an
-    /// existing deployment, whose inputs are fixed, refuses new ones rather than ignoring them.
+    /// `alien dev deploy --input` reaches the dev manager with the create request; a rerun
+    /// reuses the existing deployment, whose inputs were fixed at creation.
     #[tokio::test]
     async fn create_initial_deployment_sends_inputs() {
         use axum::{extract::State, routing::get, Json, Router};
@@ -1105,10 +1104,12 @@ mod tests {
             serde_json::json!({ "managedKey": false })
         );
 
-        let error = create_initial_deployment("api", port, None, inputs)
+        // A rerun reuses the deployment; inputs are only sent when creating it.
+        let rerun = create_initial_deployment("api", port, None, inputs)
             .await
-            .expect_err("an existing deployment can't take new inputs");
-        assert!(error.message.contains("already exists"), "{error:?}");
+            .expect("a rerun reuses the existing deployment");
+        assert_eq!(rerun, "dep_1");
+        assert_eq!(created.lock().unwrap().len(), 1);
     }
 
     #[test]

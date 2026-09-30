@@ -988,6 +988,7 @@ pub async fn deploy_test_app(
         stack_settings: Some(stack_settings),
         environment_variables: deployment_environment_variables(app),
         resource_prefix: Some(resource_prefix),
+        input_values: Default::default(),
     };
 
     let resp = manager
