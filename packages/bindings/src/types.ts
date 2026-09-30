@@ -393,6 +393,21 @@ export interface SandboxInstance {
   generation: number
 }
 
+/**
+ * An authenticated way to reach a port inside a sandbox: send requests to `endpoint` with every
+ * header in `headers`, and ask for a new one before it expires.
+ */
+export interface SandboxPreview {
+  /** Endpoint the request must be sent to. */
+  endpoint: string
+  /** Headers that must accompany every request. */
+  headers: Record<string, string>
+  /** Ports this preview admits; a request to any other port is refused upstream. */
+  allowedPorts: number[]
+  /** Seconds until the preview expires. */
+  expiresInSeconds: number
+}
+
 /** A sandbox from `getOrCreate`, and which of the two things happened. */
 export interface ResolvedSandbox {
   /** The sandbox, whether it was made by this call or found. */
@@ -539,6 +554,8 @@ export interface Sandbox {
   readFile(sandboxId: string, path: string): Promise<Buffer>
   /** Writes files into the sandbox. Requires `files`. Parent directories are created as needed. */
   writeFiles(sandboxId: string, files: Record<string, Buffer | string>): Promise<void>
+  /** Mints an authenticated preview of a port the sandbox declares. Requires `preview`. */
+  preview(sandboxId: string, port: number): Promise<SandboxPreview>
   /**
    * Pauses a sandbox, preserving state. Requires `pauseResume`.
    *

@@ -413,6 +413,17 @@ class JobResult:
     error_message: str | None
 
 
+@dataclass(frozen=True)
+class SandboxPreview:
+    """Reach a port inside a sandbox: send requests to ``endpoint`` with every
+    header in ``headers``. Request a new one before ``expires_in_seconds``."""
+
+    endpoint: str
+    headers: Mapping[str, str]
+    allowed_ports: tuple[int, ...]
+    expires_in_seconds: int
+
+
 def _sandbox_info(value: Any) -> SandboxInfo:
     return SandboxInfo(value.sandbox_id, value.state, value.generation)
 
@@ -555,6 +566,16 @@ class Sandbox:
     @translate_errors
     async def resume(self, sandbox_id: str) -> None:
         await (await self._handle.get()).resume(sandbox_id)
+
+    @translate_errors
+    async def preview(self, sandbox_id: str, port: int) -> SandboxPreview:
+        value = await (await self._handle.get()).preview(sandbox_id, port)
+        return SandboxPreview(
+            value.endpoint,
+            dict(value.headers),
+            tuple(value.allowed_ports),
+            value.expires_in_seconds,
+        )
 
     @translate_errors
     async def terminate(self, sandbox_id: str) -> None:

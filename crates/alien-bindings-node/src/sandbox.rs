@@ -14,7 +14,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alien_bindings::traits::{
-    CommandOutput, CreateSandboxRequest, JobPoll, RunCommandRequest, Sandbox, SandboxInstance,
+    CommandOutput, CreateSandboxRequest, JobPoll, PreviewCapability, RunCommandRequest, Sandbox,
+    SandboxInstance,
 };
 use futures::channel::oneshot;
 use futures::future::{select, Either, FutureExt, Shared};
@@ -41,6 +42,29 @@ pub struct SandboxInstanceJs {
     pub state: String,
     /// Increments when a sandbox is replaced, so a stale handle is detectable.
     pub generation: i64,
+}
+
+/// An authenticated way to reach a port inside a sandbox: send requests to `endpoint` with every
+/// header in `headers`, and ask for a new one before it expires.
+#[napi(object)]
+pub struct SandboxPreviewJs {
+    /// Endpoint the request must be sent to.
+    pub endpoint: String,
+    /// Headers that must accompany every request.
+    pub headers: std::collections::HashMap<String, String>,
+    /// Ports this preview admits; a request to any other port is refused upstream.
+    pub allowed_ports: Vec<u32>,
+    /// Seconds until the preview expires.
+    pub expires_in_seconds: i64,
+}
+
+fn preview_to_js(preview: PreviewCapability) -> SandboxPreviewJs {
+    SandboxPreviewJs {
+        endpoint: preview.endpoint,
+        headers: preview.headers.into_iter().collect(),
+        allowed_ports: preview.allowed_ports.into_iter().map(u32::from).collect(),
+        expires_in_seconds: preview.expires_in_seconds as i64,
+    }
 }
 
 /// A sandbox from `getOrCreate`, and which of the two things happened.
@@ -257,8 +281,8 @@ impl SandboxHandle {
     ///
     /// The point of publishing capabilities is that a caller branches on them instead of
     /// discovering a gap through an error, so a capability with no method to call is worse than
-    /// one that is absent. `preview` and `snapshot` are true on some platforms but have no method
-    /// here yet, so they are not advertised until they do.
+    /// one that is absent. `snapshot` is true on some platforms but has no method here yet, so it
+    /// is not advertised until it does.
     ///
     /// Destructured rather than read field by field: a capability added to the set then fails to
     /// compile here instead of being silently dropped, which is how `egressDeny` went missing.
@@ -268,7 +292,7 @@ impl SandboxHandle {
             files,
             reconnect,
             jobs,
-            preview: _,
+            preview,
             pause_resume,
             snapshot: _,
             domain_egress_rules,
@@ -284,6 +308,7 @@ impl SandboxHandle {
             (files, "files"),
             (reconnect, "reconnect"),
             (jobs, "jobs"),
+            (preview, "preview"),
             (pause_resume, "pauseResume"),
             (domain_egress_rules, "domainEgressRules"),
             (egress_deny, "egressDeny"),
@@ -512,6 +537,24 @@ impl SandboxHandle {
     pub async fn pause(&self, sandbox_id: String) -> napi::Result<()> {
         let sandbox = self.inner.clone();
         sandbox.pause(&sandbox_id).await.map_err(map_alien_error)
+    }
+
+    /// Mints an authenticated preview of a port the sandbox declares. Requires the `preview`
+    /// capability.
+    #[napi]
+    pub async fn preview(&self, sandbox_id: String, port: u32) -> napi::Result<SandboxPreviewJs> {
+        let port = u16::try_from(port).map_err(|_| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("port {port} is not a valid TCP port"),
+            )
+        })?;
+        let sandbox = self.inner.clone();
+        sandbox
+            .preview(&sandbox_id, port)
+            .await
+            .map(preview_to_js)
+            .map_err(map_alien_error)
     }
 
     /// Resumes a paused sandbox. Requires the `pauseResume` capability.
