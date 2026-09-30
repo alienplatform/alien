@@ -1432,7 +1432,7 @@ fn versions_body(
         // emitters are ported, rather than letting a release decide for us.
         provider_attrs.push(attr(
             "azurerm",
-            provider_decl_attr("hashicorp/azurerm", ">= 3.100, < 5.0"),
+            provider_decl_attr("hashicorp/azurerm", ">= 4.75, < 5.0"),
         ));
         if include_azapi_provider {
             // Bounded for the same reason as azurerm, and more sharply: the sandbox group is a
@@ -2716,7 +2716,25 @@ fn providers_body(
                         "resource_provider_registrations",
                         Expression::String("none".to_string()),
                     ),
-                    Structure::Block(block("features", [])),
+                    // Track accepted creates before polling so failures remain
+                    // available to Terraform cleanup. Keep group deletion guarded:
+                    // retained key vaults are deliberately detached from state.
+                    nested(block(
+                        "features",
+                        [
+                            attr(
+                                "persist_id_on_create_before_polling_for_completion",
+                                Expression::Bool(true),
+                            ),
+                            nested(block(
+                                "resource_group",
+                                [attr(
+                                    "prevent_deletion_if_contains_resources",
+                                    Expression::Bool(true),
+                                )],
+                            )),
+                        ],
+                    )),
                 ]),
             }));
             if include_azapi_provider {
