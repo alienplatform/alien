@@ -4,7 +4,7 @@ client-sdks/**/openapi*.json linguist-generated=true
 packages/core/openapi.json linguist-generated=true
 
 # Azure OpenAPI fragments and the generated include module.
-crates/alien-azure-clients/openapi/** linguist-generated=true
+crates/alien-azure-models-*/openapi/** linguist-generated=true
 crates/alien-azure-clients/src/azure/models/mod.rs linguist-generated=true
 
 # Speakeasy-generated client SDK docs and lockfile.
@@ -17,5 +17,5 @@ client-sdks/*/typescript/.speakeasy/gen.lock linguist-generated=true
 packages/core/src/generated/** linguist-generated=true
 
 # Protobuf TypeScript output.
-packages/sdk/src/generated/** linguist-generated=true
+packages/sdk/src/worker-runtime/generated/** linguist-generated=true
 packages/sdk/dist/generated/** linguist-generated=true

@@ -3,15 +3,39 @@ import "package://github.com/jdx/hk/releases/download/v2.1.0/hk@2.1.0#/Builtins.
 
 stash_untracked = false
 
+local generated_outputs = List(
+    "client-sdks/*/typescript/src/**",
+    "client-sdks/*/typescript/docs/**",
+    "client-sdks/*/typescript/examples/**",
+    "client-sdks/*/typescript/.devcontainer/**",
+    "client-sdks/*/typescript/.speakeasy/gen.lock",
+    "client-sdks/*/typescript/*.md",
+    "client-sdks/*/typescript/*.json",
+    "client-sdks/*/typescript/*.mjs",
+    "client-sdks/*/typescript/.gitattributes",
+    "client-sdks/*/typescript/.gitignore",
+    "client-sdks/*/typescript/.npmignore",
+    "client-sdks/*/openapi*.json",
+    "client-sdks/*/rust/openapi*.json",
+    "crates/alien-manager/openapi.json",
+    "crates/alien-azure-models-*/openapi/**",
+    "crates/alien-azure-clients/src/azure/models/mod.rs",
+    "packages/core/openapi.json",
+    "packages/core/src/generated/**",
+    "packages/sdk/src/worker-runtime/generated/**"
+)
+
 local fast_steps = new Mapping<String, Step> {
     ["oxfmt"] = new Step {
         glob = List("**/*.cjs", "**/*.css", "**/*.cts", "**/*.js", "**/*.json", "**/*.jsonc", "**/*.jsx", "**/*.mjs", "**/*.mts", "**/*.ts", "**/*.tsx")
+        exclude = generated_outputs
         batch = true
         check = "pnpm exec oxfmt --check --no-error-on-unmatched-pattern {{files}}"
         fix = "pnpm exec oxfmt --write --no-error-on-unmatched-pattern {{files}}"
     }
     ["oxlint"] = new Step {
         glob = List("**/*.cjs", "**/*.cts", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.mts", "**/*.ts", "**/*.tsx")
+        exclude = generated_outputs
         batch = true
         depends = "oxfmt"
         check = "pnpm exec oxlint --no-error-on-unmatched-pattern {{files}}"
@@ -19,12 +43,17 @@ local fast_steps = new Mapping<String, Step> {
     }
     ["check-added-large-files"] = Builtins.check_added_large_files
     ["check-merge-conflict"] = Builtins.check_merge_conflict
-    ["newlines"] = Builtins.newlines
+    ["newlines"] = (Builtins.newlines) {
+        exclude = generated_outputs
+    }
     ["rustfmt"] = (Builtins.rustfmt) {
+        exclude = generated_outputs
         check = "rustfmt --check --edition 2021 {{files}}"
         fix = "rustfmt --edition 2021 {{files}}"
     }
-    ["trailing-whitespace"] = Builtins.trailing_whitespace
+    ["trailing-whitespace"] = (Builtins.trailing_whitespace) {
+        exclude = generated_outputs
+    }
 }
 
 hooks {

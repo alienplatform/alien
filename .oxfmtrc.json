@@ -22,7 +22,7 @@
     "client-sdks/platform/typescript",
     "**/openapi.json",
     "**/openapi-3.0.json",
-    "**/openapi",
+    "crates/alien-azure-models-*/openapi",
     "**/app/.well-known",
     "**/code-samples-overlay.json",
     "**/.next",
