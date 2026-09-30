@@ -18,6 +18,13 @@ import {
 export type CreateDeploymentRequest = {
   deploymentGroupId?: string | null | undefined;
   environmentVariables?: Array<EnvironmentVariable> | null | undefined;
+  /**
+   * Stack input values, by input name. Stored with the deployment and read by every
+   *
+   * @remarks
+   * deployment step, like the values a setup collects.
+   */
+  inputValues?: { [k: string]: any } | undefined;
   name: string;
   /**
    * Represents the target cloud platform.
@@ -31,6 +38,7 @@ export type CreateDeploymentRequest = {
 export type CreateDeploymentRequest$Outbound = {
   deploymentGroupId?: string | null | undefined;
   environmentVariables?: Array<EnvironmentVariable$Outbound> | null | undefined;
+  inputValues?: { [k: string]: any } | undefined;
   name: string;
   platform: string;
   resourcePrefix?: string | null | undefined;
@@ -45,6 +53,7 @@ export const CreateDeploymentRequest$outboundSchema: z.ZodType<
   deploymentGroupId: z.nullable(z.string()).optional(),
   environmentVariables: z.nullable(z.array(EnvironmentVariable$outboundSchema))
     .optional(),
+  inputValues: z.record(z.string(), z.any()).optional(),
   name: z.string(),
   platform: PlatformEnum$outboundSchema,
   resourcePrefix: z.nullable(z.string()).optional(),

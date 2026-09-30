@@ -581,6 +581,7 @@ pub async fn create_initial_deployment(
     deployment_name: &str,
     port: u16,
     environment_variables: Option<Vec<alien_core::EnvironmentVariable>>,
+    input_values: HashMap<String, serde_json::Value>,
 ) -> Result<String> {
     let client = local_dev_client(port);
 
@@ -600,6 +601,18 @@ pub async fn create_initial_deployment(
         .iter()
         .find(|d| d.name == deployment_name)
     {
+        // Inputs are fixed when a deployment is created, so an existing one would silently
+        // ignore them.
+        if !input_values.is_empty() {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "input".to_string(),
+                message: format!(
+                    "Local deployment '{deployment_name}' already exists, and its inputs are \
+                     set at creation. Destroy it with `alien dev destroy --name \
+                     {deployment_name} --platform local` to create it with these inputs."
+                ),
+            }));
+        }
         info!("Deployment '{}' already exists", deployment_name);
         return Ok(existing.id.clone());
     }
@@ -634,7 +647,8 @@ pub async fn create_initial_deployment(
         .body_map(|body| {
             let mut b = body
                 .name(deployment_name)
-                .platform(alien_manager_api::types::Platform::Local);
+                .platform(alien_manager_api::types::Platform::Local)
+                .input_values(input_values.into_iter().collect::<serde_json::Map<_, _>>());
             if let Some(ref vars) = env_vars {
                 b = b.environment_variables(vars.clone());
             }
@@ -691,7 +705,7 @@ pub async fn prepare_dev_session_deployment(
         wait_for_local_deployment_absent(port, deployment_name).await?;
     }
 
-    create_initial_deployment(deployment_name, port, environment_variables).await
+    create_initial_deployment(deployment_name, port, environment_variables, HashMap::new()).await
 }
 
 async fn find_named_local_deployment(
@@ -1025,6 +1039,76 @@ mod tests {
             .permissions("execution".to_string())
             .code(WorkerCode::Image { image })
             .build()
+    }
+
+    /// `alien dev deploy --input` reaches the dev manager with the create request, and an
+    /// existing deployment, whose inputs are fixed, refuses new ones rather than ignoring them.
+    #[tokio::test]
+    async fn create_initial_deployment_sends_inputs() {
+        use axum::{extract::State, routing::get, Json, Router};
+        use std::sync::{Arc, Mutex};
+
+        fn deployment(name: &str) -> serde_json::Value {
+            serde_json::json!({
+                "id": "dep_1",
+                "name": name,
+                "platform": "local",
+                "status": "pending",
+                "deploymentGroupId": "dg_1",
+                "deploymentProtocolVersion": 1,
+                "projectId": "default",
+                "workspaceId": "default",
+                "retryRequested": false,
+                "createdAt": "2026-01-01T00:00:00Z",
+            })
+        }
+        type Created = Arc<Mutex<Vec<serde_json::Value>>>;
+        async fn list(State(created): State<Created>) -> Json<serde_json::Value> {
+            let items: Vec<_> = created
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|body| deployment(body["name"].as_str().unwrap()))
+                .collect();
+            Json(serde_json::json!({ "items": items }))
+        }
+        async fn create(
+            State(created): State<Created>,
+            Json(body): Json<serde_json::Value>,
+        ) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+            let name = body["name"].as_str().unwrap().to_string();
+            created.lock().unwrap().push(body);
+            // The manager answers a create with 201 Created.
+            (
+                axum::http::StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "deployment": deployment(&name),
+                    "deploymentModel": "push",
+                })),
+            )
+        }
+
+        let created: Created = Arc::default();
+        let app = Router::new()
+            .route("/v1/deployments", get(list).post(create))
+            .with_state(created.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let inputs = HashMap::from([("managedKey".to_string(), serde_json::json!(false))]);
+
+        create_initial_deployment("api", port, None, inputs.clone())
+            .await
+            .expect("the deployment is created");
+        assert_eq!(
+            created.lock().unwrap()[0]["inputValues"],
+            serde_json::json!({ "managedKey": false })
+        );
+
+        let error = create_initial_deployment("api", port, None, inputs)
+            .await
+            .expect_err("an existing deployment can't take new inputs");
+        assert!(error.message.contains("already exists"), "{error:?}");
     }
 
     #[test]
