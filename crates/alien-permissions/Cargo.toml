@@ -6,9 +6,6 @@ authors.workspace = true
 description.workspace = true
 license-file.workspace = true
 
-[lib]
-crate-type = ["rlib", "cdylib"]
-
 [features]
 default = ["infrastructure"]
 infrastructure = ["dep:alien-core", "dep:regex", "dep:json5", "dep:tracing"]

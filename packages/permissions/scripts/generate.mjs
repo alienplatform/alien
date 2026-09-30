@@ -11,11 +11,14 @@ const temporary = mkdtempSync(resolve(tmpdir(), "alien-permissions-"))
 try {
   const build = [
     "+1.97.1",
-    "build",
+    "rustc",
     "--locked",
     "--release",
     "-p",
     "alien-permissions",
+    "--lib",
+    "--crate-type",
+    "cdylib",
     "--no-default-features",
     "--features",
     "wasm",
