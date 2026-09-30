@@ -107,4 +107,4 @@ jobs:
         run: pnpm generate
 
       - name: Check generated files are committed
-        run: git diff --exit-code -- packages/core packages/sdk
+        run: git diff --exit-code -- packages/core packages/sdk packages/permissions/generated
