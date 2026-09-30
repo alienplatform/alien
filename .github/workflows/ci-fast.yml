@@ -25,6 +25,9 @@ jobs:
       startsWith(github.event.head_commit.message, 'chore: release '))
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+      - name: Check Renovate lockfile classification
+        run: bash scripts/repair-renovate-lockfiles.test.sh
       - name: Validate PR title and branch
         if: github.event_name == 'pull_request'
         env:
@@ -37,7 +40,10 @@ jobs:
             echo "  Example: feat: add Azure container deployment support"
             exit 1
           fi
+          # Self-hosted Renovate opens renovate/alien-<issue>-<slug> as the token user.
+          # The slug may contain dots, which the human branch pattern rejects.
           if [[ "$PR_AUTHOR" != "dependabot[bot]" && "$PR_AUTHOR" != "renovate[bot]" ]] &&
+             ! grep -qE '^renovate/alien-[0-9]+-[a-z0-9][a-z0-9._-]*$' <<< "$BRANCH" &&
              ! grep -qE '^[a-z0-9][a-z0-9._-]*/alien-[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$' <<< "$BRANCH"; then
             echo "::error::Branch must include its Linear issue, for example: alon/alien-123-azure-containers"
             exit 1

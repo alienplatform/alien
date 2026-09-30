@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/bindings",
-  "version": "3.3.25",
+  "version": "3.3.26",
   "description": "Direct TypeScript bindings for Alien storage, kv, queue, vault, and postgres over an in-process napi-rs addon",
   "keywords": [
     "alien",

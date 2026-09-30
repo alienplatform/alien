@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/bindings-linux-x64-gnu",
-  "version": "3.3.25",
+  "version": "3.3.26",
   "description": "napi-rs addon exposing alien-bindings storage/kv/queue/vault to JavaScript",
   "files": [
     "alien-bindings-node.linux-x64-gnu.node"

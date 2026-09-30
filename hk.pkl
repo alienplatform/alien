@@ -20,6 +20,7 @@ local generated_outputs = List(
     "crates/alien-manager/openapi.json",
     "crates/alien-azure-models-*/openapi/**",
     "crates/alien-azure-clients/src/azure/models/mod.rs",
+    "examples/custom-operations/metadata.json",
     "packages/core/openapi.json",
     "packages/core/src/generated/**",
     "packages/sdk/src/worker-runtime/generated/**"

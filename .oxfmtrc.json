@@ -6,6 +6,7 @@
     "**/.alien",
     "**/alien-data",
     "**/dist",
+    "examples/custom-operations/metadata.json",
     "client-sdks/manager/typescript",
     "client-sdks/platform/typescript",
     "**/openapi.json",

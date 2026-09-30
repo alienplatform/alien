@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/ai-gateway",
-  "version": "3.3.25",
+  "version": "3.3.26",
   "description": "Thin TypeScript wrapper that spawns the Alien AI gateway (a Rust binary) and points an OpenAI-compatible client at it",
   "keywords": [
     "ai",

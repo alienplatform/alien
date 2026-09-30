@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/commands",
-  "version": "3.3.25",
+  "version": "3.3.26",
   "description": "Pure-TypeScript command sender and pull receiver for the Alien platform, over fetch",
   "keywords": [
     "alien",
