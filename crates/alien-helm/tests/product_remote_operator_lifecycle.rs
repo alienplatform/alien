@@ -2784,6 +2784,7 @@ fn verify_collector_selector_upgrade(temp: &Path, current_chart: &Path, namespac
             None,
         );
     }
+    run_ok("kubectl", ["delete", "crd", CRD_NAME], None);
 }
 
 fn kubernetes_resource_json(namespace: &str, kind: &str, name: Option<&str>) -> serde_json::Value {
