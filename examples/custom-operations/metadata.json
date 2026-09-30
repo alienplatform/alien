@@ -1,0 +1,87 @@
+{
+  "name": "custom-ops",
+  "version": "0.1.0",
+  "tier": "mutating",
+  "binaries": {
+    "amd64": "custom-ops-linux-amd64",
+    "arm64": "custom-ops-linux-arm64"
+  },
+  "operations": [
+    {
+      "name": "doctor",
+      "tier": "read-only",
+      "description": "Read application health and export throttle.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "DoctorParams",
+        "type": "object",
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "DoctorOutput",
+        "type": "object",
+        "required": [
+          "maxExportsPerMinute",
+          "status"
+        ],
+        "properties": {
+          "maxExportsPerMinute": {
+            "description": "Maximum exports the application currently permits per minute.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 1.0
+          },
+          "status": {
+            "description": "Application-reported health status, for example \"healthy\".",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "permissions": [],
+      "timeoutSeconds": 15
+    },
+    {
+      "name": "throttle-export-automation",
+      "tier": "mutating",
+      "description": "Set the application's export limit per minute.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ExportThrottle",
+        "type": "object",
+        "required": [
+          "maxExportsPerMinute"
+        ],
+        "properties": {
+          "maxExportsPerMinute": {
+            "description": "Maximum exports the application permits per minute.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 1.0
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ExportThrottle",
+        "type": "object",
+        "required": [
+          "maxExportsPerMinute"
+        ],
+        "properties": {
+          "maxExportsPerMinute": {
+            "description": "Maximum exports the application permits per minute.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 1.0
+          }
+        },
+        "additionalProperties": false
+      },
+      "permissions": [],
+      "timeoutSeconds": 15
+    }
+  ]
+}

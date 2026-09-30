@@ -47,6 +47,7 @@ members = [
   "client-sdks/manager/rust",
   "client-sdks/platform/rust",
   "examples/basic-worker-rs",
+  "examples/custom-operations",
   "examples/endpoint-agent",
   "examples/byoc-database",
   "examples/slatedb-trace-store",
