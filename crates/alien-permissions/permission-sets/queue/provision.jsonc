@@ -12,18 +12,18 @@
             "sqs:GetQueueAttributes",
             "sqs:SetQueueAttributes",
             "sqs:ListQueues",
-            "sqs:TagQueue"
-          ]
+            "sqs:TagQueue",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"]
-          }
-        }
-      }
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -33,15 +33,15 @@
             "pubsub.topics.delete",
             "pubsub.topics.get",
             "pubsub.topics.update",
-            "pubsub.topics.attachSubscription"
-          ]
+            "pubsub.topics.attachSubscription",
+          ],
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
           "resource": {
-            "scope": "projects/${projectName}/topics/${resourceName}"
-          }
-        }
+            "scope": "projects/${projectName}/topics/${resourceName}",
+          },
+        },
       },
       {
         "grant": {
@@ -49,16 +49,16 @@
             "pubsub.subscriptions.create",
             "pubsub.subscriptions.delete",
             "pubsub.subscriptions.get",
-            "pubsub.subscriptions.update"
-          ]
+            "pubsub.subscriptions.update",
+          ],
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
           "resource": {
-            "scope": "projects/${projectName}/subscriptions/${resourceName}"
-          }
-        }
-      }
+            "scope": "projects/${projectName}/subscriptions/${resourceName}",
+          },
+        },
+      },
     ],
     "azure": [
       {
@@ -70,19 +70,19 @@
             "Microsoft.ServiceBus/namespaces/queues/read",
             "Microsoft.ServiceBus/namespaces/queues/write",
             "Microsoft.ServiceBus/namespaces/queues/delete",
-            "Microsoft.ServiceBus/checkNameAvailability/action"
+            "Microsoft.ServiceBus/checkNameAvailability/action",
           ],
-          "dataActions": []
+          "dataActions": [],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb",
+          },
+        },
+      },
+    ],
+  },
 }

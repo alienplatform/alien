@@ -4,9 +4,9 @@
  * incoming tasks (commands + storage/cron/queue events) to them.
  */
 
-import type { StorageEvent, StorageEventType } from "@alienplatform/core"
-import { type Channel, createClient } from "nice-grpc"
-import { createGrpcChannel } from "./channel.js"
+import type { StorageEvent, StorageEventType } from "@alienplatform/core";
+import { type Channel, createClient } from "nice-grpc";
+import { createGrpcChannel } from "./channel.js";
 import type {
   ControlServiceClient as GeneratedClient,
   ArcCommand as ProtoArcCommand,
@@ -14,30 +14,30 @@ import type {
   QueueMessage as ProtoQueueMessage,
   StorageEvent as ProtoStorageEvent,
   Task,
-} from "./generated/control.js"
-import { wrapGrpcCall } from "./grpc-utils.js"
+} from "./generated/control.js";
+import { wrapGrpcCall } from "./grpc-utils.js";
 import {
   type CronEvent,
   getCommands,
   getEventHandlers,
   type QueueMessageEvent,
   runCommand,
-} from "./registry.js"
-import type { getControlServiceDefinition } from "./service-definitions.js"
-import { logSystemError, logSystemWarn } from "./system-log.js"
+} from "./registry.js";
+import type { getControlServiceDefinition } from "./service-definitions.js";
+import { logSystemError, logSystemWarn } from "./system-log.js";
 
-const MAX_LOG_ERROR_LENGTH = 1_000
+const MAX_LOG_ERROR_LENGTH = 1_000;
 
 /** @internal exported for tests */
 export function formatEventLoopError(error: unknown): string {
   try {
-    const raw = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
-    const singleLine = raw.replace(/\s+/g, " ").trim()
+    const raw = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    const singleLine = raw.replace(/\s+/g, " ").trim();
     return singleLine.length > MAX_LOG_ERROR_LENGTH
       ? `${singleLine.slice(0, MAX_LOG_ERROR_LENGTH)}…`
-      : singleLine
+      : singleLine;
   } catch {
-    return "Unformattable thrown value"
+    return "Unformattable thrown value";
   }
 }
 
@@ -50,25 +50,25 @@ export function formatEventLoopError(error: unknown): string {
  * dispatch logical names directly, so this only widens the match.
  */
 export function physicalSourceNames(source: string): string[] {
-  const raw = process.env[`ALIEN_${source.replaceAll("-", "_").toUpperCase()}_BINDING`]
-  if (!raw) return []
+  const raw = process.env[`ALIEN_${source.replaceAll("-", "_").toUpperCase()}_BINDING`];
+  if (!raw) return [];
   try {
     const binding = JSON.parse(raw) as {
-      bucketName?: string
-      queueName?: string
-      queueUrl?: string
-    }
+      bucketName?: string;
+      queueName?: string;
+      queueUrl?: string;
+    };
     return [binding.bucketName, binding.queueName, binding.queueUrl?.split("/").pop()].filter(
       (name): name is string => typeof name === "string" && name.length > 0,
-    )
+    );
   } catch {
-    return []
+    return [];
   }
 }
 
 /** @internal exported for tests */
 export function sourceMatches(src: string, physical: string): boolean {
-  return src === "*" || src === physical || physicalSourceNames(src).includes(physical)
+  return src === "*" || src === physical || physicalSourceNames(src).includes(physical);
 }
 
 /**
@@ -77,12 +77,12 @@ export function sourceMatches(src: string, physical: string): boolean {
  * @internal
  */
 export class EventLoop {
-  private readonly client: GeneratedClient
-  private sendClient: GeneratedClient | undefined
-  private readonly applicationId: string
-  private readonly endpoint: string
-  private readonly service: ReturnType<typeof getControlServiceDefinition>
-  private running = false
+  private readonly client: GeneratedClient;
+  private sendClient: GeneratedClient | undefined;
+  private readonly applicationId: string;
+  private readonly endpoint: string;
+  private readonly service: ReturnType<typeof getControlServiceDefinition>;
+  private running = false;
 
   constructor(
     channel: Channel,
@@ -90,10 +90,10 @@ export class EventLoop {
     endpoint: string,
     service: ReturnType<typeof getControlServiceDefinition>,
   ) {
-    this.client = createClient(service, channel)
-    this.applicationId = applicationId
-    this.endpoint = endpoint
-    this.service = service
+    this.client = createClient(service, channel);
+    this.applicationId = applicationId;
+    this.endpoint = endpoint;
+    this.service = service;
   }
 
   /**
@@ -103,17 +103,17 @@ export class EventLoop {
    */
   private async getSendClient(): Promise<GeneratedClient> {
     if (!this.sendClient) {
-      const sendChannel = await createGrpcChannel(this.endpoint)
-      this.sendClient = createClient(this.service, sendChannel)
+      const sendChannel = await createGrpcChannel(this.endpoint);
+      this.sendClient = createClient(this.service, sendChannel);
     }
-    return this.sendClient
+    return this.sendClient;
   }
 
   /**
    * Register all handlers (events + commands) with the runtime.
    */
   async registerHandlers(): Promise<void> {
-    const registrations: Promise<void>[] = []
+    const registrations: Promise<void>[] = [];
 
     for (const { registration } of getEventHandlers().values()) {
       registrations.push(
@@ -121,9 +121,9 @@ export class EventLoop {
           await this.client.registerEventHandler({
             handlerType: registration.type,
             resourceName: registration.source,
-          })
+          });
         }),
-      )
+      );
     }
 
     for (const command of getCommands().values()) {
@@ -132,40 +132,40 @@ export class EventLoop {
           await this.client.registerEventHandler({
             handlerType: "command",
             resourceName: command.name,
-          })
+          });
         }),
-      )
+      );
     }
 
-    await Promise.all(registrations)
+    await Promise.all(registrations);
   }
 
   /**
    * Start the event loop.
    */
   async start(): Promise<void> {
-    this.running = true
+    this.running = true;
     while (this.running) {
       try {
-        await this.processTasks()
+        await this.processTasks();
       } catch (error) {
         logSystemError(
           `[alien:event-loop] processTasks threw: error=${formatEventLoopError(error)}`,
-        )
-        await new Promise(resolve => setTimeout(resolve, 1000))
+        );
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
   }
 
   private async processTasks(): Promise<void> {
-    const stream = this.client.waitForTasks({ applicationId: this.applicationId })
+    const stream = this.client.waitForTasks({ applicationId: this.applicationId });
     for await (const task of stream) {
       try {
-        await this.handleTask(task)
+        await this.handleTask(task);
       } catch (error) {
         logSystemError(
           `[alien:event-loop] handleTask threw (task will not break stream): id=${task.taskId} error=${formatEventLoopError(error)}`,
-        )
+        );
       }
     }
   }
@@ -173,28 +173,28 @@ export class EventLoop {
   private async handleTask(task: Task): Promise<void> {
     try {
       if (task.arcCommand) {
-        const result = await this.handleCommand(task.arcCommand)
-        await this.sendTaskResult(task.taskId, { success: true, data: result })
-        return
+        const result = await this.handleCommand(task.arcCommand);
+        await this.sendTaskResult(task.taskId, { success: true, data: result });
+        return;
       }
 
-      let matchedEntry: { handler: (event: unknown) => Promise<void> } | undefined
+      let matchedEntry: { handler: (event: unknown) => Promise<void> } | undefined;
       for (const entry of getEventHandlers().values()) {
-        const src = entry.registration.source
+        const src = entry.registration.source;
         if (task.storageEvent && entry.registration.type === "storage") {
           if (sourceMatches(src, task.storageEvent.bucket)) {
-            matchedEntry = entry
-            break
+            matchedEntry = entry;
+            break;
           }
         } else if (task.cronEvent && entry.registration.type === "cron") {
           if (src === "*" || src === task.cronEvent.scheduleName) {
-            matchedEntry = entry
-            break
+            matchedEntry = entry;
+            break;
           }
         } else if (task.queueMessage && entry.registration.type === "queue") {
           if (sourceMatches(src, task.queueMessage.source)) {
-            matchedEntry = entry
-            break
+            matchedEntry = entry;
+            break;
           }
         }
       }
@@ -203,44 +203,44 @@ export class EventLoop {
         // Report the miss as a failed result — without it the runtime waits
         // for the task until its event timeout (a 2-minute hang per event on
         // Lambda) instead of failing loudly.
-        logSystemWarn(`No handler found for task: ${task.taskId}`)
+        logSystemWarn(`No handler found for task: ${task.taskId}`);
         await this.sendTaskResult(task.taskId, {
           success: false,
           error: `No handler registered for task ${task.taskId}`,
-        })
-        return
+        });
+        return;
       }
 
       if (task.storageEvent) {
-        await matchedEntry.handler(this.fromProtoStorageEvent(task.storageEvent))
+        await matchedEntry.handler(this.fromProtoStorageEvent(task.storageEvent));
       } else if (task.cronEvent) {
-        await matchedEntry.handler(this.fromProtoCronEvent(task.cronEvent))
+        await matchedEntry.handler(this.fromProtoCronEvent(task.cronEvent));
       } else if (task.queueMessage) {
-        await matchedEntry.handler(this.fromProtoQueueMessage(task.queueMessage))
+        await matchedEntry.handler(this.fromProtoQueueMessage(task.queueMessage));
       }
 
-      await this.sendTaskResult(task.taskId, { success: true })
+      await this.sendTaskResult(task.taskId, { success: true });
     } catch (error) {
-      const formattedError = formatEventLoopError(error)
-      logSystemError(`[alien:event-loop] Task error: id=${task.taskId} error=${formattedError}`)
+      const formattedError = formatEventLoopError(error);
+      logSystemError(`[alien:event-loop] Task error: id=${task.taskId} error=${formattedError}`);
       try {
         await this.sendTaskResult(task.taskId, {
           success: false,
           error: formattedError,
-        })
+        });
       } catch (sendError) {
         logSystemError(
           `[alien:event-loop] Failed to send error result: id=${task.taskId} sendError=${formatEventLoopError(sendError)}`,
-        )
+        );
       }
     }
   }
 
   private async handleCommand(command: ProtoArcCommand): Promise<unknown> {
-    let params: unknown = {}
+    let params: unknown = {};
     if (command.params && command.params.length > 0) {
       try {
-        params = JSON.parse(new TextDecoder().decode(command.params))
+        params = JSON.parse(new TextDecoder().decode(command.params));
       } catch (error) {
         // Fail fast: params that don't decode mean a malformed command, not an
         // empty one. Surface it as a task error (mirroring the pull receiver,
@@ -252,35 +252,35 @@ export class EventLoop {
             error instanceof Error ? error.message : String(error)
           }`,
           { cause: error },
-        )
+        );
       }
     }
     return await runCommand(command.commandName, params, {
       commandId: command.commandId,
       attempt: command.attempt,
       deadline: command.deadline,
-    })
+    });
   }
 
   private async sendTaskResult(
     taskId: string,
     result: { success: boolean; error?: string; data?: unknown },
   ): Promise<void> {
-    const client = await this.getSendClient()
-    const signal = AbortSignal.timeout(30_000)
+    const client = await this.getSendClient();
+    const signal = AbortSignal.timeout(30_000);
     await wrapGrpcCall("ControlService", "SendTaskResult", async () => {
       if (result.success) {
         const responseData = result.data
           ? new TextEncoder().encode(JSON.stringify(result.data))
-          : new Uint8Array()
-        await client.sendTaskResult({ taskId, success: { responseData } }, { signal })
+          : new Uint8Array();
+        await client.sendTaskResult({ taskId, success: { responseData } }, { signal });
       } else {
         await client.sendTaskResult(
           { taskId, error: { code: "ERROR", message: result.error ?? "Unknown error" } },
           { signal },
-        )
+        );
       }
-    })
+    });
   }
 
   private fromProtoStorageEvent(proto: ProtoStorageEvent): StorageEvent {
@@ -291,7 +291,7 @@ export class EventLoop {
       metadata_updated: "metadataUpdated",
       restored: "restored",
       tier_changed: "tierChanged",
-    }
+    };
 
     return {
       eventType: eventTypeMap[proto.eventType] ?? "unknown",
@@ -308,18 +308,18 @@ export class EventLoop {
       currentTier: proto.currentTier || undefined,
       region: proto.region || undefined,
       versionId: proto.versionId || undefined,
-    }
+    };
   }
 
   private fromProtoCronEvent(proto: ProtoCronEvent): CronEvent {
     return {
       scheduleName: proto.scheduleName,
       timestamp: proto.scheduledTime?.toISOString() ?? new Date().toISOString(),
-    }
+    };
   }
 
   private fromProtoQueueMessage<T>(proto: ProtoQueueMessage): QueueMessageEvent<T> {
-    let payload: unknown = null
+    let payload: unknown = null;
     if (proto.payload && proto.payload.length > 0) {
       // The payload bytes are either a JSON message (`MessagePayload::Json`) or
       // raw text (`MessagePayload::Text`). Decode the bytes as UTF-8 text, then
@@ -327,11 +327,11 @@ export class EventLoop {
       // Never hand back the raw `Uint8Array` cast to `T` — that silently lies
       // about the payload's type (a JSON handler would receive bytes, not the
       // object it expects).
-      const text = new TextDecoder().decode(proto.payload)
+      const text = new TextDecoder().decode(proto.payload);
       try {
-        payload = JSON.parse(text)
+        payload = JSON.parse(text);
       } catch {
-        payload = text
+        payload = text;
       }
     }
 
@@ -344,6 +344,6 @@ export class EventLoop {
       timestamp: proto.timestamp ?? new Date(),
       attributes:
         proto.attributes && Object.keys(proto.attributes).length > 0 ? proto.attributes : undefined,
-    }
+    };
   }
 }

@@ -2,6 +2,6 @@
 // path string. `bun build --compile` embeds the file and rewrites the path to the
 // in-binary copy; `native.ts` hands that path to the loader to extract and spawn.
 declare module "*.bin" {
-  const path: string
-  export default path
+  const path: string;
+  export default path;
 }

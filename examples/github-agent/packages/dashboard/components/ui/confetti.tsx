@@ -1,23 +1,23 @@
-"use client"
+"use client";
 
-import confetti from "canvas-confetti"
-import type { Options as ConfettiOptions } from "canvas-confetti"
-import { useCallback, useEffect, useImperativeHandle, useRef } from "react"
+import confetti from "canvas-confetti";
+import type { Options as ConfettiOptions } from "canvas-confetti";
+import { useCallback, useEffect, useImperativeHandle, useRef } from "react";
 
 export interface ConfettiRef {
-  fire: (options?: ConfettiOptions) => void
+  fire: (options?: ConfettiOptions) => void;
 }
 
 interface ConfettiProps {
-  options?: ConfettiOptions
-  className?: string
-  onMouseEnter?: () => void
+  options?: ConfettiOptions;
+  className?: string;
+  onMouseEnter?: () => void;
 }
 
 interface ConfettiButtonProps {
-  options?: ConfettiOptions
-  children?: React.ReactNode
-  className?: string
+  options?: ConfettiOptions;
+  children?: React.ReactNode;
+  className?: string;
 }
 
 export const Confetti = ({
@@ -26,23 +26,23 @@ export const Confetti = ({
   onMouseEnter,
   ref,
 }: ConfettiProps & { ref?: React.Ref<ConfettiRef> }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const confettiInstance = useRef<confetti.CreateTypes | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const confettiInstance = useRef<confetti.CreateTypes | null>(null);
 
   useEffect(() => {
     if (canvasRef.current) {
       confettiInstance.current = confetti.create(canvasRef.current, {
         resize: true,
         useWorker: true,
-      })
+      });
     }
 
     return () => {
       if (confettiInstance.current) {
-        confettiInstance.current.reset()
+        confettiInstance.current.reset();
       }
-    }
-  }, [])
+    };
+  }, []);
 
   const makeShot = useCallback(
     (opts?: ConfettiOptions) => {
@@ -50,11 +50,11 @@ export const Confetti = ({
         confettiInstance.current({
           ...options,
           ...opts,
-        })
+        });
       }
     },
     [options],
-  )
+  );
 
   useImperativeHandle(
     ref,
@@ -62,17 +62,17 @@ export const Confetti = ({
       fire: makeShot,
     }),
     [makeShot],
-  )
+  );
 
-  return <canvas ref={canvasRef} className={className} onMouseEnter={onMouseEnter} />
-}
+  return <canvas ref={canvasRef} className={className} onMouseEnter={onMouseEnter} />;
+};
 
 export function ConfettiButton({ options, children, className = "" }: ConfettiButtonProps) {
-  const confettiRef = useRef<ConfettiRef>(null)
+  const confettiRef = useRef<ConfettiRef>(null);
 
   const handleClick = () => {
-    confettiRef.current?.fire(options || {})
-  }
+    confettiRef.current?.fire(options || {});
+  };
 
   return (
     <>
@@ -84,5 +84,5 @@ export function ConfettiButton({ options, children, className = "" }: ConfettiBu
         className="pointer-events-none fixed left-0 top-0 z-50 size-full"
       />
     </>
-  )
+  );
 }

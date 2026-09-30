@@ -1,4 +1,4 @@
-import { defineConfig } from "tsdown"
+import { defineConfig } from "tsdown";
 
 export default defineConfig({
   entry: ["src/index.ts", "src/native.ts"],
@@ -17,4 +17,4 @@ export default defineConfig({
   // Never bundle the native addon: the `./alien-bindings.node` specifier in
   // native.ts must survive into the output as a literal so bun can embed it.
   external: [/\.node$/],
-})
+});

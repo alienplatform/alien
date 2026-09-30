@@ -1,20 +1,20 @@
-import { postgres } from "@alienplatform/sdk"
-import { Pool, type QueryResult } from "pg"
-import { ensureSeeded, forgetSeeded } from "./seed"
+import { postgres } from "@alienplatform/sdk";
+import { Pool, type QueryResult } from "pg";
+import { ensureSeeded, forgetSeeded } from "./seed";
 
-const UNDEFINED_TABLE = "42P01"
+const UNDEFINED_TABLE = "42P01";
 
-let pool: Promise<Pool> | undefined
+let pool: Promise<Pool> | undefined;
 
 export async function query(text: string, values: unknown[] = []): Promise<QueryResult> {
-  const run = async () => (await queryPool()).query(text, values)
+  const run = async () => (await queryPool()).query(text, values);
   try {
-    return await run()
+    return await run();
   } catch (err) {
-    if ((err as { code?: string }).code !== UNDEFINED_TABLE) throw err
-    forgetSeeded()
-    await ensureSeeded()
-    return run()
+    if ((err as { code?: string }).code !== UNDEFINED_TABLE) throw err;
+    forgetSeeded();
+    await ensureSeeded();
+    return run();
   }
 }
 
@@ -22,7 +22,7 @@ export async function query(text: string, values: unknown[] = []): Promise<Query
 export function queryPool(): Promise<Pool> {
   if (!pool) {
     pool = (async () => {
-      const conn = await postgres("db").connection()
+      const conn = await postgres("db").connection();
       // Field style + conn.ssl, NOT conn.connectionString: node-postgres parses the
       // URL's sslmode and overrides ssl, which breaks the managed-cloud cert path.
       return new Pool({
@@ -33,12 +33,12 @@ export function queryPool(): Promise<Pool> {
         password: conn.password,
         ssl: conn.ssl,
         options: "-c default_transaction_read_only=on -c statement_timeout=10000",
-      })
-    })().catch(err => {
+      });
+    })().catch((err) => {
       // Don't cache a failed resolution; let the next request retry.
-      pool = undefined
-      throw err
-    })
+      pool = undefined;
+      throw err;
+    });
   }
-  return pool
+  return pool;
 }

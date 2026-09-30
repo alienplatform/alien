@@ -1,22 +1,22 @@
-import { eq } from "drizzle-orm"
-import { headers } from "next/headers"
-import { redirect } from "next/navigation"
-import { AppSidebar } from "@/components/app-sidebar"
-import { DynamicBreadcrumb } from "@/components/dynamic-breadcrumb"
-import { Separator } from "@/components/ui/separator"
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
-import { Toaster } from "@/components/ui/sonner"
-import { auth } from "@/lib/auth"
-import { db } from "@/lib/db"
-import { member, organization } from "@/lib/schema"
+import { eq } from "drizzle-orm";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { AppSidebar } from "@/components/app-sidebar";
+import { DynamicBreadcrumb } from "@/components/dynamic-breadcrumb";
+import { Separator } from "@/components/ui/separator";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { Toaster } from "@/components/ui/sonner";
+import { auth } from "@/lib/auth";
+import { db } from "@/lib/db";
+import { member, organization } from "@/lib/schema";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const session = await auth.api.getSession({
     headers: await headers(),
-  })
+  });
 
   if (!session) {
-    redirect("/login")
+    redirect("/login");
   }
 
   // Get user's organization memberships
@@ -31,19 +31,19 @@ export default async function DashboardLayout({ children }: { children: React.Re
     })
     .from(member)
     .innerJoin(organization, eq(member.organizationId, organization.id))
-    .where(eq(member.userId, session.user.id))
+    .where(eq(member.userId, session.user.id));
 
   if (userMemberships.length === 0) {
-    redirect("/onboarding")
+    redirect("/onboarding");
   }
 
   // Format organizations for the sidebar
-  const organizations = userMemberships.map(m => ({
+  const organizations = userMemberships.map((m) => ({
     id: m.orgId,
     name: m.orgName,
     slug: m.orgSlug,
     logo: m.orgLogo,
-  }))
+  }));
 
   return (
     <SidebarProvider
@@ -76,5 +76,5 @@ export default async function DashboardLayout({ children }: { children: React.Re
       </SidebarInset>
       <Toaster />
     </SidebarProvider>
-  )
+  );
 }

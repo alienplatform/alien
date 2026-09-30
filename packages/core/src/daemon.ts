@@ -8,8 +8,8 @@ import {
   type PublicEndpoint,
   type ResourceSpec,
   type ResourceType,
-} from "./generated/index.js"
-import { type Resource, ResourceBuilder } from "./resource.js"
+} from "./generated/index.js";
+import { type Resource, ResourceBuilder } from "./resource.js";
 
 export type {
   Daemon as DaemonConfig,
@@ -20,21 +20,21 @@ export type {
   HealthCheck,
   PublicEndpoint,
   ResourceSpec,
-} from "./generated/index.js"
+} from "./generated/index.js";
 export {
   DaemonCodeSchema,
   DaemonOutputsSchema,
   DaemonSchema as DaemonConfigSchema,
   PublicEndpointSchema,
-} from "./generated/index.js"
+} from "./generated/index.js";
 
 export type DaemonPublicEndpointOptions =
   | ExposeProtocol
   | {
-      protocol: ExposeProtocol
-      hostLabel?: string
-      wildcardSubdomains?: boolean
-    }
+      protocol: ExposeProtocol;
+      hostLabel?: string;
+      wildcardSubdomains?: boolean;
+    };
 
 /**
  * Represents a resident process that runs once per eligible machine or node.
@@ -49,15 +49,15 @@ export class Daemon extends ResourceBuilder {
     environment: {},
     cpu: { min: "0.1", desired: "0.1" },
     memory: { min: "128Mi", desired: "128Mi" },
-  }
+  };
 
   /**
    * Creates a new Daemon builder.
    * @param id Identifier for the daemon. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
   constructor(id: string) {
-    super()
-    this._config.id = id
+    super();
+    this._config.id = id;
   }
 
   /**
@@ -66,7 +66,7 @@ export class Daemon extends ResourceBuilder {
    * @returns The "daemon" resource type.
    */
   public static any(): ResourceType {
-    return "daemon"
+    return "daemon";
   }
 
   /**
@@ -75,8 +75,8 @@ export class Daemon extends ResourceBuilder {
    * @returns The Daemon builder instance.
    */
   public code(code: DaemonCode): this {
-    this._config.code = code
-    return this
+    this._config.code = code;
+    return this;
   }
 
   /**
@@ -84,8 +84,8 @@ export class Daemon extends ResourceBuilder {
    * Kubernetes and Local deployments ignore this field.
    */
   public cluster(clusterId: string): this {
-    this._config.cluster = clusterId
-    return this
+    this._config.cluster = clusterId;
+    return this;
   }
 
   /**
@@ -93,35 +93,35 @@ export class Daemon extends ResourceBuilder {
    */
   public cpu(value: number | ResourceSpec): this {
     if (typeof value === "number") {
-      this._config.cpu = { min: value.toString(), desired: value.toString() }
+      this._config.cpu = { min: value.toString(), desired: value.toString() };
     } else {
-      this._config.cpu = value
+      this._config.cpu = value;
     }
-    return this
+    return this;
   }
 
   /**
    * Sets memory resources for each daemon instance.
    */
   public memory(size: string): this {
-    this._config.memory = { min: size, desired: size }
-    return this
+    this._config.memory = { min: size, desired: size };
+    return this;
   }
 
   /**
    * Sets the backend pool/capacity group for daemon placement.
    */
   public pool(pool: string): this {
-    this._config.pool = pool
-    return this
+    this._config.pool = pool;
+    return this;
   }
 
   /**
    * Overrides the image default command.
    */
   public command(command: string[]): this {
-    this._config.command = command
-    return this
+    this._config.command = command;
+    return this;
   }
 
   /**
@@ -130,8 +130,8 @@ export class Daemon extends ResourceBuilder {
    * The value is expressed in seconds. Valid values are 1 through 86400.
    */
   public stopGracePeriod(seconds: number): this {
-    this._config.stopGracePeriodSeconds = seconds
-    return this
+    this._config.stopGracePeriodSeconds = seconds;
+    return this;
   }
 
   /**
@@ -141,8 +141,8 @@ export class Daemon extends ResourceBuilder {
    * as a privileged loader that installs or supervises a native host process.
    */
   public runtime(runtime: DaemonRuntime): this {
-    this._config.runtime = runtime
-    return this
+    this._config.runtime = runtime;
+    return this;
   }
 
   /**
@@ -154,13 +154,13 @@ export class Daemon extends ResourceBuilder {
     options: DaemonPublicEndpointOptions = "http",
   ): this {
     if (!this._config.publicEndpoints) {
-      this._config.publicEndpoints = []
+      this._config.publicEndpoints = [];
     }
 
     const endpoint =
       typeof options === "string"
         ? { protocol: options, hostLabel: undefined, wildcardSubdomains: false }
-        : options
+        : options;
 
     const publicEndpoint: PublicEndpoint = {
       name,
@@ -168,18 +168,18 @@ export class Daemon extends ResourceBuilder {
       protocol: endpoint.protocol,
       hostLabel: endpoint.hostLabel,
       wildcardSubdomains: endpoint.wildcardSubdomains ?? false,
-    }
+    };
 
-    this._config.publicEndpoints.push(publicEndpoint)
-    return this
+    this._config.publicEndpoints.push(publicEndpoint);
+    return this;
   }
 
   /**
    * Configures the HTTP health check used by public daemon endpoint load balancers.
    */
   public healthCheck(config: HealthCheck): this {
-    this._config.healthCheck = config
-    return this
+    this._config.healthCheck = config;
+    return this;
   }
 
   /**
@@ -191,8 +191,8 @@ export class Daemon extends ResourceBuilder {
       method: config.method,
       timeoutSeconds: 1,
       failureThreshold: 3,
-    }
-    return this
+    };
+    return this;
   }
 
   /**
@@ -201,8 +201,8 @@ export class Daemon extends ResourceBuilder {
    * @returns The Daemon builder instance.
    */
   public environment(env: Record<string, string>): this {
-    this._config.environment = env
-    return this
+    this._config.environment = env;
+    return this;
   }
 
   /**
@@ -214,10 +214,10 @@ export class Daemon extends ResourceBuilder {
    */
   public link(resource: Resource): this {
     if (!this._config.links) {
-      this._config.links = []
+      this._config.links = [];
     }
-    this._config.links.push(resource.ref())
-    return this
+    this._config.links.push(resource.ref());
+    return this;
   }
 
   /**
@@ -228,8 +228,8 @@ export class Daemon extends ResourceBuilder {
    * @returns The Daemon builder instance.
    */
   public permissions(permissions: string): this {
-    this._config.permissions = permissions
-    return this
+    this._config.permissions = permissions;
+    return this;
   }
 
   /**
@@ -240,8 +240,8 @@ export class Daemon extends ResourceBuilder {
    * @returns The Daemon builder instance.
    */
   public commandsEnabled(enabled: boolean): this {
-    this._config.commandsEnabled = enabled
-    return this
+    this._config.commandsEnabled = enabled;
+    return this;
   }
 
   /**
@@ -250,11 +250,11 @@ export class Daemon extends ResourceBuilder {
    * @throws Error if the daemon configuration is invalid.
    */
   public build(): Resource {
-    const config = DaemonSchema.parse(this._config)
+    const config = DaemonSchema.parse(this._config);
 
     return this.resource({
       type: "daemon",
       ...config,
-    })
+    });
   }
 }

@@ -1,13 +1,13 @@
-import * as alien from "@alienplatform/core"
+import * as alien from "@alienplatform/core";
 
-const files = new alien.Storage("files").build()
+const files = new alien.Storage("files").build();
 
 const worker = new alien.Worker("worker")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
   .commandsEnabled(true)
   .link(files)
   .permissions("execution")
-  .build()
+  .build();
 
 export default new alien.Stack("remote-worker")
   .platforms(["aws", "gcp", "azure"])
@@ -20,4 +20,4 @@ export default new alien.Stack("remote-worker")
       },
     },
   })
-  .build()
+  .build();

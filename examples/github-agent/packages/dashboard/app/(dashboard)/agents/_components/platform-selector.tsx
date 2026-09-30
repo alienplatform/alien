@@ -1,19 +1,19 @@
-"use client"
+"use client";
 
-import { IconCircleCheck } from "@tabler/icons-react"
-import Image from "next/image"
-import { cn } from "@/lib/utils"
+import { IconCircleCheck } from "@tabler/icons-react";
+import Image from "next/image";
+import { cn } from "@/lib/utils";
 
-export type Platform = "aws" | "gcp" | "azure" | "kubernetes" | "local"
+export type Platform = "aws" | "gcp" | "azure" | "kubernetes" | "local";
 
 interface PlatformInfo {
-  name: string
-  description: string
-  icon: string
+  name: string;
+  description: string;
+  icon: string;
 }
 
 // Platform order: aws, gcp, azure, kubernetes, local (local is last)
-const platformOrder: Platform[] = ["aws", "gcp", "azure", "kubernetes", "local"]
+const platformOrder: Platform[] = ["aws", "gcp", "azure", "kubernetes", "local"];
 
 const platformInfo: Record<Platform, PlatformInfo> = {
   aws: {
@@ -41,19 +41,19 @@ const platformInfo: Record<Platform, PlatformInfo> = {
     description: "Run on your machine",
     icon: "/local.svg",
   },
-}
+};
 
 interface PlatformSelectorProps {
-  selected: Platform
-  onSelect: (platform: Platform) => void
+  selected: Platform;
+  onSelect: (platform: Platform) => void;
 }
 
 export function PlatformSelector({ selected, onSelect }: PlatformSelectorProps) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-      {platformOrder.map(platform => {
-        const info = platformInfo[platform]
-        const isSelected = selected === platform
+      {platformOrder.map((platform) => {
+        const info = platformInfo[platform];
+        const isSelected = selected === platform;
 
         return (
           <button
@@ -89,8 +89,8 @@ export function PlatformSelector({ selected, onSelect }: PlatformSelectorProps) 
               {info.description}
             </span>
           </button>
-        )
+        );
       })}
     </div>
-  )
+  );
 }

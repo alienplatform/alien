@@ -7,68 +7,68 @@
         "label": "write-lambda-logs",
         "description": "Write Lambda execution logs to CloudWatch Logs for this application.",
         "grant": {
-          "actions": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+          "actions": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
         },
         "binding": {
           "stack": {
             "resources": [
               "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${stackPrefix}-*",
-              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${stackPrefix}-*:*"
-            ]
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${stackPrefix}-*:*",
+            ],
           },
           "resource": {
             "resources": [
               "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${resourceName}",
-              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${resourceName}:*"
-            ]
-          }
-        }
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${resourceName}:*",
+            ],
+          },
+        },
       },
       // TODO: Only add this if worker ingress == public
       {
         "label": "read-lambda-function-url-config",
         "description": "Read Lambda function URL configuration for public endpoint handling.",
         "grant": {
-          "actions": ["lambda:GetFunctionUrlConfig"]
+          "actions": ["lambda:GetFunctionUrlConfig"],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"]
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"]
-          }
-        }
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"],
+          },
+        },
       },
       {
         "label": "get-ecr-login-token",
         "description": "Get an ECR authorization token so Lambda can pull deployment container images.",
         "grant": {
-          "actions": ["ecr:GetAuthorizationToken"]
+          "actions": ["ecr:GetAuthorizationToken"],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
+            "resources": ["*"],
           },
           "resource": {
-            "resources": ["*"]
-          }
-        }
+            "resources": ["*"],
+          },
+        },
       },
       {
         "label": "read-deployment-container-images",
         "description": "Read deployment container images from ECR at runtime.",
         "grant": {
-          "actions": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+          "actions": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
+            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"],
           },
           "resource": {
-            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
-          }
-        }
+            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"],
+          },
+        },
       },
       {
         "label": "manage-lambda-vpc-network-interfaces",
@@ -79,18 +79,18 @@
             "ec2:DescribeNetworkInterfaces",
             "ec2:DeleteNetworkInterface",
             "ec2:AssignPrivateIpAddresses",
-            "ec2:UnassignPrivateIpAddresses"
-          ]
+            "ec2:UnassignPrivateIpAddresses",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
+            "resources": ["*"],
           },
           "resource": {
-            "resources": ["*"]
-          }
-        }
-      }
+            "resources": ["*"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -100,35 +100,35 @@
           "predefinedRoles": [
             "roles/artifactregistry.reader",
             "roles/logging.logWriter",
-            "roles/run.viewer"
-          ]
+            "roles/run.viewer",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${managingProjectId}"
+            "scope": "projects/${managingProjectId}",
           },
           "resource": {
-            "scope": "projects/${managingProjectId}"
-          }
-        }
-      }
+            "scope": "projects/${managingProjectId}",
+          },
+        },
+      },
     ],
     "azure": [
       {
         "label": "run-container-apps",
         "description": "Pull deployment images and read runtime resources used by Azure Container Apps.",
         "grant": {
-          "predefinedRoles": ["AcrPull", "Reader"]
+          "predefinedRoles": ["AcrPull", "Reader"],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${managingSubscriptionId}/resourceGroups/${managingResourceGroup}"
+            "scope": "/subscriptions/${managingSubscriptionId}/resourceGroups/${managingResourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${managingSubscriptionId}/resourceGroups/${managingResourceGroup}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${managingSubscriptionId}/resourceGroups/${managingResourceGroup}",
+          },
+        },
+      },
+    ],
+  },
 }

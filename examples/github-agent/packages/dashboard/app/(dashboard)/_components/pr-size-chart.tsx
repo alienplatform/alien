@@ -1,9 +1,9 @@
-"use client"
+"use client";
 
-import { IconEye } from "@tabler/icons-react"
-import Link from "next/link"
-import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts"
-import { Button } from "@/components/ui/button"
+import { IconEye } from "@tabler/icons-react";
+import Link from "next/link";
+import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardAction,
@@ -11,23 +11,23 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card"
+} from "@/components/ui/card";
 import {
   type ChartConfig,
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
-} from "@/components/ui/chart"
+} from "@/components/ui/chart";
 
 interface PrSizeChartProps {
   data: {
-    small: number
-    medium: number
-    large: number
-  }
-  integrationId: string
-  agentId: string
-  repoName?: string
+    small: number;
+    medium: number;
+    large: number;
+  };
+  integrationId: string;
+  agentId: string;
+  repoName?: string;
 }
 
 const chartConfig = {
@@ -43,16 +43,16 @@ const chartConfig = {
     label: "Large",
     color: "oklch(0.637 0.237 25.331)",
   },
-} satisfies ChartConfig
+} satisfies ChartConfig;
 
 export function PrSizeChart({ data, integrationId, agentId, repoName }: PrSizeChartProps) {
   const chartData = [
     { name: "Small", value: data.small, fill: chartConfig.small.color },
     { name: "Medium", value: data.medium, fill: chartConfig.medium.color },
     { name: "Large", value: data.large, fill: chartConfig.large.color },
-  ].filter(item => item.value > 0)
+  ].filter((item) => item.value > 0);
 
-  const total = data.small + data.medium + data.large
+  const total = data.small + data.medium + data.large;
 
   return (
     <Card>
@@ -86,7 +86,7 @@ export function PrSizeChart({ data, integrationId, agentId, repoName }: PrSizeCh
                 strokeWidth={2}
                 stroke="var(--background)"
               >
-                {chartData.map(entry => (
+                {chartData.map((entry) => (
                   <Cell key={entry.name} fill={entry.fill} />
                 ))}
               </Pie>
@@ -94,7 +94,7 @@ export function PrSizeChart({ data, integrationId, agentId, repoName }: PrSizeCh
           </ResponsiveContainer>
         </ChartContainer>
         <div className="flex justify-center gap-6 mt-4">
-          {chartData.map(item => (
+          {chartData.map((item) => (
             <div key={item.name} className="flex items-center gap-2">
               <div className="h-3 w-3 rounded-full" style={{ backgroundColor: item.fill }} />
               <span className="text-sm text-muted-foreground">
@@ -106,5 +106,5 @@ export function PrSizeChart({ data, integrationId, agentId, repoName }: PrSizeCh
         </div>
       </CardContent>
     </Card>
-  )
+  );
 }

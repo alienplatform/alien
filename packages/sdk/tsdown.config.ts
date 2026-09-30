@@ -1,4 +1,4 @@
-import { defineConfig } from "tsdown"
+import { defineConfig } from "tsdown";
 
 export default defineConfig({
   entry: ["src/index.ts", "src/worker-runtime/index.ts", "src/native.ts", "src/native-bindings.ts"],
@@ -31,4 +31,4 @@ export default defineConfig({
     "@alienplatform/ai-gateway/native",
   ],
   noExternal: [/.*/],
-})
+});

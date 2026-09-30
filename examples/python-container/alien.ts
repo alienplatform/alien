@@ -1,4 +1,4 @@
-import * as alien from "@alienplatform/core"
+import * as alien from "@alienplatform/core";
 
 const app = new alien.Container("app")
   .code({
@@ -15,10 +15,10 @@ const app = new alien.Container("app")
   .port(8080)
   .publicEndpoint("web", 8080, "http")
   .permissions("app")
-  .build()
+  .build();
 
 export default new alien.Stack("python-container")
   .platforms(["aws", "gcp", "azure"])
   .add(app, "live")
   .permissions({ profiles: { app: {} } })
-  .build()
+  .build();

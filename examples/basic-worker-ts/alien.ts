@@ -1,11 +1,11 @@
-import * as alien from "@alienplatform/core"
+import * as alien from "@alienplatform/core";
 
 const agent = new alien.Worker("agent")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
   .commandsEnabled(true)
   .publicEndpoint("api")
   .permissions("execution")
-  .build()
+  .build();
 
 export default new alien.Stack("basic-worker")
   .add(agent, "live")
@@ -14,4 +14,4 @@ export default new alien.Stack("basic-worker")
       execution: {},
     },
   })
-  .build()
+  .build();

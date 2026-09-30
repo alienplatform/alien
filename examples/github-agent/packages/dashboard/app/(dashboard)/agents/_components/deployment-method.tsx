@@ -1,4 +1,4 @@
-"use client"
+"use client";
 
 import {
   IconArrowRight,
@@ -7,34 +7,34 @@ import {
   IconCircleCheck,
   IconDownload,
   IconExternalLink,
-} from "@tabler/icons-react"
-import Image from "next/image"
-import { useEffect, useMemo, useState } from "react"
-import { Button } from "@/components/ui/button"
+} from "@tabler/icons-react";
+import Image from "next/image";
+import { useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { CodeDisplay } from "./code-display"
-import type { Platform } from "./platform-selector"
+} from "@/components/ui/dropdown-menu";
+import { CodeDisplay } from "./code-display";
+import type { Platform } from "./platform-selector";
 
-type OS = "windows" | "mac" | "linux"
-type DeploymentMethod = OS | "cli" | "cloudformation" | "terraform" | "google-login" | "dev"
+type OS = "windows" | "mac" | "linux";
+type DeploymentMethod = OS | "cli" | "cloudformation" | "terraform" | "google-login" | "dev";
 
 interface DeploymentMethodProps {
-  platform: Platform
-  token?: string
-  projectName?: string
+  platform: Platform;
+  token?: string;
+  projectName?: string;
 }
 
 function detectOS(): OS {
-  if (typeof window === "undefined") return "linux"
-  const ua = window.navigator.userAgent.toLowerCase()
-  if (ua.includes("win")) return "windows"
-  if (ua.includes("mac")) return "mac"
-  return "linux"
+  if (typeof window === "undefined") return "linux";
+  const ua = window.navigator.userAgent.toLowerCase();
+  if (ua.includes("win")) return "windows";
+  if (ua.includes("mac")) return "mac";
+  return "linux";
 }
 
 const methodLabels: Record<DeploymentMethod, string> = {
@@ -46,87 +46,87 @@ const methodLabels: Record<DeploymentMethod, string> = {
   terraform: "Terraform",
   "google-login": "Google Login",
   dev: "Local Development",
-}
+};
 
 export function DeploymentMethod({
   platform,
   token,
   projectName = "github-agent",
 }: DeploymentMethodProps) {
-  const detectedOS = useMemo(() => detectOS(), [])
-  const isLocal = platform === "local"
+  const detectedOS = useMemo(() => detectOS(), []);
+  const isLocal = platform === "local";
 
   const getAvailableMethods = (): DeploymentMethod[] => {
     if (isLocal) {
-      return ["windows", "mac", "linux", "dev"]
+      return ["windows", "mac", "linux", "dev"];
     }
 
-    const methods: DeploymentMethod[] = []
+    const methods: DeploymentMethod[] = [];
 
     // GCP: Google Login, Terraform, CLI
     if (platform === "gcp") {
-      methods.push("google-login")
+      methods.push("google-login");
     }
 
     // AWS: CloudFormation, Terraform, CLI
     if (platform === "aws") {
-      methods.push("cloudformation")
+      methods.push("cloudformation");
     }
 
     // Terraform available for AWS, GCP, Azure, and Kubernetes
     if (["aws", "gcp", "azure", "kubernetes"].includes(platform)) {
-      methods.push("terraform")
+      methods.push("terraform");
     }
 
     // CLI available for all non-local platforms
-    methods.push("cli")
+    methods.push("cli");
 
-    return methods
-  }
+    return methods;
+  };
 
   const getDefaultMethod = (): DeploymentMethod => {
-    if (isLocal) return detectedOS
-    if (platform === "gcp") return "google-login"
-    if (platform === "aws") return "cloudformation"
-    if (platform === "azure" || platform === "kubernetes") return "terraform"
-    return "cli"
-  }
+    if (isLocal) return detectedOS;
+    if (platform === "gcp") return "google-login";
+    if (platform === "aws") return "cloudformation";
+    if (platform === "azure" || platform === "kubernetes") return "terraform";
+    return "cli";
+  };
 
-  const [selectedMethod, setSelectedMethod] = useState<DeploymentMethod>(getDefaultMethod)
+  const [selectedMethod, setSelectedMethod] = useState<DeploymentMethod>(getDefaultMethod);
 
   // Update selected method when platform changes
   useEffect(() => {
-    let newMethod: DeploymentMethod
+    let newMethod: DeploymentMethod;
     if (isLocal) {
-      newMethod = detectedOS
+      newMethod = detectedOS;
     } else if (platform === "gcp") {
-      newMethod = "google-login"
+      newMethod = "google-login";
     } else if (platform === "aws") {
-      newMethod = "cloudformation"
+      newMethod = "cloudformation";
     } else if (platform === "azure" || platform === "kubernetes") {
-      newMethod = "terraform"
+      newMethod = "terraform";
     } else {
-      newMethod = "cli"
+      newMethod = "cli";
     }
-    setSelectedMethod(newMethod)
-  }, [platform, isLocal, detectedOS])
+    setSelectedMethod(newMethod);
+  }, [platform, isLocal, detectedOS]);
 
   const getInstallCommand = (os: OS) => {
-    const baseUrl = "https://get.alien.dev"
+    const baseUrl = "https://get.alien.dev";
 
     if (os === "windows") {
       return `# Install via PowerShell
-irm "${baseUrl}/install.ps1" | iex`
+irm "${baseUrl}/install.ps1" | iex`;
     }
 
     return `# Install via curl
-curl -sSL ${baseUrl}/install.sh | bash`
-  }
+curl -sSL ${baseUrl}/install.sh | bash`;
+  };
 
-  const devCommand = `alien dev --token ${token || "dg_xxx..."}`
-  const cliCommand = `alien deploy --platform=${platform} --token=${token || "dg_xxx..."}`
+  const devCommand = `alien dev --token ${token || "dg_xxx..."}`;
+  const cliCommand = `alien deploy --platform=${platform} --token=${token || "dg_xxx..."}`;
 
-  const availableMethods = getAvailableMethods()
+  const availableMethods = getAvailableMethods();
 
   return (
     <div className="space-y-2">
@@ -138,7 +138,7 @@ curl -sSL ${baseUrl}/install.sh | bash`
             <IconChevronDown className="h-3.5 w-3.5" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-44">
-            {availableMethods.map(method => (
+            {availableMethods.map((method) => (
               <DropdownMenuItem
                 key={method}
                 onClick={() => setSelectedMethod(method)}
@@ -360,7 +360,7 @@ resource "${projectName.replace(/-/g, "_")}_agent" "main" {
         )}
       </div>
     </div>
-  )
+  );
 }
 
 function InfoBox({ children }: { children: React.ReactNode }) {
@@ -373,7 +373,7 @@ function InfoBox({ children }: { children: React.ReactNode }) {
         <div className="flex-1">{children}</div>
       </div>
     </div>
-  )
+  );
 }
 
 function ListItem({ children }: { children: React.ReactNode }) {
@@ -382,7 +382,7 @@ function ListItem({ children }: { children: React.ReactNode }) {
       <IconArrowRight className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-primary" />
       <span>{children}</span>
     </li>
-  )
+  );
 }
 
 function NumberedItem({ n, children }: { n: number; children: React.ReactNode }) {
@@ -391,5 +391,5 @@ function NumberedItem({ n, children }: { n: number; children: React.ReactNode })
       <span className="font-bold mt-0.5 flex-shrink-0 w-4 text-primary">{n}.</span>
       <span>{children}</span>
     </li>
-  )
+  );
 }

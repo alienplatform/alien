@@ -7,61 +7,61 @@
  * endpoint stays in this test process and records every request.
  */
 
-import { spawn } from "node:child_process"
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
-import { createServer } from "node:http"
-import type { AddressInfo } from "node:net"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { fileURLToPath } from "node:url"
-import { describe, expect, it } from "vitest"
-import { findLocalAddon, platformTriple } from "../src/loader.js"
+import { spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import { findLocalAddon, platformTriple } from "../src/loader.js";
 import {
   type CredentialMintClientResult,
   exerciseLongLivedKvHandle,
-} from "./helpers/credential-mint-client.js"
-import { bindingEnvVarName } from "./helpers/local-binding-env.js"
+} from "./helpers/credential-mint-client.js";
+import { bindingEnvVarName } from "./helpers/local-binding-env.js";
 
 interface MintRequest {
-  authorization: string | undefined
-  body: unknown
-  method: string | undefined
-  url: string | undefined
+  authorization: string | undefined;
+  body: unknown;
+  method: string | undefined;
+  url: string | undefined;
 }
 
 function runPublicClientChild(env: NodeJS.ProcessEnv): Promise<CredentialMintClientResult> {
   return new Promise((resolve, reject) => {
     const childEntry = fileURLToPath(
       new URL("./helpers/credential-mint-client.ts", import.meta.url),
-    )
-    const child = spawn(process.execPath, [childEntry], { env })
-    let stdout = ""
-    let stderr = ""
+    );
+    const child = spawn(process.execPath, [childEntry], { env });
+    let stdout = "";
+    let stderr = "";
 
-    child.stdout.setEncoding("utf8")
-    child.stdout.on("data", chunk => {
-      stdout += chunk
-    })
-    child.stderr.setEncoding("utf8")
-    child.stderr.on("data", chunk => {
-      stderr += chunk
-    })
-    child.on("error", reject)
-    child.on("close", code => {
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
       if (code !== 0) {
-        reject(new Error(`public bindings child exited with code ${code}: ${stderr}`))
-        return
+        reject(new Error(`public bindings child exited with code ${code}: ${stderr}`));
+        return;
       }
 
       try {
-        resolve(JSON.parse(stdout) as CredentialMintClientResult)
+        resolve(JSON.parse(stdout) as CredentialMintClientResult);
       } catch (error) {
         reject(
           new Error(`public bindings child returned invalid JSON '${stdout}': ${String(error)}`),
-        )
+        );
       }
-    })
-  })
+    });
+  });
 }
 
 async function withProcessEnv<T>(
@@ -69,72 +69,72 @@ async function withProcessEnv<T>(
   removedKeys: string[],
   operation: () => Promise<T>,
 ): Promise<T> {
-  const touchedKeys = new Set([...Object.keys(env), ...removedKeys])
-  const previous = new Map([...touchedKeys].map(key => [key, process.env[key]]))
+  const touchedKeys = new Set([...Object.keys(env), ...removedKeys]);
+  const previous = new Map([...touchedKeys].map((key) => [key, process.env[key]]));
 
   try {
-    for (const key of removedKeys) delete process.env[key]
+    for (const key of removedKeys) delete process.env[key];
     for (const [key, value] of Object.entries(env)) {
-      if (value === undefined) delete process.env[key]
-      else process.env[key] = value
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
     }
-    return await operation()
+    return await operation();
   } finally {
     for (const [key, value] of previous) {
-      if (value === undefined) delete process.env[key]
-      else process.env[key] = value
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
     }
   }
 }
 
 describe("credential minting through the public TypeScript binding", () => {
   it("refreshes a long-lived handle before expiry and caches the refreshed provider", async () => {
-    const root = mkdtempSync(join(tmpdir(), "alien-bindings-mint-test-"))
-    const requests: MintRequest[] = []
-    let mintCount = 0
+    const root = mkdtempSync(join(tmpdir(), "alien-bindings-mint-test-"));
+    const requests: MintRequest[] = [];
+    let mintCount = 0;
     const server = createServer((request, response) => {
-      let body = ""
-      request.setEncoding("utf8")
-      request.on("data", chunk => {
-        body += chunk
-      })
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
       request.on("end", () => {
-        mintCount += 1
+        mintCount += 1;
         requests.push({
           authorization: request.headers.authorization,
           body: JSON.parse(body) as unknown,
           method: request.method,
           url: request.url,
-        })
+        });
 
         // The first config is still valid for two minutes, but is already
         // within the resolver's five-minute refresh window. The second is
         // fresh for an hour, so later operations on the same handle reuse it.
-        const lifetimeSeconds = mintCount === 1 ? 120 : 3600
-        response.writeHead(200, { "content-type": "application/json" })
+        const lifetimeSeconds = mintCount === 1 ? 120 : 3600;
+        response.writeHead(200, { "content-type": "application/json" });
         response.end(
           JSON.stringify({
             clientConfig: { platform: "local", state_directory: root },
             expiresAt: new Date(Date.now() + lifetimeSeconds * 1000).toISOString(),
             principal: "local:napi-mint-test",
           }),
-        )
-      })
-    })
+        );
+      });
+    });
 
     try {
       await new Promise<void>((resolve, reject) => {
-        server.once("error", reject)
-        server.listen(0, "127.0.0.1", resolve)
-      })
-      const address = server.address() as AddressInfo | null
-      if (!address) throw new Error("fake mint server did not expose its address")
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address() as AddressInfo | null;
+      if (!address) throw new Error("fake mint server did not expose its address");
 
-      const addonPath = findLocalAddon(platformTriple())
-      if (!addonPath) throw new Error("real napi addon must be built before this test runs")
+      const addonPath = findLocalAddon(platformTriple());
+      if (!addonPath) throw new Error("real napi addon must be built before this test runs");
 
-      const dataDir = join(root, "mint-cache")
-      mkdirSync(dataDir)
+      const dataDir = join(root, "mint-cache");
+      mkdirSync(dataDir);
 
       const bindingEnv: NodeJS.ProcessEnv = {
         ALIEN_BINDINGS_ADDON_PATH: addonPath,
@@ -152,7 +152,7 @@ describe("credential minting through the public TypeScript binding", () => {
           service: "local-kv",
           dataDir,
         }),
-      }
+      };
       const removedAwsCredentialKeys = [
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
@@ -161,7 +161,7 @@ describe("credential minting through the public TypeScript binding", () => {
         "AWS_ROLE_ARN",
         "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
         "AWS_CONTAINER_CREDENTIALS_FULL_URI",
-      ]
+      ];
 
       const result =
         process.env.BUN_EXPECTED === "1"
@@ -171,9 +171,9 @@ describe("credential minting through the public TypeScript binding", () => {
               TMPDIR: process.env.TMPDIR,
               ...bindingEnv,
             })
-          : await withProcessEnv(bindingEnv, removedAwsCredentialKeys, exerciseLongLivedKvHandle)
+          : await withProcessEnv(bindingEnv, removedAwsCredentialKeys, exerciseLongLivedKvHandle);
 
-      expect(result).toEqual({ first: "first", second: "second" })
+      expect(result).toEqual({ first: "first", second: "second" });
       expect(requests).toEqual([
         {
           authorization: "Bearer napi-test-deployment-token",
@@ -195,15 +195,15 @@ describe("credential minting through the public TypeScript binding", () => {
           method: "POST",
           url: "/v1/credentials/mint",
         },
-      ])
+      ]);
     } finally {
       await new Promise<void>((resolve, reject) => {
-        server.close(error => {
-          if (error) reject(error)
-          else resolve()
-        })
-      })
-      rmSync(root, { force: true, recursive: true })
+        server.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+      rmSync(root, { force: true, recursive: true });
     }
-  }, 30_000)
-})
+  }, 30_000);
+});

@@ -1,33 +1,33 @@
-"use client"
+"use client";
 
-import { useEffect, useRef, useState } from "react"
-import { Spinner } from "./spinner"
+import { useEffect, useRef, useState } from "react";
+import { Spinner } from "./spinner";
 
-type Table = { name: string; rows: Record<string, unknown>[]; total: number }
+type Table = { name: string; rows: Record<string, unknown>[]; total: number };
 
 /** The tables the model queries, so an answer can be checked against the data. */
 export function DataDrawer() {
-  const [open, setOpen] = useState(false)
-  const [tables, setTables] = useState<Table[] | null>(null)
-  const [failed, setFailed] = useState(false)
+  const [open, setOpen] = useState(false);
+  const [tables, setTables] = useState<Table[] | null>(null);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    if (!open || tables || failed) return
+    if (!open || tables || failed) return;
     fetch("/api/tables")
-      .then(r => r.json())
+      .then((r) => r.json())
       .then((d: { tables: Table[] }) => setTables(d.tables))
-      .catch(() => setFailed(true))
-  }, [open, tables, failed])
+      .catch(() => setFailed(true));
+  }, [open, tables, failed]);
 
   // showModal() is what puts the dialog in the top layer, above every stacking
   // context on the page, and brings Escape and the backdrop with it.
-  const dialogRef = useRef<HTMLDialogElement>(null)
+  const dialogRef = useRef<HTMLDialogElement>(null);
   useEffect(() => {
-    const dialog = dialogRef.current
-    if (!dialog) return
-    if (open && !dialog.open) dialog.showModal()
-    if (!open && dialog.open) dialog.close()
-  }, [open])
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
 
   return (
     <>
@@ -47,7 +47,7 @@ export function DataDrawer() {
         onCancel={() => setOpen(false)}
         // The backdrop belongs to the dialog, so a click on it targets the dialog
         // itself; anything inside targets a child.
-        onClick={e => e.target === dialogRef.current && setOpen(false)}
+        onClick={(e) => e.target === dialogRef.current && setOpen(false)}
         className="my-0 ml-auto mr-0 h-dvh max-h-none w-full max-w-lg bg-transparent p-0 backdrop:bg-black/60 backdrop:backdrop-blur-[2px] open:motion-safe:animate-[slide-in_220ms_cubic-bezier(0.32,0.72,0,1)]"
       >
         {open && (
@@ -82,7 +82,7 @@ export function DataDrawer() {
                   Reading
                 </div>
               )}
-              {tables?.map(table => (
+              {tables?.map((table) => (
                 <TableCard key={table.name} table={table} />
               ))}
             </div>
@@ -90,19 +90,19 @@ export function DataDrawer() {
         )}
       </dialog>
     </>
-  )
+  );
 }
 
 // A `date` column arrives as a full ISO timestamp once it has been through JSON;
 // the day is the only part the demo data carries.
 function cell(value: unknown): string {
-  const text = String(value ?? "")
-  return /^\d{4}-\d{2}-\d{2}T00:00:00/.test(text) ? text.slice(0, 10) : text
+  const text = String(value ?? "");
+  return /^\d{4}-\d{2}-\d{2}T00:00:00/.test(text) ? text.slice(0, 10) : text;
 }
 
 function TableCard({ table }: { table: Table }) {
-  const columns = table.rows.length > 0 ? Object.keys(table.rows[0]) : []
-  const numeric = new Set(columns.filter(c => typeof table.rows[0]?.[c] === "number"))
+  const columns = table.rows.length > 0 ? Object.keys(table.rows[0]) : [];
+  const numeric = new Set(columns.filter((c) => typeof table.rows[0]?.[c] === "number"));
 
   return (
     <div className="overflow-hidden rounded-xl border border-edge bg-card/60">
@@ -118,7 +118,7 @@ function TableCard({ table }: { table: Table }) {
         <table className="w-full border-collapse font-mono text-[11px]">
           <thead>
             <tr className="border-b border-edge text-left text-zinc-400">
-              {columns.map(column => (
+              {columns.map((column) => (
                 <th
                   key={column}
                   className={`px-4 py-1.5 font-medium ${numeric.has(column) ? "text-right" : ""}`}
@@ -129,9 +129,9 @@ function TableCard({ table }: { table: Table }) {
             </tr>
           </thead>
           <tbody>
-            {table.rows.map(row => (
+            {table.rows.map((row) => (
               <tr key={String(row.id)} className="border-b border-edge/50 last:border-0">
-                {columns.map(column => (
+                {columns.map((column) => (
                   <td
                     key={column}
                     className={`whitespace-nowrap px-4 py-1.5 tabular-nums text-zinc-100 ${numeric.has(column) ? "text-right" : ""}`}
@@ -150,7 +150,7 @@ function TableCard({ table }: { table: Table }) {
         )}
       </div>
     </div>
-  )
+  );
 }
 
 function CloseIcon() {
@@ -167,5 +167,5 @@ function CloseIcon() {
     >
       <path d="M18 6 6 18M6 6l12 12" />
     </svg>
-  )
+  );
 }

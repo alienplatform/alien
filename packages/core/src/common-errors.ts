@@ -1,5 +1,5 @@
-import * as z from "zod/v4"
-import { defineError } from "./error.js"
+import * as z from "zod/v4";
+import { defineError } from "./error.js";
 
 /**
  * Error thrown when a requested resource cannot be found in the stack state.
@@ -16,7 +16,7 @@ export const ResourceNotFoundError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 404,
-})
+});
 
 /**
  * Error thrown when resource outputs cannot be parsed according to their expected schema.
@@ -34,7 +34,7 @@ export const ResourceOutputsParseError = defineError({
   retryable: false,
   internal: true,
   httpStatusCode: 500,
-})
+});
 
 /**
  * Error thrown when there's a resource type mismatch during stack operations.
@@ -52,7 +52,7 @@ export const UnexpectedResourceTypeError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 400,
-})
+});
 
 /**
  * Error thrown when a binding's projected configuration is invalid.
@@ -67,7 +67,7 @@ export const InvalidBindingConfigError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 400,
-})
+});
 
 /**
  * Error thrown when a binding is not found.
@@ -82,4 +82,4 @@ export const BindingNotFoundError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 404,
-})
+});

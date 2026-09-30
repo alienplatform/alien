@@ -8,51 +8,51 @@
  * credential).
  */
 
-import { AlienError } from "@alienplatform/core"
+import { AlienError } from "@alienplatform/core";
 // OpenAI's canonical result shapes, so callers get a typed completion without reinventing
 // them. These reach the emitted .d.ts, so `openai` is an optional peer dependency: nothing
 // is imported at runtime, but a consumer needs it installed to typecheck against us.
-import type { ChatCompletion, ChatCompletionChunk } from "openai/resources/chat/completions"
+import type { ChatCompletion, ChatCompletionChunk } from "openai/resources/chat/completions";
 import type {
   Response as OpenAIResponse,
   ResponseStreamEvent,
-} from "openai/resources/responses/responses"
-import { isExternalAiBinding, parseAiBinding } from "./binding.js"
+} from "openai/resources/responses/responses";
+import { isExternalAiBinding, parseAiBinding } from "./binding.js";
 import {
   AiTransportError,
   AiUpstreamError,
   BindingNotFoundError,
   ResponsesApiUnsupportedError,
   UnsupportedProviderError,
-} from "./errors.js"
-import type { Gateway } from "./gateway.js"
+} from "./errors.js";
+import type { Gateway } from "./gateway.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public request / response types
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface ChatCompletionCreateParams {
-  model: string
-  messages: Array<{ role: string; content: string | object }>
-  stream?: boolean
-  [key: string]: unknown
+  model: string;
+  messages: Array<{ role: string; content: string | object }>;
+  stream?: boolean;
+  [key: string]: unknown;
 }
 
 export interface ResponseCreateParams {
-  model: string
-  input: string | Array<{ role: string; content: string }>
-  stream?: boolean
-  [key: string]: unknown
+  model: string;
+  input: string | Array<{ role: string; content: string }>;
+  stream?: boolean;
+  [key: string]: unknown;
 }
 
 /** One model the gateway exposes for this binding's cloud. */
 export interface AiModel {
   /** The id passed to `chat.completions.create` / `responses.create`. */
-  id: string
+  id: string;
   /** The model's publisher, e.g. "openai", "anthropic", "google". */
-  provider: string
+  provider: string;
   /** A human label for a model picker, e.g. "Claude Opus 4.8". */
-  displayName: string
+  displayName: string;
 }
 
 /**
@@ -62,18 +62,18 @@ export interface AiModel {
  * `.choices[0].message.content` (or iterates chunks) with no cast.
  */
 export interface ChatCompletionsApi {
-  create(params: ChatCompletionCreateParams & { stream?: false }): Promise<ChatCompletion>
+  create(params: ChatCompletionCreateParams & { stream?: false }): Promise<ChatCompletion>;
   create(
     params: ChatCompletionCreateParams & { stream: true },
-  ): Promise<AsyncIterable<ChatCompletionChunk>>
+  ): Promise<AsyncIterable<ChatCompletionChunk>>;
 }
 
 /** OpenAI-compatible Responses surface (the API Codex speaks), typed like above. */
 export interface ResponsesApi {
-  create(params: ResponseCreateParams & { stream?: false }): Promise<OpenAIResponse>
+  create(params: ResponseCreateParams & { stream?: false }): Promise<OpenAIResponse>;
   create(
     params: ResponseCreateParams & { stream: true },
-  ): Promise<AsyncIterable<ResponseStreamEvent>>
+  ): Promise<AsyncIterable<ResponseStreamEvent>>;
 }
 
 // The BYO-key providers we know the upstream base URL for. `_postSurface` attaches the
@@ -83,24 +83,24 @@ export interface ResponsesApi {
 const KNOWN_PROVIDER_BASE_URLS: Record<string, string> = {
   openai: "https://api.openai.com",
   anthropic: "https://api.anthropic.com",
-}
+};
 
 // Upstream base URL (no `/v1`) for a BYO-key provider. `ALIEN_AI_LOCAL_BASE_URL` overrides it so
 // any OpenAI-compatible provider works locally; without an override we fail closed on an unknown
 // provider rather than defaulting it to OpenAI and leaking the key there.
 function providerBaseUrl(provider: string): string {
-  const override = process.env.ALIEN_AI_LOCAL_BASE_URL
-  if (override) return override.replace(/\/$/, "")
-  const base = KNOWN_PROVIDER_BASE_URLS[provider]
+  const override = process.env.ALIEN_AI_LOCAL_BASE_URL;
+  if (override) return override.replace(/\/$/, "");
+  const base = KNOWN_PROVIDER_BASE_URLS[provider];
   if (!base) {
     throw new AlienError(
       UnsupportedProviderError.create({
         provider,
         supported: Object.keys(KNOWN_PROVIDER_BASE_URLS),
       }),
-    )
+    );
   }
-  return base
+  return base;
 }
 
 // A small curated chat-model list for the BYO-key picker (we don't proxy the provider's own
@@ -109,15 +109,15 @@ function providerBaseUrl(provider: string): string {
 function defaultModels(provider: string): string[] {
   return provider === "anthropic"
     ? ["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"]
-    : ["gpt-4o-mini", "gpt-4o"]
+    : ["gpt-4o-mini", "gpt-4o"];
 }
 
 /** Resolution shared by `ai()` and `getAiConnection()`. `baseUrl` is the root (no `/v1`);
  * `apiKey`/`staticModels` are set only for a BYO-key (External) provider. */
 export interface ResolvedAiBinding {
-  baseUrl: string
-  apiKey?: string
-  staticModels?: AiModel[]
+  baseUrl: string;
+  apiKey?: string;
+  staticModels?: AiModel[];
 }
 
 /**
@@ -130,9 +130,9 @@ export interface ResolvedAiBinding {
  * `/<segment>/v1/...`, and the client appends the versioned paths itself.
  */
 export async function resolveAiBinding(gateway: Gateway, name: string): Promise<ResolvedAiBinding> {
-  const binding = await parseAiBinding(name)
+  const binding = await parseAiBinding(name);
   if (!binding) {
-    throw new AlienError(BindingNotFoundError.create({ bindingName: name, bindingType: "Ai" }))
+    throw new AlienError(BindingNotFoundError.create({ bindingName: name, bindingType: "Ai" }));
   }
   if (isExternalAiBinding(binding)) {
     return {
@@ -140,18 +140,18 @@ export async function resolveAiBinding(gateway: Gateway, name: string): Promise<
       apiKey: binding.apiKey,
       // BYO and ambient bindings return the identical AiModel shape; a BYO id is
       // its own display label since we do not curate the provider's own catalog.
-      staticModels: defaultModels(binding.provider).map(id => ({
+      staticModels: defaultModels(binding.provider).map((id) => ({
         id,
         provider: binding.provider,
         displayName: id,
       })),
-    }
+    };
   }
-  const handle = await gateway.startAiGateway()
+  const handle = await gateway.startAiGateway();
   // Mirror the gateway's `canonical_binding_name` (lowercase, `_`->`-`) so the route key
   // matches for every legal resource id, including underscored ones.
-  const segment = name.toLowerCase().replace(/_/g, "-")
-  return { baseUrl: `${handle.url}/${segment}` }
+  const segment = name.toLowerCase().replace(/_/g, "-");
+  return { baseUrl: `${handle.url}/${segment}` };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -162,7 +162,7 @@ export async function resolveAiBinding(gateway: Gateway, name: string): Promise<
 // forwarded provider message may carry upstream detail.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const RETRYABLE_STATUSES = new Set([429, 502, 503, 504])
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
 
 function createUpstreamError(url: string, status: number, message: string): AlienError {
   return new AlienError({
@@ -171,7 +171,7 @@ function createUpstreamError(url: string, status: number, message: string): Alie
     // definition, so override just those two on the schema-typed base.
     retryable: RETRYABLE_STATUSES.has(status),
     httpStatusCode: status >= 400 ? status : 502,
-  })
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -187,18 +187,18 @@ async function* parseSse(
   url: string,
   body: ReadableStream<Uint8Array>,
 ): AsyncGenerator<Record<string, unknown>> {
-  const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
 
   const emit = function* (line: string): Generator<Record<string, unknown>> {
-    const trimmed = line.trimEnd()
-    if (!trimmed.startsWith("data:")) return
-    const payload = trimmed.slice(5).trim()
-    if (payload === "[DONE]") return
-    let chunk: Record<string, unknown>
+    const trimmed = line.trimEnd();
+    if (!trimmed.startsWith("data:")) return;
+    const payload = trimmed.slice(5).trim();
+    if (payload === "[DONE]") return;
+    let chunk: Record<string, unknown>;
     try {
-      chunk = JSON.parse(payload) as Record<string, unknown>
+      chunk = JSON.parse(payload) as Record<string, unknown>;
     } catch (cause) {
       throw new AlienError({
         ...AiTransportError.create({
@@ -211,35 +211,35 @@ async function* parseSse(
           retryable: false,
           internal: true,
         },
-      })
+      });
     }
-    yield chunk
-  }
+    yield chunk;
+  };
 
   try {
     while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
+      const { done, value } = await reader.read();
+      if (done) break;
 
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split("\n")
-      buffer = lines.pop() ?? ""
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
 
       for (const line of lines) {
-        if (line.trimEnd() === "data: [DONE]") return
-        yield* emit(line)
+        if (line.trimEnd() === "data: [DONE]") return;
+        yield* emit(line);
       }
     }
 
     // Flush any bytes still held by the decoder, then any trailing line.
-    buffer += decoder.decode()
+    buffer += decoder.decode();
     for (const line of buffer.split("\n")) {
-      if (line.trimEnd() === "data: [DONE]") return
-      yield* emit(line)
+      if (line.trimEnd() === "data: [DONE]") return;
+      yield* emit(line);
     }
   } finally {
     // cancel() both cancels the stream and releases the reader lock.
-    await reader.cancel().catch(() => {})
+    await reader.cancel().catch(() => {});
   }
 }
 
@@ -263,17 +263,17 @@ async function* parseSse(
  * ```
  */
 export class Ai {
-  private readonly resolve: () => Promise<ResolvedAiBinding>
-  private connectionPromise: Promise<ResolvedAiBinding> | null = null
+  private readonly resolve: () => Promise<ResolvedAiBinding>;
+  private connectionPromise: Promise<ResolvedAiBinding> | null = null;
 
   /** OpenAI-compatible chat namespace. */
-  readonly chat: { completions: ChatCompletionsApi }
+  readonly chat: { completions: ChatCompletionsApi };
 
   /** OpenAI-compatible Responses API namespace (the surface Codex speaks). */
-  readonly responses: ResponsesApi
+  readonly responses: ResponsesApi;
 
   constructor(resolve: () => Promise<ResolvedAiBinding>) {
-    this.resolve = resolve
+    this.resolve = resolve;
 
     // One internal cast bridges the single passthrough impl to the typed
     // stream/non-stream overloads, so callers never cast the result themselves.
@@ -282,12 +282,12 @@ export class Ai {
         create: ((params: ChatCompletionCreateParams) =>
           this._chatCompletionsCreate(params)) as ChatCompletionsApi["create"],
       },
-    }
+    };
 
     this.responses = {
       create: ((params: ResponseCreateParams) =>
         this._responsesCreate(params)) as ResponsesApi["create"],
-    }
+    };
   }
 
   // Resolve the binding (and start the gateway for an ambient one) once, then reuse.
@@ -295,40 +295,40 @@ export class Ai {
   // instance permanently broken after one transient gateway-start failure, which the Rust
   // side reports as retryable — the same guarantee `createGateway` keeps.
   private connection(): Promise<ResolvedAiBinding> {
-    this.connectionPromise ??= this.resolve().catch(error => {
-      this.connectionPromise = null
-      throw error
-    })
-    return this.connectionPromise
+    this.connectionPromise ??= this.resolve().catch((error) => {
+      this.connectionPromise = null;
+      throw error;
+    });
+    return this.connectionPromise;
   }
 
   /** List the models the gateway exposes for this binding's cloud. */
   async getAvailableModels(): Promise<AiModel[]> {
-    const { baseUrl, staticModels } = await this.connection()
+    const { baseUrl, staticModels } = await this.connection();
     // Curated default for a BYO-key provider (see `defaultModels`); the gateway
     // path fetches the cloud's catalog below.
     if (staticModels) {
-      return staticModels
+      return staticModels;
     }
-    const url = `${baseUrl}/v1/models`
-    const response = await this._fetch(url, { method: "GET" })
+    const url = `${baseUrl}/v1/models`;
+    const response = await this._fetch(url, { method: "GET" });
     if (!response.ok) {
-      throw createUpstreamError(url, response.status, await extractErrorMessage(response))
+      throw createUpstreamError(url, response.status, await extractErrorMessage(response));
     }
-    let body: { data?: AiModel[] }
+    let body: { data?: AiModel[] };
     try {
-      body = (await response.json()) as { data?: AiModel[] }
+      body = (await response.json()) as { data?: AiModel[] };
     } catch (jsonError) {
       throw (await AlienError.from(jsonError)).withContext(
         AiTransportError.create({
           url,
           reason: `Response body is not valid JSON: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`,
         }),
-      )
+      );
     }
     // The gateway always returns a `data` array; its absence means a broken response.
     if (!Array.isArray(body.data)) {
-      throw createUpstreamError(url, response.status, "models response had no data array")
+      throw createUpstreamError(url, response.status, "models response had no data array");
     }
     // The gateway subprocess is a separate trust boundary (it can be a stale or
     // mismatched binary), so verify each element actually carries the AiModel
@@ -343,25 +343,25 @@ export class Ai {
           url,
           response.status,
           `models response entry is missing id/provider/displayName: ${JSON.stringify(model)}`,
-        )
+        );
       }
     }
-    return body.data
+    return body.data;
   }
 
   private _chatCompletionsCreate(params: ChatCompletionCreateParams): Promise<unknown> {
-    return this._postSurface("/v1/chat/completions", params)
+    return this._postSurface("/v1/chat/completions", params);
   }
 
   private async _responsesCreate(params: ResponseCreateParams): Promise<unknown> {
     // Anthropic's OpenAI-compatible host serves /v1/chat/completions but not /v1/responses,
     // so a BYO-Anthropic Responses call would 404. Fail fast with the reason instead. An
     // ALIEN_AI_LOCAL_BASE_URL override resolves to a different base, so it is not blocked here.
-    const { baseUrl } = await this.connection()
+    const { baseUrl } = await this.connection();
     if (baseUrl === KNOWN_PROVIDER_BASE_URLS.anthropic) {
-      throw new AlienError(ResponsesApiUnsupportedError.create({ provider: "anthropic" }))
+      throw new AlienError(ResponsesApiUnsupportedError.create({ provider: "anthropic" }));
     }
-    return this._postSurface("/v1/responses", params)
+    return this._postSurface("/v1/responses", params);
   }
 
   // The chat-completions and responses surfaces are byte-for-byte passthroughs that differ
@@ -371,50 +371,50 @@ export class Ai {
     path: string,
     params: { stream?: boolean } & Record<string, unknown>,
   ): Promise<unknown> {
-    const { baseUrl, apiKey } = await this.connection()
-    const url = `${baseUrl}${path}`
-    const headers = { "Content-Type": "application/json" }
-    if (apiKey) Object.assign(headers, { Authorization: `Bearer ${apiKey}` })
+    const { baseUrl, apiKey } = await this.connection();
+    const url = `${baseUrl}${path}`;
+    const headers = { "Content-Type": "application/json" };
+    if (apiKey) Object.assign(headers, { Authorization: `Bearer ${apiKey}` });
     const response = await this._fetch(url, {
       method: "POST",
       // Only the BYO-key path authenticates here; ambient credentials are the gateway's.
       headers,
       body: JSON.stringify(params),
-    })
+    });
 
     if (!response.ok) {
-      throw createUpstreamError(url, response.status, await extractErrorMessage(response))
+      throw createUpstreamError(url, response.status, await extractErrorMessage(response));
     }
 
     if (params.stream === true) {
       if (!response.body) {
-        throw createUpstreamError(url, response.status, "Streaming response body is null")
+        throw createUpstreamError(url, response.status, "Streaming response body is null");
       }
-      return parseSse(url, response.body)
+      return parseSse(url, response.body);
     }
 
     try {
-      return await response.json()
+      return await response.json();
     } catch (jsonError) {
       throw (await AlienError.from(jsonError)).withContext(
         AiTransportError.create({
           url,
           reason: `Response body is not valid JSON: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`,
         }),
-      )
+      );
     }
   }
 
   private async _fetch(url: string, init: RequestInit): Promise<Response> {
     try {
-      return await fetch(url, init)
+      return await fetch(url, init);
     } catch (fetchError) {
       throw (await AlienError.from(fetchError)).withContext(
         AiTransportError.create({
           url,
           reason: fetchError instanceof Error ? fetchError.message : String(fetchError),
         }),
-      )
+      );
     }
   }
 }
@@ -429,14 +429,14 @@ export class Ai {
  * ambient-cloud bindings, where the embedded gateway injects the credential.
  */
 export interface AiConnection {
-  baseURL: string
-  apiKey?: string
+  baseURL: string;
+  apiKey?: string;
 }
 
 /** The app-facing AI client surface, shared by the lazy-loading and static-embed entries. */
 export interface AiClient {
-  ai(name: string): Ai
-  getAiConnection(name: string): Promise<AiConnection>
+  ai(name: string): Ai;
+  getAiConnection(name: string): Promise<AiConnection>;
 }
 
 /**
@@ -447,7 +447,7 @@ export function createAiClient(gateway: Gateway): AiClient {
   return {
     /** An OpenAI-compatible client for the named AI binding. */
     ai(name: string): Ai {
-      return new Ai(() => resolveAiBinding(gateway, name))
+      return new Ai(() => resolveAiBinding(gateway, name));
     },
 
     /**
@@ -460,10 +460,10 @@ export function createAiClient(gateway: Gateway): AiClient {
      * before the caller's client uses it.
      */
     async getAiConnection(name: string): Promise<AiConnection> {
-      const resolved = await resolveAiBinding(gateway, name)
-      return { baseURL: `${resolved.baseUrl}/v1`, apiKey: resolved.apiKey }
+      const resolved = await resolveAiBinding(gateway, name);
+      return { baseURL: `${resolved.baseUrl}/v1`, apiKey: resolved.apiKey };
     },
-  }
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -472,13 +472,13 @@ export function createAiClient(gateway: Gateway): AiClient {
 
 async function extractErrorMessage(response: Response): Promise<string> {
   try {
-    const errBody = (await response.json()) as Record<string, unknown>
-    const errObj = errBody.error
+    const errBody = (await response.json()) as Record<string, unknown>;
+    const errObj = errBody.error;
     if (errObj && typeof errObj === "object" && "message" in errObj) {
-      return String((errObj as Record<string, unknown>).message)
+      return String((errObj as Record<string, unknown>).message);
     }
-    return errBody.message ? String(errBody.message) : response.statusText
+    return errBody.message ? String(errBody.message) : response.statusText;
   } catch {
-    return response.statusText || "Unknown upstream error"
+    return response.statusText || "Unknown upstream error";
   }
 }

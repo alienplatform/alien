@@ -1,4 +1,4 @@
-import { defineConfig } from "tsdown"
+import { defineConfig } from "tsdown";
 
 export default defineConfig({
   entry: ["src/index.ts"],
@@ -14,4 +14,4 @@ export default defineConfig({
   // `zod` is bundled — it is a devDependency used solely to build the error
   // definitions, so it must not leak into the runtime dependency set.
   noExternal: [/^zod(\/|$)/],
-})
+});

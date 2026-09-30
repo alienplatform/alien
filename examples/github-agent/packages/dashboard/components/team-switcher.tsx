@@ -1,9 +1,9 @@
-"use client"
+"use client";
 
-import { IconBrandGithub } from "@tabler/icons-react"
-import { ChevronsUpDown, Plus } from "lucide-react"
-import { useRouter } from "next/navigation"
-import * as React from "react"
+import { IconBrandGithub } from "@tabler/icons-react";
+import { ChevronsUpDown, Plus } from "lucide-react";
+import { useRouter } from "next/navigation";
+import * as React from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -12,49 +12,50 @@ import {
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+} from "@/components/ui/dropdown-menu";
 import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
   useSidebar,
-} from "@/components/ui/sidebar"
-import { authClient } from "@/lib/auth-client"
+} from "@/components/ui/sidebar";
+import { authClient } from "@/lib/auth-client";
 
 interface Organization {
-  id: string
-  name: string
-  slug: string | null
-  logo: string | null
+  id: string;
+  name: string;
+  slug: string | null;
+  logo: string | null;
 }
 
 interface TeamSwitcherProps {
-  organizations: Organization[]
-  activeOrganizationId: string | null
+  organizations: Organization[];
+  activeOrganizationId: string | null;
 }
 
 export function TeamSwitcher({ organizations, activeOrganizationId }: TeamSwitcherProps) {
-  const { isMobile } = useSidebar()
-  const router = useRouter()
+  const { isMobile } = useSidebar();
+  const router = useRouter();
 
-  const activeOrg = organizations.find(org => org.id === activeOrganizationId) || organizations[0]
+  const activeOrg =
+    organizations.find((org) => org.id === activeOrganizationId) || organizations[0];
 
   if (!activeOrg) {
-    return null
+    return null;
   }
 
   const handleSwitchOrganization = async (orgId: string) => {
     await authClient.organization.setActive({
       organizationId: orgId,
-    })
+    });
 
     // Refresh the page to reload data for the new organization
-    router.refresh()
-  }
+    router.refresh();
+  };
 
   const handleCreateOrganization = () => {
-    router.push("/onboarding")
-  }
+    router.push("/onboarding");
+  };
 
   return (
     <SidebarMenu>
@@ -119,5 +120,5 @@ export function TeamSwitcher({ organizations, activeOrganizationId }: TeamSwitch
         </DropdownMenu>
       </SidebarMenuItem>
     </SidebarMenu>
-  )
+  );
 }

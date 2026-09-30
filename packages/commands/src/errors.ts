@@ -6,8 +6,8 @@
  * `@alienplatform/core` so it carries the shared `AlienError` identity.
  */
 
-import { defineError } from "@alienplatform/core"
-import * as z from "zod/v4"
+import { defineError } from "@alienplatform/core";
+import * as z from "zod/v4";
 
 /**
  * Error thrown when hosted command bootstrap configuration is invalid.
@@ -22,7 +22,7 @@ export const CommandBootstrapConfigInvalidError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 400,
-})
+});
 
 /**
  * Error thrown when a network or transport failure prevents hosted command
@@ -40,7 +40,7 @@ export const CommandBootstrapFailedError = defineError({
   retryable: true,
   internal: false,
   httpStatusCode: 503,
-})
+});
 
 /**
  * Error thrown when the Alien Platform API rejects command bootstrap.
@@ -58,7 +58,7 @@ export const PlatformHttpError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 500,
-})
+});
 
 /**
  * Error thrown when command creation fails.
@@ -75,7 +75,7 @@ export const CommandCreationFailedError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 500,
-})
+});
 
 /**
  * Error thrown when fetching a command's status fails (network/transport error,
@@ -92,7 +92,7 @@ export const CommandStatusFailedError = defineError({
   retryable: true,
   internal: false,
   httpStatusCode: 500,
-})
+});
 
 /**
  * Error thrown when command execution times out.
@@ -110,7 +110,7 @@ export const CommandTimeoutError = defineError({
   retryable: true,
   internal: false,
   httpStatusCode: 504,
-})
+});
 
 /**
  * Error thrown when the deployment returns an error response.
@@ -129,7 +129,7 @@ export const DeploymentCommandError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 500,
-})
+});
 
 /**
  * Error thrown when command expires before completion.
@@ -144,7 +144,7 @@ export const CommandExpiredError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 410,
-})
+});
 
 /**
  * Error thrown when storage upload/download fails.
@@ -160,7 +160,7 @@ export const StorageOperationFailedError = defineError({
   retryable: true,
   internal: false,
   httpStatusCode: 500,
-})
+});
 
 /**
  * Error thrown when response decoding fails.
@@ -176,7 +176,7 @@ export const ResponseDecodingFailedError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 500,
-})
+});
 
 /**
  * Error thrown when a command envelope (or a param/response body it carries)
@@ -197,7 +197,7 @@ export const InvalidEnvelopeError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 400,
-})
+});
 
 /**
  * Error thrown when the pull receiver's environment configuration is missing or
@@ -218,7 +218,7 @@ export const CommandReceiverConfigInvalidError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 400,
-})
+});
 
 /**
  * Error thrown when Manager returns an HTTP error.
@@ -237,7 +237,7 @@ export const ManagerHttpError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 500,
-})
+});
 
 /**
  * Error thrown when a 2xx response body from the command server fails to parse
@@ -256,4 +256,4 @@ export const MalformedResponseError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 502,
-})
+});

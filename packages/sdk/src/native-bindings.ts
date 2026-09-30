@@ -9,9 +9,9 @@
  * bundle packages and make the build fail wherever that asset was never staged.
  */
 
-import { installEmbeddedAddon as installBindingsAddon } from "@alienplatform/bindings/native"
+import { installEmbeddedAddon as installBindingsAddon } from "@alienplatform/bindings/native";
 
 /** Register the bun-embedded bindings addon with its loader. */
 export function installEmbeddedAddon(): void {
-  installBindingsAddon()
+  installBindingsAddon();
 }

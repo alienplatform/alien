@@ -1,6 +1,6 @@
-import * as alien from "@alienplatform/core"
+import * as alien from "@alienplatform/core";
 
-const index = new alien.Kv("index").build()
+const index = new alien.Kv("index").build();
 
 const typescriptContainer = new alien.Container("typescript-container")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
@@ -9,7 +9,7 @@ const typescriptContainer = new alien.Container("typescript-container")
   .commandsEnabled(true)
   .link(index)
   .permissions("execution")
-  .build()
+  .build();
 
 const rustDaemon = new alien.Daemon("rust-daemon")
   .code({
@@ -20,7 +20,7 @@ const rustDaemon = new alien.Daemon("rust-daemon")
   .commandsEnabled(true)
   .link(index)
   .permissions("execution")
-  .build()
+  .build();
 
 export default new alien.Stack("runtime-less-mixed")
   .platforms(["local", "kubernetes"])
@@ -34,4 +34,4 @@ export default new alien.Stack("runtime-less-mixed")
       },
     },
   })
-  .build()
+  .build();

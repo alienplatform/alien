@@ -10,10 +10,10 @@
  * `bun build --compile` needs `--format=cjs`.
  */
 
-import embeddedBinaryPath from "./alien-ai-gateway.bin" with { type: "file" }
-import { createAiClient } from "./client.js"
-import { createGateway } from "./gateway.js"
-import { registerEmbeddedBinary, resolveGatewayBinary } from "./loader.js"
+import embeddedBinaryPath from "./alien-ai-gateway.bin" with { type: "file" };
+import { createAiClient } from "./client.js";
+import { createGateway } from "./gateway.js";
+import { registerEmbeddedBinary, resolveGatewayBinary } from "./loader.js";
 
 /**
  * Register the bun-embedded gateway binary with the default loader, so plain
@@ -25,28 +25,28 @@ import { registerEmbeddedBinary, resolveGatewayBinary } from "./loader.js"
  * tree-shaking.
  */
 export function installEmbeddedGateway(): void {
-  registerEmbeddedBinary(embeddedBinaryPath)
+  registerEmbeddedBinary(embeddedBinaryPath);
 }
 
-const gateway = createGateway(resolveGatewayBinary)
-const client = createAiClient(gateway)
+const gateway = createGateway(resolveGatewayBinary);
+const client = createAiClient(gateway);
 
-export const startAiGateway = gateway.startAiGateway
-export const ai = client.ai
-export const getAiConnection = client.getAiConnection
+export const startAiGateway = gateway.startAiGateway;
+export const ai = client.ai;
+export const getAiConnection = client.getAiConnection;
 
-export type { AiBinding, AmbientAiBinding, ExternalAiBinding } from "./binding.js"
-export { aiBindingEnvVarName, isExternalAiBinding, parseAiBinding } from "./binding.js"
+export type { AiBinding, AmbientAiBinding, ExternalAiBinding } from "./binding.js";
+export { aiBindingEnvVarName, isExternalAiBinding, parseAiBinding } from "./binding.js";
 export type {
   AiConnection,
   AiModel,
   ChatCompletionCreateParams,
   ResponseCreateParams,
-} from "./client.js"
-export { Ai } from "./client.js"
+} from "./client.js";
+export { Ai } from "./client.js";
 export {
   AiTransportError,
   AiUpstreamError,
   BindingNotFoundError,
   InvalidBindingConfigError,
-} from "./errors.js"
+} from "./errors.js";

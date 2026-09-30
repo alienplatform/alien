@@ -7,28 +7,28 @@
         "label": "encrypt-and-decrypt",
         "description": "Encrypt and decrypt with the selected AWS KMS key.",
         "grant": {
-          "actions": ["kms:Encrypt", "kms:Decrypt"]
+          "actions": ["kms:Encrypt", "kms:Decrypt"],
         },
         "binding": {
           "resource": {
-            "resources": ["${resourceName}"]
-          }
-        }
-      }
+            "resources": ["${resourceName}"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
         "label": "encrypt-and-decrypt",
         "description": "Encrypt and decrypt with the selected Cloud KMS key.",
         "grant": {
-          "predefinedRoles": ["roles/cloudkms.cryptoKeyEncrypterDecrypter"]
+          "predefinedRoles": ["roles/cloudkms.cryptoKeyEncrypterDecrypter"],
         },
         "binding": {
           "resource": {
-            "scope": "${resourceName}"
-          }
-        }
-      }
+            "scope": "${resourceName}",
+          },
+        },
+      },
     ],
     "azure": [
       {
@@ -37,15 +37,15 @@
         "grant": {
           "dataActions": [
             "Microsoft.KeyVault/vaults/keys/encrypt/action",
-            "Microsoft.KeyVault/vaults/keys/decrypt/action"
-          ]
+            "Microsoft.KeyVault/vaults/keys/decrypt/action",
+          ],
         },
         "binding": {
           "resource": {
-            "scope": "${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

@@ -7,7 +7,7 @@
         "label": "import-kubernetes-endpoint-certificates",
         "description": "Import TLS certificates for application-owned Kubernetes public endpoints.",
         "grant": {
-          "actions": ["acm:ImportCertificate", "acm:AddTagsToCertificate"]
+          "actions": ["acm:ImportCertificate", "acm:AddTagsToCertificate"],
         },
         "binding": {
           "resource": {
@@ -16,11 +16,11 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceId}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       {
         "label": "manage-kubernetes-endpoint-certificates",
@@ -30,8 +30,8 @@
             "acm:ImportCertificate",
             "acm:AddTagsToCertificate",
             "acm:DeleteCertificate",
-            "acm:DescribeCertificate"
-          ]
+            "acm:DescribeCertificate",
+          ],
         },
         "binding": {
           "resource": {
@@ -40,12 +40,12 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceId}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
-      }
-    ]
-  }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
+      },
+    ],
+  },
 }

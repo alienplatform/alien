@@ -1,15 +1,15 @@
-"use client"
+"use client";
 
-import { Spinner } from "./spinner"
+import { Spinner } from "./spinner";
 
-const PREVIEW_ROWS = 5
+const PREVIEW_ROWS = 5;
 
-export type QueryInput = { question?: string; plan?: string; status?: string }
+export type QueryInput = { question?: string; plan?: string; status?: string };
 export type QueryOutput = {
-  rowCount?: number | null
-  rows?: Record<string, unknown>[]
-  error?: string
-}
+  rowCount?: number | null;
+  rows?: Record<string, unknown>[];
+  error?: string;
+};
 
 export function QueryCard({
   state,
@@ -17,18 +17,18 @@ export function QueryCard({
   output,
   errorText,
 }: {
-  state: "input-streaming" | "input-available" | "output-available" | "output-error"
-  input?: QueryInput
-  output?: QueryOutput
-  errorText?: string
+  state: "input-streaming" | "input-available" | "output-available" | "output-error";
+  input?: QueryInput;
+  output?: QueryOutput;
+  errorText?: string;
 }) {
-  const running = state === "input-streaming" || state === "input-available"
+  const running = state === "input-streaming" || state === "input-available";
   const failure =
-    state === "output-error" ? (errorText ?? "The query could not be run.") : output?.error
-  const call = input?.question && describe(input)
-  const rows = output?.rows ?? []
-  const columns = rows.length > 0 ? Object.keys(rows[0]) : []
-  const numeric = new Set(columns.filter(column => typeof rows[0]?.[column] === "number"))
+    state === "output-error" ? (errorText ?? "The query could not be run.") : output?.error;
+  const call = input?.question && describe(input);
+  const rows = output?.rows ?? [];
+  const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+  const numeric = new Set(columns.filter((column) => typeof rows[0]?.[column] === "number"));
 
   return (
     <div className="my-3 overflow-hidden rounded-xl border border-white/40 bg-card/80 backdrop-blur-sm">
@@ -60,7 +60,7 @@ export function QueryCard({
           <table className="w-full border-collapse font-mono text-[11px]">
             <thead>
               <tr className="border-b border-edge text-left text-zinc-400">
-                {columns.map(column => (
+                {columns.map((column) => (
                   <th
                     key={column}
                     className={`px-4 py-1.5 font-medium ${numeric.has(column) ? "text-right" : ""}`}
@@ -73,7 +73,7 @@ export function QueryCard({
             <tbody>
               {rows.slice(0, PREVIEW_ROWS).map((row, i) => (
                 <tr key={i} className="border-b border-edge/50 last:border-0">
-                  {columns.map(column => (
+                  {columns.map((column) => (
                     <td
                       key={column}
                       className={`px-4 py-1.5 tabular-nums text-zinc-100 ${numeric.has(column) ? "text-right" : ""}`}
@@ -93,12 +93,12 @@ export function QueryCard({
         </div>
       )}
     </div>
-  )
+  );
 }
 
 function describe({ question, plan, status }: QueryInput): string {
-  const filters = [plan && `plan=${plan}`, status && `status=${status}`].filter(Boolean)
-  return [question, ...filters].join("  ·  ")
+  const filters = [plan && `plan=${plan}`, status && `status=${status}`].filter(Boolean);
+  return [question, ...filters].join("  ·  ");
 }
 
 function DatabaseIcon() {
@@ -119,5 +119,5 @@ function DatabaseIcon() {
       <path d="M3 5v14a9 3 0 0 0 18 0V5" />
       <path d="M3 12a9 3 0 0 0 18 0" />
     </svg>
-  )
+  );
 }

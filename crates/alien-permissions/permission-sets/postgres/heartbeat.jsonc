@@ -11,8 +11,8 @@
             "rds:DescribeDBClusters",
             "rds:DescribeDBInstances",
             "rds:ListTagsForResource",
-            "cloudwatch:GetMetricData"
-          ]
+            "cloudwatch:GetMetricData",
+          ],
         },
         // `cloudwatch:GetMetricData` ignores resource-level ARN scoping (CloudWatch metrics
         // aren't ARN-addressable), so the binding below effectively scopes only the rds:* actions;
@@ -21,16 +21,16 @@
           "stack": {
             "resources": [
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*",
-              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-*"
-            ]
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-*",
+            ],
           },
           "resource": {
             "resources": [
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}",
-              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*"
-            ]
-          }
-        }
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*",
+            ],
+          },
+        },
       },
       {
         // Read-only confirmation that the database security group still admits
@@ -39,50 +39,50 @@
         "label": "describe-security-groups",
         "description": "Read the database security group state to verify the network boundary stays intact.",
         "grant": {
-          "actions": ["ec2:DescribeSecurityGroups"]
+          "actions": ["ec2:DescribeSecurityGroups"],
         },
         // `DescribeSecurityGroups` is an un-scopable discovery API, so the resource
         // binding is also `*` — same shape as `vault/heartbeat`'s `ssm:DescribeParameters`.
         // This lets per-resource emitters scope the set at `BindingTarget::Resource`.
         "binding": {
           "stack": {
-            "resources": ["*"]
+            "resources": ["*"],
           },
           "resource": {
-            "resources": ["*"]
-          }
-        }
-      }
+            "resources": ["*"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
         "label": "check-cloud-sql-health",
         "description": "Read Cloud SQL instance metadata needed for health checks.",
         "grant": {
-          "permissions": ["cloudsql.instances.get", "cloudsql.instances.list"]
+          "permissions": ["cloudsql.instances.get", "cloudsql.instances.list"],
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}" }
-        }
-      }
+          "resource": { "scope": "projects/${projectName}" },
+        },
+      },
     ],
     "azure": [
       {
         "label": "check-flexible-server-health",
         "description": "Read Flexible Server metadata needed for health checks.",
         "grant": {
-          "predefinedRoles": ["Reader"]
+          "predefinedRoles": ["Reader"],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

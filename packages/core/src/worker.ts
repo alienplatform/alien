@@ -6,8 +6,8 @@ import {
   type WorkerPublicEndpoint,
   WorkerSchema,
   type WorkerTrigger,
-} from "./generated/index.js"
-import { type Resource, ResourceBuilder } from "./resource.js"
+} from "./generated/index.js";
+import { type Resource, ResourceBuilder } from "./resource.js";
 
 export type {
   HttpMethod,
@@ -16,7 +16,7 @@ export type {
   WorkerOutputs,
   WorkerPublicEndpoint,
   WorkerTrigger,
-} from "./generated/index.js"
+} from "./generated/index.js";
 export {
   HttpMethodSchema,
   ReadinessProbeSchema,
@@ -24,11 +24,11 @@ export {
   WorkerPublicEndpointSchema,
   WorkerSchema as WorkerConfigSchema,
   WorkerTriggerSchema,
-} from "./generated/index.js"
+} from "./generated/index.js";
 
 export interface WorkerPublicEndpointOptions {
-  hostLabel?: string
-  wildcardSubdomains?: boolean
+  hostLabel?: string;
+  wildcardSubdomains?: boolean;
 }
 
 /**
@@ -41,15 +41,15 @@ export class Worker extends ResourceBuilder {
     triggers: [],
     publicEndpoints: [],
     environment: {},
-  }
+  };
 
   /**
    * Creates a new Worker builder.
    * @param id Identifier for the worker. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
   constructor(id: string) {
-    super()
-    this._config.id = id
+    super();
+    this._config.id = id;
   }
 
   /**
@@ -58,7 +58,7 @@ export class Worker extends ResourceBuilder {
    * @returns The "worker" resource type.
    */
   public static any(): ResourceType {
-    return "worker"
+    return "worker";
   }
 
   /**
@@ -67,8 +67,8 @@ export class Worker extends ResourceBuilder {
    * @returns The Worker builder instance.
    */
   public code(code: WorkerCode): this {
-    this._config.code = code
-    return this
+    this._config.code = code;
+    return this;
   }
 
   /**
@@ -79,8 +79,8 @@ export class Worker extends ResourceBuilder {
    * @returns The Worker builder instance.
    */
   public memoryMb(mb: number): this {
-    this._config.memoryMb = mb
-    return this
+    this._config.memoryMb = mb;
+    return this;
   }
 
   /**
@@ -91,8 +91,8 @@ export class Worker extends ResourceBuilder {
    * @returns The Worker builder instance.
    */
   public timeoutSeconds(sec: number): this {
-    this._config.timeoutSeconds = sec
-    return this
+    this._config.timeoutSeconds = sec;
+    return this;
   }
 
   /**
@@ -102,8 +102,8 @@ export class Worker extends ResourceBuilder {
    * @returns The Worker builder instance.
    */
   public concurrencyLimit(limit: number | undefined): this {
-    this._config.concurrencyLimit = limit
-    return this
+    this._config.concurrencyLimit = limit;
+    return this;
   }
 
   /**
@@ -114,14 +114,14 @@ export class Worker extends ResourceBuilder {
    */
   public publicEndpoint(name: string, options: WorkerPublicEndpointOptions = {}): this {
     if (!this._config.publicEndpoints) {
-      this._config.publicEndpoints = []
+      this._config.publicEndpoints = [];
     }
     this._config.publicEndpoints.push({
       name,
       hostLabel: options.hostLabel,
       wildcardSubdomains: options.wildcardSubdomains ?? false,
-    } satisfies WorkerPublicEndpoint)
-    return this
+    } satisfies WorkerPublicEndpoint);
+    return this;
   }
 
   /**
@@ -130,8 +130,8 @@ export class Worker extends ResourceBuilder {
    * @returns The Worker builder instance.
    */
   public environment(env: Record<string, string>): this {
-    this._config.environment = env
-    return this
+    this._config.environment = env;
+    return this;
   }
 
   /**
@@ -143,10 +143,10 @@ export class Worker extends ResourceBuilder {
    */
   public link(resource: Resource): this {
     if (!this._config.links) {
-      this._config.links = []
+      this._config.links = [];
     }
-    this._config.links.push(resource.ref())
-    return this
+    this._config.links.push(resource.ref());
+    return this;
   }
 
   /**
@@ -157,8 +157,8 @@ export class Worker extends ResourceBuilder {
    * @returns The Worker builder instance.
    */
   public permissions(permissions: string): this {
-    this._config.permissions = permissions
-    return this
+    this._config.permissions = permissions;
+    return this;
   }
 
   /**
@@ -184,8 +184,8 @@ export class Worker extends ResourceBuilder {
    * @returns The Worker builder instance.
    */
   public readinessProbe(probe: ReadinessProbe): this {
-    this._config.readinessProbe = probe
-    return this
+    this._config.readinessProbe = probe;
+    return this;
   }
 
   /**
@@ -196,8 +196,8 @@ export class Worker extends ResourceBuilder {
    * @returns The Worker builder instance.
    */
   public commandsEnabled(enabled: boolean): this {
-    this._config.commandsEnabled = enabled
-    return this
+    this._config.commandsEnabled = enabled;
+    return this;
   }
 
   /**
@@ -230,10 +230,10 @@ export class Worker extends ResourceBuilder {
    */
   public trigger(trigger: WorkerTrigger): this {
     if (!this._config.triggers) {
-      this._config.triggers = []
+      this._config.triggers = [];
     }
-    this._config.triggers.push(trigger)
-    return this
+    this._config.triggers.push(trigger);
+    return this;
   }
 
   /**
@@ -242,11 +242,11 @@ export class Worker extends ResourceBuilder {
    * @throws Error if the worker configuration is invalid (e.g., missing code).
    */
   public build(): Resource {
-    const config = WorkerSchema.parse(this._config)
+    const config = WorkerSchema.parse(this._config);
 
     return this.resource({
       type: "worker",
       ...config,
-    })
+    });
   }
 }

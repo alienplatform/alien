@@ -1,8 +1,8 @@
-import * as alien from "@alienplatform/core"
+import * as alien from "@alienplatform/core";
 
-const inbox = new alien.Queue("inbox").build()
-const data = new alien.Storage("data").build()
-const events = new alien.Kv("events").build()
+const inbox = new alien.Queue("inbox").build();
+const data = new alien.Storage("data").build();
+const events = new alien.Kv("events").build();
 
 const processor = new alien.Worker("processor")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
@@ -15,7 +15,7 @@ const processor = new alien.Worker("processor")
   .trigger({ type: "storage", storage: data.ref(), events: ["created"] })
   .trigger({ type: "schedule", cron: "0 * * * *" })
   .permissions("execution")
-  .build()
+  .build();
 
 export default new alien.Stack("event-pipeline")
   .platforms(["aws", "gcp", "azure"])
@@ -37,4 +37,4 @@ export default new alien.Stack("event-pipeline")
       },
     },
   })
-  .build()
+  .build();

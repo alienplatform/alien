@@ -7,26 +7,26 @@
         "label": "discover-resources",
         "description": "Discover tagged resources across the account (required for inventory).",
         "grant": {
-          "actions": ["tag:GetResources"]
+          "actions": ["tag:GetResources"],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
-          }
-        }
+            "resources": ["*"],
+          },
+        },
       },
       {
         "label": "read-metrics",
         "description": "Read CloudWatch metrics for resource health.",
         "grant": {
-          "actions": ["cloudwatch:ListMetrics"]
+          "actions": ["cloudwatch:ListMetrics"],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
-          }
-        }
-      }
+            "resources": ["*"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -36,15 +36,15 @@
           "permissions": [
             "cloudasset.assets.searchAllResources",
             "monitoring.timeSeries.list",
-            "monitoring.metricDescriptors.list"
-          ]
+            "monitoring.metricDescriptors.list",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
-          }
-        }
-      }
+            "scope": "projects/${projectName}",
+          },
+        },
+      },
     ],
     "azure": [
       {
@@ -54,15 +54,15 @@
           "actions": [
             "Microsoft.ResourceGraph/resources/read",
             "Microsoft.Insights/metrics/read",
-            "Microsoft.Insights/metricDefinitions/read"
-          ]
+            "Microsoft.Insights/metricDefinitions/read",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}",
+          },
+        },
+      },
+    ],
+  },
 }

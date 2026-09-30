@@ -21,15 +21,15 @@
             "iam:DeleteRolePermissionsBoundary",
             "iam:UpdateRole",
             "iam:TagRole",
-            "iam:UntagRole"
-          ]
+            "iam:UntagRole",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-management"]
-          }
-        }
-      }
-    ]
-  }
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-management"],
+          },
+        },
+      },
+    ],
+  },
 }

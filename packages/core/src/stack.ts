@@ -6,21 +6,21 @@ import {
   type Stack as StackConfig,
   type StackInputDefinition,
   StackSchema,
-} from "./generated/index.js"
-import { getStackInputDefinitions, type StackInputCollection } from "./input.js"
-import type { Resource } from "./resource.js"
+} from "./generated/index.js";
+import { getStackInputDefinitions, type StackInputCollection } from "./input.js";
+import type { Resource } from "./resource.js";
 
 function isRepositoryName(repository: string): boolean {
-  const [authority = "", ...path] = repository.split("/")
-  if (path.length === 0 || path.some(part => !/^[a-z0-9]+(?:[._-]+[a-z0-9]+)*$/.test(part))) {
-    return false
+  const [authority = "", ...path] = repository.split("/");
+  if (path.length === 0 || path.some((part) => !/^[a-z0-9]+(?:[._-]+[a-z0-9]+)*$/.test(part))) {
+    return false;
   }
-  const [host = "", port, ...extra] = authority.split(":")
+  const [host = "", port, ...extra] = authority.split(":");
   return (
     extra.length === 0 &&
     (port === undefined || /^[0-9]+$/.test(port)) &&
-    host.split(".").every(label => /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label))
-  )
+    host.split(".").every((label) => /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label))
+  );
 }
 
 /**
@@ -32,7 +32,7 @@ export interface AddResourceOptions {
    * When true, binding params are synced to StackState for external access.
    * Default: false (prevents sensitive data in synced state).
    */
-  remoteAccess?: boolean
+  remoteAccess?: boolean;
 }
 
 export type {
@@ -51,14 +51,14 @@ export type {
   StackResourceState,
   StackState,
   StackStatus,
-} from "./generated/index.js"
+} from "./generated/index.js";
 export {
   ResourceStatusSchema,
   StackResourceStateSchema,
   StackSchema,
   StackStateSchema,
   StackStatusSchema,
-} from "./generated/index.js"
+} from "./generated/index.js";
 
 /**
  * Represents a collection of cloud resources that are managed together.
@@ -68,14 +68,14 @@ export class Stack {
   private _config: Partial<StackConfig> = {
     resources: {},
     permissions: undefined,
-  }
+  };
 
   /**
    * Creates a new Stack builder.
    * @param id Identifier for the stack. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 128 characters.
    */
   constructor(id: string) {
-    this._config.id = id
+    this._config.id = id;
   }
 
   /**
@@ -90,15 +90,15 @@ export class Stack {
       config: resource.config,
       lifecycle,
       dependencies: [], // Additional dependencies beyond what the resource itself defines
-    }
+    };
     if (options?.remoteAccess) {
-      entry.remoteAccess = true
+      entry.remoteAccess = true;
     }
     if (resource.enabledWhen !== undefined) {
-      entry.enabledWhen = resource.enabledWhen
+      entry.enabledWhen = resource.enabledWhen;
     }
-    this._config.resources![resource.config.id] = entry
-    return this
+    this._config.resources![resource.config.id] = entry;
+    return this;
   }
 
   /**
@@ -106,8 +106,8 @@ export class Stack {
    * When omitted, the stack supports all platforms.
    */
   public platforms(platforms: Platform[]): this {
-    this._config.supportedPlatforms = platforms
-    return this
+    this._config.supportedPlatforms = platforms;
+    return this;
   }
 
   /**
@@ -116,8 +116,8 @@ export class Stack {
    * @returns The Stack builder instance.
    */
   public permissions(config: PermissionsConfig): this {
-    this._config.permissions = config
-    return this
+    this._config.permissions = config;
+    return this;
   }
 
   /**
@@ -126,8 +126,8 @@ export class Stack {
    * @returns The Stack builder instance.
    */
   public inputs(inputs: StackInputCollection | readonly StackInputDefinition[]): this {
-    this._config.inputs = getStackInputDefinitions(inputs)
-    return this
+    this._config.inputs = getStackInputDefinitions(inputs);
+    return this;
   }
 
   /** Approve exact OCI image repositories for containers created after installation. */
@@ -136,23 +136,23 @@ export class Stack {
       repositories.length === 0 ||
       repositories.length > 16 ||
       new Set(repositories).size !== repositories.length ||
-      repositories.some(repository => !isRepositoryName(repository))
+      repositories.some((repository) => !isRepositoryName(repository))
     ) {
       throw new Error(
         "Dynamic container repositories must be 1–16 distinct, fully qualified OCI repositories",
-      )
+      );
     }
-    this._config.dynamicContainerRepositories = repositories
-    return this
+    this._config.dynamicContainerRepositories = repositories;
+    return this;
   }
 
   /** Approve the repositories of Container images shipped in this release. */
   public dynamicContainerImageResources(resourceIds: string[]): this {
     if (resourceIds.length === 0 || new Set(resourceIds).size !== resourceIds.length) {
-      throw new Error("Dynamic container image resource IDs must be distinct and non-empty")
+      throw new Error("Dynamic container image resource IDs must be distinct and non-empty");
     }
-    this._config.dynamicContainerImageResources = resourceIds
-    return this
+    this._config.dynamicContainerImageResources = resourceIds;
+    return this;
   }
 
   /**
@@ -160,7 +160,7 @@ export class Stack {
    * @returns The stack ID.
    */
   public get id(): string {
-    return this._config.id!
+    return this._config.id!;
   }
 
   /**
@@ -173,9 +173,9 @@ export class Stack {
       if (this._config.resources?.[resourceId]?.config.type !== "container") {
         throw new Error(
           `Dynamic container image resource '${resourceId}' must be a declared Container`,
-        )
+        );
       }
     }
-    return StackSchema.parse(this._config)
+    return StackSchema.parse(this._config);
   }
 }

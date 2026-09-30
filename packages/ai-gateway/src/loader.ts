@@ -17,36 +17,36 @@
  *      found by walking up from this module.
  */
 
-import { chmodSync, existsSync, mkdtempSync, statSync, writeFileSync } from "node:fs"
-import { createRequire } from "node:module"
-import { tmpdir } from "node:os"
-import { dirname, join, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
-import { AlienError } from "@alienplatform/core"
-import { GatewayBinaryUnavailableError, UnsupportedPlatformError } from "./errors.js"
+import { chmodSync, existsSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { AlienError } from "@alienplatform/core";
+import { GatewayBinaryUnavailableError, UnsupportedPlatformError } from "./errors.js";
 
-const require = createRequire(import.meta.url)
+const require = createRequire(import.meta.url);
 
 /** The launcher binary's file name across all platforms. */
-const BINARY_NAME = "alien-ai-gateway"
+const BINARY_NAME = "alien-ai-gateway";
 
 /** A running gateway handle: its loopback base URL. */
 export interface RawAiGatewayHandle {
-  readonly url: string
+  readonly url: string;
 }
 
-export type LinuxLibc = "gnu" | "musl"
+export type LinuxLibc = "gnu" | "musl";
 
 /** Detect glibc vs musl, the same way napi-rs's generated loader does. */
 export function detectLinuxLibc(): LinuxLibc {
   const report =
     typeof process.report?.getReport === "function"
       ? (process.report.getReport() as { header?: { glibcVersionRuntime?: string } })
-      : undefined
+      : undefined;
   if (report?.header) {
-    return report.header.glibcVersionRuntime ? "gnu" : "musl"
+    return report.header.glibcVersionRuntime ? "gnu" : "musl";
   }
-  return existsSync("/etc/alpine-release") ? "musl" : "gnu"
+  return existsSync("/etc/alpine-release") ? "musl" : "gnu";
 }
 
 /**
@@ -59,33 +59,33 @@ export function platformTriple(
   arch: NodeJS.Architecture = process.arch,
   libc: LinuxLibc = platform === "linux" ? detectLinuxLibc() : "gnu",
 ): string {
-  if (platform === "darwin" && arch === "arm64") return "darwin-arm64"
-  if (platform === "darwin" && arch === "x64") return "darwin-x64"
+  if (platform === "darwin" && arch === "arm64") return "darwin-arm64";
+  if (platform === "darwin" && arch === "x64") return "darwin-x64";
   if (platform === "linux") {
-    if (arch === "x64") return `linux-x64-${libc}`
-    if (arch === "arm64") return `linux-arm64-${libc}`
+    if (arch === "x64") return `linux-x64-${libc}`;
+    if (arch === "arm64") return `linux-arm64-${libc}`;
   }
-  throw new AlienError(UnsupportedPlatformError.create({ platform, arch }))
+  throw new AlienError(UnsupportedPlatformError.create({ platform, arch }));
 }
 
 /** Walk up from `startDir` to find the locally-built binary, or `undefined`. */
 export function findLocalBinary(
   startDir: string = dirname(fileURLToPath(import.meta.url)),
 ): string | undefined {
-  let dir = startDir
+  let dir = startDir;
   for (;;) {
     for (const profile of ["release", "debug"]) {
-      const candidate = join(dir, "target", profile, BINARY_NAME)
-      if (existsSync(candidate)) return candidate
+      const candidate = join(dir, "target", profile, BINARY_NAME);
+      if (existsSync(candidate)) return candidate;
     }
-    const parent = dirname(dir)
-    if (parent === dir) return undefined
-    dir = parent
+    const parent = dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
   }
 }
 
-let cached: string | undefined
-let embeddedBinaryPath: string | undefined
+let cached: string | undefined;
+let embeddedBinaryPath: string | undefined;
 
 /**
  * Register the bun-embedded binary path, so plain `@alienplatform/ai-gateway`
@@ -94,48 +94,48 @@ let embeddedBinaryPath: string | undefined
  * cannot. In a normal install this is never called. The `/native` entry calls it.
  */
 export function registerEmbeddedBinary(path: string): void {
-  embeddedBinaryPath = path
+  embeddedBinaryPath = path;
 }
 
 /** Resolve (and memoize) a runnable path to the launcher binary, or throw. */
 export async function resolveGatewayBinary(): Promise<string> {
-  if (cached) return cached
+  if (cached) return cached;
 
   // A compiled binary registers its embedded copy up front; extract it to a real,
   // executable file, since the embedded path is virtual and cannot be spawned.
   if (embeddedBinaryPath) {
-    cached = await extractEmbedded(embeddedBinaryPath)
-    return cached
+    cached = await extractEmbedded(embeddedBinaryPath);
+    return cached;
   }
 
-  const override = process.env.ALIEN_AI_GATEWAY_BINARY_PATH
+  const override = process.env.ALIEN_AI_GATEWAY_BINARY_PATH;
   if (override) {
     // Resolved against cwd, not this module's dist/ directory.
-    cached = ensureExecutable(resolve(override))
-    return cached
+    cached = ensureExecutable(resolve(override));
+    return cached;
   }
 
   // A bundled Worker's cwd is where the base image stages the launcher (see the
   // worker Dockerfile), and it has no node_modules for the prebuild route below.
   // Size-checked: the base-image build substitutes an empty placeholder for a
   // skipped architecture, and spawning that fails with a far worse error.
-  const staged = resolve(BINARY_NAME)
+  const staged = resolve(BINARY_NAME);
   if (existsSync(staged) && statSync(staged).size > 0) {
-    cached = ensureExecutable(staged)
-    return cached
+    cached = ensureExecutable(staged);
+    return cached;
   }
 
-  const triple = platformTriple()
-  const prebuild = await resolvePrebuild(triple)
+  const triple = platformTriple();
+  const prebuild = await resolvePrebuild(triple);
   if (prebuild) {
-    cached = ensureExecutable(prebuild)
-    return cached
+    cached = ensureExecutable(prebuild);
+    return cached;
   }
 
-  const local = findLocalBinary()
+  const local = findLocalBinary();
   if (local) {
-    cached = ensureExecutable(local)
-    return cached
+    cached = ensureExecutable(local);
+    return cached;
   }
 
   throw new AlienError(
@@ -143,7 +143,7 @@ export async function resolveGatewayBinary(): Promise<string> {
       triple,
       reason: `no embedded binary, no ALIEN_AI_GATEWAY_BINARY_PATH, no ./${BINARY_NAME} staged by the worker base, no '@alienplatform/ai-gateway-${triple}' prebuild, and no locally-built target/{release,debug}/${BINARY_NAME}; build it with \`cargo build --bin ${BINARY_NAME} -p alien-ai-gateway\``,
     }),
-  )
+  );
 }
 
 /**
@@ -153,7 +153,7 @@ export async function resolveGatewayBinary(): Promise<string> {
  */
 async function extractEmbedded(virtualPath: string): Promise<string> {
   const bun = (globalThis as { Bun?: { file(p: string): { arrayBuffer(): Promise<ArrayBuffer> } } })
-    .Bun
+    .Bun;
   if (!bun) {
     throw new AlienError(
       GatewayBinaryUnavailableError.create({
@@ -161,15 +161,15 @@ async function extractEmbedded(virtualPath: string): Promise<string> {
         path: virtualPath,
         reason: "an embedded gateway binary can only be extracted under the Bun runtime",
       }),
-    )
+    );
   }
   try {
-    const bytes = await bun.file(virtualPath).arrayBuffer()
-    const dir = mkdtempSync(join(tmpdir(), "alien-ai-gateway-"))
-    const exe = join(dir, BINARY_NAME)
-    writeFileSync(exe, Buffer.from(bytes))
-    chmodSync(exe, 0o755)
-    return exe
+    const bytes = await bun.file(virtualPath).arrayBuffer();
+    const dir = mkdtempSync(join(tmpdir(), "alien-ai-gateway-"));
+    const exe = join(dir, BINARY_NAME);
+    writeFileSync(exe, Buffer.from(bytes));
+    chmodSync(exe, 0o755);
+    return exe;
   } catch (error) {
     // A filesystem fault here (no temp space, read-only tmp) would otherwise
     // surface as a bare Error; wrap it so callers still see an AlienError.
@@ -179,43 +179,43 @@ async function extractEmbedded(virtualPath: string): Promise<string> {
         path: virtualPath,
         reason: "failed to extract the embedded gateway binary",
       }),
-    )
+    );
   }
 }
 
 /** Best-effort execute bit; a prebuild may already be executable or read-only. */
 function ensureExecutable(path: string): string {
   try {
-    chmodSync(path, 0o755)
+    chmodSync(path, 0o755);
   } catch {
     // A read-only mount can't be chmod'd; if it isn't already executable the
     // spawn below surfaces a real, specific error.
   }
-  return path
+  return path;
 }
 
 /** Resolve the binary shipped by the per-platform prebuild package, or `undefined`. */
 async function resolvePrebuild(triple: string): Promise<string | undefined> {
-  const pkg = `@alienplatform/ai-gateway-${triple}`
-  let pkgJson: string
+  const pkg = `@alienplatform/ai-gateway-${triple}`;
+  let pkgJson: string;
   try {
-    pkgJson = require.resolve(`${pkg}/package.json`)
+    pkgJson = require.resolve(`${pkg}/package.json`);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "MODULE_NOT_FOUND") return undefined
+    if ((error as NodeJS.ErrnoException).code === "MODULE_NOT_FOUND") return undefined;
     // Installed but unresolvable (e.g. a corrupt manifest); preserve the cause.
     throw (await AlienError.from(error)).withContext(
       GatewayBinaryUnavailableError.create({
         triple,
         reason: `the '${pkg}' prebuild is installed but could not be resolved`,
       }),
-    )
+    );
   }
-  const candidate = join(dirname(pkgJson), BINARY_NAME)
-  return existsSync(candidate) ? candidate : undefined
+  const candidate = join(dirname(pkgJson), BINARY_NAME);
+  return existsSync(candidate) ? candidate : undefined;
 }
 
 /** Test-only: reset the memoized resolution. */
 export function resetGatewayBinaryCacheForTests(): void {
-  cached = undefined
-  embeddedBinaryPath = undefined
+  cached = undefined;
+  embeddedBinaryPath = undefined;
 }

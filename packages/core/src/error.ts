@@ -58,16 +58,16 @@
  * ```
  */
 
-import { serializeError } from "serialize-error"
-import type { z } from "zod/v4"
+import { serializeError } from "serialize-error";
+import type { z } from "zod/v4";
 import {
   type AlienError as AlienErrorOptions,
   AlienErrorSchema as AlienErrorOptionsSchema,
-} from "./generated/index.js"
+} from "./generated/index.js";
 
-export type { AlienErrorOptions }
+export type { AlienErrorOptions };
 // Re-export the schema for external use
-export { AlienErrorOptionsSchema }
+export { AlienErrorOptionsSchema };
 
 /**
  * Base interface that all error type definitions must implement.
@@ -79,17 +79,17 @@ export { AlienErrorOptionsSchema }
  */
 export interface AlienErrorMetadata<TContext extends z.ZodTypeAny> {
   /** Unique error code (e.g., "DATABASE_CONNECTION_FAILED") */
-  code: string
+  code: string;
   /** Zod schema for type-safe context validation */
-  context: TContext
+  context: TContext;
   /** Whether this error can be retried */
-  retryable: boolean
+  retryable: boolean;
   /** Whether this error contains sensitive information */
-  internal: boolean
+  internal: boolean;
   /** HTTP status code for API responses */
-  httpStatusCode?: number
+  httpStatusCode?: number;
   /** Worker to generate human-readable error message from context */
-  message: (context: z.infer<TContext>) => string
+  message: (context: z.infer<TContext>) => string;
 }
 
 /**
@@ -141,7 +141,7 @@ export function defineError<TContext extends z.ZodTypeAny>(metadata: AlienErrorM
         context,
       }),
     }),
-  }
+  };
 }
 
 /**
@@ -153,9 +153,9 @@ export function defineError<TContext extends z.ZodTypeAny>(metadata: AlienErrorM
  * @template TContext - Zod schema type for the error context
  */
 export interface AlienErrorDefinition<TContext extends z.ZodTypeAny> {
-  metadata: AlienErrorMetadata<TContext>
-  contextSchema: TContext
-  context: z.infer<TContext>
+  metadata: AlienErrorMetadata<TContext>;
+  contextSchema: TContext;
+  context: z.infer<TContext>;
 
   /**
    * Convert this error definition directly to AlienErrorOptions.
@@ -165,7 +165,7 @@ export interface AlienErrorDefinition<TContext extends z.ZodTypeAny> {
    *
    * @returns AlienErrorOptions object representing this error
    */
-  toOptions(): AlienErrorOptions
+  toOptions(): AlienErrorOptions;
 }
 
 /**
@@ -215,29 +215,29 @@ export interface AlienErrorDefinition<TContext extends z.ZodTypeAny> {
  */
 export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error {
   /** Unique error code identifying the error type */
-  public readonly code: string
+  public readonly code: string;
   /** Whether this error can be safely retried */
-  public readonly retryable: boolean
+  public readonly retryable: boolean;
   /** Whether this error contains sensitive internal information */
-  public readonly internal: boolean
+  public readonly internal: boolean;
   /** HTTP status code for API responses */
-  public readonly httpStatusCode: number
+  public readonly httpStatusCode: number;
   /** Type-safe context data specific to this error */
-  public readonly context?: z.infer<TContext>
+  public readonly context?: z.infer<TContext>;
   /** Optional human-facing remediation hint */
-  public readonly hint?: string | null
+  public readonly hint?: string | null;
   /** Source error that caused this error (for chaining) */
-  public readonly source?: AlienError<any>
+  public readonly source?: AlienError<any>;
 
   constructor(input: AlienErrorDefinition<TContext> | (AlienErrorOptions & { context?: any })) {
     // Handle both error definitions and raw options
-    let options: AlienErrorOptions & { context?: any }
+    let options: AlienErrorOptions & { context?: any };
 
     if ("metadata" in input && "context" in input) {
       // It's an AlienErrorDefinition
-      const definition = input as AlienErrorDefinition<TContext>
-      const { metadata, context: contextData } = definition
-      const message = metadata.message(contextData)
+      const definition = input as AlienErrorDefinition<TContext>;
+      const { metadata, context: contextData } = definition;
+      const message = metadata.message(contextData);
 
       options = {
         code: metadata.code,
@@ -246,25 +246,25 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
         internal: metadata.internal,
         httpStatusCode: metadata.httpStatusCode,
         context: contextData,
-      }
+      };
     } else {
       // It's raw AlienErrorOptions
-      options = input as AlienErrorOptions & { context?: any }
+      options = input as AlienErrorOptions & { context?: any };
     }
 
-    const message = options.message
-    super(message, { cause: options.source })
+    const message = options.message;
+    super(message, { cause: options.source });
 
-    this.name = "AlienError"
-    this.code = options.code
-    this.retryable = options.retryable
-    this.internal = options.internal
-    this.httpStatusCode = options.httpStatusCode ?? 500
-    this.context = options.context
-    this.hint = options.hint
+    this.name = "AlienError";
+    this.code = options.code;
+    this.retryable = options.retryable;
+    this.internal = options.internal;
+    this.httpStatusCode = options.httpStatusCode ?? 500;
+    this.context = options.context;
+    this.hint = options.hint;
 
     // Handle source construction - check if it's a valid AlienErrorOptions object
-    this.source = undefined
+    this.source = undefined;
     if (options.source && typeof options.source === "object") {
       // Check if it has the required fields to be a valid AlienErrorOptions
       if (
@@ -273,7 +273,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
         "retryable" in options.source &&
         "internal" in options.source
       ) {
-        this.source = new AlienError(options.source as AlienErrorOptions)
+        this.source = new AlienError(options.source as AlienErrorOptions);
       }
     }
   }
@@ -288,7 +288,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
   static fromDefinition<TContext extends z.ZodTypeAny>(
     definition: AlienErrorDefinition<TContext>,
   ): AlienError<TContext> {
-    return new AlienError(definition)
+    return new AlienError(definition);
   }
 
   /**
@@ -298,7 +298,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
    * @returns New AlienError instance
    */
   static fromOptions(options: AlienErrorOptions): AlienError {
-    return new AlienError(AlienErrorOptionsSchema.parse(options))
+    return new AlienError(AlienErrorOptionsSchema.parse(options));
   }
 
   /**
@@ -310,24 +310,24 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
   private static getErrorTypeName(error: any): string {
     // Handle null explicitly (typeof null === "object" is a JS quirk)
     if (error === null) {
-      return "null"
+      return "null";
     }
 
     // Handle undefined
     if (error === undefined) {
-      return "undefined"
+      return "undefined";
     }
 
     // Try to get constructor name first (for Arrays, Workers, custom classes, etc.)
     if (error?.constructor?.name) {
-      return error.constructor.name
+      return error.constructor.name;
     }
 
     // Fall back to typeof, but capitalize for consistency
-    const typeofResult = typeof error
+    const typeofResult = typeof error;
     return typeofResult === "object"
       ? "Object"
-      : typeofResult.charAt(0).toUpperCase() + typeofResult.slice(1)
+      : typeofResult.charAt(0).toUpperCase() + typeofResult.slice(1);
   }
 
   /**
@@ -377,14 +377,14 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
    */
   static async from(error: any): Promise<AlienError> {
     if (error instanceof AlienError) {
-      return error
+      return error;
     }
 
     // Try to parse as fetch Response with AlienError in body
     if (error instanceof Response) {
-      let errorBody: any
+      let errorBody: any;
       try {
-        errorBody = await error.json()
+        errorBody = await error.json();
       } catch {
         // If JSON parsing fails, create generic error
         return new AlienError({
@@ -398,13 +398,13 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
             status: error.status,
             statusText: error.statusText,
           },
-        })
+        });
       }
 
       // Try to parse as AlienError
-      const parseResult = AlienErrorOptionsSchema.safeParse(errorBody)
+      const parseResult = AlienErrorOptionsSchema.safeParse(errorBody);
       if (parseResult.success) {
-        return new AlienError(parseResult.data)
+        return new AlienError(parseResult.data);
       }
 
       // If not an AlienError, wrap it as generic error
@@ -420,22 +420,22 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
           statusText: error.statusText,
           responseBody: errorBody,
         },
-      })
+      });
     }
 
     // Try to parse as AxiosError with AlienError in response.data
     if (error?.response?.data && typeof error.response.data === "object") {
-      const parseResult = AlienErrorOptionsSchema.safeParse(error.response.data)
+      const parseResult = AlienErrorOptionsSchema.safeParse(error.response.data);
       if (parseResult.success) {
-        return new AlienError(parseResult.data)
+        return new AlienError(parseResult.data);
       }
       // If parsing fails, continue with generic error handling
       // This is expected for non-AlienError responses
     }
 
     // Serialize the error using serialize-error for consistent structure
-    const serialized = serializeError(error)
-    const message = serialized?.message || String(error)
+    const serialized = serializeError(error);
+    const message = serialized?.message || String(error);
 
     return new AlienError({
       code: "GENERIC_ERROR",
@@ -447,7 +447,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
         originalError: serialized,
         errorType: AlienError.getErrorTypeName(error),
       },
-    })
+    });
   }
 
   /**
@@ -481,8 +481,8 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
   withContext<TNewContext extends z.ZodTypeAny>(
     definition: AlienErrorDefinition<TNewContext>,
   ): AlienError<TNewContext> {
-    const { metadata, context: contextData } = definition
-    const message = metadata.message(contextData)
+    const { metadata, context: contextData } = definition;
+    const message = metadata.message(contextData);
 
     // Convert current error to source format
     const sourceOptions: AlienErrorOptions = {
@@ -494,7 +494,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
       context: this.context,
       hint: this.hint,
       source: this.source?.toOptions(),
-    }
+    };
 
     return new AlienError({
       code: metadata.code,
@@ -504,7 +504,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
       httpStatusCode: metadata.httpStatusCode,
       context: contextData,
       source: sourceOptions,
-    })
+    });
   }
 
   /**
@@ -525,7 +525,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
       context: this.context,
       hint: this.hint,
       source: this.source?.toOptions(),
-    }
+    };
   }
 
   /**
@@ -560,7 +560,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
         retryable: false,
         internal: false,
         httpStatusCode: 500,
-      }
+      };
     }
 
     return {
@@ -572,7 +572,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
       context: this.context,
       hint: this.hint,
       source: this.source?.toExternal(),
-    }
+    };
   }
 
   /**
@@ -595,8 +595,8 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
    * ```
    */
   hasErrorCode(code: string): boolean {
-    if (this.code === code) return true
-    return this.source?.hasErrorCode(code) ?? false
+    if (this.code === code) return true;
+    return this.source?.hasErrorCode(code) ?? false;
   }
 
   /**
@@ -621,8 +621,8 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
    * ```
    */
   findErrorByCode(code: string): AlienError | undefined {
-    if (this.code === code) return this
-    return this.source?.findErrorByCode(code)
+    if (this.code === code) return this;
+    return this.source?.findErrorByCode(code);
   }
 
   /**
@@ -645,20 +645,20 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
    * ```
    */
   toString(): string {
-    let result = `${this.code}: ${this.message}`
-    let current = this.source
-    let indent = ""
+    let result = `${this.code}: ${this.message}`;
+    let current = this.source;
+    let indent = "";
 
     while (current) {
-      indent += "  "
-      result += `\n${indent}├─▶ ${current.code}: ${current.message}`
-      current = current.source
+      indent += "  ";
+      result += `\n${indent}├─▶ ${current.code}: ${current.message}`;
+      current = current.source;
     }
 
-    return result
+    return result;
   }
 }
 
 // Utility type to extract context type from error definition
 export type ExtractContext<T> =
-  T extends AlienErrorDefinition<infer TContext> ? z.infer<TContext> : never
+  T extends AlienErrorDefinition<infer TContext> ? z.infer<TContext> : never;

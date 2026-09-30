@@ -1,10 +1,10 @@
 // EXAMPLE: Zero-disk vector database deployed to the customer's cloud
 
-import * as alien from "@alienplatform/core"
+import * as alien from "@alienplatform/core";
 
 // Object storage for vector data
 // S3 on AWS, Cloud Storage on GCP, Blob Storage on Azure
-const storage = new alien.Storage("data").build()
+const storage = new alien.Storage("data").build();
 
 // Writer container
 const writer = new alien.Container("writer")
@@ -23,7 +23,7 @@ const writer = new alien.Container("writer")
   })
   .permissions("default")
   .link(storage)
-  .build()
+  .build();
 
 // Reader container
 const reader = new alien.Container("reader")
@@ -45,7 +45,7 @@ const reader = new alien.Container("reader")
   })
   .permissions("default")
   .link(storage)
-  .build()
+  .build();
 
 // Router: nginx routing requests to writer/reader
 const router = new alien.Container("router")
@@ -62,7 +62,7 @@ const router = new alien.Container("router")
   .publicEndpoint("web", 8080, "http")
   .healthCheck({ path: "/health", method: "GET", timeoutSeconds: 1, failureThreshold: 3 })
   .permissions("default")
-  .build()
+  .build();
 
 export default new alien.Stack("byoc-database")
   .platforms(["aws", "gcp", "azure", "kubernetes", "machines"])
@@ -77,4 +77,4 @@ export default new alien.Stack("byoc-database")
       },
     },
   })
-  .build()
+  .build();

@@ -3,16 +3,16 @@ import {
   BuildSchema,
   type ComputeType,
   type ResourceType,
-} from "./generated/index.js"
-import { Resource } from "./resource.js"
+} from "./generated/index.js";
+import { Resource } from "./resource.js";
 
-export type { BuildConfig, BuildOutputs, BuildStatus, ComputeType } from "./generated/index.js"
+export type { BuildConfig, BuildOutputs, BuildStatus, ComputeType } from "./generated/index.js";
 export {
   BuildConfigSchema,
   BuildOutputsSchema,
   BuildStatusSchema,
   ComputeTypeSchema,
-} from "./generated/index.js"
+} from "./generated/index.js";
 
 /**
  * Represents a build resource that executes bash scripts to build code.
@@ -23,14 +23,14 @@ export class Build {
   private _config: Partial<BuildConfig> = {
     links: [],
     environment: {},
-  }
+  };
 
   /**
    * Creates a new Build builder.
    * @param id Identifier for the build resource. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
   constructor(id: string) {
-    this._config.id = id
+    this._config.id = id;
   }
 
   /**
@@ -39,7 +39,7 @@ export class Build {
    * @returns The "build" resource type.
    */
   public static any(): ResourceType {
-    return "build"
+    return "build";
   }
 
   /**
@@ -48,8 +48,8 @@ export class Build {
    * @returns The Build builder instance.
    */
   public computeType(type: ComputeType): this {
-    this._config.computeType = type
-    return this
+    this._config.computeType = type;
+    return this;
   }
 
   /**
@@ -58,8 +58,8 @@ export class Build {
    * @returns The Build builder instance.
    */
   public environment(env: Record<string, string>): this {
-    this._config.environment = env
-    return this
+    this._config.environment = env;
+    return this;
   }
 
   /**
@@ -71,10 +71,10 @@ export class Build {
    */
   public link(resource: Resource): this {
     if (!this._config.links) {
-      this._config.links = []
+      this._config.links = [];
     }
-    this._config.links.push(resource.ref())
-    return this
+    this._config.links.push(resource.ref());
+    return this;
   }
 
   /**
@@ -85,8 +85,8 @@ export class Build {
    * @returns The Build builder instance.
    */
   public permissions(permissions: string): this {
-    this._config.permissions = permissions
-    return this
+    this._config.permissions = permissions;
+    return this;
   }
 
   /**
@@ -95,11 +95,11 @@ export class Build {
    * @throws Error if the build configuration is invalid.
    */
   public build(): Resource {
-    const config = BuildSchema.parse(this._config)
+    const config = BuildSchema.parse(this._config);
 
     return new Resource({
       type: "build",
       ...config,
-    })
+    });
   }
 }

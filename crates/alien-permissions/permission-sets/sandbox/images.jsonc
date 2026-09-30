@@ -12,17 +12,17 @@
           "dataActions": [
             "Microsoft.App/sandboxGroups/diskimages/read",
             "Microsoft.App/sandboxGroups/diskimages/write",
-            "Microsoft.App/sandboxGroups/diskimages/delete"
-          ]
+            "Microsoft.App/sandboxGroups/diskimages/delete",
+          ],
         },
         // The group only: at resource-group scope the manager could replace a sibling sandbox's
         // image.
         "binding": {
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

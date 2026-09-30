@@ -8,8 +8,8 @@
           "actions": [
             "bedrock:InvokeModel",
             "bedrock:InvokeModelWithResponseStream",
-            "bedrock-mantle:CreateInference"
-          ]
+            "bedrock-mantle:CreateInference",
+          ],
         },
         // AWS Bedrock foundation models are not per-account or per-stack resources;
         // they are a global namespace. Claude models are invoked via cross-region
@@ -27,18 +27,18 @@
             "resources": [
               "arn:aws:bedrock:*::foundation-model/*",
               "arn:aws:bedrock:*:${awsAccountId}:inference-profile/*",
-              "arn:aws:bedrock-mantle:*:${awsAccountId}:project/default"
-            ]
+              "arn:aws:bedrock-mantle:*:${awsAccountId}:project/default",
+            ],
           },
           "resource": {
             "resources": [
               "arn:aws:bedrock:*::foundation-model/*",
               "arn:aws:bedrock:*:${awsAccountId}:inference-profile/*",
-              "arn:aws:bedrock-mantle:*:${awsAccountId}:project/default"
-            ]
-          }
-        }
-      }
+              "arn:aws:bedrock-mantle:*:${awsAccountId}:project/default",
+            ],
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -48,14 +48,14 @@
           // and sensitive-data reads (datasets.export, featurestores.readFeatures, etc.) that
           // a workload must never hold. A custom role with the two predict permissions is the
           // minimum required for Vertex AI inference.
-          "permissions": ["aiplatform.endpoints.predict", "aiplatform.endpoints.explain"]
+          "permissions": ["aiplatform.endpoints.predict", "aiplatform.endpoints.explain"],
         },
         // Vertex AI is a project-level service; IAM bindings are scoped to the project.
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}" }
-        }
-      }
+          "resource": { "scope": "projects/${projectName}" },
+        },
+      },
     ],
     "azure": [
       {
@@ -63,17 +63,17 @@
           // "Cognitive Services User" is the least-privilege built-in role that can invoke
           // both OpenAI and partner models such as Claude. "Cognitive Services OpenAI User"
           // only authorizes OpenAI models.
-          "predefinedRoles": ["Cognitive Services User"]
+          "predefinedRoles": ["Cognitive Services User"],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.CognitiveServices/accounts/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.CognitiveServices/accounts/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

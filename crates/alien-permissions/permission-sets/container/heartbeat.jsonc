@@ -7,47 +7,47 @@
       // and volume status (are persistent volumes attached?)
       {
         "grant": {
-          "actions": ["elasticloadbalancing:DescribeTargetHealth", "ec2:DescribeVolumes"]
+          "actions": ["elasticloadbalancing:DescribeTargetHealth", "ec2:DescribeVolumes"],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
+            "resources": ["*"],
           },
           "resource": {
-            "resources": ["*"]
-          }
-        }
-      }
+            "resources": ["*"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
         "grant": {
-          "permissions": ["compute.backendServices.get", "compute.disks.get"]
+          "permissions": ["compute.backendServices.get", "compute.disks.get"],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}"
-          }
-        }
-      }
+            "scope": "projects/${projectName}",
+          },
+        },
+      },
     ],
     "azure": [
       {
         "grant": {
-          "predefinedRoles": ["Reader"]
+          "predefinedRoles": ["Reader"],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
+          },
+        },
+      },
+    ],
+  },
 }

@@ -1,7 +1,7 @@
-import { eq } from "drizzle-orm"
-import { alien, config } from "./config"
-import { db } from "./db"
-import { organizationMetadata } from "./schema"
+import { eq } from "drizzle-orm";
+import { alien, config } from "./config";
+import { db } from "./db";
+import { organizationMetadata } from "./schema";
 
 /**
  * Create a deployment group for an organization.
@@ -11,11 +11,11 @@ export async function createDeploymentGroupForOrganization(
   organizationName: string,
   organizationSlug: string | null,
 ): Promise<{
-  deploymentGroupId: string
-  deploymentToken: string
+  deploymentGroupId: string;
+  deploymentToken: string;
 }> {
   // Create deployment group with organization's name
-  const name = organizationSlug ?? organizationName.toLowerCase().replace(/[^a-z0-9-]/g, "-")
+  const name = organizationSlug ?? organizationName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
 
   const deploymentGroup = await alien.deploymentGroups.createDeploymentGroup({
     workspace: config.workspace,
@@ -24,7 +24,7 @@ export async function createDeploymentGroupForOrganization(
       project: config.project,
       maxAgents: 10,
     },
-  })
+  });
 
   // Create deployment group token
   const tokenResponse = await alien.deploymentGroups.createDeploymentGroupToken({
@@ -33,16 +33,16 @@ export async function createDeploymentGroupForOrganization(
     createDeploymentGroupTokenRequest: {
       description: `Deployment token for ${organizationName}`,
     },
-  })
+  });
 
   if (!deploymentGroup.id || !tokenResponse.token) {
-    throw new Error("Failed to create deployment group: missing id or token")
+    throw new Error("Failed to create deployment group: missing id or token");
   }
 
   return {
     deploymentGroupId: deploymentGroup.id,
     deploymentToken: tokenResponse.token,
-  }
+  };
 }
 
 /**
@@ -55,21 +55,21 @@ export async function getOrCreateDeploymentGroup(
   organizationName: string,
   organizationSlug: string | null,
 ): Promise<{
-  deploymentGroupId: string
-  deploymentToken: string
+  deploymentGroupId: string;
+  deploymentToken: string;
 }> {
   // Check if deployment group already exists
   const [metadata] = await db
     .select()
     .from(organizationMetadata)
     .where(eq(organizationMetadata.organizationId, organizationId))
-    .limit(1)
+    .limit(1);
 
   if (metadata?.deploymentGroupId && metadata.deploymentToken) {
     return {
       deploymentGroupId: metadata.deploymentGroupId,
       deploymentToken: metadata.deploymentToken,
-    }
+    };
   }
 
   // Create new deployment group
@@ -77,7 +77,7 @@ export async function getOrCreateDeploymentGroup(
     organizationId,
     organizationName,
     organizationSlug,
-  )
+  );
 
   // Store in database (upsert)
   if (metadata) {
@@ -88,7 +88,7 @@ export async function getOrCreateDeploymentGroup(
         deploymentToken: result.deploymentToken,
         updatedAt: new Date(),
       })
-      .where(eq(organizationMetadata.organizationId, organizationId))
+      .where(eq(organizationMetadata.organizationId, organizationId));
   } else {
     await db.insert(organizationMetadata).values({
       id: `org_meta_${organizationId}`,
@@ -97,8 +97,8 @@ export async function getOrCreateDeploymentGroup(
       deploymentToken: result.deploymentToken,
       createdAt: new Date(),
       updatedAt: new Date(),
-    })
+    });
   }
 
-  return result
+  return result;
 }

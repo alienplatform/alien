@@ -1,4 +1,4 @@
-import type { NextConfig } from "next"
+import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   // The container runs the generated .next/standalone/server.js without node_modules.
@@ -15,6 +15,6 @@ const nextConfig: NextConfig = {
       "node_modules/@alienplatform/ai-gateway-*/**",
     ],
   },
-}
+};
 
-export default nextConfig
+export default nextConfig;

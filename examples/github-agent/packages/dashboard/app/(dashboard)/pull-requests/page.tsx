@@ -1,4 +1,4 @@
-"use client"
+"use client";
 
 import {
   IconAlertCircle,
@@ -11,13 +11,13 @@ import {
   IconSparkles,
   IconTrendingDown,
   IconTrendingUp,
-} from "@tabler/icons-react"
-import { useQuery } from "@tanstack/react-query"
-import { formatDistanceToNow } from "date-fns"
-import type { ClassifiedPRWithReview } from "github-agent-remote-agent"
-import { useSearchParams } from "next/navigation"
-import { useState } from "react"
-import { Badge } from "@/components/ui/badge"
+} from "@tabler/icons-react";
+import { useQuery } from "@tanstack/react-query";
+import { formatDistanceToNow } from "date-fns";
+import type { ClassifiedPRWithReview } from "github-agent-remote-agent";
+import { useSearchParams } from "next/navigation";
+import { useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardAction,
@@ -26,12 +26,12 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card"
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
-import { Skeleton } from "@/components/ui/skeleton"
-import { useAgentInfo } from "@/lib/queries"
-import { AIReviewCard } from "./_components/ai-review-card"
-import { EncryptionIndicator } from "./_components/encryption-indicator"
+} from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useAgentInfo } from "@/lib/queries";
+import { AIReviewCard } from "./_components/ai-review-card";
+import { EncryptionIndicator } from "./_components/encryption-indicator";
 
 const sizeColors = {
   small:
@@ -40,7 +40,7 @@ const sizeColors = {
     "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800",
   large:
     "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800",
-} as const
+} as const;
 
 const riskColors = {
   low: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-green-200 dark:border-green-800",
@@ -49,10 +49,10 @@ const riskColors = {
   high: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400 border-orange-200 dark:border-orange-800",
   critical:
     "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800",
-} as const
+} as const;
 
 function PRRow({ pr }: { pr: ClassifiedPRWithReview }) {
-  const [isOpen, setIsOpen] = useState(false)
+  const [isOpen, setIsOpen] = useState(false);
 
   return (
     <>
@@ -106,7 +106,7 @@ function PRRow({ pr }: { pr: ClassifiedPRWithReview }) {
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-muted-foreground hover:text-foreground transition-colors"
-                  onClick={e => e.stopPropagation()}
+                  onClick={(e) => e.stopPropagation()}
                 >
                   <IconExternalLink className="h-4 w-4" />
                 </a>
@@ -132,20 +132,20 @@ function PRRow({ pr }: { pr: ClassifiedPRWithReview }) {
         </div>
       </Collapsible>
     </>
-  )
+  );
 }
 
 export default function PullRequestsPage() {
-  const searchParams = useSearchParams()
-  const integrationId = searchParams.get("integrationId")
-  const agentId = searchParams.get("agentId")
-  const repoName = searchParams.get("repo") || "Repository"
+  const searchParams = useSearchParams();
+  const integrationId = searchParams.get("integrationId");
+  const agentId = searchParams.get("agentId");
+  const repoName = searchParams.get("repo") || "Repository";
 
   const {
     data: agentInfo,
     isLoading: agentInfoLoading,
     error: agentInfoError,
-  } = useAgentInfo(agentId || undefined)
+  } = useAgentInfo(agentId || undefined);
 
   const {
     data: prs = [],
@@ -155,60 +155,60 @@ export default function PullRequestsPage() {
     queryKey: ["prs", integrationId, agentId],
     queryFn: async () => {
       if (!integrationId || !agentId) {
-        throw new Error("Missing required parameters")
+        throw new Error("Missing required parameters");
       }
 
       if (!agentInfo) {
-        throw new Error("Agent info not available")
+        throw new Error("Agent info not available");
       }
 
-      const rawAgentUrl = agentInfo.resources?.agent?.publicUrl
+      const rawAgentUrl = agentInfo.resources?.agent?.publicUrl;
       if (!rawAgentUrl) {
-        throw new Error("Agent is not running or doesn't have a public URL")
+        throw new Error("Agent is not running or doesn't have a public URL");
       }
 
       // The publicUrl flows from deployment state which the agent itself
       // writes via sync/reconcile. Validate it before using it in a fetch
       // so a malicious value can't redirect the browser to an arbitrary host.
-      let agentOrigin: string
+      let agentOrigin: string;
       try {
-        const parsed = new URL(rawAgentUrl)
+        const parsed = new URL(rawAgentUrl);
         if (parsed.protocol !== "https:") {
-          throw new Error(`Agent URL must use https:// (got ${parsed.protocol})`)
+          throw new Error(`Agent URL must use https:// (got ${parsed.protocol})`);
         }
-        agentOrigin = parsed.origin
+        agentOrigin = parsed.origin;
       } catch {
-        throw new Error("Agent URL is not a valid https:// URL")
+        throw new Error("Agent URL is not a valid https:// URL");
       }
 
       const response = await fetch(
         `${agentOrigin}/prs?integrationId=${encodeURIComponent(integrationId)}`,
-      )
+      );
 
       if (!response.ok) {
-        throw new Error("Failed to fetch PRs from agent")
+        throw new Error("Failed to fetch PRs from agent");
       }
 
-      const data = await response.json()
-      return (data.pullRequests || []) as ClassifiedPRWithReview[]
+      const data = await response.json();
+      return (data.pullRequests || []) as ClassifiedPRWithReview[];
     },
     enabled: !!integrationId && !!agentId && !!agentInfo,
-  })
+  });
 
-  const loading = agentInfoLoading || prsLoading
-  const error = agentInfoError || prsError
+  const loading = agentInfoLoading || prsLoading;
+  const error = agentInfoError || prsError;
 
-  const agentEnvironment = agentInfo?.resources?.agent?.publicUrl || "agent"
+  const agentEnvironment = agentInfo?.resources?.agent?.publicUrl || "agent";
 
-  const openPRs = prs.filter(pr => pr.state === "open").length
-  const mergedPRs = prs.filter(pr => pr.mergedAt).length
-  const highRiskPRs = prs.filter(pr => pr.risk === "high" || pr.risk === "critical").length
-  const lowRiskPRs = prs.filter(pr => pr.risk === "low").length
-  const largePRs = prs.filter(pr => pr.size === "large").length
+  const openPRs = prs.filter((pr) => pr.state === "open").length;
+  const mergedPRs = prs.filter((pr) => pr.mergedAt).length;
+  const highRiskPRs = prs.filter((pr) => pr.risk === "high" || pr.risk === "critical").length;
+  const lowRiskPRs = prs.filter((pr) => pr.risk === "low").length;
+  const largePRs = prs.filter((pr) => pr.size === "large").length;
 
   // Calculate percentages for badges
-  const openPercentage = prs.length > 0 ? Math.round((openPRs / prs.length) * 100) : 0
-  const highRiskPercentage = prs.length > 0 ? Math.round((highRiskPRs / prs.length) * 100) : 0
+  const openPercentage = prs.length > 0 ? Math.round((openPRs / prs.length) * 100) : 0;
+  const highRiskPercentage = prs.length > 0 ? Math.round((highRiskPRs / prs.length) * 100) : 0;
 
   return (
     <div className="@container/main flex flex-1 flex-col gap-4 p-4 md:gap-6 md:p-6">
@@ -397,12 +397,12 @@ export default function PullRequestsPage() {
           </Card>
         ) : (
           <div className="space-y-3">
-            {prs.map(pr => (
+            {prs.map((pr) => (
               <PRRow key={pr.number} pr={pr} />
             ))}
           </div>
         )}
       </div>
     </div>
-  )
+  );
 }

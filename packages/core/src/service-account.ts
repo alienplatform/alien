@@ -3,19 +3,19 @@ import {
   type ResourceType,
   type ServiceAccount as ServiceAccountConfig,
   ServiceAccountSchema,
-} from "./generated/index.js"
-import { Resource } from "./resource.js"
+} from "./generated/index.js";
+import { Resource } from "./resource.js";
 
 export type {
   PermissionSet,
   ServiceAccount as ServiceAccountConfig,
   ServiceAccountOutputs,
-} from "./generated/index.js"
+} from "./generated/index.js";
 export {
   PermissionSetSchema,
   ServiceAccountOutputsSchema,
   ServiceAccountSchema as ServiceAccountConfigSchema,
-} from "./generated/index.js"
+} from "./generated/index.js";
 
 /**
  * Represents a non-human identity that can be assumed by compute services.
@@ -46,14 +46,14 @@ export {
 export class ServiceAccount {
   private _config: Partial<ServiceAccountConfig> = {
     stackPermissionSets: [],
-  }
+  };
 
   /**
    * Creates a new ServiceAccount builder.
    * @param id Identifier for the service account. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
   constructor(id: string) {
-    this._config.id = id
+    this._config.id = id;
   }
 
   /**
@@ -62,7 +62,7 @@ export class ServiceAccount {
    * @returns The "service-account" resource type.
    */
   public static any(): ResourceType {
-    return "service-account"
+    return "service-account";
   }
 
   /**
@@ -95,10 +95,10 @@ export class ServiceAccount {
    */
   public stackPermissionSet(permissionSet: PermissionSet): this {
     if (!this._config.stackPermissionSets) {
-      this._config.stackPermissionSets = []
+      this._config.stackPermissionSets = [];
     }
-    this._config.stackPermissionSets.push(permissionSet)
-    return this
+    this._config.stackPermissionSets.push(permissionSet);
+    return this;
   }
 
   /**
@@ -107,11 +107,11 @@ export class ServiceAccount {
    * @throws Error if the service account configuration is invalid.
    */
   public build(): Resource {
-    const config = ServiceAccountSchema.parse(this._config)
+    const config = ServiceAccountSchema.parse(this._config);
 
     return new Resource({
       type: "service-account",
       ...config,
-    })
+    });
   }
 }

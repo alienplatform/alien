@@ -1,18 +1,18 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from "react"
+import { useEffect, useState } from "react";
 
-const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 export function Spinner({ className }: { className?: string }) {
-  const [frame, setFrame] = useState(0)
+  const [frame, setFrame] = useState(0);
   useEffect(() => {
-    const timer = setInterval(() => setFrame(f => (f + 1) % FRAMES.length), 80)
-    return () => clearInterval(timer)
-  }, [])
+    const timer = setInterval(() => setFrame((f) => (f + 1) % FRAMES.length), 80);
+    return () => clearInterval(timer);
+  }, []);
   return (
     <span className={`font-mono ${className ?? "text-yellow-400"}`} aria-hidden="true">
       {FRAMES[frame]}
     </span>
-  )
+  );
 }

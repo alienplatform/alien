@@ -1,95 +1,95 @@
-"use client"
+"use client";
 
-import { IconBrandGithub, IconLoader2 } from "@tabler/icons-react"
-import { useRouter } from "next/navigation"
-import { useEffect, useState } from "react"
-import { toast } from "sonner"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { authClient } from "@/lib/auth-client"
+import { IconBrandGithub, IconLoader2 } from "@tabler/icons-react";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { authClient } from "@/lib/auth-client";
 
 export default function OnboardingPage() {
-  const router = useRouter()
-  const [organizationName, setOrganizationName] = useState("")
-  const [slug, setSlug] = useState("")
-  const [isCreating, setIsCreating] = useState(false)
-  const [isLoadingSession, setIsLoadingSession] = useState(true)
+  const router = useRouter();
+  const [organizationName, setOrganizationName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
+  const [isLoadingSession, setIsLoadingSession] = useState(true);
 
   useEffect(() => {
     // Check if user already has an organization
     const checkSession = async () => {
-      const session = await authClient.getSession()
+      const session = await authClient.getSession();
 
       if (!session) {
-        router.push("/login")
-        return
+        router.push("/login");
+        return;
       }
 
       // Check if user already has an organization
-      const orgs = await authClient.organization.listOrganizations()
+      const orgs = await authClient.organization.listOrganizations();
       if (orgs.data && orgs.data.length > 0) {
         // User already has an organization, redirect to dashboard
-        router.push("/")
-        return
+        router.push("/");
+        return;
       }
 
-      setIsLoadingSession(false)
-    }
+      setIsLoadingSession(false);
+    };
 
-    checkSession()
-  }, [router])
+    checkSession();
+  }, [router]);
 
   const handleCreateOrganization = async () => {
     if (!organizationName.trim()) {
-      toast.error("Please enter an organization name")
-      return
+      toast.error("Please enter an organization name");
+      return;
     }
 
     if (!slug.trim()) {
-      toast.error("Please enter a valid organization slug")
-      return
+      toast.error("Please enter a valid organization slug");
+      return;
     }
 
-    setIsCreating(true)
+    setIsCreating(true);
 
     try {
       const result = await authClient.organization.create({
         name: organizationName,
         slug: slug,
-      })
+      });
 
       if (result.error) {
-        toast.error(result.error.message || "Failed to create organization")
-        setIsCreating(false)
-        return
+        toast.error(result.error.message || "Failed to create organization");
+        setIsCreating(false);
+        return;
       }
 
       // Set as active organization
       if (result.data?.id) {
         await authClient.organization.setActive({
           organizationId: result.data.id,
-        })
+        });
       }
 
-      toast.success("Organization created successfully!")
+      toast.success("Organization created successfully!");
 
       // Redirect to dashboard
-      router.push("/")
+      router.push("/");
     } catch (error) {
-      console.error("Failed to create organization:", error)
-      toast.error("Failed to create organization")
-      setIsCreating(false)
+      console.error("Failed to create organization:", error);
+      toast.error("Failed to create organization");
+      setIsCreating(false);
     }
-  }
+  };
 
   if (isLoadingSession) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <IconLoader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
-    )
+    );
   }
 
   return (
@@ -113,15 +113,15 @@ export default function OnboardingPage() {
               id="organization-name"
               placeholder="Acme Inc"
               value={organizationName}
-              onChange={e => {
-                const name = e.target.value
-                setOrganizationName(name)
+              onChange={(e) => {
+                const name = e.target.value;
+                setOrganizationName(name);
                 setSlug(
                   name
                     .toLowerCase()
                     .replace(/[^a-z0-9]+/g, "-")
                     .replace(/^-+|-+$/g, ""),
-                )
+                );
               }}
               disabled={isCreating}
             />
@@ -136,7 +136,7 @@ export default function OnboardingPage() {
               id="slug"
               placeholder="acme-inc"
               value={slug}
-              onChange={e => setSlug(e.target.value)}
+              onChange={(e) => setSlug(e.target.value)}
               disabled={isCreating}
             />
           </div>
@@ -158,5 +158,5 @@ export default function OnboardingPage() {
         </CardContent>
       </Card>
     </div>
-  )
+  );
 }

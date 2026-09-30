@@ -1,43 +1,43 @@
-import { command, storage } from "@alienplatform/sdk"
-import { Hono } from "hono"
-import { z } from "zod"
+import { command, storage } from "@alienplatform/sdk";
+import { Hono } from "hono";
+import { z } from "zod";
 
-const app = new Hono()
+const app = new Hono();
 
 const tools: Record<string, { description: string; execute: (params: any) => Promise<any> }> = {
   "read-file": {
     description: "Read a file from the customer's private workspace",
     execute: async ({ path }: { path: string }) => {
-      const store = storage("files")
-      const object = await store.get(path)
-      return { content: new TextDecoder().decode(object.data) }
+      const store = storage("files");
+      const object = await store.get(path);
+      return { content: new TextDecoder().decode(object.data) };
     },
   },
   "write-file": {
     description: "Write a file to the customer's private workspace",
     execute: async ({ path, content }: { path: string; content: string }) => {
-      const store = storage("files")
-      await store.put(path, new TextEncoder().encode(content))
-      return { written: true, path }
+      const store = storage("files");
+      await store.put(path, new TextEncoder().encode(content));
+      return { written: true, path };
     },
   },
-}
+};
 
 command(
   "execute-tool",
   z.object({ tool: z.string(), params: z.unknown() }),
   async ({ tool, params }) => {
-    const handler = tools[tool]
+    const handler = tools[tool];
     if (!handler) {
-      throw new Error(`Unknown tool: ${tool}. Available: ${Object.keys(tools).join(", ")}`)
+      throw new Error(`Unknown tool: ${tool}. Available: ${Object.keys(tools).join(", ")}`);
     }
-    return handler.execute(params)
+    return handler.execute(params);
   },
-)
+);
 
 command("list-tools", async () =>
   Object.entries(tools).map(([name, t]) => ({ name, description: t.description })),
-)
+);
 
 command("where-am-i", async () => ({
   deploymentId: process.env.ALIEN_DEPLOYMENT_ID ?? null,
@@ -49,8 +49,8 @@ command("where-am-i", async () => ({
     null,
   region: process.env.AWS_REGION ?? process.env.GCP_REGION ?? process.env.AZURE_REGION ?? null,
   timestamp: new Date().toISOString(),
-}))
+}));
 
-app.get("/health", c => c.json({ status: "ok" }))
+app.get("/health", (c) => c.json({ status: "ok" }));
 
-export default app
+export default app;

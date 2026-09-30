@@ -23,23 +23,23 @@
             "ses:PutEmailIdentityMailFromAttributes",
             "ses:PutEmailIdentityDkimAttributes",
             "ses:PutEmailIdentityFeedbackAttributes",
-            "ses:PutEmailIdentityConfigurationSetAttributes"
-          ]
+            "ses:PutEmailIdentityConfigurationSetAttributes",
+          ],
         },
         "binding": {
           "stack": {
             "resources": [
               "arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*",
-              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${stackPrefix}-*"
-            ]
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${stackPrefix}-*",
+            ],
           },
           "resource": {
             "resources": [
               "arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*",
-              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${resourceName}"
-            ]
-          }
-        }
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${resourceName}",
+            ],
+          },
+        },
       },
       {
         // Per the SES entry in the Service Authorization Reference,
@@ -48,17 +48,17 @@
         // runtime-created identities (the binding intentionally carries no
         // domain list).
         "grant": {
-          "actions": ["ses:ListEmailIdentities"]
+          "actions": ["ses:ListEmailIdentities"],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
+            "resources": ["*"],
           },
           "resource": {
-            "resources": ["*"]
-          }
-        }
-      }
-    ]
-  }
+            "resources": ["*"],
+          },
+        },
+      },
+    ],
+  },
 }

@@ -2,19 +2,19 @@
  * External secrets - platform-native secret management
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
-import { AlienError } from "@alienplatform/core"
-import { PutParameterCommand, SSMClient } from "@aws-sdk/client-ssm"
-import { ClientSecretCredential } from "@azure/identity"
-import { SecretClient } from "@azure/keyvault-secrets"
-import { SecretManagerServiceClient } from "@google-cloud/secret-manager"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { AlienError } from "@alienplatform/core";
+import { PutParameterCommand, SSMClient } from "@aws-sdk/client-ssm";
+import { ClientSecretCredential } from "@azure/identity";
+import { SecretClient } from "@azure/keyvault-secrets";
+import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
 import {
   TestingOperationFailedError,
   TestingUnsupportedPlatformError,
   withTestingContext,
-} from "./errors.js"
-import type { Platform } from "./types.js"
+} from "./errors.js";
+import type { Platform } from "./types.js";
 
 /**
  * Set an external secret using platform-native tools
@@ -34,29 +34,29 @@ export async function setExternalSecret(
   try {
     switch (platform) {
       case "aws":
-        await setAWSSecret(resourcePrefix, vaultName, secretKey, secretValue)
-        break
+        await setAWSSecret(resourcePrefix, vaultName, secretKey, secretValue);
+        break;
 
       case "gcp":
-        await setGCPSecret(resourcePrefix, vaultName, secretKey, secretValue)
-        break
+        await setGCPSecret(resourcePrefix, vaultName, secretKey, secretValue);
+        break;
 
       case "azure":
-        await setAzureSecret(resourcePrefix, vaultName, secretKey, secretValue)
-        break
+        await setAzureSecret(resourcePrefix, vaultName, secretKey, secretValue);
+        break;
 
       case "local":
-        await setLocalSecret(vaultName, secretKey, secretValue, stateDir, deploymentId)
-        break
+        await setLocalSecret(vaultName, secretKey, secretValue, stateDir, deploymentId);
+        break;
 
       default: {
-        const exhaustive: never = platform
+        const exhaustive: never = platform;
         throw new AlienError(
           TestingUnsupportedPlatformError.create({
             platform: String(exhaustive),
             operation: "setExternalSecret",
           }),
-        )
+        );
       }
     }
   } catch (error) {
@@ -65,7 +65,7 @@ export async function setExternalSecret(
       resourcePrefix,
       vaultName,
       secretKey,
-    })
+    });
   }
 }
 
@@ -82,8 +82,8 @@ async function setAWSSecret(
 ): Promise<void> {
   const client = new SSMClient({
     region: process.env.AWS_REGION,
-  })
-  const parameterName = `/${resourcePrefix}-${vaultName}-${secretKey}`
+  });
+  const parameterName = `/${resourcePrefix}-${vaultName}-${secretKey}`;
 
   await client.send(
     new PutParameterCommand({
@@ -92,7 +92,7 @@ async function setAWSSecret(
       Type: "SecureString",
       Overwrite: true,
     }),
-  )
+  );
 }
 
 /**
@@ -107,8 +107,8 @@ async function setGCPSecret(
   secretValue: string,
 ): Promise<void> {
   // Falls back to GOOGLE_APPLICATION_CREDENTIALS
-  const client = new SecretManagerServiceClient()
-  const projectId = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT
+  const client = new SecretManagerServiceClient();
+  const projectId = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT;
 
   if (!projectId) {
     throw new AlienError(
@@ -116,12 +116,12 @@ async function setGCPSecret(
         operation: "setGCPSecret",
         message: "GCP project ID is required (set GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT env var)",
       }),
-    )
+    );
   }
 
-  const secretName = `${resourcePrefix}-${vaultName}-${secretKey}`
-  const parent = `projects/${projectId}`
-  const secretPath = `${parent}/secrets/${secretName}`
+  const secretName = `${resourcePrefix}-${vaultName}-${secretKey}`;
+  const parent = `projects/${projectId}`;
+  const secretPath = `${parent}/secrets/${secretName}`;
 
   try {
     // Try to create the secret first
@@ -133,11 +133,11 @@ async function setGCPSecret(
           automatic: {},
         },
       },
-    })
+    });
   } catch (error: any) {
     // Secret already exists, that's fine
     if (!error.message?.includes("ALREADY_EXISTS")) {
-      throw await withTestingContext(error, "setGCPSecret", "Failed to create GCP secret")
+      throw await withTestingContext(error, "setGCPSecret", "Failed to create GCP secret");
     }
   }
 
@@ -147,7 +147,7 @@ async function setGCPSecret(
     payload: {
       data: Buffer.from(secretValue, "utf8"),
     },
-  })
+  });
 }
 
 /**
@@ -161,13 +161,13 @@ async function setAzureSecret(
   secretKey: string,
   secretValue: string,
 ): Promise<void> {
-  const vaultNameFull = `${resourcePrefix}-${vaultName}`
-  const vaultUrl = `https://${vaultNameFull}.vault.azure.net`
+  const vaultNameFull = `${resourcePrefix}-${vaultName}`;
+  const vaultUrl = `https://${vaultNameFull}.vault.azure.net`;
 
   // Fall back to environment variables
-  const tenantId = process.env.AZURE_TENANT_ID
-  const clientId = process.env.AZURE_CLIENT_ID
-  const clientSecret = process.env.AZURE_CLIENT_SECRET
+  const tenantId = process.env.AZURE_TENANT_ID;
+  const clientId = process.env.AZURE_CLIENT_ID;
+  const clientSecret = process.env.AZURE_CLIENT_SECRET;
 
   if (!tenantId || !clientId || !clientSecret) {
     throw new AlienError(
@@ -176,16 +176,16 @@ async function setAzureSecret(
         message:
           "Azure credentials are required (set AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET env vars)",
       }),
-    )
+    );
   }
 
-  const credential = new ClientSecretCredential(tenantId, clientId, clientSecret)
-  const client = new SecretClient(vaultUrl, credential)
+  const credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
+  const client = new SecretClient(vaultUrl, credential);
 
   // Azure Key Vault requires alphanumeric names with hyphens
-  const azureSecretKey = secretKey.replace(/_/g, "-")
+  const azureSecretKey = secretKey.replace(/_/g, "-");
 
-  await client.setSecret(azureSecretKey, secretValue)
+  await client.setSecret(azureSecretKey, secretValue);
 }
 
 /**
@@ -209,7 +209,7 @@ async function setLocalSecret(
         operation: "setLocalSecret",
         message: "stateDir is required for local vault set",
       }),
-    )
+    );
   }
 
   if (!deploymentId) {
@@ -218,23 +218,23 @@ async function setLocalSecret(
         operation: "setLocalSecret",
         message: "deploymentId is required for local vault set",
       }),
-    )
+    );
   }
 
   // Path matches what LocalVault reads: {stateDir}/{deploymentId}/vault/{vaultName}/secrets.json
-  const vaultDir = join(stateDir, deploymentId, "vault", vaultName)
-  const secretsFile = join(vaultDir, "secrets.json")
+  const vaultDir = join(stateDir, deploymentId, "vault", vaultName);
+  const secretsFile = join(vaultDir, "secrets.json");
 
   // Read existing secrets or start fresh
-  let secrets: Record<string, string> = {}
+  let secrets: Record<string, string> = {};
   if (existsSync(secretsFile)) {
-    secrets = JSON.parse(readFileSync(secretsFile, "utf-8"))
+    secrets = JSON.parse(readFileSync(secretsFile, "utf-8"));
   }
 
   // Set the secret
-  secrets[secretKey] = secretValue
+  secrets[secretKey] = secretValue;
 
   // Write back
-  mkdirSync(vaultDir, { recursive: true })
-  writeFileSync(secretsFile, JSON.stringify(secrets, null, 2))
+  mkdirSync(vaultDir, { recursive: true });
+  writeFileSync(secretsFile, JSON.stringify(secrets, null, 2));
 }

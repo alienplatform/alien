@@ -10,23 +10,23 @@
         // configuration set ARN. Identities are named after customer mail
         // domains, so they cannot be scoped with the stack prefix.
         "grant": {
-          "actions": ["ses:SendEmail", "ses:SendRawEmail"]
+          "actions": ["ses:SendEmail", "ses:SendRawEmail"],
         },
         "binding": {
           "stack": {
             "resources": [
               "arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*",
-              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${stackPrefix}-*"
-            ]
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${stackPrefix}-*",
+            ],
           },
           "resource": {
             "resources": [
               "arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*",
-              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${resourceName}"
-            ]
-          }
-        }
-      }
-    ]
-  }
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${resourceName}",
+            ],
+          },
+        },
+      },
+    ],
+  },
 }

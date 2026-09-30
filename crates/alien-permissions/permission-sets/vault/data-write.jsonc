@@ -8,58 +8,58 @@
         "label": "write-ssm-parameters",
         "description": "Create, update, and delete application-owned SSM Parameter Store values.",
         "grant": {
-          "actions": ["ssm:PutParameter", "ssm:DeleteParameter"]
+          "actions": ["ssm:PutParameter", "ssm:DeleteParameter"],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"]
+            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-*"]
-          }
-        }
-      }
+            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-*"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
         "label": "create-secret-manager-secrets",
         "description": "Create application-owned Secret Manager secrets.",
         "grant": {
-          "permissions": ["secretmanager.secrets.create"]
+          "permissions": ["secretmanager.secrets.create"],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}"
-          }
-        }
+            "scope": "projects/${projectName}",
+          },
+        },
       },
       {
         "label": "write-secret-manager-values",
         "description": "Add values to application-owned Secret Manager secrets and delete those secrets during cleanup.",
         "grant": {
           "predefinedRoles": ["roles/secretmanager.secretVersionAdder"],
-          "residualPermissions": ["secretmanager.secrets.get", "secretmanager.secrets.delete"]
+          "residualPermissions": ["secretmanager.secrets.get", "secretmanager.secrets.delete"],
         },
         "binding": {
           "stack": {
             "scope": "projects/${projectName}",
             "condition": {
               "title": "StackVaultSecrets",
-              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")"
-            }
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")",
+            },
           },
           "resource": {
             "scope": "projects/${projectName}",
             "condition": {
               "title": "ResourceVaultSecrets",
-              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")"
-            }
-          }
-        }
-      }
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")",
+            },
+          },
+        },
+      },
     ],
     "azure": [
       {
@@ -69,18 +69,18 @@
           "dataActions": [
             "Microsoft.KeyVault/vaults/secrets/setSecret/action",
             "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
-            "Microsoft.KeyVault/vaults/secrets/delete"
-          ]
+            "Microsoft.KeyVault/vaults/secrets/delete",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

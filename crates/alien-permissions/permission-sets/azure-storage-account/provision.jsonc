@@ -8,18 +8,18 @@
           "actions": [
             "Microsoft.Storage/storageAccounts/write",
             "Microsoft.Storage/storageAccounts/delete",
-            "Microsoft.Storage/storageAccounts/read"
-          ]
+            "Microsoft.Storage/storageAccounts/read",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

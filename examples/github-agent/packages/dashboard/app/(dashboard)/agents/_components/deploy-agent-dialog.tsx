@@ -1,22 +1,22 @@
-"use client"
+"use client";
 
-import { IconAlertCircle, IconCheck, IconLoader2, IconPlus, IconRocket } from "@tabler/icons-react"
-import { useRouter } from "next/navigation"
-import { useEffect, useRef, useState } from "react"
-import { match } from "ts-pattern"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Confetti, type ConfettiRef } from "@/components/ui/confetti"
+import { IconAlertCircle, IconCheck, IconLoader2, IconPlus, IconRocket } from "@tabler/icons-react";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { match } from "ts-pattern";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Confetti, type ConfettiRef } from "@/components/ui/confetti";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog"
-import { Progress } from "@/components/ui/progress"
-import { DeploymentMethod } from "./deployment-method"
-import { type Platform, PlatformSelector } from "./platform-selector"
+} from "@/components/ui/dialog";
+import { Progress } from "@/components/ui/progress";
+import { DeploymentMethod } from "./deployment-method";
+import { type Platform, PlatformSelector } from "./platform-selector";
 
 // Agent status type (subset of platform agent statuses)
 type AgentStatus =
@@ -31,24 +31,24 @@ type AgentStatus =
   | "initial-setup-failed"
   | "provisioning-failed"
   | "update-failed"
-  | "delete-failed"
+  | "delete-failed";
 
 interface DeployAgentDialogProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  token?: string
-  tokenLoading?: boolean
-  tokenError?: string
-  currentAgentCount: number
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  token?: string;
+  tokenLoading?: boolean;
+  tokenError?: string;
+  currentAgentCount: number;
 }
 
-type DeploymentState = "configuring" | "deploying" | "completed" | "failed"
+type DeploymentState = "configuring" | "deploying" | "completed" | "failed";
 
 interface DeployingAgent {
-  id: string
-  name: string
-  status: AgentStatus
-  platform: string
+  id: string;
+  name: string;
+  status: AgentStatus;
+  platform: string;
 }
 
 export function DeployAgentDialog({
@@ -59,83 +59,83 @@ export function DeployAgentDialog({
   tokenError,
   currentAgentCount,
 }: DeployAgentDialogProps) {
-  const router = useRouter()
-  const [selectedPlatform, setSelectedPlatform] = useState<Platform>("local")
-  const [deploymentState, setDeploymentState] = useState<DeploymentState>("configuring")
-  const [deployingAgent, setDeployingAgent] = useState<DeployingAgent | null>(null)
-  const [previousAgentCount, setPreviousAgentCount] = useState(currentAgentCount)
-  const prevOpenRef = useRef(open)
-  const confettiRef = useRef<ConfettiRef>(null)
+  const router = useRouter();
+  const [selectedPlatform, setSelectedPlatform] = useState<Platform>("local");
+  const [deploymentState, setDeploymentState] = useState<DeploymentState>("configuring");
+  const [deployingAgent, setDeployingAgent] = useState<DeployingAgent | null>(null);
+  const [previousAgentCount, setPreviousAgentCount] = useState(currentAgentCount);
+  const prevOpenRef = useRef(open);
+  const confettiRef = useRef<ConfettiRef>(null);
 
   // Reset state when dialog opens/closes, track initial agent count
   useEffect(() => {
-    const wasClosedNowOpen = !prevOpenRef.current && open
-    const wasOpenNowClosed = prevOpenRef.current && !open
+    const wasClosedNowOpen = !prevOpenRef.current && open;
+    const wasOpenNowClosed = prevOpenRef.current && !open;
 
     if (wasClosedNowOpen) {
       // Dialog just opened - initialize
-      setPreviousAgentCount(currentAgentCount)
-      setDeploymentState("configuring")
-      setDeployingAgent(null)
+      setPreviousAgentCount(currentAgentCount);
+      setDeploymentState("configuring");
+      setDeployingAgent(null);
     } else if (wasOpenNowClosed) {
       // Dialog just closed - reset
-      setDeploymentState("configuring")
-      setDeployingAgent(null)
+      setDeploymentState("configuring");
+      setDeployingAgent(null);
     }
 
-    prevOpenRef.current = open
-  }, [open, currentAgentCount])
+    prevOpenRef.current = open;
+  }, [open, currentAgentCount]);
 
   // Poll for new agent (only in configuring state, before deployment starts)
   useEffect(() => {
-    if (!open || deploymentState !== "configuring") return
+    if (!open || deploymentState !== "configuring") return;
 
     const pollInterval = setInterval(async () => {
       try {
-        const response = await fetch("/api/agents")
-        if (!response.ok) return
+        const response = await fetch("/api/agents");
+        if (!response.ok) return;
 
-        const data = await response.json()
-        const agents = data.agents || []
+        const data = await response.json();
+        const agents = data.agents || [];
 
         // Detect new agent (newest first)
         if (agents.length > previousAgentCount) {
-          const newestAgent = agents[0]
-          setDeployingAgent(newestAgent)
-          setDeploymentState("deploying")
+          const newestAgent = agents[0];
+          setDeployingAgent(newestAgent);
+          setDeploymentState("deploying");
         }
       } catch (error) {
-        console.error("Failed to poll agents:", error)
+        console.error("Failed to poll agents:", error);
       }
-    }, 2000) // Poll every 2 seconds
+    }, 2000); // Poll every 2 seconds
 
-    return () => clearInterval(pollInterval)
-  }, [open, deploymentState, previousAgentCount])
+    return () => clearInterval(pollInterval);
+  }, [open, deploymentState, previousAgentCount]);
 
   // Track deploying agent status (poll for status updates)
   useEffect(() => {
-    if (!open || deploymentState !== "deploying" || !deployingAgent) return
+    if (!open || deploymentState !== "deploying" || !deployingAgent) return;
 
     const pollInterval = setInterval(async () => {
       try {
-        const response = await fetch("/api/agents")
-        if (!response.ok) return
+        const response = await fetch("/api/agents");
+        if (!response.ok) return;
 
-        const data = await response.json()
-        const agents = data.agents || []
-        const updatedAgent = agents.find((a: DeployingAgent) => a.id === deployingAgent.id)
+        const data = await response.json();
+        const agents = data.agents || [];
+        const updatedAgent = agents.find((a: DeployingAgent) => a.id === deployingAgent.id);
 
         if (updatedAgent) {
-          setDeployingAgent(updatedAgent)
+          setDeployingAgent(updatedAgent);
 
           // Check if deployment completed successfully
           if (updatedAgent.status === "running") {
-            setDeploymentState("completed")
+            setDeploymentState("completed");
             confettiRef.current?.fire({
               particleCount: 100,
               spread: 70,
               origin: { y: 0.6 },
-            })
+            });
           }
           // Check if deployment failed
           else if (
@@ -145,27 +145,27 @@ export function DeployAgentDialog({
             updatedAgent.status === "initial-setup-failed" ||
             updatedAgent.status === "provisioning-failed"
           ) {
-            setDeploymentState("failed")
+            setDeploymentState("failed");
           }
         }
       } catch (error) {
-        console.error("Failed to poll agent status:", error)
+        console.error("Failed to poll agent status:", error);
       }
-    }, 2000) // Poll every 2 seconds
+    }, 2000); // Poll every 2 seconds
 
-    return () => clearInterval(pollInterval)
-  }, [open, deploymentState, deployingAgent])
+    return () => clearInterval(pollInterval);
+  }, [open, deploymentState, deployingAgent]);
 
   const handleClose = () => {
-    onOpenChange(false)
+    onOpenChange(false);
     // Ensure we're on the agents page
-    router.push("/agents")
-  }
+    router.push("/agents");
+  };
 
   const handleAddIntegration = () => {
-    onOpenChange(false)
-    router.push("/integrations")
-  }
+    onOpenChange(false);
+    router.push("/integrations");
+  };
 
   const getStatusProgress = (status: AgentStatus): number => {
     return match(status)
@@ -173,8 +173,8 @@ export function DeployAgentDialog({
       .with("initial-setup", () => 40)
       .with("provisioning", () => 60)
       .with("running", () => 100)
-      .otherwise(() => 0)
-  }
+      .otherwise(() => 0);
+  };
 
   const getStatusLabel = (status: AgentStatus): string => {
     return match(status)
@@ -182,8 +182,8 @@ export function DeployAgentDialog({
       .with("initial-setup", () => "Setting up infrastructure...")
       .with("provisioning", () => "Deploying resources...")
       .with("running", () => "Agent is running!")
-      .otherwise(() => status)
-  }
+      .otherwise(() => status);
+  };
 
   const renderContent = () => {
     if (tokenError) {
@@ -197,7 +197,7 @@ export function DeployAgentDialog({
             <code className="bg-muted px-2 py-1 rounded">alien dev server</code>
           </p>
         </div>
-      )
+      );
     }
 
     if (deploymentState === "completed" && deployingAgent) {
@@ -228,7 +228,7 @@ export function DeployAgentDialog({
             </Button>
           </div>
         </div>
-      )
+      );
     }
 
     if (deploymentState === "failed" && deployingAgent) {
@@ -251,12 +251,12 @@ export function DeployAgentDialog({
             <Button onClick={handleClose}>View Agents</Button>
           </div>
         </div>
-      )
+      );
     }
 
     if (deploymentState === "deploying" && deployingAgent) {
-      const progress = getStatusProgress(deployingAgent.status)
-      const statusLabel = getStatusLabel(deployingAgent.status)
+      const progress = getStatusProgress(deployingAgent.status);
+      const statusLabel = getStatusLabel(deployingAgent.status);
 
       return (
         <div className="py-8 px-4 space-y-6">
@@ -291,7 +291,7 @@ export function DeployAgentDialog({
             completes.
           </div>
         </div>
-      )
+      );
     }
 
     // Default: configuring state
@@ -327,24 +327,24 @@ export function DeployAgentDialog({
           </div>
         </div>
       </div>
-    )
-  }
+    );
+  };
 
   const getDialogTitle = () => {
     return match(deploymentState)
       .with("deploying", () => "Deploying Agent")
       .with("completed", () => "Agent Deployed!")
       .with("failed", () => "Deployment Failed")
-      .otherwise(() => "Deploy an Agent")
-  }
+      .otherwise(() => "Deploy an Agent");
+  };
 
   const getDialogDescription = () => {
     return match(deploymentState)
       .with("deploying", () => "Please wait while we set up your agent")
       .with("completed", () => "Your agent is running and ready to use")
       .with("failed", () => "The deployment encountered an error")
-      .otherwise(() => "Choose your deployment platform and follow the instructions")
-  }
+      .otherwise(() => "Choose your deployment platform and follow the instructions");
+  };
 
   return (
     <>
@@ -372,5 +372,5 @@ export function DeployAgentDialog({
         </DialogContent>
       </Dialog>
     </>
-  )
+  );
 }

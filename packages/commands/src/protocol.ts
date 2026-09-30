@@ -30,20 +30,20 @@ export type {
   TraceContext,
   UploadCompleteRequest,
   UploadCompleteResponse,
-} from "@alienplatform/core"
+} from "@alienplatform/core";
 
 /**
  * Target resource type — lowercase; `worker` is only valid for the worker
  * runtime. Not surfaced from `@alienplatform/core`'s public API, so it stays
  * local; kept structurally identical to the generated `CommandTargetType`.
  */
-export type CommandTargetType = "worker" | "container" | "daemon"
+export type CommandTargetType = "worker" | "container" | "daemon";
 
 /** Identifies the specific resource a command is addressed to. */
 export type CommandTarget = {
-  resourceId: string
-  resourceType: CommandTargetType
-}
+  resourceId: string;
+  resourceType: CommandTargetType;
+};
 
 /** Error envelope returned by the axum handlers on non-2xx responses. */
-export type ErrorResponse = { code: string; message: string; details?: string }
+export type ErrorResponse = { code: string; message: string; details?: string };

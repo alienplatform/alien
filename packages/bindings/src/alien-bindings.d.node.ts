@@ -3,7 +3,7 @@
 // exists at build time in this repo — `alien build` stages it next to the
 // built `native.js` (see PACKAGE_LAYOUT.md). This declaration lets
 // `native.ts` typecheck and gives the default import the full addon type.
-import type { NativeAddon } from "./loader.js"
+import type { NativeAddon } from "./loader.js";
 
-declare const addon: NativeAddon
-export default addon
+declare const addon: NativeAddon;
+export default addon;

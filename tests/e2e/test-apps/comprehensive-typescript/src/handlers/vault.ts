@@ -1,24 +1,24 @@
-import { vault } from "@alienplatform/sdk"
-import { Hono } from "hono"
-import { toExternalOperationError } from "../helpers.js"
+import { vault } from "@alienplatform/sdk";
+import { Hono } from "hono";
+import { toExternalOperationError } from "../helpers.js";
 
-const app = new Hono()
+const app = new Hono();
 
-app.post("/vault-test/:bindingName", async c => {
-  const bindingName = c.req.param("bindingName")
+app.post("/vault-test/:bindingName", async (c) => {
+  const bindingName = c.req.param("bindingName");
   try {
-    const v = vault(bindingName)
-    const testKey = `test-secret-${Date.now()}`
-    const testValue = "test-secret-value"
+    const v = vault(bindingName);
+    const testKey = `test-secret-${Date.now()}`;
+    const testValue = "test-secret-value";
 
     // 1. Set secret
-    await v.put(testKey, testValue)
+    await v.put(testKey, testValue);
 
     // 2. Wait for propagation
-    await new Promise(resolve => setTimeout(resolve, 500))
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
     // 3. Get and verify
-    const retrieved = await v.get(testKey)
+    const retrieved = await v.get(testKey);
     if (retrieved !== testValue) {
       return c.json(
         {
@@ -26,39 +26,39 @@ app.post("/vault-test/:bindingName", async c => {
           error: `Value mismatch: expected "${testValue}", got "${retrieved}"`,
         },
         500,
-      )
+      );
     }
 
     // 4. Delete
-    await v.delete(testKey)
+    await v.delete(testKey);
 
     // 5. Wait for propagation
-    await new Promise(resolve => setTimeout(resolve, 500))
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
     // 6. Verify deletion
     try {
-      await v.get(testKey)
+      await v.get(testKey);
       // If we get here without error, deletion may not have propagated yet — acceptable
     } catch {
       // Expected: secret not found
     }
 
-    return c.json({ success: true, bindingName })
+    return c.json({ success: true, bindingName });
   } catch (error: unknown) {
-    const alienError = await toExternalOperationError(error, "vault-test")
-    return c.json({ success: false, error: alienError.message, code: alienError.code }, 500)
+    const alienError = await toExternalOperationError(error, "vault-test");
+    return c.json({ success: false, error: alienError.message, code: alienError.code }, 500);
   }
-})
+});
 
-app.get("/managed-secret", async c => {
+app.get("/managed-secret", async (c) => {
   try {
-    const v = vault("secrets")
-    const value = await v.get("MANAGED_TEST_SECRET")
-    return c.json({ exists: !!value, value })
+    const v = vault("secrets");
+    const value = await v.get("MANAGED_TEST_SECRET");
+    return c.json({ exists: !!value, value });
   } catch (error: unknown) {
-    const alienError = await toExternalOperationError(error, "managed-secret")
-    return c.json({ exists: false, error: alienError.message, code: alienError.code })
+    const alienError = await toExternalOperationError(error, "managed-secret");
+    return c.json({ exists: false, error: alienError.message, code: alienError.code });
   }
-})
+});
 
-export default app
+export default app;

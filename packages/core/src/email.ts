@@ -1,5 +1,5 @@
-import { type Email as EmailConfig, EmailSchema, type ResourceType } from "./generated/index.js"
-import { type Resource, ResourceBuilder } from "./resource.js"
+import { type Email as EmailConfig, EmailSchema, type ResourceType } from "./generated/index.js";
+import { type Resource, ResourceBuilder } from "./resource.js";
 
 export type {
   Email as EmailConfig,
@@ -8,8 +8,8 @@ export type {
   EmailEvents,
   EmailInbound,
   EmailOutputs,
-} from "./generated/index.js"
-export { EmailSchema as EmailConfigSchema } from "./generated/index.js"
+} from "./generated/index.js";
+export { EmailSchema as EmailConfigSchema } from "./generated/index.js";
 
 /**
  * Email infrastructure for sending and receiving mail on customer-owned
@@ -36,15 +36,15 @@ export { EmailSchema as EmailConfigSchema } from "./generated/index.js"
 export class Email extends ResourceBuilder {
   private _config: Partial<EmailConfig> = {
     domains: [],
-  }
+  };
 
   /**
    * Creates a new Email builder.
    * @param id Identifier for the email resource. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
   constructor(id: string) {
-    super()
-    this._config.id = id
+    super();
+    this._config.id = id;
   }
 
   /**
@@ -53,7 +53,7 @@ export class Email extends ResourceBuilder {
    * @returns The "email" resource type.
    */
   public static any(): ResourceType {
-    return "email"
+    return "email";
   }
 
   /**
@@ -63,8 +63,8 @@ export class Email extends ResourceBuilder {
    * @returns The Email builder instance.
    */
   public domains(domains: string[]): this {
-    this._config.domains = domains
-    return this
+    this._config.domains = domains;
+    return this;
   }
 
   /**
@@ -73,8 +73,8 @@ export class Email extends ResourceBuilder {
    * @returns The Email builder instance.
    */
   public domain(domain: string): this {
-    this._config.domains = [...(this._config.domains ?? []), domain]
-    return this
+    this._config.domains = [...(this._config.domains ?? []), domain];
+    return this;
   }
 
   /**
@@ -85,8 +85,8 @@ export class Email extends ResourceBuilder {
    * @returns The Email builder instance.
    */
   public inbound(storage: Resource): this {
-    this._config.inbound = { storage: storage.ref() }
-    return this
+    this._config.inbound = { storage: storage.ref() };
+    return this;
   }
 
   /**
@@ -96,8 +96,8 @@ export class Email extends ResourceBuilder {
    * @returns The Email builder instance.
    */
   public events(queue: Resource): this {
-    this._config.events = { queue: queue.ref() }
-    return this
+    this._config.events = { queue: queue.ref() };
+    return this;
   }
 
   /**
@@ -106,10 +106,10 @@ export class Email extends ResourceBuilder {
    * @throws Error if the email configuration is invalid.
    */
   public build(): Resource {
-    const config = EmailSchema.parse(this._config)
+    const config = EmailSchema.parse(this._config);
     return this.resource({
       type: "email",
       ...config,
-    })
+    });
   }
 }

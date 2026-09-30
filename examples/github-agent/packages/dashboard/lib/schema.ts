@@ -1,4 +1,4 @@
-import { boolean, integer, pgTable, real, text, timestamp } from "drizzle-orm/pg-core"
+import { boolean, integer, pgTable, real, text, timestamp } from "drizzle-orm/pg-core";
 
 // Better Auth tables
 export const user = pgTable("user", {
@@ -9,7 +9,7 @@ export const user = pgTable("user", {
   image: text("image"),
   createdAt: timestamp("created_at").notNull(),
   updatedAt: timestamp("updated_at").notNull(),
-})
+});
 
 // Session table (includes activeOrganizationId for better-auth organization plugin)
 export const session = pgTable("session", {
@@ -24,7 +24,7 @@ export const session = pgTable("session", {
     .notNull()
     .references(() => user.id),
   activeOrganizationId: text("active_organization_id"),
-})
+});
 
 export const account = pgTable("account", {
   id: text("id").primaryKey(),
@@ -42,7 +42,7 @@ export const account = pgTable("account", {
   password: text("password"),
   createdAt: timestamp("created_at").notNull(),
   updatedAt: timestamp("updated_at").notNull(),
-})
+});
 
 export const verification = pgTable("verification", {
   id: text("id").primaryKey(),
@@ -51,7 +51,7 @@ export const verification = pgTable("verification", {
   expiresAt: timestamp("expires_at").notNull(),
   createdAt: timestamp("created_at"),
   updatedAt: timestamp("updated_at"),
-})
+});
 
 // Organization tables (better-auth plugin)
 export const organization = pgTable("organization", {
@@ -62,7 +62,7 @@ export const organization = pgTable("organization", {
   metadata: text("metadata"), // JSON string
   createdAt: timestamp("created_at").notNull(),
   updatedAt: timestamp("updated_at"), // Nullable - better-auth may not set this initially
-})
+});
 
 export const member = pgTable("member", {
   id: text("id").primaryKey(),
@@ -74,7 +74,7 @@ export const member = pgTable("member", {
     .references(() => user.id),
   role: text("role").notNull(), // 'owner' | 'admin' | 'member'
   createdAt: timestamp("created_at").notNull(),
-})
+});
 
 export const invitation = pgTable("invitation", {
   id: text("id").primaryKey(),
@@ -89,7 +89,7 @@ export const invitation = pgTable("invitation", {
     .notNull()
     .references(() => user.id),
   createdAt: timestamp("created_at").notNull(),
-})
+});
 
 // App-specific tables
 
@@ -104,7 +104,7 @@ export const organizationMetadata = pgTable("organization_metadata", {
   deploymentToken: text("deployment_token"),
   createdAt: timestamp("created_at").notNull(),
   updatedAt: timestamp("updated_at").notNull(),
-})
+});
 
 // Integrations - stores metadata about GitHub integrations (credentials stay in agent vault)
 export const integration = pgTable("integration", {
@@ -120,7 +120,7 @@ export const integration = pgTable("integration", {
   isActive: boolean("is_active").notNull().default(true), // False when agent is deleted
   createdAt: timestamp("created_at").notNull(),
   updatedAt: timestamp("updated_at").notNull(),
-})
+});
 
 // Metrics history - stores aggregated metrics from periodic syncs
 export const metricsHistory = pgTable("metrics_history", {
@@ -141,7 +141,7 @@ export const metricsHistory = pgTable("metrics_history", {
   reviewThroughputScore: integer("review_throughput_score"),
   churnHotspots: text("churn_hotspots"), // JSON string
   syncedAt: timestamp("synced_at").notNull(),
-})
+});
 
 // Sync status - tracks the last sync for each integration
 export const syncStatus = pgTable("sync_status", {
@@ -154,4 +154,4 @@ export const syncStatus = pgTable("sync_status", {
   lastSyncStatus: text("last_sync_status"), // 'success' | 'error'
   lastSyncError: text("last_sync_error"),
   nextSyncAt: timestamp("next_sync_at"),
-})
+});

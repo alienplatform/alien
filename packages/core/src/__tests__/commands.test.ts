@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest"
-import { CreateCommandResponseSchema } from "../index.js"
+import { describe, expect, it } from "vitest";
+import { CreateCommandResponseSchema } from "../index.js";
 
 describe("command schemas", () => {
   it("accepts create responses from managers that predate the created field", () => {
@@ -8,8 +8,8 @@ describe("command schemas", () => {
       state: "PENDING",
       inlineAllowedUpTo: 1024,
       next: "poll",
-    })
+    });
 
-    expect(response.created).toBeUndefined()
-  })
-})
+    expect(response.created).toBeUndefined();
+  });
+});

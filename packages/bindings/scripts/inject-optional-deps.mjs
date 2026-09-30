@@ -13,23 +13,23 @@
  * list, so re-running never accumulates stale entries.
  */
 
-import { readFileSync, writeFileSync } from "node:fs"
-import { resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const TRIPLES = ["darwin-arm64", "darwin-x64", "linux-x64-gnu", "linux-arm64-gnu"]
+const TRIPLES = ["darwin-arm64", "darwin-x64", "linux-x64-gnu", "linux-arm64-gnu"];
 
 const wrapperManifest = process.argv[2]
   ? resolve(process.argv[2])
-  : fileURLToPath(new URL("../package.json", import.meta.url))
-const pkg = JSON.parse(readFileSync(wrapperManifest, "utf8"))
-const { version } = pkg
+  : fileURLToPath(new URL("../package.json", import.meta.url));
+const pkg = JSON.parse(readFileSync(wrapperManifest, "utf8"));
+const { version } = pkg;
 
 pkg.optionalDependencies = Object.fromEntries(
-  TRIPLES.map(triple => [`@alienplatform/bindings-${triple}`, version]),
-)
+  TRIPLES.map((triple) => [`@alienplatform/bindings-${triple}`, version]),
+);
 
-writeFileSync(wrapperManifest, `${JSON.stringify(pkg, null, 2)}\n`)
+writeFileSync(wrapperManifest, `${JSON.stringify(pkg, null, 2)}\n`);
 
-console.log(`Injected optionalDependencies (pinned to ${version}):`)
-console.log(JSON.stringify(pkg.optionalDependencies, null, 2))
+console.log(`Injected optionalDependencies (pinned to ${version}):`);
+console.log(JSON.stringify(pkg.optionalDependencies, null, 2));

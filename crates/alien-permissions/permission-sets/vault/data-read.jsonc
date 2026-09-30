@@ -6,55 +6,55 @@
     "aws": [
       {
         "grant": {
-          "actions": ["ssm:GetParameter"]
+          "actions": ["ssm:GetParameter"],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"]
+            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-*"]
-          }
-        }
-      }
+            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-*"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
         "grant": {
-          "predefinedRoles": ["roles/secretmanager.viewer", "roles/secretmanager.secretAccessor"]
+          "predefinedRoles": ["roles/secretmanager.viewer", "roles/secretmanager.secretAccessor"],
         },
         "binding": {
           "stack": {
             "scope": "projects/${projectName}",
             "condition": {
               "title": "StackVaultSecretsRead",
-              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")"
-            }
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")",
+            },
           },
           "resource": {
             "scope": "projects/${projectName}",
             "condition": {
               "title": "ResourceVaultSecretsRead",
-              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")"
-            }
-          }
-        }
-      }
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")",
+            },
+          },
+        },
+      },
     ],
     "azure": [
       {
         "grant": {
-          "predefinedRoles": ["Key Vault Secrets User"]
+          "predefinedRoles": ["Key Vault Secrets User"],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

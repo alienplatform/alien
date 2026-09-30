@@ -7,20 +7,20 @@
  * per-binding error taxonomy the old binding-gRPC clients carried.
  */
 
-import { AlienError } from "@alienplatform/core"
-import { Status } from "nice-grpc"
-import { GrpcCallError } from "./errors.js"
+import { AlienError } from "@alienplatform/core";
+import { Status } from "nice-grpc";
+import { GrpcCallError } from "./errors.js";
 
 /**
  * Convert a gRPC error to an AlienError with proper chaining.
  */
 export async function grpcErrorToAlienError(error: unknown, service: string, method: string) {
-  const baseError = await AlienError.from(error)
+  const baseError = await AlienError.from(error);
 
   if (error && typeof error === "object" && "code" in error) {
-    const grpcError = error as { code: number; details?: string; message?: string }
-    const details = grpcError.details ?? grpcError.message ?? "Unknown error"
-    const code = grpcError.code
+    const grpcError = error as { code: number; details?: string; message?: string };
+    const details = grpcError.details ?? grpcError.message ?? "Unknown error";
+    const code = grpcError.code;
     return baseError.withContext(
       GrpcCallError.create({
         service,
@@ -28,7 +28,7 @@ export async function grpcErrorToAlienError(error: unknown, service: string, met
         grpcCode: Status[code] ?? String(code),
         details,
       }),
-    )
+    );
   }
 
   return baseError.withContext(
@@ -38,7 +38,7 @@ export async function grpcErrorToAlienError(error: unknown, service: string, met
       grpcCode: "UNKNOWN",
       details: error instanceof Error ? error.message : String(error),
     }),
-  )
+  );
 }
 
 /**
@@ -50,8 +50,8 @@ export async function wrapGrpcCall<T>(
   call: () => Promise<T>,
 ): Promise<T> {
   try {
-    return await call()
+    return await call();
   } catch (error) {
-    throw await grpcErrorToAlienError(error, service, method)
+    throw await grpcErrorToAlienError(error, service, method);
   }
 }

@@ -1,4 +1,4 @@
-import { defineConfig } from "drizzle-kit"
+import { defineConfig } from "drizzle-kit";
 
 export default defineConfig({
   schema: "./lib/schema.ts",
@@ -7,4 +7,4 @@ export default defineConfig({
   dbCredentials: {
     url: process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5435/github_agent",
   },
-})
+});

@@ -1,17 +1,5 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "useTabs": false,
-  "tabWidth": 2,
-  "printWidth": 100,
-  "singleQuote": false,
-  "jsxSingleQuote": false,
-  "quoteProps": "as-needed",
-  "trailingComma": "all",
-  "semi": false,
-  "arrowParens": "avoid",
-  "bracketSameLine": false,
-  "bracketSpacing": true,
-  "singleAttributePerLine": false,
   "ignorePatterns": [
     "**/.wrangler/**/*.js",
     "**/.turbo",
@@ -32,17 +20,5 @@
     "packages/sdk/src/worker-runtime/generated",
     "**/shim.mjs",
     "**/target"
-  ],
-  "overrides": [
-    {
-      "files": ["**/*.json", "**/*.jsonc"],
-      "options": {
-        "trailingComma": "none"
-      }
-    }
-  ],
-  "sortPackageJson": false,
-  "sortImports": {
-    "newlinesBetween": false
-  }
+  ]
 }

@@ -1,8 +1,8 @@
-import { type Kv as KvConfig, KvSchema, type ResourceType } from "./generated/index.js"
-import { type Resource, ResourceBuilder } from "./resource.js"
+import { type Kv as KvConfig, KvSchema, type ResourceType } from "./generated/index.js";
+import { type Resource, ResourceBuilder } from "./resource.js";
 
-export type { Kv as KvConfig, KvOutputs } from "./generated/index.js"
-export { KvSchema as KvConfigSchema } from "./generated/index.js"
+export type { Kv as KvConfig, KvOutputs } from "./generated/index.js";
+export { KvSchema as KvConfigSchema } from "./generated/index.js";
 
 /**
  * Represents a key-value store for data storage.
@@ -37,15 +37,15 @@ export { KvSchema as KvConfigSchema } from "./generated/index.js"
  * - No completeness guarantee under concurrent writes
  */
 export class Kv extends ResourceBuilder {
-  private _config: Partial<KvConfig> = {}
+  private _config: Partial<KvConfig> = {};
 
   /**
    * Creates a new KV builder.
    * @param id Identifier for the KV store. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
   constructor(id: string) {
-    super()
-    this._config.id = id
+    super();
+    this._config.id = id;
   }
 
   /**
@@ -54,7 +54,7 @@ export class Kv extends ResourceBuilder {
    * @returns The "kv" resource type.
    */
   public static any(): ResourceType {
-    return "kv"
+    return "kv";
   }
 
   /**
@@ -63,11 +63,11 @@ export class Kv extends ResourceBuilder {
    * @throws Error if the KV configuration is invalid.
    */
   public build(): Resource {
-    const config = KvSchema.parse(this._config)
+    const config = KvSchema.parse(this._config);
 
     return this.resource({
       type: "kv",
       ...config,
-    })
+    });
   }
 }

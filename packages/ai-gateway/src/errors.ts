@@ -5,11 +5,11 @@
  * resolves through this package's gateway process, not the bindings native addon.
  */
 
-import { defineError } from "@alienplatform/core"
-import * as z from "zod/v4"
+import { defineError } from "@alienplatform/core";
+import * as z from "zod/v4";
 
 // Shared with the binding surfaces in @alienplatform/bindings.
-export { BindingNotFoundError, InvalidBindingConfigError } from "@alienplatform/core"
+export { BindingNotFoundError, InvalidBindingConfigError } from "@alienplatform/core";
 
 /**
  * Error thrown when an upstream LLM endpoint returns a non-2xx response.
@@ -30,7 +30,7 @@ export const AiUpstreamError = defineError({
   retryable: false,
   internal: true,
   httpStatusCode: 502,
-})
+});
 
 /**
  * Error thrown when a network-level failure occurs before or after an
@@ -47,7 +47,7 @@ export const AiTransportError = defineError({
   retryable: true,
   internal: true,
   httpStatusCode: 503,
-})
+});
 
 /**
  * Error thrown when a BYO-key binding names a provider the client has no base URL for.
@@ -65,7 +65,7 @@ export const UnsupportedProviderError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 400,
-})
+});
 
 /**
  * Error thrown when a binding's upstream serves chat/completions but not the OpenAI Responses
@@ -82,7 +82,7 @@ export const ResponsesApiUnsupportedError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 400,
-})
+});
 
 /**
  * Error thrown when this platform/architecture has no prebuilt gateway binary.
@@ -99,7 +99,7 @@ export const UnsupportedPlatformError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 400,
-})
+});
 
 /**
  * Error thrown when the `alien-ai-gateway` executable cannot be located (or, for a
@@ -119,7 +119,7 @@ export const GatewayBinaryUnavailableError = defineError({
   internal: true,
   // Same class as UnsupportedPlatformError: the host environment can't run the binary.
   httpStatusCode: 400,
-})
+});
 
 /**
  * Error thrown when the spawned `alien-ai-gateway` process failed to report a
@@ -135,4 +135,4 @@ export const GatewayStartFailedError = defineError({
   retryable: true,
   internal: true,
   httpStatusCode: 503,
-})
+});

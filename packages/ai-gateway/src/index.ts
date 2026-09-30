@@ -17,32 +17,32 @@
  * ```
  */
 
-import { createAiClient } from "./client.js"
-import { createGateway } from "./gateway.js"
-import { resolveGatewayBinary } from "./loader.js"
+import { createAiClient } from "./client.js";
+import { createGateway } from "./gateway.js";
+import { resolveGatewayBinary } from "./loader.js";
 
-const gateway = createGateway(resolveGatewayBinary)
-const client = createAiClient(gateway)
+const gateway = createGateway(resolveGatewayBinary);
+const client = createAiClient(gateway);
 
 /** Start the AI gateway subprocess (idempotent) and return its running handle. */
-export const startAiGateway = gateway.startAiGateway
+export const startAiGateway = gateway.startAiGateway;
 /** An OpenAI-compatible client for the named AI binding (External BYO-key or ambient). */
-export const ai = client.ai
+export const ai = client.ai;
 /** Resolve an AI binding to `{ baseURL, apiKey? }`, starting the gateway for ambient bindings. */
-export const getAiConnection = client.getAiConnection
+export const getAiConnection = client.getAiConnection;
 
-export type { AiBinding, AmbientAiBinding, ExternalAiBinding } from "./binding.js"
-export { aiBindingEnvVarName, isExternalAiBinding, parseAiBinding } from "./binding.js"
+export type { AiBinding, AmbientAiBinding, ExternalAiBinding } from "./binding.js";
+export { aiBindingEnvVarName, isExternalAiBinding, parseAiBinding } from "./binding.js";
 export type {
   AiConnection,
   AiModel,
   ChatCompletionCreateParams,
   ResponseCreateParams,
-} from "./client.js"
-export { Ai } from "./client.js"
+} from "./client.js";
+export { Ai } from "./client.js";
 export {
   AiTransportError,
   AiUpstreamError,
   BindingNotFoundError,
   InvalidBindingConfigError,
-} from "./errors.js"
+} from "./errors.js";

@@ -1,4 +1,4 @@
-"use client"
+"use client";
 
 import {
   IconAlertCircle,
@@ -8,20 +8,20 @@ import {
   IconFileCode,
   IconInfoCircle,
   IconSparkles,
-} from "@tabler/icons-react"
-import type { AICodeExample, AIReview, AIReviewIssue } from "github-agent-remote-agent"
-import { match } from "ts-pattern"
+} from "@tabler/icons-react";
+import type { AICodeExample, AIReview, AIReviewIssue } from "github-agent-remote-agent";
+import { match } from "ts-pattern";
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
-} from "@/components/ui/accordion"
-import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+} from "@/components/ui/accordion";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 interface AIReviewCardProps {
-  review: AIReview
+  review: AIReview;
 }
 
 export function AIReviewCard({ review }: AIReviewCardProps) {
@@ -47,8 +47,8 @@ export function AIReviewCard({ review }: AIReviewCardProps) {
         () =>
           "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800",
       )
-      .exhaustive()
-  }
+      .exhaustive();
+  };
 
   const getSeverityIcon = (severity: AIReviewIssue["severity"]) => {
     return match(severity)
@@ -57,8 +57,8 @@ export function AIReviewCard({ review }: AIReviewCardProps) {
       .with("medium", () => <IconAlertTriangle className="h-4 w-4 text-yellow-500" />)
       .with("low", () => <IconInfoCircle className="h-4 w-4 text-blue-500" />)
       .with("info", () => <IconInfoCircle className="h-4 w-4 text-gray-500" />)
-      .exhaustive()
-  }
+      .exhaustive();
+  };
 
   const getSeverityColor = (severity: AIReviewIssue["severity"]) => {
     return match(severity)
@@ -87,8 +87,8 @@ export function AIReviewCard({ review }: AIReviewCardProps) {
         () =>
           "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400 border-gray-200 dark:border-gray-800",
       )
-      .exhaustive()
-  }
+      .exhaustive();
+  };
 
   const getCategoryColor = (category: AIReviewIssue["category"]) => {
     return match(category)
@@ -109,8 +109,8 @@ export function AIReviewCard({ review }: AIReviewCardProps) {
         "bug-risk",
         () => "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400",
       )
-      .exhaustive()
-  }
+      .exhaustive();
+  };
 
   return (
     <Card className="border-purple-200 dark:border-purple-800 bg-gradient-to-br from-purple-50/50 to-transparent dark:from-purple-950/20">
@@ -256,5 +256,5 @@ export function AIReviewCard({ review }: AIReviewCardProps) {
         </div>
       </CardContent>
     </Card>
-  )
+  );
 }

@@ -1,4 +1,4 @@
-"use client"
+"use client";
 
 import {
   IconActivity,
@@ -10,11 +10,11 @@ import {
   IconRefresh,
   IconTrendingDown,
   IconTrendingUp,
-} from "@tabler/icons-react"
-import { formatDistanceToNow } from "date-fns"
-import { useCallback, useEffect, useState } from "react"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+} from "@tabler/icons-react";
+import { formatDistanceToNow } from "date-fns";
+import { useCallback, useEffect, useState } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardAction,
@@ -23,31 +23,31 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card"
-import { DashboardSkeleton } from "./dashboard-skeleton"
-import { PrRiskChart } from "./pr-risk-chart"
-import { PrSizeChart } from "./pr-size-chart"
+} from "@/components/ui/card";
+import { DashboardSkeleton } from "./dashboard-skeleton";
+import { PrRiskChart } from "./pr-risk-chart";
+import { PrSizeChart } from "./pr-size-chart";
 
 interface DashboardContentProps {
-  integrationId: string
-  agentId: string
-  repoName?: string
+  integrationId: string;
+  agentId: string;
+  repoName?: string;
 }
 
 interface Metrics {
-  totalPRs: number
-  bySize: { small: number; medium: number; large: number }
-  byRisk: { low: number; medium: number; high: number; critical: number }
-  avgTimeToFirstReviewHours: number
-  avgMergeTimeHours: number
-  reviewThroughputScore: number
-  churnHotspots: Array<{ file: string; changes: number }>
+  totalPRs: number;
+  bySize: { small: number; medium: number; large: number };
+  byRisk: { low: number; medium: number; high: number; critical: number };
+  avgTimeToFirstReviewHours: number;
+  avgMergeTimeHours: number;
+  reviewThroughputScore: number;
+  churnHotspots: Array<{ file: string; changes: number }>;
 }
 
 interface SyncStatus {
-  lastSyncAt: Date | null
-  lastSyncStatus: string | null
-  lastSyncError: string | null
+  lastSyncAt: Date | null;
+  lastSyncStatus: string | null;
+  lastSyncError: string | null;
 }
 
 export function DashboardContent({
@@ -55,62 +55,62 @@ export function DashboardContent({
   agentId,
   repoName = "Repository",
 }: DashboardContentProps) {
-  const [metrics, setMetrics] = useState<Metrics | null>(null)
+  const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({
     lastSyncAt: null,
     lastSyncStatus: null,
     lastSyncError: null,
-  })
-  const [loading, setLoading] = useState(true)
-  const [syncing, setSyncing] = useState(false)
+  });
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
 
   const fetchMetrics = useCallback(async () => {
     try {
-      const response = await fetch(`/api/metrics?integrationId=${integrationId}`)
+      const response = await fetch(`/api/metrics?integrationId=${integrationId}`);
       if (response.ok) {
-        const data = await response.json()
+        const data = await response.json();
         if (data.metrics) {
-          setMetrics(data.metrics)
+          setMetrics(data.metrics);
         }
         if (data.syncStatus) {
           setSyncStatus({
             lastSyncAt: data.syncStatus.lastSyncAt ? new Date(data.syncStatus.lastSyncAt) : null,
             lastSyncStatus: data.syncStatus.lastSyncStatus,
             lastSyncError: data.syncStatus.lastSyncError,
-          })
+          });
         }
       }
     } catch (error) {
-      console.error("Failed to fetch metrics:", error)
+      console.error("Failed to fetch metrics:", error);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }, [integrationId])
+  }, [integrationId]);
 
   useEffect(() => {
-    fetchMetrics()
-    const interval = setInterval(fetchMetrics, 5000)
-    return () => clearInterval(interval)
-  }, [fetchMetrics])
+    fetchMetrics();
+    const interval = setInterval(fetchMetrics, 5000);
+    return () => clearInterval(interval);
+  }, [fetchMetrics]);
 
   const handleSync = async () => {
-    setSyncing(true)
+    setSyncing(true);
     try {
       await fetch("/api/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ integrationId, agentId }),
-      })
-      await fetchMetrics()
+      });
+      await fetchMetrics();
     } catch (error) {
-      console.error("Sync failed:", error)
+      console.error("Sync failed:", error);
     } finally {
-      setSyncing(false)
+      setSyncing(false);
     }
-  }
+  };
 
   if (loading) {
-    return <DashboardSkeleton />
+    return <DashboardSkeleton />;
   }
 
   if (!metrics) {
@@ -138,10 +138,10 @@ export function DashboardContent({
           </Button>
         </CardContent>
       </Card>
-    )
+    );
   }
 
-  const highRiskCount = metrics.byRisk.high + metrics.byRisk.critical
+  const highRiskCount = metrics.byRisk.high + metrics.byRisk.critical;
 
   return (
     <div className="space-y-6">
@@ -340,5 +340,5 @@ export function DashboardContent({
         </Card>
       )}
     </div>
-  )
+  );
 }

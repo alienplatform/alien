@@ -1,9 +1,9 @@
-"use client"
+"use client";
 
-import { IconDashboard, IconGitPullRequest, IconPlug, IconServer } from "@tabler/icons-react"
-import Link from "next/link"
-import { usePathname } from "next/navigation"
-import { match } from "ts-pattern"
+import { IconDashboard, IconGitPullRequest, IconPlug, IconServer } from "@tabler/icons-react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { match } from "ts-pattern";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -11,10 +11,10 @@ import {
   BreadcrumbList,
   BreadcrumbPage,
   BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb"
+} from "@/components/ui/breadcrumb";
 
 export function DynamicBreadcrumb() {
-  const pathname = usePathname()
+  const pathname = usePathname();
 
   const {
     icon: Icon,
@@ -45,7 +45,7 @@ export function DynamicBreadcrumb() {
       icon: IconDashboard,
       label: "Dashboard",
       parent: null,
-    }))
+    }));
 
   if (!parent) {
     return (
@@ -59,7 +59,7 @@ export function DynamicBreadcrumb() {
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
-    )
+    );
   }
 
   return (
@@ -79,5 +79,5 @@ export function DynamicBreadcrumb() {
         </BreadcrumbItem>
       </BreadcrumbList>
     </Breadcrumb>
-  )
+  );
 }

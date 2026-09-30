@@ -1,6 +1,6 @@
-import * as alien from "@alienplatform/core"
+import * as alien from "@alienplatform/core";
 
-const events = new alien.Kv("events").build()
+const events = new alien.Kv("events").build();
 
 const stackInputs = alien.inputs({
   webhookSigningSecret: alien.secret({
@@ -26,7 +26,7 @@ const stackInputs = alien.inputs({
       targetResources: ["api"],
     },
   }),
-})
+});
 
 const api = new alien.Worker("api")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
@@ -34,7 +34,7 @@ const api = new alien.Worker("api")
   .publicEndpoint("api")
   .link(events)
   .permissions("execution")
-  .build()
+  .build();
 
 export default new alien.Stack("webhook-api")
   .inputs(stackInputs)
@@ -47,4 +47,4 @@ export default new alien.Stack("webhook-api")
       },
     },
   })
-  .build()
+  .build();

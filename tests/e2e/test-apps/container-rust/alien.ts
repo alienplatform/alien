@@ -1,8 +1,8 @@
 // Local pull E2E app: one Rust SOURCE Container with a pull command receiver
 // and a direct in-process KV binding.
-import * as alien from "@alienplatform/core"
+import * as alien from "@alienplatform/core";
 
-const index = new alien.Kv("index").build()
+const index = new alien.Kv("index").build();
 
 const indexer = new alien.Container("indexer")
   .code({
@@ -15,7 +15,7 @@ const indexer = new alien.Container("indexer")
   .commandsEnabled(true)
   .link(index)
   .permissions("execution")
-  .build()
+  .build();
 
 export default new alien.Stack("container-rust")
   .platforms(["local"])
@@ -28,4 +28,4 @@ export default new alien.Stack("container-rust")
       },
     },
   })
-  .build()
+  .build();

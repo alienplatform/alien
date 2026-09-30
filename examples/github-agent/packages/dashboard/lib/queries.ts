@@ -5,7 +5,7 @@
  * refetching, error handling, and loading states.
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 /**
  * Query keys for React Query cache management
@@ -15,7 +15,7 @@ export const queryKeys = {
   agentInfo: (agentId: string) => ["agent", agentId] as const,
   integrations: ["integrations"] as const,
   deploymentGroup: ["deployment-group"] as const,
-}
+};
 
 /**
  * List all agents for the current organization
@@ -24,16 +24,16 @@ export function useAgents() {
   return useQuery({
     queryKey: ["agents"],
     queryFn: async () => {
-      const response = await fetch("/api/agents")
+      const response = await fetch("/api/agents");
       if (!response.ok) {
         // Return empty array if agents aren't running yet
-        return []
+        return [];
       }
-      const data = await response.json()
-      return data.agents || []
+      const data = await response.json();
+      return data.agents || [];
     },
     refetchInterval: 5_000, // Poll every 5 seconds
-  })
+  });
 }
 
 /**
@@ -43,13 +43,13 @@ export function useAgentInfo(agentId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.agentInfo(agentId || ""),
     queryFn: async () => {
-      if (!agentId) throw new Error("Agent ID is required")
-      const response = await fetch(`/api/agents/${agentId}/info`)
-      if (!response.ok) throw new Error("Failed to fetch agent info")
-      return await response.json()
+      if (!agentId) throw new Error("Agent ID is required");
+      const response = await fetch(`/api/agents/${agentId}/info`);
+      if (!response.ok) throw new Error("Failed to fetch agent info");
+      return await response.json();
     },
     enabled: !!agentId,
-  })
+  });
 }
 
 /**
@@ -59,12 +59,12 @@ export function useIntegrations() {
   return useQuery({
     queryKey: queryKeys.integrations,
     queryFn: async () => {
-      const response = await fetch("/api/integrations")
-      if (!response.ok) throw new Error("Failed to fetch integrations")
-      const data = await response.json()
-      return data.integrations || []
+      const response = await fetch("/api/integrations");
+      if (!response.ok) throw new Error("Failed to fetch integrations");
+      const data = await response.json();
+      return data.integrations || [];
     },
-  })
+  });
 }
 
 /**
@@ -74,48 +74,48 @@ export function useDeploymentGroup() {
   return useQuery({
     queryKey: queryKeys.deploymentGroup,
     queryFn: async () => {
-      const response = await fetch("/api/organizations/deployment-group")
+      const response = await fetch("/api/organizations/deployment-group");
       if (!response.ok) {
-        const error = await response.text()
-        throw new Error(error || "Failed to get deployment group")
+        const error = await response.text();
+        throw new Error(error || "Failed to get deployment group");
       }
-      return await response.json()
+      return await response.json();
     },
     retry: 1,
-  })
+  });
 }
 
 /**
  * Add a new integration
  */
 export function useAddIntegration() {
-  const queryClient = useQueryClient()
+  const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async (data: {
-      owner: string
-      repo: string
-      token?: string
-      baseUrl?: string
-      agentId: string
+      owner: string;
+      repo: string;
+      token?: string;
+      baseUrl?: string;
+      agentId: string;
     }) => {
       const response = await fetch("/api/integrations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
-      })
+      });
 
       if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || "Failed to add integration")
+        const error = await response.json();
+        throw new Error(error.error || "Failed to add integration");
       }
 
-      return await response.json()
+      return await response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.integrations })
+      queryClient.invalidateQueries({ queryKey: queryKeys.integrations });
     },
-  })
+  });
 }
 
 /**
@@ -128,19 +128,19 @@ export function useAnalyzeIntegration() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ integrationId }),
-      })
+      });
 
-      if (!response.ok) throw new Error("Analysis failed")
-      return await response.json()
+      if (!response.ok) throw new Error("Analysis failed");
+      return await response.json();
     },
-  })
+  });
 }
 
 /**
  * Update an integration (e.g., reassign agent)
  */
 export function useUpdateIntegration() {
-  const queryClient = useQueryClient()
+  const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async (data: { integrationId: string; agentId?: string; isActive?: boolean }) => {
@@ -148,17 +148,17 @@ export function useUpdateIntegration() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
-      })
+      });
 
       if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || "Failed to update integration")
+        const error = await response.json();
+        throw new Error(error.error || "Failed to update integration");
       }
 
-      return await response.json()
+      return await response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.integrations })
+      queryClient.invalidateQueries({ queryKey: queryKeys.integrations });
     },
-  })
+  });
 }

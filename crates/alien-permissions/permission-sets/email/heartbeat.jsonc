@@ -6,17 +6,17 @@
       {
         // SES v1 does not support resource-level scoping for receipt-rule inspection.
         "grant": {
-          "actions": ["ses:DescribeActiveReceiptRuleSet"]
+          "actions": ["ses:DescribeActiveReceiptRuleSet"],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
+            "resources": ["*"],
           },
           "resource": {
-            "resources": ["*"]
-          }
-        }
-      }
-    ]
-  }
+            "resources": ["*"],
+          },
+        },
+      },
+    ],
+  },
 }

@@ -14,31 +14,33 @@
             "codebuild:ListCuratedEnvironmentImages",
             "codebuild:GetResourcePolicy",
             "codebuild:PutResourcePolicy",
-            "codebuild:DeleteResourcePolicy"
-          ]
+            "codebuild:DeleteResourcePolicy",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${stackPrefix}-*"]
+            "resources": [
+              "arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${stackPrefix}-*",
+            ],
           },
           "resource": {
-            "resources": ["arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${resourceName}"]
-          }
-        }
+            "resources": ["arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${resourceName}"],
+          },
+        },
       },
       {
         "grant": {
-          "actions": ["iam:PassRole"]
+          "actions": ["iam:PassRole"],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"],
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
-          }
-        }
-      }
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -53,16 +55,16 @@
             "cloudbuild.builds.update",
             "cloudbuild.workerpools.use",
             "cloudbuild.operations.get",
-            "cloudbuild.operations.list"
-          ]
+            "cloudbuild.operations.list",
+          ],
         },
         // Cloud Build IDs are auto-generated UUIDs — name-prefix conditions can never match.
         // Worker pool names are user-chosen but builds/triggers use UUIDs. Must use scope-only.
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}" }
-        }
-      }
+          "resource": { "scope": "projects/${projectName}" },
+        },
+      },
     ],
     "azure": [
       {
@@ -73,19 +75,19 @@
             "Microsoft.App/managedEnvironments/read",
             "Microsoft.App/managedEnvironments/write",
             "Microsoft.App/jobs/read",
-            "Microsoft.App/jobs/executions/read"
+            "Microsoft.App/jobs/executions/read",
           ],
-          "dataActions": []
+          "dataActions": [],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/jobs/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/jobs/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

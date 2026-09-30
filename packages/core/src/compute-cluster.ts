@@ -3,8 +3,8 @@ import {
   ComputeClusterSchema,
   type MachineProfile,
   type ResourceType,
-} from "./generated/index.js"
-import { Resource } from "./resource.js"
+} from "./generated/index.js";
+import { Resource } from "./resource.js";
 
 export type {
   CapacityGroup,
@@ -12,14 +12,14 @@ export type {
   ComputeChoiceRange as GeneratedComputeChoiceRange,
   ComputeCluster as ComputeClusterConfig,
   MachineProfile,
-} from "./generated/index.js"
+} from "./generated/index.js";
 export {
   CapacityGroupScalePolicySchema,
   CapacityGroupSchema,
   ComputeChoiceRangeSchema,
   ComputeClusterSchema as ComputeClusterConfigSchema,
   MachineProfileSchema,
-} from "./generated/index.js"
+} from "./generated/index.js";
 
 /**
  * Hardware requirements for a compute pool.
@@ -28,45 +28,45 @@ export {
  * requirements are rejected because this resource cannot guarantee them there.
  */
 export type ComputePoolRequirements = {
-  cpu: number | string
-  memory: string
-  ephemeralStorage?: string
-  architecture?: "arm64" | "x86_64"
-  nestedVirtualization?: boolean
+  cpu: number | string;
+  memory: string;
+  ephemeralStorage?: string;
+  architecture?: "arm64" | "x86_64";
+  nestedVirtualization?: boolean;
   accelerators?: Array<{
-    type: string
-    count: number
-  }>
-}
+    type: string;
+    count: number;
+  }>;
+};
 
 export type ComputeChoiceRange =
   | number
   | {
-      min: number
-      max: number
-      default: number
-    }
+      min: number;
+      max: number;
+      default: number;
+    };
 
 /** Machine counts and node autoscaling apply to cloud fleets. Kubernetes uses existing node capacity. */
 export type ComputePoolScale =
   | {
-      type: "fixed"
-      machines: ComputeChoiceRange
+      type: "fixed";
+      machines: ComputeChoiceRange;
     }
   | {
-      type: "autoscale"
-      min: ComputeChoiceRange
-      max: ComputeChoiceRange
-    }
+      type: "autoscale";
+      min: ComputeChoiceRange;
+      max: ComputeChoiceRange;
+    };
 
 export type ComputePoolInput = {
-  requirements: ComputePoolRequirements
-  scale: ComputePoolScale
+  requirements: ComputePoolRequirements;
+  scale: ComputePoolScale;
   /** Allow containers created after installation to use this pool. Only one pool may opt in. */
-  dynamicContainers?: boolean
+  dynamicContainers?: boolean;
   /** Cloud fleet failure-domain spread. Advisory on existing Kubernetes clusters. */
-  failureDomainSpread?: number
-}
+  failureDomainSpread?: number;
+};
 
 /**
  * Declares a ComputeCluster — the setup-owned machine boundary for daemons and
@@ -92,10 +92,10 @@ export type ComputePoolInput = {
 export class ComputeCluster {
   private _config: Partial<ComputeClusterConfig> = {
     capacityGroups: [],
-  }
+  };
 
   constructor(id: string) {
-    this._config.id = id
+    this._config.id = id;
   }
 
   /**
@@ -103,13 +103,13 @@ export class ComputeCluster {
    * compute-cluster resources.
    */
   public static any(): ResourceType {
-    return "compute-cluster"
+    return "compute-cluster";
   }
 
   public pool(groupId: string, config: ComputePoolInput): this {
     if (config.dynamicContainers) {
       if (this._config.dynamicContainerPool !== undefined) {
-        throw new Error("Only one compute pool may accept dynamic containers")
+        throw new Error("Only one compute pool may accept dynamic containers");
       }
     }
     if (
@@ -118,9 +118,9 @@ export class ComputeCluster {
         config.failureDomainSpread < 1 ||
         config.failureDomainSpread > 255)
     ) {
-      throw new Error("Compute pool failureDomainSpread must be an integer from 1 to 255")
+      throw new Error("Compute pool failureDomainSpread must be an integer from 1 to 255");
     }
-    const { minSize, maxSize } = selectedScaleBounds(config.scale)
+    const { minSize, maxSize } = selectedScaleBounds(config.scale);
     this._config.capacityGroups!.push({
       groupId,
       profile: machineProfileFromRequirements(config.requirements),
@@ -128,15 +128,15 @@ export class ComputeCluster {
       maxSize,
       scalePolicy: scalePolicyFromInput(config.scale),
       nestedVirtualization: config.requirements.nestedVirtualization,
-    })
+    });
     if (config.failureDomainSpread !== undefined) {
-      this._config.failureDomainSpread ??= {}
-      this._config.failureDomainSpread[groupId] = config.failureDomainSpread
+      this._config.failureDomainSpread ??= {};
+      this._config.failureDomainSpread[groupId] = config.failureDomainSpread;
     }
     if (config.dynamicContainers) {
-      this._config.dynamicContainerPool = groupId
+      this._config.dynamicContainerPool = groupId;
     }
-    return this
+    return this;
   }
 
   /**
@@ -145,8 +145,8 @@ export class ComputeCluster {
    * Defaults to 10.244.0.0/16 if not specified.
    */
   public containerCidr(cidr: string): this {
-    this._config.containerCidr = cidr
-    return this
+    this._config.containerCidr = cidr;
+    return this;
   }
 
   /**
@@ -156,29 +156,29 @@ export class ComputeCluster {
     if (
       this._config.dynamicContainerPool !== undefined &&
       !this._config.capacityGroups?.some(
-        group => group.groupId === this._config.dynamicContainerPool,
+        (group) => group.groupId === this._config.dynamicContainerPool,
       )
     ) {
-      throw new Error("Dynamic container pool must be declared in the compute cluster")
+      throw new Error("Dynamic container pool must be declared in the compute cluster");
     }
-    const config = ComputeClusterSchema.parse(this._config)
+    const config = ComputeClusterSchema.parse(this._config);
     return new Resource({
       type: "compute-cluster",
       ...config,
-    })
+    });
   }
 }
 
 function selectedScaleBounds(scale: ComputePoolScale): { minSize: number; maxSize: number } {
   if (scale.type === "fixed") {
-    const machines = defaultChoice(scale.machines)
-    return { minSize: machines, maxSize: machines }
+    const machines = defaultChoice(scale.machines);
+    return { minSize: machines, maxSize: machines };
   }
 
   return {
     minSize: defaultChoice(scale.min),
     maxSize: defaultChoice(scale.max),
-  }
+  };
 }
 
 function scalePolicyFromInput(
@@ -188,29 +188,29 @@ function scalePolicyFromInput(
     return {
       type: "fixed",
       machines: choiceRange(scale.machines),
-    }
+    };
   }
 
   return {
     type: "autoscale",
     min: choiceRange(scale.min),
     max: choiceRange(scale.max),
-  }
+  };
 }
 
 function choiceRange(choice: ComputeChoiceRange): { min: number; max: number; default: number } {
   if (typeof choice === "number") {
-    return { min: choice, max: choice, default: choice }
+    return { min: choice, max: choice, default: choice };
   }
-  return choice
+  return choice;
 }
 
 function defaultChoice(choice: ComputeChoiceRange): number {
   if (typeof choice === "number") {
-    return choice
+    return choice;
   }
 
-  return choice.default
+  return choice.default;
 }
 
 function machineProfileFromRequirements(requirements: ComputePoolRequirements): MachineProfile {
@@ -225,17 +225,17 @@ function machineProfileFromRequirements(requirements: ComputePoolRequirements): 
           count: requirements.accelerators[0].count,
         }
       : undefined,
-  }
+  };
 }
 
 function parseQuantityBytes(value: string): number {
-  const match = value.match(/^([0-9]+(?:\.[0-9]+)?)(Ki|Mi|Gi|Ti|k|M|G|T)?$/)
+  const match = value.match(/^([0-9]+(?:\.[0-9]+)?)(Ki|Mi|Gi|Ti|k|M|G|T)?$/);
   if (!match) {
-    throw new Error(`Invalid memory/storage quantity: ${value}`)
+    throw new Error(`Invalid memory/storage quantity: ${value}`);
   }
 
-  const amount = Number(match[1])
-  const suffix = match[2]
+  const amount = Number(match[1]);
+  const suffix = match[2];
   const multiplier =
     suffix === "Ti"
       ? 1024 ** 4
@@ -253,7 +253,7 @@ function parseQuantityBytes(value: string): number {
                   ? 1000 ** 2
                   : suffix === "k"
                     ? 1000
-                    : 1
+                    : 1;
 
-  return Math.round(amount * multiplier)
+  return Math.round(amount * multiplier);
 }

@@ -20,25 +20,25 @@
             "rds:DescribeDBInstances",
             "rds:DescribeDBSubnetGroups",
             "rds:AddTagsToResource",
-            "rds:ListTagsForResource"
-          ]
+            "rds:ListTagsForResource",
+          ],
         },
         "binding": {
           "stack": {
             "resources": [
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*",
               "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-*",
-              "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-*"
-            ]
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-*",
+            ],
           },
           "resource": {
             "resources": [
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}",
               "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*",
-              "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-${resourceName}-*"
-            ]
-          }
-        }
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-${resourceName}-*",
+            ],
+          },
+        },
       },
       {
         // RDS creates this account-level role on the first cluster. The role is
@@ -46,30 +46,30 @@
         "label": "create-rds-service-linked-role",
         "description": "Allow RDS to create its default service-linked role in a new account.",
         "grant": {
-          "actions": ["iam:CreateServiceLinkedRole"]
+          "actions": ["iam:CreateServiceLinkedRole"],
         },
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:iam::${awsAccountId}:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS"
+              "arn:aws:iam::${awsAccountId}:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS",
             ],
             "condition": {
               "StringEquals": {
-                "iam:AWSServiceName": "rds.amazonaws.com"
-              }
-            }
+                "iam:AWSServiceName": "rds.amazonaws.com",
+              },
+            },
           },
           "resource": {
             "resources": [
-              "arn:aws:iam::${awsAccountId}:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS"
+              "arn:aws:iam::${awsAccountId}:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS",
             ],
             "condition": {
               "StringEquals": {
-                "iam:AWSServiceName": "rds.amazonaws.com"
-              }
-            }
-          }
-        }
+                "iam:AWSServiceName": "rds.amazonaws.com",
+              },
+            },
+          },
+        },
       },
       {
         "label": "manage-connection-secret",
@@ -79,21 +79,21 @@
             "secretsmanager:CreateSecret",
             "secretsmanager:DeleteSecret",
             "secretsmanager:PutSecretValue",
-            "secretsmanager:TagResource"
-          ]
+            "secretsmanager:TagResource",
+          ],
         },
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
-            ]
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*",
+            ],
           },
           "resource": {
             "resources": [
-              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
-            ]
-          }
-        }
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*",
+            ],
+          },
+        },
       },
       {
         // The Aurora cluster sits in a dedicated security group that admits 5432
@@ -104,28 +104,28 @@
         "label": "create-database-security-group",
         "description": "Create the dedicated database security group.",
         "grant": {
-          "actions": ["ec2:CreateSecurityGroup"]
+          "actions": ["ec2:CreateSecurityGroup"],
         },
         "binding": {
           "stack": {
             "resources": [
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
-            ]
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*",
+            ],
           },
           "resource": {
             "resources": [
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
-            ]
-          }
-        }
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*",
+            ],
+          },
+        },
       },
       {
         "label": "tag-database-security-group",
         "description": "Stamp the Alien boundary tags on the database security group at creation.",
         "grant": {
-          "actions": ["ec2:CreateTags"]
+          "actions": ["ec2:CreateTags"],
         },
         "binding": {
           "stack": {
@@ -134,9 +134,9 @@
               "StringEquals": {
                 "ec2:CreateAction": "CreateSecurityGroup",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
@@ -145,11 +145,11 @@
                 "ec2:CreateAction": "CreateSecurityGroup",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       {
         // The 5432-from-stack rule and teardown only touch the database security
@@ -160,8 +160,8 @@
           "actions": [
             "ec2:AuthorizeSecurityGroupIngress",
             "ec2:RevokeSecurityGroupIngress",
-            "ec2:DeleteSecurityGroup"
-          ]
+            "ec2:DeleteSecurityGroup",
+          ],
         },
         "binding": {
           "stack": {
@@ -169,9 +169,9 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
@@ -179,11 +179,11 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       {
         // The controller lists the cluster's instances with a db-cluster-id
@@ -193,17 +193,17 @@
         "label": "describe-database-instances",
         "description": "List the Aurora cluster's instances by cluster filter.",
         "grant": {
-          "actions": ["rds:DescribeDBInstances"]
+          "actions": ["rds:DescribeDBInstances"],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
+            "resources": ["*"],
           },
           "resource": {
-            "resources": ["*"]
-          }
-        }
-      }
+            "resources": ["*"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -236,13 +236,13 @@
             "servicedirectory.services.create",
             "servicedirectory.services.delete",
             "servicedirectory.endpoints.create",
-            "servicedirectory.endpoints.delete"
-          ]
+            "servicedirectory.endpoints.delete",
+          ],
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}" }
-        }
+          "resource": { "scope": "projects/${projectName}" },
+        },
       },
       {
         "label": "manage-cloud-sql-instance",
@@ -260,13 +260,13 @@
             // The instance create provisions only the built-in `postgres` superuser, so the `alien`
             // app user is created and its password set to match the connection secret.
             "cloudsql.users.create",
-            "cloudsql.users.update"
-          ]
+            "cloudsql.users.update",
+          ],
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}" }
-        }
+          "resource": { "scope": "projects/${projectName}" },
+        },
       },
       {
         "label": "create-connection-secret",
@@ -276,12 +276,12 @@
         // mirrors `vault/data-write`, which likewise leaves `secrets.create` unconditioned.
         "description": "Create the connection-password secret.",
         "grant": {
-          "permissions": ["secretmanager.secrets.create"]
+          "permissions": ["secretmanager.secrets.create"],
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}" }
-        }
+          "resource": { "scope": "projects/${projectName}" },
+        },
       },
       {
         "label": "write-connection-secret",
@@ -290,25 +290,25 @@
         // secrets outside its own deployment.
         "description": "Version and delete the generated connection-password secret.",
         "grant": {
-          "permissions": ["secretmanager.secrets.delete", "secretmanager.versions.add"]
+          "permissions": ["secretmanager.secrets.delete", "secretmanager.versions.add"],
         },
         "binding": {
           "stack": {
             "scope": "projects/${projectName}",
             "condition": {
               "title": "StackPostgresSecretWrite",
-              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")"
-            }
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")",
+            },
           },
           "resource": {
             "scope": "projects/${projectName}",
             "condition": {
               "title": "ResourcePostgresSecretWrite",
-              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")"
-            }
-          }
-        }
-      }
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")",
+            },
+          },
+        },
+      },
     ],
     "azure": [
       // No Key Vault secret grant here: the Azure controller stores the generated password in the
@@ -339,18 +339,18 @@
             "Microsoft.Network/privateDnsZones/write",
             "Microsoft.Network/privateDnsZones/delete",
             "Microsoft.Network/privateDnsZones/virtualNetworkLinks/write",
-            "Microsoft.Network/privateDnsZones/virtualNetworkLinks/delete"
-          ]
+            "Microsoft.Network/privateDnsZones/virtualNetworkLinks/delete",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

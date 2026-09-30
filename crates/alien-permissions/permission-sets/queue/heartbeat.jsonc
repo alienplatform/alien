@@ -7,62 +7,62 @@
         "label": "check-sqs-queue-health",
         "description": "Read SQS queue attributes and tags needed for application health checks.",
         "grant": {
-          "actions": ["sqs:GetQueueAttributes", "sqs:ListQueueTags"]
+          "actions": ["sqs:GetQueueAttributes", "sqs:ListQueueTags"],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"]
-          }
-        }
-      }
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
         "label": "check-pubsub-topic-health",
         "description": "Read Pub/Sub topic metadata needed for application health checks.",
         "grant": {
-          "predefinedRoles": ["roles/pubsub.viewer"]
+          "predefinedRoles": ["roles/pubsub.viewer"],
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
           "resource": {
-            "scope": "projects/${projectName}/topics/${resourceName}"
-          }
-        }
+            "scope": "projects/${projectName}/topics/${resourceName}",
+          },
+        },
       },
       {
         "label": "check-pubsub-subscription-health",
         "description": "Read Pub/Sub subscription metadata needed for application health checks.",
         "grant": {
-          "predefinedRoles": ["roles/pubsub.viewer"]
+          "predefinedRoles": ["roles/pubsub.viewer"],
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
           "resource": {
-            "scope": "projects/${projectName}/subscriptions/${resourceName}"
-          }
-        }
-      }
+            "scope": "projects/${projectName}/subscriptions/${resourceName}",
+          },
+        },
+      },
     ],
     "azure": [
       {
         "label": "check-service-bus-health",
         "description": "Read Azure Service Bus namespace metadata needed for application health checks.",
         "grant": {
-          "predefinedRoles": ["Reader"]
+          "predefinedRoles": ["Reader"],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb",
+          },
+        },
+      },
+    ],
+  },
 }

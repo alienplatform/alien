@@ -1,5 +1,5 @@
-import { AlienError } from "@alienplatform/core"
-import type { Kv } from "@alienplatform/sdk"
+import { AlienError } from "@alienplatform/core";
+import type { Kv } from "@alienplatform/sdk";
 
 /**
  * Sanitize a value for use inside a KV key.
@@ -8,16 +8,16 @@ import type { Kv } from "@alienplatform/sdk"
  * schedule (`* * * * *`) contain spaces and `*`, so every disallowed character
  * maps to `_`. Record and lookup sides must both use this so the keys match.
  */
-export const sanitizeKvKeyPart = (part: string) => part.replace(/[^a-zA-Z0-9\-_:.]/g, "_")
+export const sanitizeKvKeyPart = (part: string) => part.replace(/[^a-zA-Z0-9\-_:.]/g, "_");
 
 /** Iterate every key under a prefix, following the KV scan cursor across pages. */
 export async function* scanAll(store: Kv, prefix: string) {
-  let cursor: string | undefined
+  let cursor: string | undefined;
   do {
-    const page = await store.scan(prefix, undefined, cursor)
-    for (const item of page.items) yield item
-    cursor = page.nextCursor
-  } while (cursor)
+    const page = await store.scan(prefix, undefined, cursor);
+    for (const item of page.items) yield item;
+    cursor = page.nextCursor;
+  } while (cursor);
 }
 
 /**
@@ -29,7 +29,7 @@ export async function* scanAll(store: Kv, prefix: string) {
  * inspection by callers that read it.
  */
 export async function toExternalOperationError(error: unknown, operation: string) {
-  const source = await AlienError.from(error)
+  const source = await AlienError.from(error);
   return new AlienError({
     code: "E2E_OPERATION_FAILED",
     // Embed source code+message so the e2e test runner's `bail!` body
@@ -40,5 +40,5 @@ export async function toExternalOperationError(error: unknown, operation: string
     httpStatusCode: 500,
     context: { operation, sourceCode: source.code },
     source: source.toOptions(),
-  }).toExternal()
+  }).toExternal();
 }

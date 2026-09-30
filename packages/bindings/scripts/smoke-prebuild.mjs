@@ -14,34 +14,34 @@
  * local-provider KV put/get against a temp `local-kv` binding.
  */
 
-import { kv } from "@alienplatform/bindings"
+import { kv } from "@alienplatform/bindings";
 
 if (process.env.ALIEN_BINDINGS_ADDON_PATH) {
-  console.error("[smoke] FAIL: ALIEN_BINDINGS_ADDON_PATH is set; that bypasses the prebuild path")
-  process.exit(1)
+  console.error("[smoke] FAIL: ALIEN_BINDINGS_ADDON_PATH is set; that bypasses the prebuild path");
+  process.exit(1);
 }
 
-const runtime = typeof Bun !== "undefined" ? "bun" : "node"
+const runtime = typeof Bun !== "undefined" ? "bun" : "node";
 
 async function main() {
   if (!process.env.ALIEN_DEPLOYMENT_TYPE || !process.env.ALIEN_CACHE_BINDING) {
-    throw new Error("smoke binding environment must be set before the runtime starts")
+    throw new Error("smoke binding environment must be set before the runtime starts");
   }
 
-  const cache = kv("cache")
-  await cache.set("greeting", "hi")
-  const got = await cache.getText("greeting")
+  const cache = kv("cache");
+  await cache.set("greeting", "hi");
+  const got = await cache.getText("greeting");
 
   if (got?.value !== "hi") {
-    throw new Error(`expected 'hi', got ${JSON.stringify(got)}`)
+    throw new Error(`expected 'hi', got ${JSON.stringify(got)}`);
   }
 
   console.log(
     `[smoke:${runtime}] OK: kv put/get through the prebuilt addon returned '${got.value}'`,
-  )
+  );
 }
 
-main().catch(err => {
-  console.error(`[smoke:${runtime}] UNEXPECTED`, err)
-  process.exit(1)
-})
+main().catch((err) => {
+  console.error(`[smoke:${runtime}] UNEXPECTED`, err);
+  process.exit(1);
+});

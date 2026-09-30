@@ -1,25 +1,25 @@
-"use client"
+"use client";
 
-import { IconCheck, IconCopy } from "@tabler/icons-react"
-import { useState } from "react"
-import { toast } from "sonner"
-import { Button } from "@/components/ui/button"
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
+import { IconCheck, IconCopy } from "@tabler/icons-react";
+import { useState } from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 
 interface CodeDisplayProps {
-  code: string
-  language?: string
+  code: string;
+  language?: string;
 }
 
 export function CodeDisplay({ code, language = "bash" }: CodeDisplayProps) {
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(code)
-    setCopied(true)
-    toast.success("Copied to clipboard!")
-    setTimeout(() => setCopied(false), 2000)
-  }
+    navigator.clipboard.writeText(code);
+    setCopied(true);
+    toast.success("Copied to clipboard!");
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
     <ScrollArea className="border rounded-lg p-3 bg-card/50">
@@ -42,5 +42,5 @@ export function CodeDisplay({ code, language = "bash" }: CodeDisplayProps) {
       </div>
       <ScrollBar orientation="horizontal" forceMount />
     </ScrollArea>
-  )
+  );
 }

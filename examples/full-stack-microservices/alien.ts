@@ -1,6 +1,6 @@
-import * as alien from "@alienplatform/core"
+import * as alien from "@alienplatform/core";
 
-const files = new alien.Storage("files").build()
+const files = new alien.Storage("files").build();
 
 const postgres = new alien.Container("postgres")
   .code({ type: "image", image: "postgres:16-alpine" })
@@ -15,7 +15,7 @@ const postgres = new alien.Container("postgres")
   })
   .permissions("app")
   .persistentStorage("10Gi")
-  .build()
+  .build();
 
 const redis = new alien.Container("redis")
   .code({ type: "image", image: "redis:7-alpine" })
@@ -23,7 +23,7 @@ const redis = new alien.Container("redis")
   .memory("256Mi")
   .port(6379)
   .permissions("app")
-  .build()
+  .build();
 
 const api = new alien.Container("api")
   .code({
@@ -43,7 +43,7 @@ const api = new alien.Container("api")
   })
   .permissions("app")
   .link(files)
-  .build()
+  .build();
 
 const worker = new alien.Container("worker")
   .code({
@@ -61,7 +61,7 @@ const worker = new alien.Container("worker")
   })
   .permissions("app")
   .link(files)
-  .build()
+  .build();
 
 const scheduler = new alien.Container("scheduler")
   .code({
@@ -76,7 +76,7 @@ const scheduler = new alien.Container("scheduler")
     SCHEDULE_INTERVAL_SECONDS: "60",
   })
   .permissions("app")
-  .build()
+  .build();
 
 const dashboard = new alien.Container("dashboard")
   .code({
@@ -92,7 +92,7 @@ const dashboard = new alien.Container("dashboard")
     VITE_API_BASE: "/api",
   })
   .permissions("app")
-  .build()
+  .build();
 
 const gateway = new alien.Container("gateway")
   .code({
@@ -106,7 +106,7 @@ const gateway = new alien.Container("gateway")
   .publicEndpoint("web", 8080, "http")
   .healthCheck({ path: "/health", method: "GET", timeoutSeconds: 1, failureThreshold: 3 })
   .permissions("app")
-  .build()
+  .build();
 
 export default new alien.Stack("full-stack-microservices")
   .platforms(["kubernetes"])
@@ -125,4 +125,4 @@ export default new alien.Stack("full-stack-microservices")
       },
     },
   })
-  .build()
+  .build();

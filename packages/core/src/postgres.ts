@@ -2,11 +2,11 @@ import {
   type Postgres as PostgresConfig,
   PostgresSchema,
   type ResourceType,
-} from "./generated/index.js"
-import { type Resource, ResourceBuilder } from "./resource.js"
+} from "./generated/index.js";
+import { type Resource, ResourceBuilder } from "./resource.js";
 
-export type { Postgres as PostgresConfig, PostgresOutputs } from "./generated/index.js"
-export { PostgresSchema as PostgresConfigSchema } from "./generated/index.js"
+export type { Postgres as PostgresConfig, PostgresOutputs } from "./generated/index.js";
+export { PostgresSchema as PostgresConfigSchema } from "./generated/index.js";
 
 /**
  * Represents a managed PostgreSQL database. The target platform decides the backend;
@@ -17,15 +17,15 @@ export class Postgres extends ResourceBuilder {
     version: "17",
     storage: "20Gi",
     highAvailability: false,
-  }
+  };
 
   /**
    * Creates a new Postgres builder.
    * @param id ID of the database. A database of this name is created on the server.
    */
   constructor(id: string) {
-    super()
-    this._config.id = id
+    super();
+    this._config.id = id;
   }
 
   /**
@@ -34,7 +34,7 @@ export class Postgres extends ResourceBuilder {
    * @returns The "postgres" resource type.
    */
   public static any(): ResourceType {
-    return "postgres"
+    return "postgres";
   }
 
   /**
@@ -45,8 +45,8 @@ export class Postgres extends ResourceBuilder {
    * @returns The Postgres builder instance.
    */
   public version(value: "15" | "16" | "17"): this {
-    this._config.version = value
-    return this
+    this._config.version = value;
+    return this;
   }
 
   /**
@@ -57,8 +57,8 @@ export class Postgres extends ResourceBuilder {
    * @returns The Postgres builder instance.
    */
   public cpu(value: string): this {
-    this._config.cpu = value
-    return this
+    this._config.cpu = value;
+    return this;
   }
 
   /**
@@ -68,8 +68,8 @@ export class Postgres extends ResourceBuilder {
    * @returns The Postgres builder instance.
    */
   public memory(value: string): this {
-    this._config.memory = value
-    return this
+    this._config.memory = value;
+    return this;
   }
 
   /**
@@ -78,8 +78,8 @@ export class Postgres extends ResourceBuilder {
    * @returns The Postgres builder instance.
    */
   public storage(value: string): this {
-    this._config.storage = value
-    return this
+    this._config.storage = value;
+    return this;
   }
 
   /**
@@ -88,8 +88,8 @@ export class Postgres extends ResourceBuilder {
    * @returns The Postgres builder instance.
    */
   public highAvailability(value = true): this {
-    this._config.highAvailability = value
-    return this
+    this._config.highAvailability = value;
+    return this;
   }
 
   /**
@@ -98,11 +98,11 @@ export class Postgres extends ResourceBuilder {
    * @throws Error if the configuration is invalid.
    */
   public build(): Resource {
-    const config = PostgresSchema.parse(this._config)
+    const config = PostgresSchema.parse(this._config);
 
     return this.resource({
       type: "postgres",
       ...config,
-    })
+    });
   }
 }

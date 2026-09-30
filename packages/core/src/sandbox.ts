@@ -6,8 +6,8 @@ import {
   type SandboxLifecyclePolicy,
   type SandboxLimits,
   SandboxSchema,
-} from "./generated/index.js"
-import { type Resource, ResourceBuilder } from "./resource.js"
+} from "./generated/index.js";
+import { type Resource, ResourceBuilder } from "./resource.js";
 
 export type {
   Sandbox as SandboxConfig,
@@ -17,8 +17,8 @@ export type {
   SandboxLifecyclePolicy,
   SandboxLimits,
   SandboxOutputs,
-} from "./generated/index.js"
-export { SandboxSchema as SandboxConfigSchema } from "./generated/index.js"
+} from "./generated/index.js";
+export { SandboxSchema as SandboxConfigSchema } from "./generated/index.js";
 
 /**
  * An isolated environment for running untrusted code.
@@ -43,23 +43,23 @@ export { SandboxSchema as SandboxConfigSchema } from "./generated/index.js"
  * planned. A platform that cannot enforce them rejects the sandbox rather than ignoring them.
  */
 export class Sandbox extends ResourceBuilder {
-  private _config: Partial<SandboxConfig> = {}
+  private _config: Partial<SandboxConfig> = {};
 
   /**
    * Creates a new Sandbox builder.
    * @param id Identifier for the sandbox. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
   constructor(id: string) {
-    super()
-    this._config.id = id
+    super();
+    this._config.id = id;
   }
 
   /**
    * Sets where the sandbox's root filesystem comes from.
    */
   public code(code: SandboxCode): this {
-    this._config.code = code
-    return this
+    this._config.code = code;
+    return this;
   }
 
   /**
@@ -67,32 +67,32 @@ export class Sandbox extends ResourceBuilder {
    * opens the repository to the customer's account only once the deployment registers.
    */
   public privateBaseImage(image: string): this {
-    this._config.privateBaseImage = image
-    return this
+    this._config.privateBaseImage = image;
+    return this;
   }
 
   /**
    * Sets the enforced cpu, memory, disk and process ceilings.
    */
   public limits(limits: SandboxLimits): this {
-    this._config.limits = limits
-    return this
+    this._config.limits = limits;
+    return this;
   }
 
   /**
    * Sets the outbound network policy.
    */
   public egress(egress: SandboxEgress): this {
-    this._config.egress = egress
-    return this
+    this._config.egress = egress;
+    return this;
   }
 
   /**
    * Sets the sandbox lifetime ceiling and idle behaviour.
    */
   public lifecycle(lifecycle: SandboxLifecyclePolicy): this {
-    this._config.lifecycle = lifecycle
-    return this
+    this._config.lifecycle = lifecycle;
+    return this;
   }
 
   /**
@@ -102,8 +102,8 @@ export class Sandbox extends ResourceBuilder {
    * ingress at runtime.
    */
   public previewPorts(ports: number[]): this {
-    this._config.previewPorts = ports
-    return this
+    this._config.previewPorts = ports;
+    return this;
   }
 
   /**
@@ -112,7 +112,7 @@ export class Sandbox extends ResourceBuilder {
    * @returns The "sandbox" resource type.
    */
   public static any(): ResourceType {
-    return "sandbox"
+    return "sandbox";
   }
 
   /**
@@ -121,11 +121,11 @@ export class Sandbox extends ResourceBuilder {
    * @throws Error if the sandbox configuration is invalid.
    */
   public build(): Resource {
-    const config = SandboxSchema.parse(this._config)
+    const config = SandboxSchema.parse(this._config);
 
     return this.resource({
       type: "sandbox",
       ...config,
-    })
+    });
   }
 }

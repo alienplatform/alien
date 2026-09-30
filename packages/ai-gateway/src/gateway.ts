@@ -11,19 +11,19 @@
  * the compiled-embed entry (`native.ts`) share one implementation.
  */
 
-import { type ChildProcess, spawn } from "node:child_process"
-import type { Readable } from "node:stream"
-import { AlienError } from "@alienplatform/core"
-import { GatewayBinaryUnavailableError, GatewayStartFailedError } from "./errors.js"
-import { platformTriple, type RawAiGatewayHandle } from "./loader.js"
+import { type ChildProcess, spawn } from "node:child_process";
+import type { Readable } from "node:stream";
+import { AlienError } from "@alienplatform/core";
+import { GatewayBinaryUnavailableError, GatewayStartFailedError } from "./errors.js";
+import { platformTriple, type RawAiGatewayHandle } from "./loader.js";
 
 /** The env var a container launcher sets after starting the gateway out of band. */
-const URL_ENV = "ALIEN_AI_GATEWAY_URL"
+const URL_ENV = "ALIEN_AI_GATEWAY_URL";
 /** The launcher serve mode; binds an ephemeral port and prints its URL. */
-const SERVE_FLAG = "--gateway-serve"
+const SERVE_FLAG = "--gateway-serve";
 
 export interface Gateway {
-  startAiGateway(): Promise<RawAiGatewayHandle>
+  startAiGateway(): Promise<RawAiGatewayHandle>;
 }
 
 export function createGateway(resolveBinary: () => Promise<string>): Gateway {
@@ -33,20 +33,20 @@ export function createGateway(resolveBinary: () => Promise<string>): Gateway {
   // gateway, even though the Rust side marks those errors retryable; and a child
   // that dies after reporting ready clears the memo (see keepChildAlive), so the
   // next call respawns instead of handing back a URL nothing is listening on.
-  let started: Promise<RawAiGatewayHandle> | null = null
+  let started: Promise<RawAiGatewayHandle> | null = null;
   const forget = () => {
-    started = null
-  }
+    started = null;
+  };
 
   async function startAiGateway(): Promise<RawAiGatewayHandle> {
-    started ??= startOnce(resolveBinary, forget).catch(error => {
-      forget()
-      throw error
-    })
-    return started
+    started ??= startOnce(resolveBinary, forget).catch((error) => {
+      forget();
+      throw error;
+    });
+    return started;
   }
 
-  return { startAiGateway }
+  return { startAiGateway };
 }
 
 async function startOnce(
@@ -55,18 +55,18 @@ async function startOnce(
 ): Promise<RawAiGatewayHandle> {
   // A launcher (container path) already started the gateway and exported its URL;
   // it owns that process, so there is nothing here to keep alive or reap.
-  const preset = process.env[URL_ENV]
-  if (preset) return { url: preset }
+  const preset = process.env[URL_ENV];
+  if (preset) return { url: preset };
 
-  const binary = await resolveBinary()
-  const child = spawn(binary, [SERVE_FLAG], { stdio: ["ignore", "pipe", "pipe"] })
+  const binary = await resolveBinary();
+  const child = spawn(binary, [SERVE_FLAG], { stdio: ["ignore", "pipe", "pipe"] });
   // Track and guard the child the instant it exists, before the ready-await: a
   // directed SIGTERM (or a stream I/O fault) during startup must reap it, not
   // orphan it.
-  trackChild(child)
-  const url = await readReadyUrl(child, binary)
-  keepChildAlive(child, onGatewayLost)
-  return { url }
+  trackChild(child);
+  const url = await readReadyUrl(child, binary);
+  keepChildAlive(child, onGatewayLost);
+  return { url };
 }
 
 /**
@@ -75,31 +75,31 @@ async function startOnce(
  */
 function readReadyUrl(child: ChildProcess, binary: string): Promise<string> {
   return new Promise<string>((resolveUrl, rejectUrl) => {
-    let stdout = ""
-    let stderr = ""
+    let stdout = "";
+    let stderr = "";
 
     const cleanup = () => {
-      child.stdout?.off("data", onStdout)
-      child.stderr?.off("data", onStderr)
-      child.off("exit", onExit)
-      child.off("error", onError)
-    }
+      child.stdout?.off("data", onStdout);
+      child.stderr?.off("data", onStderr);
+      child.off("exit", onExit);
+      child.off("error", onError);
+    };
 
     const onStdout = (chunk: Buffer) => {
-      stdout += chunk.toString()
-      const url = parseReadyUrl(stdout)
+      stdout += chunk.toString();
+      const url = parseReadyUrl(stdout);
       if (url) {
-        cleanup()
-        resolveUrl(url)
+        cleanup();
+        resolveUrl(url);
       }
-    }
+    };
     const onStderr = (chunk: Buffer) => {
-      stderr += chunk.toString()
-    }
+      stderr += chunk.toString();
+    };
     // An early exit is usually transient (an ambient cloud credential not yet
     // resolvable), so surface it as retryable.
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup()
+      cleanup();
       rejectUrl(
         new AlienError(
           GatewayStartFailedError.create({
@@ -108,21 +108,21 @@ function readReadyUrl(child: ChildProcess, binary: string): Promise<string> {
               `process exited (${signal ?? `code ${code ?? "null"}`}) before reporting a URL`,
           }),
         ),
-      )
-    }
+      );
+    };
     // A spawn 'error' means the OS could not exec the binary (ENOENT / EACCES /
     // exec-format): the host cannot run it, so a retry against the same path is
     // futile. Surface it as the non-retryable "binary unavailable" class.
     const onError = async (error: Error) => {
-      cleanup()
+      cleanup();
       // platformTriple() can throw on an unsupported host, and this runs inside an
       // event callback where a throw would strand the promise; fall back to the raw
       // platform/arch so the rejection always fires.
-      let triple: string
+      let triple: string;
       try {
-        triple = platformTriple()
+        triple = platformTriple();
       } catch {
-        triple = `${process.platform}-${process.arch}`
+        triple = `${process.platform}-${process.arch}`;
       }
       // Chain the spawn error (ENOENT/EACCES) so its cause is preserved.
       rejectUrl(
@@ -133,59 +133,59 @@ function readReadyUrl(child: ChildProcess, binary: string): Promise<string> {
             reason: "could not execute the gateway binary",
           }),
         ),
-      )
-    }
+      );
+    };
 
-    child.stdout?.on("data", onStdout)
-    child.stderr?.on("data", onStderr)
-    child.on("exit", onExit)
-    child.on("error", onError)
-  })
+    child.stdout?.on("data", onStdout);
+    child.stderr?.on("data", onStderr);
+    child.on("exit", onExit);
+    child.on("error", onError);
+  });
 }
 
 /** Extract the URL from the launcher's machine-readable stdout line, if present. */
 function parseReadyUrl(buffered: string): string | undefined {
   for (const line of buffered.split("\n")) {
-    const trimmed = line.trim()
-    if (!trimmed.startsWith("{")) continue
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{")) continue;
     try {
-      const parsed = JSON.parse(trimmed) as { aiGatewayUrl?: unknown }
-      if (typeof parsed.aiGatewayUrl === "string") return parsed.aiGatewayUrl
+      const parsed = JSON.parse(trimmed) as { aiGatewayUrl?: unknown };
+      if (typeof parsed.aiGatewayUrl === "string") return parsed.aiGatewayUrl;
     } catch {
       // A partial line: wait for more stdout.
     }
   }
-  return undefined
+  return undefined;
 }
 
 // The child currently serving the gateway. The reaper (installed once) reads this,
 // so a respawn never stacks duplicate signal handlers and never leaves a previous
 // child orphaned when the process is torn down.
-let liveChild: ChildProcess | undefined
-let reaperInstalled = false
+let liveChild: ChildProcess | undefined;
+let reaperInstalled = false;
 
 /** Reap whatever child is live when this process is torn down. Installed once. */
 function installReaper(): void {
-  if (reaperInstalled) return
-  reaperInstalled = true
+  if (reaperInstalled) return;
+  reaperInstalled = true;
   const killLive = () => {
     try {
-      liveChild?.kill("SIGTERM")
+      liveChild?.kill("SIGTERM");
     } catch {
       // Already gone.
     }
-  }
+  };
   // Normal exit reaps synchronously.
-  process.once("exit", killLive)
+  process.once("exit", killLive);
   // A directed SIGINT/SIGTERM terminates the host before 'exit' fires, which would
   // orphan the child. Reap it, then re-raise the signal so the host app's own
   // handlers (or the default action) still run: we don't force-exit and truncate
   // its shutdown.
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.once(signal, () => {
-      killLive()
-      process.kill(process.pid, signal)
-    })
+      killLive();
+      process.kill(process.pid, signal);
+    });
   }
 }
 
@@ -197,10 +197,10 @@ function installReaper(): void {
  * an 'error' listener, `readReadyUrl`'s during startup then `keepChildAlive`'s after).
  */
 function trackChild(child: ChildProcess): void {
-  liveChild = child
-  installReaper()
-  child.stdout?.on("error", () => {})
-  child.stderr?.on("error", () => {})
+  liveChild = child;
+  installReaper();
+  child.stdout?.on("error", () => {});
+  child.stderr?.on("error", () => {});
 }
 
 /**
@@ -209,8 +209,8 @@ function trackChild(child: ChildProcess): void {
  * no-op instead of a crash.
  */
 function unrefStream(stream: Readable | null): void {
-  const s = stream as (Readable & { unref?: () => void }) | null
-  if (s && typeof s.unref === "function") s.unref()
+  const s = stream as (Readable & { unref?: () => void }) | null;
+  if (s && typeof s.unref === "function") s.unref();
 }
 
 /**
@@ -225,14 +225,14 @@ function unrefStream(stream: Readable | null): void {
  */
 function keepChildAlive(child: ChildProcess, onGatewayLost: () => void): void {
   const onGone = () => {
-    if (liveChild === child) liveChild = undefined
-    onGatewayLost()
-  }
-  child.on("error", onGone)
-  child.on("exit", onGone)
-  child.stdout?.resume()
-  child.stderr?.resume()
-  unrefStream(child.stdout)
-  unrefStream(child.stderr)
-  child.unref()
+    if (liveChild === child) liveChild = undefined;
+    onGatewayLost();
+  };
+  child.on("error", onGone);
+  child.on("exit", onGone);
+  child.stdout?.resume();
+  child.stderr?.resume();
+  unrefStream(child.stdout);
+  unrefStream(child.stderr);
+  child.unref();
 }

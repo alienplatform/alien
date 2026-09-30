@@ -16,18 +16,18 @@
             "Microsoft.App/managedEnvironments/certificates/delete",
             "Microsoft.App/managedEnvironments/storages/read",
             "Microsoft.App/managedEnvironments/storages/write",
-            "Microsoft.App/managedEnvironments/storages/delete"
-          ]
+            "Microsoft.App/managedEnvironments/storages/delete",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/managedEnvironments/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/managedEnvironments/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

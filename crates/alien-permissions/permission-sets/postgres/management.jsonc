@@ -12,23 +12,23 @@
             "rds:DescribeDBSubnetGroups",
             "rds:ModifyDBCluster",
             "rds:ModifyDBInstance",
-            "rds:ListTagsForResource"
-          ]
+            "rds:ListTagsForResource",
+          ],
         },
         "binding": {
           "stack": {
             "resources": [
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*",
-              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-*"
-            ]
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-*",
+            ],
           },
           "resource": {
             "resources": [
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}",
-              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*"
-            ]
-          }
-        }
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*",
+            ],
+          },
+        },
       },
       {
         // The controller lists instances by DB cluster filter without an instance ID.
@@ -36,17 +36,17 @@
         "label": "describe-database-instances",
         "description": "List the Aurora cluster's instances during management.",
         "grant": {
-          "actions": ["rds:DescribeDBInstances"]
+          "actions": ["rds:DescribeDBInstances"],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
+            "resources": ["*"],
           },
           "resource": {
-            "resources": ["*"]
-          }
-        }
-      }
+            "resources": ["*"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -56,14 +56,14 @@
           "permissions": [
             "cloudsql.instances.get",
             "cloudsql.instances.list",
-            "cloudsql.instances.update"
-          ]
+            "cloudsql.instances.update",
+          ],
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}" }
-        }
-      }
+          "resource": { "scope": "projects/${projectName}" },
+        },
+      },
     ],
     "azure": [
       {
@@ -74,18 +74,18 @@
             "Microsoft.DBforPostgreSQL/flexibleServers/read",
             "Microsoft.DBforPostgreSQL/flexibleServers/write",
             "Microsoft.DBforPostgreSQL/flexibleServers/configurations/read",
-            "Microsoft.DBforPostgreSQL/flexibleServers/configurations/write"
-          ]
+            "Microsoft.DBforPostgreSQL/flexibleServers/configurations/write",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

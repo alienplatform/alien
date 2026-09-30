@@ -14,8 +14,8 @@
             "lambda:RunMicrovm",
             "lambda:SuspendMicrovm",
             "lambda:ResumeMicrovm",
-            "lambda:TerminateMicrovm"
-          ]
+            "lambda:TerminateMicrovm",
+          ],
         },
         // Resource-scoped only, unlike `sandbox/execute`, and this is the whole boundary. The
         // manager hands a remote caller raw sandbox credentials, so `owned_microvm`'s image check
@@ -24,10 +24,10 @@
         "binding": {
           "resource": {
             "resources": [
-              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}"
-            ]
-          }
-        }
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}",
+            ],
+          },
+        },
       },
       {
         "label": "pass-the-managed-connectors-a-sandbox-starts-on",
@@ -37,7 +37,7 @@
           // connector: AWS attaches both implicitly and a RunMicrovm response reports them back as
           // `egressNetworkConnectors` and `ingressNetworkConnectors`. Without this a remotely
           // reachable sandbox — which preflight requires to be open-egress — cannot start at all.
-          "actions": ["lambda:PassNetworkConnector"]
+          "actions": ["lambda:PassNetworkConnector"],
         },
         // AWS's own connectors live under the literal account `aws`, so this pattern cannot name
         // one the customer declared: those carry the customer's account id. That is what keeps the
@@ -46,10 +46,10 @@
         "binding": {
           "resource": {
             "resources": [
-              "arn:aws:lambda:${awsRegion}:aws:network-connector:aws-network-connector:*"
-            ]
-          }
-        }
+              "arn:aws:lambda:${awsRegion}:aws:network-connector:aws-network-connector:*",
+            ],
+          },
+        },
       },
       {
         "label": "reach-inside-a-sandbox",
@@ -66,16 +66,16 @@
           //
           // The mint also has no port condition key, so a declared `previewPorts` list bounds only
           // callers going through the provider, not a holder of these credentials.
-          "actions": ["lambda:CreateMicrovmAuthToken", "lambda:GetMicrovm"]
+          "actions": ["lambda:CreateMicrovmAuthToken", "lambda:GetMicrovm"],
         },
         "binding": {
           "resource": {
             "resources": [
-              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}"
-            ]
-          }
-        }
-      }
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}",
+            ],
+          },
+        },
+      },
     ],
     "azure": [
       {
@@ -85,7 +85,7 @@
           // The role Microsoft documents as sufficient for the sandbox data plane, and the same
           // one `sandbox/execute` uses — it bundles lifecycle and exec, so this set can't grant
           // exec without lifecycle. All entries are `dataAction`s: no control-plane rights.
-          "predefinedRoles": ["Container Apps SandboxGroup Data Owner"]
+          "predefinedRoles": ["Container Apps SandboxGroup Data Owner"],
         },
         // Resource-scoped: the only stack-level scope Azure RBAC can express is the resource
         // group, which would reach every sibling sandbox. The scope bounds which group, not what
@@ -93,10 +93,10 @@
         "binding": {
           "resource": {
             // `${resourceName}` already resolves to the prefixed name, so no `${stackPrefix}`.
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${resourceName}"
-          }
-        }
-      }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${resourceName}",
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -114,8 +114,8 @@
             "aiplatform.sandboxEnvironments.delete",
             "aiplatform.sandboxEnvironments.execute",
             "aiplatform.sandboxEnvironments.pause",
-            "aiplatform.sandboxEnvironments.resume"
-          ]
+            "aiplatform.sandboxEnvironments.resume",
+          ],
         },
         // The engine, and nothing wider — same boundary the AWS and Azure blocks draw. Reasoning-
         // engine IAM is enforced on the sandboxes under it; project scope would hand a remote caller
@@ -123,10 +123,10 @@
         // stack-level scope.
         "binding": {
           "resource": {
-            "scope": "projects/${projectName}/locations/${region}/reasoningEngines/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "projects/${projectName}/locations/${region}/reasoningEngines/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

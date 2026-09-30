@@ -10,28 +10,28 @@
         "label": "read-connection-secret",
         "description": "Read the generated connection-password secret.",
         "grant": {
-          "actions": ["secretsmanager:GetSecretValue"]
+          "actions": ["secretsmanager:GetSecretValue"],
         },
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*"
-            ]
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-*",
+            ],
           },
           "resource": {
             "resources": [
-              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*"
-            ]
-          }
-        }
-      }
+              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-${resourceName}-*",
+            ],
+          },
+        },
+      },
     ],
     "gcp": [
       {
         "label": "read-connection-secret",
         "description": "Read the generated connection-password secret version.",
         "grant": {
-          "permissions": ["secretmanager.versions.access", "secretmanager.secrets.get"]
+          "permissions": ["secretmanager.versions.access", "secretmanager.secrets.get"],
         },
         // Secret-value reads are sensitive content: condition them to the stack/resource
         // secret prefix (mirrors `vault/data-read`) so the workload can read only its own
@@ -41,23 +41,23 @@
             "scope": "projects/${projectName}",
             "condition": {
               "title": "StackPostgresSecretRead",
-              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")"
-            }
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")",
+            },
           },
           "resource": {
             "scope": "projects/${projectName}",
             "condition": {
               "title": "ResourcePostgresSecretRead",
-              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")"
-            }
-          }
-        }
-      }
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")",
+            },
+          },
+        },
+      },
     ],
     "azure": [
       // Azure requires a Key Vault Secrets User assignment scoped to the database
       // password secret. The resource emitter resolves the actual vault and secret
       // ARM identifiers; a generic vault-wide grant would expose unrelated secrets.
-    ]
-  }
+    ],
+  },
 }

@@ -8,8 +8,8 @@
  * `@alienplatform/bindings` and `@alienplatform/core`).
  */
 
-import { defineError } from "@alienplatform/core"
-import * as z from "zod/v4"
+import { defineError } from "@alienplatform/core";
+import * as z from "zod/v4";
 
 /**
  * Error thrown when the gRPC connection to the runtime fails.
@@ -25,7 +25,7 @@ export const GrpcConnectionError = defineError({
   retryable: true,
   internal: false,
   httpStatusCode: 503,
-})
+});
 
 /**
  * Error thrown when a gRPC call fails.
@@ -43,7 +43,7 @@ export const GrpcCallError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 500,
-})
+});
 
 /**
  * Error thrown when a required environment variable is missing.
@@ -59,4 +59,4 @@ export const MissingEnvVarError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 500,
-})
+});

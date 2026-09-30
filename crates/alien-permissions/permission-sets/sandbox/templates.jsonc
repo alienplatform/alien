@@ -13,16 +13,16 @@
             "aiplatform.sandboxEnvironmentTemplates.create",
             "aiplatform.sandboxEnvironmentTemplates.delete",
             "aiplatform.sandboxEnvironmentTemplates.get",
-            "aiplatform.sandboxEnvironmentTemplates.list"
-          ]
+            "aiplatform.sandboxEnvironmentTemplates.list",
+          ],
         },
         // The engine only: project scope would let the manager replace a sibling sandbox's image.
         "binding": {
           "resource": {
-            "scope": "projects/${projectName}/locations/${region}/reasoningEngines/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "projects/${projectName}/locations/${region}/reasoningEngines/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

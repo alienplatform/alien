@@ -12,18 +12,18 @@
             "iam:GetRolePolicy",
             "iam:ListRolePolicies",
             "iam:ListAttachedRolePolicies",
-            "iam:TagRole"
-          ]
+            "iam:TagRole",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"]
-          }
-        }
-      }
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -40,18 +40,18 @@
             "iam.roles.undelete",
             "iam.roles.update",
             "resourcemanager.projects.getIamPolicy",
-            "resourcemanager.projects.setIamPolicy"
-          ]
+            "resourcemanager.projects.setIamPolicy",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}/serviceAccounts/${stackPrefix}-${resourceName}@${projectName}.iam.gserviceaccount.com"
-          }
-        }
-      }
+            "scope": "projects/${projectName}/serviceAccounts/${stackPrefix}-${resourceName}@${projectName}.iam.gserviceaccount.com",
+          },
+        },
+      },
     ],
     "azure": [
       {
@@ -61,18 +61,18 @@
             "Microsoft.Authorization/roleDefinitions/read",
             "Microsoft.Authorization/roleDefinitions/write",
             "Microsoft.Authorization/roleAssignments/read",
-            "Microsoft.Authorization/roleAssignments/write"
-          ]
+            "Microsoft.Authorization/roleAssignments/write",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

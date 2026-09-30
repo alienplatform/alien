@@ -8,21 +8,21 @@
       // template created by an interrupted attempt.
       {
         "grant": {
-          "actions": ["ec2:DescribeLaunchTemplates"]
+          "actions": ["ec2:DescribeLaunchTemplates"],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
+            "resources": ["*"],
           },
           "resource": {
-            "resources": ["*"]
-          }
-        }
+            "resources": ["*"],
+          },
+        },
       },
       // Launch template creation must include Alien boundary tags in the request.
       {
         "grant": {
-          "actions": ["ec2:CreateLaunchTemplate", "ec2:CreateTags"]
+          "actions": ["ec2:CreateLaunchTemplate", "ec2:CreateTags"],
         },
         "binding": {
           "stack": {
@@ -30,25 +30,25 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       // Existing launch templates can be deleted only when they carry Alien boundary tags.
       {
         "grant": {
-          "actions": ["ec2:DeleteLaunchTemplate"]
+          "actions": ["ec2:DeleteLaunchTemplate"],
         },
         "binding": {
           "stack": {
@@ -56,20 +56,20 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       // Auto Scaling validates launch template use with an ec2:RunInstances
       // dry run before creating an ASG. Provision-created ComputeCluster
@@ -77,39 +77,39 @@
       {
         "label": "Use runtime launch templates and security groups",
         "grant": {
-          "actions": ["ec2:RunInstances"]
+          "actions": ["ec2:RunInstances"],
         },
         "binding": {
           "stack": {
             "resources": [
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
             ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": [
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
             ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       {
         "label": "Create runtime worker instances",
         "grant": {
-          "actions": ["ec2:RunInstances"]
+          "actions": ["ec2:RunInstances"],
         },
         "binding": {
           "stack": {
@@ -117,25 +117,25 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       {
         "label": "Use RunInstances companion resources",
         "grant": {
-          "actions": ["ec2:RunInstances"]
+          "actions": ["ec2:RunInstances"],
         },
         "binding": {
           "stack": {
@@ -143,115 +143,115 @@
               "arn:aws:ec2:${awsRegion}::image/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
-            ]
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*",
+            ],
           },
           "resource": {
             "resources": [
               "arn:aws:ec2:${awsRegion}::image/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
-            ]
-          }
-        }
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*",
+            ],
+          },
+        },
       },
       // Launch-template tag specifications trigger an ec2:CreateTags
       // authorization check as part of RunInstances.
       {
         "label": "Tag runtime worker resources",
         "grant": {
-          "actions": ["ec2:CreateTags"]
+          "actions": ["ec2:CreateTags"],
         },
         "binding": {
           "stack": {
             "resources": [
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*",
             ],
             "condition": {
               "StringEquals": {
                 "ec2:CreateAction": "RunInstances",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": [
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*",
             ],
             "condition": {
               "StringEquals": {
                 "ec2:CreateAction": "RunInstances",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       // AWS creates this account-level role on the first ASG. It is shared across
       // stacks, so scope by its exact ARN and service rather than stack tags.
       {
         "grant": {
-          "actions": ["iam:CreateServiceLinkedRole"]
+          "actions": ["iam:CreateServiceLinkedRole"],
         },
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:iam::${awsAccountId}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+              "arn:aws:iam::${awsAccountId}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling",
             ],
             "condition": {
               "StringEquals": {
-                "iam:AWSServiceName": "autoscaling.amazonaws.com"
-              }
-            }
+                "iam:AWSServiceName": "autoscaling.amazonaws.com",
+              },
+            },
           },
           "resource": {
             "resources": [
-              "arn:aws:iam::${awsAccountId}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+              "arn:aws:iam::${awsAccountId}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling",
             ],
             "condition": {
               "StringEquals": {
-                "iam:AWSServiceName": "autoscaling.amazonaws.com"
-              }
-            }
-          }
-        }
+                "iam:AWSServiceName": "autoscaling.amazonaws.com",
+              },
+            },
+          },
+        },
       },
       // ASG creation is name-scoped and must include Alien boundary tags.
       {
         "grant": {
-          "actions": ["autoscaling:CreateAutoScalingGroup"]
+          "actions": ["autoscaling:CreateAutoScalingGroup"],
         },
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*",
             ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": [
-              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*",
             ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       // Existing ASGs can be changed only when they carry Alien boundary tags.
       {
@@ -259,33 +259,33 @@
           "actions": [
             "autoscaling:DeleteAutoScalingGroup",
             "autoscaling:UpdateAutoScalingGroup",
-            "autoscaling:SetDesiredCapacity"
-          ]
+            "autoscaling:SetDesiredCapacity",
+          ],
         },
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*",
             ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": [
-              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*",
             ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       // Describe actions — AWS requires Resource: "*" for these read-only APIs.
       {
@@ -296,22 +296,22 @@
             "ec2:DescribeInstanceStatus",
             "ec2:DescribeTags",
             "autoscaling:DescribeAutoScalingGroups",
-            "autoscaling:DescribeScalingActivities"
-          ]
+            "autoscaling:DescribeScalingActivities",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
+            "resources": ["*"],
           },
           "resource": {
-            "resources": ["*"]
-          }
-        }
+            "resources": ["*"],
+          },
+        },
       },
       // Instance console output can be read only from Alien-tagged workers.
       {
         "grant": {
-          "actions": ["ec2:GetConsoleOutput"]
+          "actions": ["ec2:GetConsoleOutput"],
         },
         "binding": {
           "stack": {
@@ -319,37 +319,37 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       // iam:PassRole — scoped to stack-prefixed IAM roles created by setup.
       // CloudFormation role names are based on logical IDs and generated
       // suffixes, so they do not reliably end in a fixed role suffix.
       {
         "grant": {
-          "actions": ["iam:PassRole"]
+          "actions": ["iam:PassRole"],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
-          }
-        }
-      }
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+          },
+        },
+      },
     ],
     "gcp": [
       // Instance template and MIG management + serial port output for boot diagnostics
@@ -370,17 +370,17 @@
             "compute.globalOperations.get",
             "compute.zones.list",
             "compute.zoneOperations.get",
-            "compute.instances.getSerialPortOutput"
-          ]
+            "compute.instances.getSerialPortOutput",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}"
-          }
-        }
+            "scope": "projects/${projectName}",
+          },
+        },
       },
       // Service account management for VM instances
       {
@@ -391,17 +391,17 @@
             "iam.serviceAccounts.delete",
             "iam.serviceAccounts.actAs",
             "resourcemanager.projects.getIamPolicy",
-            "resourcemanager.projects.setIamPolicy"
-          ]
+            "resourcemanager.projects.setIamPolicy",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}"
-          }
-        }
+            "scope": "projects/${projectName}",
+          },
+        },
       },
       // Secret Manager for worker runtime secrets
       {
@@ -412,34 +412,34 @@
             "secretmanager.secrets.delete",
             "secretmanager.versions.add",
             "secretmanager.secrets.getIamPolicy",
-            "secretmanager.secrets.setIamPolicy"
-          ]
+            "secretmanager.secrets.setIamPolicy",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}"
-          }
-        }
-      }
+            "scope": "projects/${projectName}",
+          },
+        },
+      },
     ],
     "azure": [
       // Resource SKU availability is subscription-specific and cannot be read through a
       // resource-group-scoped role assignment.
       {
         "grant": {
-          "actions": ["Microsoft.Compute/skus/read"]
+          "actions": ["Microsoft.Compute/skus/read"],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}"
+            "scope": "/subscriptions/${subscriptionId}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}"
-          }
-        }
+            "scope": "/subscriptions/${subscriptionId}",
+          },
+        },
       },
       // VMSS management + VM listing + boot diagnostics for startup log visibility
       {
@@ -452,17 +452,17 @@
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/read",
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/instanceView/read",
             "Microsoft.Compute/locations/operations/read",
-            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/retrieveBootDiagnosticsData/action"
-          ]
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/retrieveBootDiagnosticsData/action",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          }
-        }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
+          },
+        },
       },
       // Network Security Group
       {
@@ -470,17 +470,17 @@
           "actions": [
             "Microsoft.Network/networkSecurityGroups/write",
             "Microsoft.Network/networkSecurityGroups/read",
-            "Microsoft.Network/networkSecurityGroups/delete"
-          ]
+            "Microsoft.Network/networkSecurityGroups/delete",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          }
-        }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
+          },
+        },
       },
       // Managed Identity and role assignments
       {
@@ -490,36 +490,36 @@
             "Microsoft.ManagedIdentity/userAssignedIdentities/write",
             "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
             "Microsoft.Authorization/roleAssignments/write",
-            "Microsoft.Authorization/roleAssignments/delete"
-          ]
+            "Microsoft.Authorization/roleAssignments/delete",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          }
-        }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
+          },
+        },
       },
       // Key Vault for worker runtime secrets
       {
         "grant": {
           "actions": [
             "Microsoft.KeyVault/vaults/secrets/write",
-            "Microsoft.KeyVault/vaults/secrets/read"
+            "Microsoft.KeyVault/vaults/secrets/read",
           ],
-          "dataActions": ["Microsoft.KeyVault/vaults/secrets/delete"]
+          "dataActions": ["Microsoft.KeyVault/vaults/secrets/delete"],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
+          },
+        },
+      },
+    ],
+  },
 }

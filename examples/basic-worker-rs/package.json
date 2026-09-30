@@ -1,8 +1,8 @@
 {
   "name": "basic-worker-rs",
   "version": "1.0.0",
-  "type": "module",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "alien dev",
     "build": "alien build --platform local",

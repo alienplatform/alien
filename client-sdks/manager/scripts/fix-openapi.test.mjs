@@ -1,6 +1,6 @@
-import assert from "node:assert/strict"
-import test from "node:test"
-import { fixNullablePatterns } from "./fix-openapi.mjs"
+import assert from "node:assert/strict";
+import test from "node:test";
+import { fixNullablePatterns } from "./fix-openapi.mjs";
 
 test("wraps nullable references in an OpenAPI 3.0 schema object", () => {
   assert.deepEqual(
@@ -13,15 +13,15 @@ test("wraps nullable references in an OpenAPI 3.0 schema object", () => {
       nullable: true,
       allOf: [{ $ref: "#/components/schemas/OperatorImageReport" }],
     },
-  )
-})
+  );
+});
 
 test("keeps inline nullable schemas inline", () => {
   assert.deepEqual(
     fixNullablePatterns({ oneOf: [{ type: "string", maxLength: 64 }, { type: "null" }] }),
     { type: "string", maxLength: 64, nullable: true },
-  )
-})
+  );
+});
 
 test("fixes nullable references recursively", () => {
   assert.deepEqual(
@@ -38,5 +38,5 @@ test("fixes nullable references recursively", () => {
         },
       },
     },
-  )
-})
+  );
+});

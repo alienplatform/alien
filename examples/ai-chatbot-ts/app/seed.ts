@@ -1,5 +1,5 @@
-import { postgres } from "@alienplatform/sdk"
-import { Client } from "pg"
+import { postgres } from "@alienplatform/sdk";
+import { Client } from "pg";
 
 // The app is publicly reachable, so it exposes no endpoint that writes to the
 // database. Seeding only what is missing keeps a repeat call harmless.
@@ -11,7 +11,7 @@ const SCHEMA = `
     id serial primary key, customer_id int references customers(id),
     amount_usd int, status text, created date
   );
-`
+`;
 
 const CUSTOMERS = `
   insert into customers (id, name, plan, country, mrr_usd) values
@@ -28,7 +28,7 @@ const CUSTOMERS = `
     plan = excluded.plan,
     country = excluded.country,
     mrr_usd = excluded.mrr_usd;
-`
+`;
 
 const ORDERS = `
   insert into orders (id, customer_id, amount_usd, status, created) values
@@ -42,29 +42,29 @@ const ORDERS = `
     amount_usd = excluded.amount_usd,
     status = excluded.status,
     created = excluded.created;
-`
+`;
 
-const SEED_LOCK = 4212025
+const SEED_LOCK = 4212025;
 
-let seeded: Promise<void> | undefined
+let seeded: Promise<void> | undefined;
 
 /** Create the demo tables and fill them, at most once per container. */
 export function ensureSeeded(): Promise<void> {
   if (!seeded) {
-    seeded = run().catch(err => {
-      seeded = undefined
-      throw err
-    })
+    seeded = run().catch((err) => {
+      seeded = undefined;
+      throw err;
+    });
   }
-  return seeded
+  return seeded;
 }
 
 export function forgetSeeded(): void {
-  seeded = undefined
+  seeded = undefined;
 }
 
 async function run(): Promise<void> {
-  const conn = await postgres("db").connection()
+  const conn = await postgres("db").connection();
   // Its own write connection: the query pool the model's tool uses is read-only.
   const client = new Client({
     host: conn.host,
@@ -76,28 +76,28 @@ async function run(): Promise<void> {
     // A container that dies holding the advisory lock would otherwise park every
     // other container's seed on `pg_advisory_lock` forever.
     options: "-c statement_timeout=30000",
-  })
-  await client.connect()
+  });
+  await client.connect();
   try {
-    await client.query("select pg_advisory_lock($1)", [SEED_LOCK])
-    await client.query("begin")
+    await client.query("select pg_advisory_lock($1)", [SEED_LOCK]);
+    await client.query("begin");
     try {
-      await client.query(SCHEMA)
+      await client.query(SCHEMA);
       // Stable IDs plus upserts repair an interrupted or partially completed seed.
-      await client.query(CUSTOMERS)
-      await client.query(ORDERS)
+      await client.query(CUSTOMERS);
+      await client.query(ORDERS);
       await client.query(
         "select setval(pg_get_serial_sequence('customers', 'id'), greatest(max(id), 1)) from customers",
-      )
+      );
       await client.query(
         "select setval(pg_get_serial_sequence('orders', 'id'), greatest(max(id), 1)) from orders",
-      )
-      await client.query("commit")
+      );
+      await client.query("commit");
     } catch (err) {
-      await client.query("rollback")
-      throw err
+      await client.query("rollback");
+      throw err;
     }
   } finally {
-    await client.end()
+    await client.end();
   }
 }

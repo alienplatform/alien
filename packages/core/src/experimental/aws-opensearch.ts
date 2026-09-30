@@ -4,8 +4,8 @@ import {
   type AwsOpenSearch as AwsOpenSearchConfig,
   AwsOpenSearchSchema,
   type ResourceType,
-} from "../generated/index.js"
-import { type Resource, ResourceBuilder } from "../resource.js"
+} from "../generated/index.js";
+import { type Resource, ResourceBuilder } from "../resource.js";
 
 export type {
   AwsOpenSearch as AwsOpenSearchConfig,
@@ -13,8 +13,8 @@ export type {
   AwsOpenSearchCapacityRange,
   AwsOpenSearchCollectionType,
   AwsOpenSearchOutputs,
-} from "../generated/index.js"
-export { AwsOpenSearchSchema as AwsOpenSearchConfigSchema } from "../generated/index.js"
+} from "../generated/index.js";
+export { AwsOpenSearchSchema as AwsOpenSearchConfigSchema } from "../generated/index.js";
 
 /**
  * An Amazon OpenSearch Serverless collection (next generation): compute and
@@ -38,15 +38,15 @@ export { AwsOpenSearchSchema as AwsOpenSearchConfigSchema } from "../generated/i
 export class AwsOpenSearch extends ResourceBuilder {
   private _config: Partial<AwsOpenSearchConfig> = {
     collectionType: "search",
-  }
+  };
 
   /**
    * Creates a new AwsOpenSearch builder.
    * @param id Identifier for the collection (lowercase letters, digits, and hyphens; max 23 characters).
    */
   constructor(id: string) {
-    super()
-    this._config.id = id
+    super();
+    this._config.id = id;
   }
 
   /**
@@ -55,7 +55,7 @@ export class AwsOpenSearch extends ResourceBuilder {
    * @returns The "experimental/aws-opensearch" resource type.
    */
   public static any(): ResourceType {
-    return "experimental/aws-opensearch"
+    return "experimental/aws-opensearch";
   }
 
   /**
@@ -65,8 +65,8 @@ export class AwsOpenSearch extends ResourceBuilder {
    * @returns The AwsOpenSearch builder instance.
    */
   public collectionType(value: AwsOpenSearchCollectionType): this {
-    this._config.collectionType = value
-    return this
+    this._config.collectionType = value;
+    return this;
   }
 
   /**
@@ -80,9 +80,9 @@ export class AwsOpenSearch extends ResourceBuilder {
    * @returns The AwsOpenSearch builder instance.
    */
   public capacity(value: AwsOpenSearchCapacity): this {
-    validateCapacity(value)
-    this._config.capacity = value
-    return this
+    validateCapacity(value);
+    this._config.capacity = value;
+    return this;
   }
 
   /**
@@ -91,12 +91,12 @@ export class AwsOpenSearch extends ResourceBuilder {
    * @throws Error if the configuration is invalid.
    */
   public build(): Resource {
-    const config = AwsOpenSearchSchema.parse(this._config)
+    const config = AwsOpenSearchSchema.parse(this._config);
 
     return this.resource({
       type: "experimental/aws-opensearch",
       ...config,
-    })
+    });
   }
 }
 
@@ -104,28 +104,28 @@ function validateCapacity(capacity: AwsOpenSearchCapacity): void {
   const components = [
     ["indexing", capacity.indexing],
     ["search", capacity.search],
-  ] as const
+  ] as const;
 
   if (components.every(([, range]) => range == null)) {
-    throw new Error("OpenSearch capacity must configure indexing, search, or both")
+    throw new Error("OpenSearch capacity must configure indexing, search, or both");
   }
 
   for (const [component, range] of components) {
     if (range == null) {
-      continue
+      continue;
     }
     if (range.minOcu == null && range.maxOcu == null) {
-      throw new Error(`OpenSearch ${component} capacity must configure minOcu, maxOcu, or both`)
+      throw new Error(`OpenSearch ${component} capacity must configure minOcu, maxOcu, or both`);
     }
 
     if (range.minOcu != null) {
-      validateOcu(`${component}.minOcu`, range.minOcu, true)
+      validateOcu(`${component}.minOcu`, range.minOcu, true);
     }
     if (range.maxOcu != null) {
-      validateOcu(`${component}.maxOcu`, range.maxOcu, false)
+      validateOcu(`${component}.maxOcu`, range.maxOcu, false);
     }
     if (range.minOcu != null && range.maxOcu != null && range.minOcu > range.maxOcu) {
-      throw new Error(`OpenSearch ${component} minOcu must not exceed maxOcu`)
+      throw new Error(`OpenSearch ${component} minOcu must not exceed maxOcu`);
     }
   }
 }
@@ -140,11 +140,11 @@ function validateOcu(field: string, value: number, allowZero: boolean): void {
       value === 4 ||
       value === 8 ||
       value === 16 ||
-      (value > 16 && value % 16 === 0))
+      (value > 16 && value % 16 === 0));
 
   if (!supported) {
     throw new Error(
       `OpenSearch ${field} must be ${allowZero ? "0, " : ""}1, 2, 4, 8, 16, or a multiple of 16 up to 1696`,
-    )
+    );
   }
 }

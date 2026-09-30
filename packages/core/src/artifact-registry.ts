@@ -2,14 +2,14 @@ import {
   type ArtifactRegistry as ArtifactRegistryConfig,
   ArtifactRegistrySchema,
   type ResourceType,
-} from "./generated/index.js"
-import { Resource } from "./resource.js"
+} from "./generated/index.js";
+import { Resource } from "./resource.js";
 
 export type {
   ArtifactRegistry as ArtifactRegistryConfig,
   ArtifactRegistryOutputs,
-} from "./generated/index.js"
-export { ArtifactRegistrySchema as ArtifactRegistryConfigSchema } from "./generated/index.js"
+} from "./generated/index.js";
+export { ArtifactRegistrySchema as ArtifactRegistryConfigSchema } from "./generated/index.js";
 
 /**
  * Represents an artifact registry for storing container images and other build artifacts.
@@ -17,14 +17,14 @@ export { ArtifactRegistrySchema as ArtifactRegistryConfigSchema } from "./genera
  * AWS ECR, GCP Artifact Registry, and Azure Container Registry.
  */
 export class ArtifactRegistry {
-  private _config: Partial<ArtifactRegistryConfig> = {}
+  private _config: Partial<ArtifactRegistryConfig> = {};
 
   /**
    * Creates a new ArtifactRegistry builder.
    * @param id Identifier for the artifact registry. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
   constructor(id: string) {
-    this._config.id = id
+    this._config.id = id;
   }
 
   /**
@@ -33,7 +33,7 @@ export class ArtifactRegistry {
    * @returns The "artifact-registry" resource type.
    */
   public static any(): ResourceType {
-    return "artifact-registry"
+    return "artifact-registry";
   }
 
   /**
@@ -44,8 +44,8 @@ export class ArtifactRegistry {
    * @param regions - AWS region codes to replicate to (e.g., ["us-east-2", "eu-west-1"])
    */
   public replicationRegions(regions: string[]): this {
-    this._config.replicationRegions = regions
-    return this
+    this._config.replicationRegions = regions;
+    return this;
   }
 
   /**
@@ -54,11 +54,11 @@ export class ArtifactRegistry {
    * @throws Error if the artifact registry configuration is invalid.
    */
   public build(): Resource {
-    const config = ArtifactRegistrySchema.parse(this._config)
+    const config = ArtifactRegistrySchema.parse(this._config);
 
     return new Resource({
       type: "artifact-registry",
       ...config,
-    })
+    });
   }
 }

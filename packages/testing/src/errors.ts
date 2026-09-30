@@ -1,5 +1,5 @@
-import { AlienError, defineError } from "@alienplatform/core"
-import * as z from "zod/v4"
+import { AlienError, defineError } from "@alienplatform/core";
+import * as z from "zod/v4";
 
 export const TestingOperationFailedError = defineError({
   code: "TESTING_OPERATION_FAILED",
@@ -12,7 +12,7 @@ export const TestingOperationFailedError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 500,
-})
+});
 
 export const TestingUnsupportedPlatformError = defineError({
   code: "TESTING_UNSUPPORTED_PLATFORM",
@@ -25,7 +25,7 @@ export const TestingUnsupportedPlatformError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 400,
-})
+});
 
 export async function withTestingContext(
   error: unknown,
@@ -39,5 +39,5 @@ export async function withTestingContext(
       message,
       details,
     }),
-  )
+  );
 }

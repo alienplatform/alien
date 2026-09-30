@@ -8,16 +8,16 @@
  * - 'local' (default) — runs locally via `alien dev`, no credentials needed
  * - 'aws' | 'gcp' | 'azure' — deploys to the cloud via the platform API (requires ALIEN_API_KEY)
  */
-export type Platform = "local" | "aws" | "gcp" | "azure"
+export type Platform = "local" | "aws" | "gcp" | "azure";
 
 /**
  * Environment variable configuration for deployments
  */
 export interface EnvironmentVariable {
-  name: string
-  value: string
-  type?: "plain" | "secret"
-  targetResources?: string[]
+  name: string;
+  value: string;
+  type?: "plain" | "secret";
+  targetResources?: string[];
 }
 
 /**
@@ -25,26 +25,26 @@ export interface EnvironmentVariable {
  */
 export interface DeployOptions {
   /** Path to application directory */
-  app: string
+  app: string;
 
   /** Optional: specific config file to use (e.g., alien.function.ts) */
-  config?: string
+  config?: string;
 
   /** Target platform (default: 'local') */
-  platform?: Platform
+  platform?: Platform;
 
   /** Environment variables */
-  environmentVariables?: EnvironmentVariable[]
+  environmentVariables?: EnvironmentVariable[];
 
   /** Verbose logging */
-  verbose?: boolean
+  verbose?: boolean;
 }
 
 /**
  * Options for upgrading a deployment
  */
 export interface UpgradeOptions {
-  environmentVariables?: EnvironmentVariable[]
+  environmentVariables?: EnvironmentVariable[];
 }
 
 /**
@@ -52,36 +52,36 @@ export interface UpgradeOptions {
  */
 export interface DeploymentInfo {
   commands: {
-    url: string
-    deploymentId: string
-  }
+    url: string;
+    deploymentId: string;
+  };
   resources: Record<
     string,
     {
-      resourceType: string
-      publicUrl?: string
+      resourceType: string;
+      publicUrl?: string;
     }
-  >
-  status: string
-  platform: Platform
+  >;
+  status: string;
+  platform: Platform;
 }
 
 /**
  * Init params for creating a Deployment instance (internal)
  */
 export interface DeploymentInit {
-  id: string
-  name: string
+  id: string;
+  name: string;
   /** Public URL of the app, when the stack has a resource that exposes one. */
-  url?: string
-  platform: Platform
-  commandsUrl: string
-  appPath: string
+  url?: string;
+  platform: Platform;
+  commandsUrl: string;
+  appPath: string;
 
   // Dev mode
-  process?: import("node:child_process").ChildProcess
+  process?: import("node:child_process").ChildProcess;
 
   // Platform API mode
-  apiUrl?: string
-  apiKey?: string
+  apiUrl?: string;
+  apiKey?: string;
 }

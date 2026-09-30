@@ -10,46 +10,46 @@
             "sqs:GetQueueAttributes",
             "sqs:SetQueueAttributes",
             "sqs:ListQueueTags",
-            "sqs:PurgeQueue"
-          ]
+            "sqs:PurgeQueue",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"]
-          }
-        }
-      }
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
         "grant": {
-          "permissions": ["pubsub.topics.get", "pubsub.topics.update", "pubsub.topics.list"]
+          "permissions": ["pubsub.topics.get", "pubsub.topics.update", "pubsub.topics.list"],
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
           "resource": {
-            "scope": "projects/${projectName}/topics/${resourceName}"
-          }
-        }
+            "scope": "projects/${projectName}/topics/${resourceName}",
+          },
+        },
       },
       {
         "grant": {
           "permissions": [
             "pubsub.subscriptions.get",
             "pubsub.subscriptions.update",
-            "pubsub.subscriptions.list"
-          ]
+            "pubsub.subscriptions.list",
+          ],
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
           "resource": {
-            "scope": "projects/${projectName}/subscriptions/${resourceName}"
-          }
-        }
-      }
+            "scope": "projects/${projectName}/subscriptions/${resourceName}",
+          },
+        },
+      },
     ],
     "azure": [
       {
@@ -58,19 +58,19 @@
             "Microsoft.ServiceBus/namespaces/read",
             "Microsoft.ServiceBus/namespaces/queues/read",
             "Microsoft.ServiceBus/namespaces/queues/write",
-            "Microsoft.ServiceBus/namespaces/authorizationRules/read"
+            "Microsoft.ServiceBus/namespaces/authorizationRules/read",
           ],
-          "dataActions": []
+          "dataActions": [],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb",
+          },
+        },
+      },
+    ],
+  },
 }

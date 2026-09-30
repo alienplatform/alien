@@ -1,16 +1,16 @@
 {
   "name": "webhook-api-ts",
   "version": "1.0.0",
-  "type": "module",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "alien dev",
     "build": "alien build --platform local",
     "test": "vitest run"
   },
   "dependencies": {
-    "@alienplatform/sdk": "^1.0.0",
     "@alienplatform/core": "^1.0.1",
+    "@alienplatform/sdk": "^1.0.0",
     "hono": "^4.0.0",
     "zod": "4.3.2"
   },

@@ -5,45 +5,45 @@
     "aws": [
       {
         "grant": {
-          "actions": ["lambda:InvokeFunction", "lambda:InvokeAsync"]
+          "actions": ["lambda:InvokeFunction", "lambda:InvokeAsync"],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"]
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"]
-          }
-        }
-      }
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
         "grant": {
-          "predefinedRoles": ["roles/pubsub.publisher"]
+          "predefinedRoles": ["roles/pubsub.publisher"],
         },
         // GCP workers receive management-dispatched commands through an internal
         // Pub/Sub topic owned by the worker controller.
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}/topics/${resourceName}" }
-        }
-      }
+          "resource": { "scope": "projects/${projectName}/topics/${resourceName}" },
+        },
+      },
     ],
     "azure": [
       {
         "grant": {
-          "predefinedRoles": ["Azure Service Bus Data Sender"]
+          "predefinedRoles": ["Azure Service Bus Data Sender"],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb/queues/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb/queues/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

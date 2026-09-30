@@ -1,6 +1,6 @@
-import * as z from "zod/v4"
-import { ResourceNotFoundError, ResourceOutputsParseError } from "./common-errors.js"
-import { AlienError } from "./error.js"
+import * as z from "zod/v4";
+import { ResourceNotFoundError, ResourceOutputsParseError } from "./common-errors.js";
+import { AlienError } from "./error.js";
 import {
   ArtifactRegistryOutputsSchema,
   ArtifactRegistrySchema,
@@ -22,8 +22,8 @@ import {
   VaultSchema,
   WorkerOutputsSchema,
   WorkerSchema,
-} from "./generated/index.js"
-import type { StackState } from "./stack.js"
+} from "./generated/index.js";
+import type { StackState } from "./stack.js";
 
 export const ResourceSchemaMapping = {
   function: {
@@ -66,27 +66,27 @@ export const ResourceSchemaMapping = {
     input: RemoteStackManagementSchema,
     output: RemoteStackManagementOutputsSchema,
   },
-}
+};
 
 // Retrieves and validates the outputs of a resource from the stack state.
 export function getResourceOutputs<K extends keyof typeof ResourceSchemaMapping>(params: {
-  state: StackState
-  resource: { type: K; name: string }
+  state: StackState;
+  resource: { type: K; name: string };
 }): z.infer<(typeof ResourceSchemaMapping)[K]["output"]> {
-  const { state, resource } = params
+  const { state, resource } = params;
 
-  const resourceState = state.resources[resource.name]
+  const resourceState = state.resources[resource.name];
   if (!resourceState) {
     throw new AlienError(
       ResourceNotFoundError.create({
         resourceId: resource.name,
         availableResources: Object.keys(state.resources),
       }),
-    )
+    );
   }
 
-  const outputsSchema = ResourceSchemaMapping[resource.type].output
-  const outputs = outputsSchema.safeParse(resourceState.outputs)
+  const outputsSchema = ResourceSchemaMapping[resource.type].output;
+  const outputs = outputsSchema.safeParse(resourceState.outputs);
   if (!outputs.success) {
     throw new AlienError(
       ResourceOutputsParseError.create({
@@ -94,8 +94,8 @@ export function getResourceOutputs<K extends keyof typeof ResourceSchemaMapping>
         resourceType: resource.type,
         validationErrors: z.prettifyError(outputs.error),
       }),
-    )
+    );
   }
 
-  return outputs.data as z.infer<(typeof ResourceSchemaMapping)[K]["output"]>
+  return outputs.data as z.infer<(typeof ResourceSchemaMapping)[K]["output"]>;
 }

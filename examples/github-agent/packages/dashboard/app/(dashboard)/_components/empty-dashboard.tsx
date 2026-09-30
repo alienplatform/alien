@@ -1,12 +1,12 @@
-"use client"
+"use client";
 
-import { IconBrandGithub, IconPlus, IconServer } from "@tabler/icons-react"
-import Link from "next/link"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import { IconBrandGithub, IconPlus, IconServer } from "@tabler/icons-react";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 
 interface EmptyDashboardProps {
-  hasAgents: boolean
+  hasAgents: boolean;
 }
 
 export function EmptyDashboard({ hasAgents }: EmptyDashboardProps) {
@@ -44,7 +44,7 @@ export function EmptyDashboard({ hasAgents }: EmptyDashboardProps) {
           </Card>
         </div>
       </>
-    )
+    );
   }
 
   // Has agents but no integrations
@@ -78,5 +78,5 @@ export function EmptyDashboard({ hasAgents }: EmptyDashboardProps) {
         </CardContent>
       </Card>
     </div>
-  )
+  );
 }

@@ -1,11 +1,11 @@
-"use client"
+"use client";
 
-import dynamic from "next/dynamic"
+import dynamic from "next/dynamic";
 
 const GrainGradient = dynamic(
-  () => import("@paper-design/shaders-react").then(mod => mod.GrainGradient),
+  () => import("@paper-design/shaders-react").then((mod) => mod.GrainGradient),
   { ssr: false, loading: () => <Fallback /> },
-)
+);
 
 export function GrainBackground() {
   return (
@@ -24,7 +24,7 @@ export function GrainBackground() {
         maxPixelCount={1920 * 1080}
       />
     </div>
-  )
+  );
 }
 
 function Fallback() {
@@ -33,5 +33,5 @@ function Fallback() {
       aria-hidden
       className="absolute inset-0 bg-[radial-gradient(85%_70%_at_8%_10%,rgba(34,197,94,0.10),transparent_62%),radial-gradient(80%_75%_at_92%_0%,rgba(45,212,160,0.06),transparent_58%)]"
     />
-  )
+  );
 }

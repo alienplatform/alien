@@ -1,6 +1,28 @@
 {
   "name": "@alienplatform/bindings",
   "version": "3.3.25",
+  "description": "Direct TypeScript bindings for Alien storage, kv, queue, vault, and postgres over an in-process napi-rs addon",
+  "keywords": [
+    "alien",
+    "bindings",
+    "kv",
+    "napi",
+    "postgres",
+    "queue",
+    "storage",
+    "vault"
+  ],
+  "homepage": "https://alien.dev",
+  "license": "FSL-1.1-Apache-2.0",
+  "author": "Alien Software, Inc. <hi@alien.dev>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alienplatform/alien.git",
+    "directory": "packages/bindings"
+  },
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "sideEffects": false,
   "types": "./dist/index.d.ts",
@@ -14,12 +36,8 @@
       "import": "./dist/native.js"
     }
   },
-  "files": [
-    "dist"
-  ],
-  "engines": {
-    "node": ">=18",
-    "bun": ">=1.0.23"
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsdown && tsc -p tsconfig.build.json --emitDeclarationOnly",
@@ -32,27 +50,8 @@
     "format-and-lint": "oxfmt --check \"**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}\" && oxlint .",
     "format-and-lint:fix": "oxfmt --write \"**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}\" && oxlint --fix ."
   },
-  "keywords": [
-    "alien",
-    "bindings",
-    "kv",
-    "napi",
-    "postgres",
-    "queue",
-    "storage",
-    "vault"
-  ],
-  "author": "Alien Software, Inc. <hi@alien.dev>",
-  "license": "FSL-1.1-Apache-2.0",
-  "description": "Direct TypeScript bindings for Alien storage, kv, queue, vault, and postgres over an in-process napi-rs addon",
-  "homepage": "https://alien.dev",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/alienplatform/alien.git",
-    "directory": "packages/bindings"
-  },
-  "publishConfig": {
-    "access": "public"
+  "dependencies": {
+    "@alienplatform/core": "workspace:^"
   },
   "devDependencies": {
     "@alienplatform/typescript-config": "workspace:^",
@@ -63,7 +62,8 @@
     "vitest": "^4.0.0",
     "zod": "4.5.2"
   },
-  "dependencies": {
-    "@alienplatform/core": "workspace:^"
+  "engines": {
+    "bun": ">=1.0.23",
+    "node": ">=18"
   }
 }

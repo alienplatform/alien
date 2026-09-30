@@ -5,32 +5,32 @@
     "gcp": [
       {
         "grant": {
-          "predefinedRoles": ["roles/serviceusage.serviceUsageViewer"]
+          "predefinedRoles": ["roles/serviceusage.serviceUsageViewer"],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}"
-          }
-        }
-      }
+            "scope": "projects/${projectName}",
+          },
+        },
+      },
     ],
     "azure": [
       {
         "grant": {
-          "predefinedRoles": ["Reader"]
+          "predefinedRoles": ["Reader"],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}"
+            "scope": "/subscriptions/${subscriptionId}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}",
+          },
+        },
+      },
+    ],
+  },
 }

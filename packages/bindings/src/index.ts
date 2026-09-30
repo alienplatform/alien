@@ -9,36 +9,36 @@
  * {@link BindingNotConfiguredError}.
  */
 
-import { createFactories } from "./factories.js"
-import { loadAddon } from "./loader.js"
+import { createFactories } from "./factories.js";
+import { loadAddon } from "./loader.js";
 
 export type {
   RemoteAiBinding,
   RemoteAiClientConfig,
   RemoteAiLease,
   RemoteDeploymentBindingsOptions,
-} from "./remote.js"
-export { Bindings } from "./remote.js"
+} from "./remote.js";
+export { Bindings } from "./remote.js";
 
-const factories = createFactories(loadAddon)
+const factories = createFactories(loadAddon);
 
 /** Resolve the storage binding named `name`. */
-export const storage = factories.storage
+export const storage = factories.storage;
 /** Resolve the provider-backed key binding named `name`. */
-export const key = factories.key
+export const key = factories.key;
 /** Resolve the key-value binding named `name`. */
-export const kv = factories.kv
+export const kv = factories.kv;
 /** Resolve the queue binding named `name`. */
-export const queue = factories.queue
+export const queue = factories.queue;
 /** Resolve the vault binding named `name`. */
-export const vault = factories.vault
+export const vault = factories.vault;
 /** Resolve the linked-container binding named `name`. */
-export const container = factories.container
+export const container = factories.container;
 /** Resolve the Postgres binding named `name`. */
-export const postgres = factories.postgres
+export const postgres = factories.postgres;
 
 /** Create an isolated environment for running untrusted code. */
-export const sandbox = factories.sandbox
+export const sandbox = factories.sandbox;
 
 export {
   AlienError,
@@ -49,7 +49,7 @@ export {
   isSandboxOutcomeUnknown,
   UnknownPostgresSslModeError,
   UnknownSandboxValueError,
-} from "./errors.js"
+} from "./errors.js";
 
 export type {
   CommandFrame,
@@ -89,4 +89,4 @@ export type {
   StoragePutOptions,
   StoragePutResult,
   Vault,
-} from "./types.js"
+} from "./types.js";

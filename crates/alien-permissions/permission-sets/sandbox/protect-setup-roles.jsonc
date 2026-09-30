@@ -22,8 +22,8 @@
             "iam:DeleteRolePermissionsBoundary",
             "iam:UpdateRole",
             "iam:TagRole",
-            "iam:UntagRole"
-          ]
+            "iam:UntagRole",
+          ],
         },
         "binding": {
           "stack": {
@@ -31,12 +31,12 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${managedByTag}": "setup",
-                "aws:ResourceTag/resource-type": "sandbox"
-              }
-            }
-          }
-        }
-      }
-    ]
-  }
+                "aws:ResourceTag/resource-type": "sandbox",
+              },
+            },
+          },
+        },
+      },
+    ],
+  },
 }

@@ -1,14 +1,14 @@
 {
   "name": "alien",
+  "version": "1.0.0",
   "private": "true",
+  "homepage": "https://alien.dev",
   "license": "FSL-1.1-Apache-2.0",
   "author": "Alien Software, Inc. <hi@alien.dev>",
-  "homepage": "https://alien.dev",
   "repository": {
     "type": "git",
     "url": "https://github.com/alienplatform/alien.git"
   },
-  "version": "1.0.0",
   "scripts": {
     "build": "turbo build",
     "build:images": "echo 'Use GitHub Actions workflows (.github/workflows/images*.yml) for canonical image builds'",

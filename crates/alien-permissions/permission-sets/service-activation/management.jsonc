@@ -5,17 +5,17 @@
     "gcp": [
       {
         "grant": {
-          "predefinedRoles": ["roles/serviceusage.serviceUsageViewer"]
+          "predefinedRoles": ["roles/serviceusage.serviceUsageViewer"],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "projects/${projectName}",
+          },
+        },
+      },
+    ],
+  },
 }

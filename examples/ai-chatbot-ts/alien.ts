@@ -1,12 +1,12 @@
-import * as alien from "@alienplatform/core"
+import * as alien from "@alienplatform/core";
 
 // A model-less AI resource. The customer's cloud serves the inference; the
 // embedded gateway injects the workload's ambient identity, so no API keys.
-const llm = new alien.AI("llm").build()
+const llm = new alien.AI("llm").build();
 
 // A private Postgres, reachable only from same-stack workloads; the app resolves
 // its connection at runtime from the binding, never from a checked-in secret.
-const db = new alien.Postgres("db").build()
+const db = new alien.Postgres("db").build();
 
 const app = new alien.Container("app")
   .code({ type: "source", src: ".", toolchain: { type: "docker", dockerfile: "Dockerfile" } })
@@ -23,7 +23,7 @@ const app = new alien.Container("app")
   .link(llm)
   .link(db)
   .permissions("app")
-  .build()
+  .build();
 
 export default new alien.Stack("ai-chatbot")
   .platforms(["aws", "gcp", "azure"])
@@ -37,4 +37,4 @@ export default new alien.Stack("ai-chatbot")
       },
     },
   })
-  .build()
+  .build();

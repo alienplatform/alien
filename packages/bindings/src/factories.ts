@@ -19,7 +19,7 @@ import {
   UnknownPostgresSslModeError,
   UnknownSandboxValueError,
   unwrapNapiError,
-} from "./errors.js"
+} from "./errors.js";
 import type {
   NativeAddon,
   RawBindingsHandle,
@@ -37,7 +37,7 @@ import type {
   RawSandboxInstance,
   RawStorageHandle,
   RawVaultHandle,
-} from "./loader.js"
+} from "./loader.js";
 import type {
   CommandFrame,
   Container,
@@ -61,9 +61,9 @@ import type {
   Storage,
   StoragePutOptions,
   Vault,
-} from "./types.js"
+} from "./types.js";
 
-type BindingsHandleProvider = () => Promise<RawBindingsHandle>
+type BindingsHandleProvider = () => Promise<RawBindingsHandle>;
 
 /**
  * Build a lazy, cached resolver for one resource handle. The returned function
@@ -71,29 +71,29 @@ type BindingsHandleProvider = () => Promise<RawBindingsHandle>
  * subsequent calls reuse the cached handle.
  */
 function lazyHandle<THandle>(resolve: () => Promise<THandle>): () => Promise<THandle> {
-  let pending: Promise<THandle> | undefined
+  let pending: Promise<THandle> | undefined;
 
   return () => {
     if (!pending) {
-      pending = resolve().catch(err => {
+      pending = resolve().catch((err) => {
         // Do not cache a failed materialization; allow a later retry.
-        pending = undefined
-        throw err
-      })
+        pending = undefined;
+        throw err;
+      });
     }
-    return pending
-  }
+    return pending;
+  };
 }
 
 function bindingsFromAddon(getAddon: () => NativeAddon): BindingsHandleProvider {
   return async () => {
-    const addon = getAddon()
-    return new addon.BindingsHandle()
-  }
+    const addon = getAddon();
+    return new addon.BindingsHandle();
+  };
 }
 
 function toBuffer(data: Buffer | Uint8Array): Buffer {
-  return Buffer.isBuffer(data) ? data : Buffer.from(data)
+  return Buffer.isBuffer(data) ? data : Buffer.from(data);
 }
 
 /** Run `op` against the resolved handle, translating any napi error. */
@@ -102,51 +102,51 @@ async function guard<THandle, TResult>(
   op: (raw: THandle) => Promise<TResult>,
 ): Promise<TResult> {
   try {
-    return await op(await handle())
+    return await op(await handle());
   } catch (err) {
-    throw unwrapNapiError(err)
+    throw unwrapNapiError(err);
   }
 }
 
 function makeStorage(handle: () => Promise<RawStorageHandle>): Storage {
   return {
-    get: path => guard(handle, raw => raw.get(path)),
+    get: (path) => guard(handle, (raw) => raw.get(path)),
     put: (path, data, options?: StoragePutOptions) =>
-      guard(handle, raw => raw.put(path, toBuffer(data), options ?? null)),
-    delete: path => guard(handle, raw => raw.delete(path)),
-    list: prefix => guard(handle, raw => raw.list(prefix ?? null)),
-    head: path => guard(handle, raw => raw.head(path)),
-    copy: (from, to) => guard(handle, raw => raw.copy(from, to)),
+      guard(handle, (raw) => raw.put(path, toBuffer(data), options ?? null)),
+    delete: (path) => guard(handle, (raw) => raw.delete(path)),
+    list: (prefix) => guard(handle, (raw) => raw.list(prefix ?? null)),
+    head: (path) => guard(handle, (raw) => raw.head(path)),
+    copy: (from, to) => guard(handle, (raw) => raw.copy(from, to)),
     signedUrl: (options: SignedUrlOptions): Promise<PresignedRequest> =>
-      guard(handle, raw => raw.signedUrl(options.method, options.path, options.expiresIn)),
-  }
+      guard(handle, (raw) => raw.signedUrl(options.method, options.path, options.expiresIn)),
+  };
 }
 
 function makeKey(handle: () => Promise<RawKeyHandle>): Key {
   return {
     encrypt: (plaintext, options?: KeyOptions) =>
-      guard(handle, raw => raw.encrypt(toBuffer(plaintext), options?.context ?? null)),
+      guard(handle, (raw) => raw.encrypt(toBuffer(plaintext), options?.context ?? null)),
     decrypt: (ciphertext, options?: KeyOptions) =>
-      guard(handle, raw => raw.decrypt(toBuffer(ciphertext), options?.context ?? null)),
-  }
+      guard(handle, (raw) => raw.decrypt(toBuffer(ciphertext), options?.context ?? null)),
+  };
 }
 
 function makeRemoteStorage(handle: () => Promise<RawRemoteStorageHandle>): RemoteStorage {
   return {
-    get: path => guard(handle, raw => raw.get(path)),
+    get: (path) => guard(handle, (raw) => raw.get(path)),
     put: (path, data, options?: StoragePutOptions) =>
-      guard(handle, raw => raw.put(path, toBuffer(data), options ?? null)),
-    delete: path => guard(handle, raw => raw.delete(path)),
-    list: prefix => guard(handle, raw => raw.list(prefix ?? null)),
-    head: path => guard(handle, raw => raw.head(path)),
-  }
+      guard(handle, (raw) => raw.put(path, toBuffer(data), options ?? null)),
+    delete: (path) => guard(handle, (raw) => raw.delete(path)),
+    list: (prefix) => guard(handle, (raw) => raw.list(prefix ?? null)),
+    head: (path) => guard(handle, (raw) => raw.head(path)),
+  };
 }
 
 /** The sandbox states the addon and this wrapper agree on. */
-const SANDBOX_STATES = ["starting", "running", "paused", "terminated"] as const
+const SANDBOX_STATES = ["starting", "running", "paused", "terminated"] as const;
 
 /** The output frame kinds that carry data; `exit` is handled separately. */
-const SANDBOX_STREAM_KINDS = ["stdout", "stderr"] as const
+const SANDBOX_STREAM_KINDS = ["stdout", "stderr"] as const;
 
 /**
  * Narrows a value the addon produced into a declared union, or throws.
@@ -157,11 +157,11 @@ const SANDBOX_STREAM_KINDS = ["stdout", "stderr"] as const
  */
 function narrow<T extends string>(field: string, value: string, expected: readonly T[]): T {
   if ((expected as readonly string[]).includes(value)) {
-    return value as T
+    return value as T;
   }
   throw new AlienError(
     UnknownSandboxValueError.create({ field, value, expected: [...expected] }).toOptions(),
-  )
+  );
 }
 
 function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
@@ -169,7 +169,7 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
     sandboxId: raw.sandboxId,
     state: narrow("sandbox state", raw.state, SANDBOX_STATES),
     generation: raw.generation,
-  })
+  });
 
   const frame = (raw: RawCommandFrame): CommandFrame =>
     raw.kind === "exit"
@@ -178,12 +178,12 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
           kind: narrow("frame kind", raw.kind, SANDBOX_STREAM_KINDS),
           seq: raw.seq ?? 0,
           data: raw.data ?? Buffer.alloc(0),
-        }
+        };
 
   return {
-    capabilities: () => guard(handle, async raw => raw.capabilities()),
-    create: options =>
-      guard(handle, async raw =>
+    capabilities: () => guard(handle, async (raw) => raw.capabilities()),
+    create: (options) =>
+      guard(handle, async (raw) =>
         instance(
           await raw.create(
             options?.sandboxId ?? null,
@@ -193,24 +193,24 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
           ),
         ),
       ),
-    get: sandboxId =>
-      guard(handle, async raw => {
-        const found = await raw.get(sandboxId)
-        return found === null ? null : instance(found)
+    get: (sandboxId) =>
+      guard(handle, async (raw) => {
+        const found = await raw.get(sandboxId);
+        return found === null ? null : instance(found);
       }),
-    getOrCreate: options =>
-      guard(handle, async raw => {
+    getOrCreate: (options) =>
+      guard(handle, async (raw) => {
         const resolved = await raw.getOrCreate(
           options?.sandboxId ?? null,
           options?.tenantKey ?? null,
           options?.env ?? null,
           options?.timeoutMs ?? null,
-        )
-        return { sandbox: instance(resolved.sandbox), created: resolved.created }
+        );
+        return { sandbox: instance(resolved.sandbox), created: resolved.created };
       }),
-    list: () => guard(handle, async raw => (await raw.list()).map(instance)),
+    list: () => guard(handle, async (raw) => (await raw.list()).map(instance)),
     startJob: (sandboxId, command, options) =>
-      guard(handle, async raw =>
+      guard(handle, async (raw) =>
         raw.startJob(
           sandboxId,
           command,
@@ -221,66 +221,66 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
         ),
       ),
     pollJob: (sandboxId, jobId, sinceSeq) =>
-      guard(handle, async raw => {
-        const answered = await raw.pollJob(sandboxId, jobId, sinceSeq ?? null)
-        const poll: JobPoll = { running: answered.running, frames: answered.frames.map(frame) }
-        if (answered.exit) poll.exit = { ...answered.exit }
-        if (answered.error) poll.error = { ...answered.error }
-        return poll
+      guard(handle, async (raw) => {
+        const answered = await raw.pollJob(sandboxId, jobId, sinceSeq ?? null);
+        const poll: JobPoll = { running: answered.running, frames: answered.frames.map(frame) };
+        if (answered.exit) poll.exit = { ...answered.exit };
+        if (answered.error) poll.error = { ...answered.error };
+        return poll;
       }),
-    cancelJob: (sandboxId, jobId) => guard(handle, async raw => raw.cancelJob(sandboxId, jobId)),
+    cancelJob: (sandboxId, jobId) => guard(handle, async (raw) => raw.cancelJob(sandboxId, jobId)),
     runCommand: (sandboxId, command, options) => ({
       [Symbol.asyncIterator](): AsyncIterator<CommandFrame, undefined> {
-        let stream: RawCommandStreamHandle | null = null
-        let starting: Promise<RawCommandStreamHandle> | null = null
-        let tail: Promise<unknown> = Promise.resolve()
-        let finished = false
+        let stream: RawCommandStreamHandle | null = null;
+        let starting: Promise<RawCommandStreamHandle> | null = null;
+        let tail: Promise<unknown> = Promise.resolve();
+        let finished = false;
 
         // A cancel that lands during setup has no handle yet, so it waits for the one being made:
         // resolving sooner would report a command stopped that is about to start.
-        let closing: Promise<void> | null = null
+        let closing: Promise<void> | null = null;
         const close = () => {
           closing ??= (async () => {
-            const open = stream ?? (await starting?.catch(() => null)) ?? null
-            if (open === null) return
+            const open = stream ?? (await starting?.catch(() => null)) ?? null;
+            if (open === null) return;
             try {
-              await open.close()
+              await open.close();
             } catch (err) {
-              throw unwrapNapiError(err)
+              throw unwrapNapiError(err);
             }
-          })()
-          return closing
-        }
+          })();
+          return closing;
+        };
 
         // Cancellation bypasses the pull queue so it can release a native read waiting for output.
         const finish = async () => {
-          finished = true
-          await close()
-        }
+          finished = true;
+          await close();
+        };
 
         // The fault iteration ended on is what the caller must see; a close that also fails is
         // reported only when it is the sole failure, from `return()`.
         const fail = async (err: unknown): Promise<never> => {
-          await finish().catch(() => undefined)
-          throw err
-        }
+          await finish().catch(() => undefined);
+          throw err;
+        };
 
         // A pull that observes a cancel only reports `done`: the `return()` or `throw()` that
         // cancelled is where a failed close is reported, and it must not be reported twice.
         const cancelled = async (): Promise<IteratorResult<CommandFrame, undefined>> => {
-          await finish().catch(() => undefined)
-          return { done: true, value: undefined }
-        }
+          await finish().catch(() => undefined);
+          return { done: true, value: undefined };
+        };
 
         return {
           next() {
             const pull = tail.then(async (): Promise<IteratorResult<CommandFrame, undefined>> => {
               if (finished) {
-                return { done: true, value: undefined }
+                return { done: true, value: undefined };
               }
-              let open = stream
+              let open = stream;
               if (open === null) {
-                starting = guard(handle, raw =>
+                starting = guard(handle, (raw) =>
                   raw.runCommand(
                     sandboxId,
                     command,
@@ -289,91 +289,91 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
                     options.cwd ?? null,
                     options.env ?? null,
                   ),
-                )
+                );
                 try {
-                  open = await starting
-                  stream = open
+                  open = await starting;
+                  stream = open;
                 } catch (err) {
-                  finished = true
-                  throw err
+                  finished = true;
+                  throw err;
                 }
               }
 
               // A return during setup cannot close a handle until this pull receives it.
               if (finished) {
-                return cancelled()
+                return cancelled();
               }
 
-              let next: RawCommandFrame | null
+              let next: RawCommandFrame | null;
               try {
-                next = await open.next()
+                next = await open.next();
               } catch (err) {
-                return fail(unwrapNapiError(err))
+                return fail(unwrapNapiError(err));
               }
 
               if (finished) {
-                return cancelled()
+                return cancelled();
               }
               if (next === null) {
-                await finish()
-                return { done: true, value: undefined }
+                await finish();
+                return { done: true, value: undefined };
               }
 
-              let value: CommandFrame
+              let value: CommandFrame;
               try {
-                value = frame(next)
+                value = frame(next);
               } catch (err) {
-                return fail(unwrapNapiError(err))
+                return fail(unwrapNapiError(err));
               }
-              return { done: false, value }
-            })
+              return { done: false, value };
+            });
 
             // A rejected pull must not poison the queue behind it.
-            tail = pull.catch(() => undefined)
-            return pull
+            tail = pull.catch(() => undefined);
+            return pull;
           },
           async return() {
-            await finish()
-            return { done: true, value: undefined }
+            await finish();
+            return { done: true, value: undefined };
           },
           throw: (err: unknown) => fail(err),
-        }
+        };
       },
     }),
-    readFile: (sandboxId, path) => guard(handle, raw => raw.readFile(sandboxId, path)),
+    readFile: (sandboxId, path) => guard(handle, (raw) => raw.readFile(sandboxId, path)),
     writeFiles: (sandboxId, files) =>
-      guard(handle, async raw => {
+      guard(handle, async (raw) => {
         for (const [path, contents] of Object.entries(files)) {
           await raw.writeFile(
             sandboxId,
             path,
             typeof contents === "string" ? Buffer.from(contents, "utf8") : contents,
-          )
+          );
         }
       }),
-    pause: sandboxId => guard(handle, raw => raw.pause(sandboxId)),
-    resume: sandboxId => guard(handle, raw => raw.resume(sandboxId)),
-    terminate: sandboxId => guard(handle, raw => raw.terminate(sandboxId)),
-  }
+    pause: (sandboxId) => guard(handle, (raw) => raw.pause(sandboxId)),
+    resume: (sandboxId) => guard(handle, (raw) => raw.resume(sandboxId)),
+    terminate: (sandboxId) => guard(handle, (raw) => raw.terminate(sandboxId)),
+  };
 }
 
 function makeKv(handle: () => Promise<RawKvHandle>): Kv {
   return {
-    get: key => guard(handle, raw => raw.get(key)),
-    getText: key =>
-      guard(handle, async raw => {
-        const entry = await raw.get(key)
-        return entry === null ? null : { ...entry, value: entry.value.toString("utf8") }
+    get: (key) => guard(handle, (raw) => raw.get(key)),
+    getText: (key) =>
+      guard(handle, async (raw) => {
+        const entry = await raw.get(key);
+        return entry === null ? null : { ...entry, value: entry.value.toString("utf8") };
       }),
     getJson: <T = unknown>(key: string): Promise<KvEntry<T> | null> =>
-      guard(handle, async raw => {
-        const entry = await raw.get(key)
+      guard(handle, async (raw) => {
+        const entry = await raw.get(key);
         return entry === null
           ? null
-          : { ...entry, value: JSON.parse(entry.value.toString("utf8")) as T }
+          : { ...entry, value: JSON.parse(entry.value.toString("utf8")) as T };
       }),
     set: (key, value, options?: KvSetOptions) =>
-      guard(handle, raw =>
+      guard(handle, (raw) =>
         raw.put(
           key,
           Buffer.from(value, "utf8"),
@@ -387,7 +387,7 @@ function makeKv(handle: () => Promise<RawKvHandle>): Kv {
         ),
       ),
     setJson: (key, value, options?: KvSetOptions) =>
-      guard(handle, raw =>
+      guard(handle, (raw) =>
         raw.put(
           key,
           Buffer.from(JSON.stringify(value), "utf8"),
@@ -400,57 +400,57 @@ function makeKv(handle: () => Promise<RawKvHandle>): Kv {
           typeof options?.ifVersion === "string" ? options.ifVersion : null,
         ),
       ),
-    delete: (key, options) => guard(handle, raw => raw.delete(key, options?.ifVersion ?? null)),
-    exists: key => guard(handle, raw => raw.exists(key)),
+    delete: (key, options) => guard(handle, (raw) => raw.delete(key, options?.ifVersion ?? null)),
+    exists: (key) => guard(handle, (raw) => raw.exists(key)),
     // The napi scan already returns each key with its value bytes; pass them
     // straight through rather than dropping the values.
     scan: (prefix, limit, cursor): Promise<KvScanResult> =>
-      guard(handle, async raw => {
-        const result = await raw.scan(prefix, limit ?? null, cursor ?? null)
-        return { items: result.items, nextCursor: result.nextCursor }
+      guard(handle, async (raw) => {
+        const result = await raw.scan(prefix, limit ?? null, cursor ?? null);
+        return { items: result.items, nextCursor: result.nextCursor };
       }),
-  }
+  };
 }
 
 // The native bound queue already carries its configured queue name.
 function makeQueue(handle: () => Promise<RawQueueHandle>): Queue {
   return {
-    send: message => guard(handle, raw => raw.sendJson(JSON.stringify(message))),
-    sendText: text => guard(handle, raw => raw.sendText(text)),
-    receive: (max): Promise<QueueMessage[]> => guard(handle, raw => raw.receive(max)),
-    ack: receipt => guard(handle, raw => raw.ack(receipt)),
-    nack: receipt => guard(handle, raw => raw.nack(receipt)),
-    purge: () => guard(handle, raw => raw.purge()),
-  }
+    send: (message) => guard(handle, (raw) => raw.sendJson(JSON.stringify(message))),
+    sendText: (text) => guard(handle, (raw) => raw.sendText(text)),
+    receive: (max): Promise<QueueMessage[]> => guard(handle, (raw) => raw.receive(max)),
+    ack: (receipt) => guard(handle, (raw) => raw.ack(receipt)),
+    nack: (receipt) => guard(handle, (raw) => raw.nack(receipt)),
+    purge: () => guard(handle, (raw) => raw.purge()),
+  };
 }
 
 function makeContainer(handle: () => Promise<RawContainerHandle>): Container {
   return {
-    getInternalUrl: () => guard(handle, raw => raw.getInternalUrl()),
-    getPublicUrl: () => guard(handle, raw => raw.getPublicUrl()),
-  }
+    getInternalUrl: () => guard(handle, (raw) => raw.getInternalUrl()),
+    getPublicUrl: () => guard(handle, (raw) => raw.getPublicUrl()),
+  };
 }
 
 function makeVault(handle: () => Promise<RawVaultHandle>): Vault {
   return {
-    get: name => guard(handle, raw => raw.getSecret(name)),
+    get: (name) => guard(handle, (raw) => raw.getSecret(name)),
     getJson: <T = unknown>(name: string): Promise<T> =>
-      guard(handle, async raw => JSON.parse(await raw.getSecret(name)) as T),
-    put: (name, value) => guard(handle, raw => raw.setSecret(name, value)),
-    putJson: (name, value) => guard(handle, raw => raw.setSecret(name, JSON.stringify(value))),
-    delete: name => guard(handle, raw => raw.deleteSecret(name)),
-    list: (): Promise<string[]> => guard(handle, raw => raw.listSecrets()),
-  }
+      guard(handle, async (raw) => JSON.parse(await raw.getSecret(name)) as T),
+    put: (name, value) => guard(handle, (raw) => raw.setSecret(name, value)),
+    putJson: (name, value) => guard(handle, (raw) => raw.setSecret(name, JSON.stringify(value))),
+    delete: (name) => guard(handle, (raw) => raw.deleteSecret(name)),
+    list: (): Promise<string[]> => guard(handle, (raw) => raw.listSecrets()),
+  };
 }
 
 const POSTGRES_SSL_MODES = {
   disable: true,
   "verify-ca": true,
   "verify-full": true,
-} satisfies Record<PostgresSslMode, true>
+} satisfies Record<PostgresSslMode, true>;
 
 function postgresSslModeLabel(sslmode: unknown): string {
-  return typeof sslmode === "string" ? sslmode : String(sslmode)
+  return typeof sslmode === "string" ? sslmode : String(sslmode);
 }
 
 function invalidPostgresTlsConfig(sslmode: unknown, reason: string): AlienError {
@@ -459,15 +459,15 @@ function invalidPostgresTlsConfig(sslmode: unknown, reason: string): AlienError 
       sslmode: postgresSslModeLabel(sslmode),
       reason,
     }).toOptions(),
-  )
+  );
 }
 
 function isPostgresSslMode(value: unknown): value is PostgresSslMode {
-  return typeof value === "string" && Object.hasOwn(POSTGRES_SSL_MODES, value)
+  return typeof value === "string" && Object.hasOwn(POSTGRES_SSL_MODES, value);
 }
 
 function hasAtLeastOne<T>(values: T[]): values is [T, ...T[]] {
-  return values.length > 0
+  return values.length > 0;
 }
 
 /**
@@ -487,23 +487,23 @@ function toPostgresConnection(raw: RawPostgresConnection): PostgresConnection {
         sslmode: postgresSslModeLabel(raw.sslmode),
         expected: Object.keys(POSTGRES_SSL_MODES),
       }).toOptions(),
-    )
+    );
   }
 
   if (!Array.isArray(raw.caCertificates)) {
-    throw invalidPostgresTlsConfig(raw.sslmode, "caCertificates must be an array")
+    throw invalidPostgresTlsConfig(raw.sslmode, "caCertificates must be an array");
   }
 
-  const caCertificates: string[] = []
-  const rawCaCertificates: unknown[] = raw.caCertificates
+  const caCertificates: string[] = [];
+  const rawCaCertificates: unknown[] = raw.caCertificates;
   for (const [index, certificate] of rawCaCertificates.entries()) {
     if (typeof certificate !== "string") {
-      throw invalidPostgresTlsConfig(raw.sslmode, `caCertificates[${index}] must be a string`)
+      throw invalidPostgresTlsConfig(raw.sslmode, `caCertificates[${index}] must be a string`);
     }
     if (certificate.trim().length === 0) {
-      throw invalidPostgresTlsConfig(raw.sslmode, `caCertificates[${index}] cannot be empty`)
+      throw invalidPostgresTlsConfig(raw.sslmode, `caCertificates[${index}] cannot be empty`);
     }
-    caCertificates.push(certificate)
+    caCertificates.push(certificate);
   }
 
   const fields = {
@@ -513,20 +513,20 @@ function toPostgresConnection(raw: RawPostgresConnection): PostgresConnection {
     database: raw.database,
     username: raw.username,
     password: raw.password,
-  }
+  };
 
   switch (raw.sslmode) {
     case "disable":
       if (caCertificates.length > 0) {
-        throw invalidPostgresTlsConfig(raw.sslmode, "disable cannot carry CA certificates")
+        throw invalidPostgresTlsConfig(raw.sslmode, "disable cannot carry CA certificates");
       }
-      return { ...fields, sslmode: raw.sslmode, ssl: false }
+      return { ...fields, sslmode: raw.sslmode, ssl: false };
     case "verify-ca":
       if (!hasAtLeastOne(caCertificates)) {
         throw invalidPostgresTlsConfig(
           raw.sslmode,
           "verify-ca requires at least one CA certificate",
-        )
+        );
       }
       return {
         ...fields,
@@ -539,7 +539,7 @@ function toPostgresConnection(raw: RawPostgresConnection): PostgresConnection {
           // cannot match the PSC consumer endpoint IP.
           checkServerIdentity: (): undefined => undefined,
         },
-      }
+      };
     case "verify-full":
       return {
         ...fields,
@@ -548,10 +548,10 @@ function toPostgresConnection(raw: RawPostgresConnection): PostgresConnection {
           caCertificates.length > 0
             ? { ca: caCertificates, rejectUnauthorized: true }
             : { rejectUnauthorized: true },
-      }
+      };
     default: {
-      const unhandledSslMode: never = raw.sslmode
-      return unhandledSslMode
+      const unhandledSslMode: never = raw.sslmode;
+      return unhandledSslMode;
     }
   }
 }
@@ -559,72 +559,73 @@ function toPostgresConnection(raw: RawPostgresConnection): PostgresConnection {
 function makePostgres(handle: () => Promise<RawPostgresHandle>): Postgres {
   return {
     connection: (): Promise<PostgresConnection> =>
-      guard(handle, async raw => toPostgresConnection(raw.connection())),
-  }
+      guard(handle, async (raw) => toPostgresConnection(raw.connection())),
+  };
 }
 
 /** The public factory surface. */
 export interface Factories {
-  storage(name: string): Storage
-  key(name: string): Key
-  kv(name: string): Kv
-  queue(name: string): Queue
-  vault(name: string): Vault
-  container(name: string): Container
-  postgres(name: string): Postgres
-  sandbox(name: string): Sandbox
+  storage(name: string): Storage;
+  key(name: string): Key;
+  kv(name: string): Kv;
+  queue(name: string): Queue;
+  vault(name: string): Vault;
+  container(name: string): Container;
+  postgres(name: string): Postgres;
+  sandbox(name: string): Sandbox;
 }
 
 /** Build the factories bound to a given addon provider. */
 export function createFactories(getAddon: () => NativeAddon): Factories {
-  const getBindings = bindingsFromAddon(getAddon)
+  const getBindings = bindingsFromAddon(getAddon);
   return {
-    storage: name => makeStorage(lazyHandle(async () => (await getBindings()).storage(name))),
-    key: name => makeKey(lazyHandle(async () => (await getBindings()).key(name))),
-    kv: name => makeKv(lazyHandle(async () => (await getBindings()).kv(name))),
-    queue: name => makeQueue(lazyHandle(async () => (await getBindings()).queue(name))),
-    vault: name => makeVault(lazyHandle(async () => (await getBindings()).vault(name))),
-    container: name => makeContainer(lazyHandle(async () => (await getBindings()).container(name))),
-    postgres: name => makePostgres(lazyHandle(async () => (await getBindings()).postgres(name))),
-    sandbox: name => makeSandbox(lazyHandle(async () => (await getBindings()).sandbox(name))),
-  }
+    storage: (name) => makeStorage(lazyHandle(async () => (await getBindings()).storage(name))),
+    key: (name) => makeKey(lazyHandle(async () => (await getBindings()).key(name))),
+    kv: (name) => makeKv(lazyHandle(async () => (await getBindings()).kv(name))),
+    queue: (name) => makeQueue(lazyHandle(async () => (await getBindings()).queue(name))),
+    vault: (name) => makeVault(lazyHandle(async () => (await getBindings()).vault(name))),
+    container: (name) =>
+      makeContainer(lazyHandle(async () => (await getBindings()).container(name))),
+    postgres: (name) => makePostgres(lazyHandle(async () => (await getBindings()).postgres(name))),
+    sandbox: (name) => makeSandbox(lazyHandle(async () => (await getBindings()).sandbox(name))),
+  };
 }
 
 /** Build the remote-only storage factory around one native bindings handle. */
 export function createRemoteStorageFactory(bindings: RawRemoteBindingsHandle) {
-  const storages = new Map<string, RemoteStorage>()
+  const storages = new Map<string, RemoteStorage>();
   return (name: string): RemoteStorage => {
-    let storage = storages.get(name)
+    let storage = storages.get(name);
     if (!storage) {
-      storage = makeRemoteStorage(lazyHandle(() => bindings.storage(name)))
-      storages.set(name, storage)
+      storage = makeRemoteStorage(lazyHandle(() => bindings.storage(name)));
+      storages.set(name, storage);
     }
-    return storage
-  }
+    return storage;
+  };
 }
 
 /** Build the remote Key factory around one native bindings handle. */
 export function createRemoteKeyFactory(bindings: RawRemoteBindingsHandle) {
-  const keys = new Map<string, Key>()
+  const keys = new Map<string, Key>();
   return (name: string): Key => {
-    let key = keys.get(name)
+    let key = keys.get(name);
     if (!key) {
-      key = makeKey(lazyHandle(() => bindings.key(name)))
-      keys.set(name, key)
+      key = makeKey(lazyHandle(() => bindings.key(name)));
+      keys.set(name, key);
     }
-    return key
-  }
+    return key;
+  };
 }
 
 /** Build the remote Sandbox factory around one native bindings handle. */
 export function createRemoteSandboxFactory(bindings: RawRemoteBindingsHandle) {
-  const sandboxes = new Map<string, Sandbox>()
+  const sandboxes = new Map<string, Sandbox>();
   return (name: string): Sandbox => {
-    let sandbox = sandboxes.get(name)
+    let sandbox = sandboxes.get(name);
     if (!sandbox) {
-      sandbox = makeSandbox(lazyHandle(() => bindings.sandbox(name)))
-      sandboxes.set(name, sandbox)
+      sandbox = makeSandbox(lazyHandle(() => bindings.sandbox(name)));
+      sandboxes.set(name, sandbox);
     }
-    return sandbox
-  }
+    return sandbox;
+  };
 }

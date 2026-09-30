@@ -1,4 +1,4 @@
-import { configDefaults, defineConfig } from "vitest/config"
+import { configDefaults, defineConfig } from "vitest/config";
 
 /**
  * Default unit-suite config (`test` / `test:bun`). The real-wire integration
@@ -9,4 +9,4 @@ export default defineConfig({
   test: {
     exclude: [...configDefaults.exclude, "tests/integration.real-server.test.ts"],
   },
-})
+});

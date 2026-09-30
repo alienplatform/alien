@@ -21,9 +21,9 @@
  * `packages/package-layout/steps/compile.ts` for the verified repro and required flag.
  */
 
-import addon from "./alien-bindings.node"
-import { createFactories } from "./factories.js"
-import { registerEmbeddedAddon } from "./loader.js"
+import addon from "./alien-bindings.node";
+import { createFactories } from "./factories.js";
+import { registerEmbeddedAddon } from "./loader.js";
 
 /**
  * Register the bun-embedded addon with the default loader, so plain
@@ -33,25 +33,25 @@ import { registerEmbeddedAddon } from "./loader.js"
  * import so it survives this package's `sideEffects: false` tree-shaking.
  */
 export function installEmbeddedAddon(): void {
-  registerEmbeddedAddon(addon)
+  registerEmbeddedAddon(addon);
 }
 
-const factories = createFactories(() => addon)
+const factories = createFactories(() => addon);
 
 /** Resolve the storage binding named `name`. */
-export const storage = factories.storage
+export const storage = factories.storage;
 /** Resolve the provider-backed key binding named `name`. */
-export const key = factories.key
+export const key = factories.key;
 /** Resolve the key-value binding named `name`. */
-export const kv = factories.kv
+export const kv = factories.kv;
 /** Resolve the queue binding named `name`. */
-export const queue = factories.queue
+export const queue = factories.queue;
 /** Resolve the vault binding named `name`. */
-export const vault = factories.vault
+export const vault = factories.vault;
 /** Resolve the linked-container binding named `name`. */
-export const container = factories.container
+export const container = factories.container;
 /** Resolve the Postgres binding named `name`. */
-export const postgres = factories.postgres
+export const postgres = factories.postgres;
 
 export {
   AlienError,
@@ -59,7 +59,7 @@ export {
   defineError,
   InvalidPostgresTlsConfigError,
   UnknownPostgresSslModeError,
-} from "./errors.js"
+} from "./errors.js";
 
 export type {
   Container,
@@ -89,4 +89,4 @@ export type {
   StoragePutOptions,
   StoragePutResult,
   Vault,
-} from "./types.js"
+} from "./types.js";

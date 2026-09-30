@@ -5,32 +5,32 @@
     "aws": [
       {
         "grant": {
-          "actions": ["s3:GetBucketNotification", "s3:PutBucketNotification"]
+          "actions": ["s3:GetBucketNotification", "s3:PutBucketNotification"],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:s3:::${stackPrefix}-*"]
+            "resources": ["arn:aws:s3:::${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:s3:::${resourceName}"]
-          }
-        }
-      }
+            "resources": ["arn:aws:s3:::${resourceName}"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
         "grant": {
-          "permissions": ["storage.buckets.get", "storage.buckets.update"]
+          "permissions": ["storage.buckets.get", "storage.buckets.update"],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}/buckets/${resourceName}"
-          }
-        }
-      }
+            "scope": "projects/${projectName}/buckets/${resourceName}",
+          },
+        },
+      },
     ],
     "azure": [
       {
@@ -38,19 +38,19 @@
           "actions": [
             "Microsoft.EventGrid/eventSubscriptions/read",
             "Microsoft.EventGrid/eventSubscriptions/write",
-            "Microsoft.EventGrid/eventSubscriptions/delete"
+            "Microsoft.EventGrid/eventSubscriptions/delete",
           ],
-          "dataActions": []
+          "dataActions": [],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
+          },
+        },
+      },
+    ],
+  },
 }

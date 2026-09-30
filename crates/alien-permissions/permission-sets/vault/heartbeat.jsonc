@@ -5,58 +5,58 @@
     "aws": [
       {
         "grant": {
-          "actions": ["ssm:DescribeParameters"]
+          "actions": ["ssm:DescribeParameters"],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
+            "resources": ["*"],
           },
           "resource": {
-            "resources": ["*"]
-          }
-        }
-      }
+            "resources": ["*"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
         "grant": {
-          "predefinedRoles": ["roles/secretmanager.viewer"]
+          "predefinedRoles": ["roles/secretmanager.viewer"],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
-          }
-        }
+            "scope": "projects/${projectName}",
+          },
+        },
       },
       {
         "grant": {
-          "predefinedRoles": ["roles/secretmanager.viewer"]
+          "predefinedRoles": ["roles/secretmanager.viewer"],
         },
         "binding": {
           "resource": {
             "scope": "projects/${projectName}",
             "condition": {
               "title": "ResourceVaultSecretsHeartbeat",
-              "expression": "resource.type == \"secretmanager.googleapis.com/Secret\" && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")"
-            }
-          }
-        }
-      }
+              "expression": "resource.type == \"secretmanager.googleapis.com/Secret\" && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")",
+            },
+          },
+        },
+      },
     ],
     "azure": [
       {
         "grant": {
-          "predefinedRoles": ["Reader"]
+          "predefinedRoles": ["Reader"],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

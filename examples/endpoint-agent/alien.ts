@@ -1,7 +1,7 @@
-import * as alien from "@alienplatform/core"
+import * as alien from "@alienplatform/core";
 
 // Encrypted local storage for events
-const events = new alien.Storage("events").build()
+const events = new alien.Storage("events").build();
 
 const agent = new alien.Daemon("agent")
   .code({
@@ -15,7 +15,7 @@ const agent = new alien.Daemon("agent")
   .link(events)
   .commandsEnabled(true)
   .permissions("execution")
-  .build()
+  .build();
 
 export default new alien.Stack("endpoint-agent")
   .platforms(["local"])
@@ -26,4 +26,4 @@ export default new alien.Stack("endpoint-agent")
       execution: {},
     },
   })
-  .build()
+  .build();

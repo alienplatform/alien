@@ -3,11 +3,11 @@ import {
   type ResourceType,
   type Storage as StorageConfig,
   StorageSchema,
-} from "./generated/index.js"
-import { type Resource, ResourceBuilder } from "./resource.js"
+} from "./generated/index.js";
+import { type Resource, ResourceBuilder } from "./resource.js";
 
-export type { LifecycleRule, Storage as StorageConfig, StorageOutputs } from "./generated/index.js"
-export { StorageSchema as StorageConfigSchema } from "./generated/index.js"
+export type { LifecycleRule, Storage as StorageConfig, StorageOutputs } from "./generated/index.js";
+export { StorageSchema as StorageConfigSchema } from "./generated/index.js";
 
 /**
  * Represents an object storage bucket.
@@ -18,15 +18,15 @@ export class Storage extends ResourceBuilder {
     versioning: false,
     lifecycleRules: [],
     corsAllowedOrigins: [],
-  }
+  };
 
   /**
    * Creates a new Storage builder.
    * @param id ID of the storage bucket. For names with dots, each dot-separated label must be ≤ 63 characters.
    */
   constructor(id: string) {
-    super()
-    this._config.id = id
+    super();
+    this._config.id = id;
   }
 
   /**
@@ -35,7 +35,7 @@ export class Storage extends ResourceBuilder {
    * @returns The "storage" resource type.
    */
   public static any(): ResourceType {
-    return "storage"
+    return "storage";
   }
 
   /**
@@ -45,8 +45,8 @@ export class Storage extends ResourceBuilder {
    * @returns The Storage builder instance.
    */
   public publicRead(value: boolean): this {
-    this._config.publicRead = value
-    return this
+    this._config.publicRead = value;
+    return this;
   }
 
   /**
@@ -56,8 +56,8 @@ export class Storage extends ResourceBuilder {
    * @returns The Storage builder instance.
    */
   public versioning(value: boolean): this {
-    this._config.versioning = value
-    return this
+    this._config.versioning = value;
+    return this;
   }
 
   /**
@@ -66,8 +66,8 @@ export class Storage extends ResourceBuilder {
    * @returns The Storage builder instance.
    */
   public lifecycleRules(rules: LifecycleRule[]): this {
-    this._config.lifecycleRules = rules
-    return this
+    this._config.lifecycleRules = rules;
+    return this;
   }
 
   /**
@@ -78,8 +78,8 @@ export class Storage extends ResourceBuilder {
    * @returns The Storage builder instance.
    */
   public corsAllowedOrigins(origins: string[]): this {
-    this._config.corsAllowedOrigins = origins
-    return this
+    this._config.corsAllowedOrigins = origins;
+    return this;
   }
 
   /**
@@ -90,10 +90,10 @@ export class Storage extends ResourceBuilder {
     if (key.config.type !== "key") {
       throw new Error(
         `Storage.encryptionKey() requires an alien.Key, received '${key.config.type}'`,
-      )
+      );
     }
-    this._config.encryptionKey = key.ref()
-    return this
+    this._config.encryptionKey = key.ref();
+    return this;
   }
 
   /**
@@ -102,11 +102,11 @@ export class Storage extends ResourceBuilder {
    * @throws Error if the storage configuration is invalid.
    */
   public build(): Resource {
-    const config = StorageSchema.parse(this._config)
+    const config = StorageSchema.parse(this._config);
 
     return this.resource({
       type: "storage",
       ...config,
-    })
+    });
   }
 }

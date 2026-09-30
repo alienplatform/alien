@@ -5,16 +5,16 @@
     "aws": [
       {
         "grant": {
-          "actions": ["ecr:GetAuthorizationToken"]
+          "actions": ["ecr:GetAuthorizationToken"],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
+            "resources": ["*"],
           },
           "resource": {
-            "resources": ["*"]
-          }
-        }
+            "resources": ["*"],
+          },
+        },
       },
       {
         "grant": {
@@ -24,71 +24,71 @@
             "ecr:BatchGetImage",
             "ecr:DescribeRepositories",
             "ecr:DescribeImages",
-            "ecr:ListImages"
-          ]
+            "ecr:ListImages",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${stackPrefix}-*"]
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${resourceName}-*"]
-          }
-        }
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${resourceName}-*"],
+          },
+        },
       },
       {
         "grant": {
-          "actions": ["sts:AssumeRole"]
+          "actions": ["sts:AssumeRole"],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-pull"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-pull"],
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-pull"]
-          }
-        }
-      }
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-pull"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
         "grant": {
-          "predefinedRoles": ["roles/artifactregistry.reader"]
+          "predefinedRoles": ["roles/artifactregistry.reader"],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}/locations/${region}/repositories/${resourceName}"
-          }
-        }
+            "scope": "projects/${projectName}/locations/${region}/repositories/${resourceName}",
+          },
+        },
       },
       {
         "grant": {
-          "permissions": ["iam.serviceAccounts.actAs", "iam.serviceAccounts.getAccessToken"]
+          "permissions": ["iam.serviceAccounts.actAs", "iam.serviceAccounts.getAccessToken"],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
-          }
-        }
-      }
+            "scope": "projects/${projectName}",
+          },
+        },
+      },
     ],
     "azure": [
       {
         "grant": {
-          "predefinedRoles": ["AcrPull"]
+          "predefinedRoles": ["AcrPull"],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ContainerRegistry/registries/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ContainerRegistry/registries/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

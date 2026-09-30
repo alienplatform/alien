@@ -7,61 +7,61 @@
  * produces those envelopes.
  */
 
-import { randomUUID } from "node:crypto"
-import { afterEach, describe, expect, it } from "vitest"
-import { AlienError, BindingNotConfiguredError, kv, storage } from "../src/index.js"
+import { randomUUID } from "node:crypto";
+import { afterEach, describe, expect, it } from "vitest";
+import { AlienError, BindingNotConfiguredError, kv, storage } from "../src/index.js";
 import {
   bindingEnvVarName,
   cleanupTempDirs,
   installBindingEnv,
   LOCAL_DEPLOYMENT_ENV,
-} from "./helpers/local-binding-env.js"
+} from "./helpers/local-binding-env.js";
 
-afterEach(cleanupTempDirs)
-const isBun = process.env.BUN_EXPECTED === "1"
+afterEach(cleanupTempDirs);
+const isBun = process.env.BUN_EXPECTED === "1";
 
 describe("bindingEnvVarName", () => {
   it("derives storage('my-files') -> ALIEN_MY_FILES_BINDING", () => {
-    expect(bindingEnvVarName("my-files")).toBe("ALIEN_MY_FILES_BINDING")
-  })
-})
+    expect(bindingEnvVarName("my-files")).toBe("ALIEN_MY_FILES_BINDING");
+  });
+});
 
 describe("missing binding", () => {
   it("throws BindingNotConfiguredError with {binding, envVar, code} on the first operation", async () => {
-    const name = `missing-${randomUUID()}`
-    installBindingEnv(LOCAL_DEPLOYMENT_ENV)
-    const s = storage(name)
+    const name = `missing-${randomUUID()}`;
+    installBindingEnv(LOCAL_DEPLOYMENT_ENV);
+    const s = storage(name);
 
-    const err = await s.head("whatever").catch((e: unknown) => e)
+    const err = await s.head("whatever").catch((e: unknown) => e);
 
-    expect(err).toBeInstanceOf(AlienError)
-    const alienErr = err as AlienError
-    expect(alienErr.code).toBe("BINDING_NOT_CONFIGURED")
-    expect(alienErr.code).toBe(BindingNotConfiguredError.metadata.code)
-    expect(alienErr.context).toEqual({ binding: name, envVar: bindingEnvVarName(name) })
-  })
-})
+    expect(err).toBeInstanceOf(AlienError);
+    const alienErr = err as AlienError;
+    expect(alienErr.code).toBe("BINDING_NOT_CONFIGURED");
+    expect(alienErr.code).toBe(BindingNotConfiguredError.metadata.code);
+    expect(alienErr.context).toEqual({ binding: name, envVar: bindingEnvVarName(name) });
+  });
+});
 
 describe("malformed binding JSON", () => {
   it("throws BINDING_CONFIG_INVALID naming the env var", async () => {
-    const name = isBun ? "bun-bad-json" : `bad-json-${randomUUID()}`
+    const name = isBun ? "bun-bad-json" : `bad-json-${randomUUID()}`;
     if (!isBun) {
-      installBindingEnv({ ...LOCAL_DEPLOYMENT_ENV, [bindingEnvVarName(name)]: "not-json" })
+      installBindingEnv({ ...LOCAL_DEPLOYMENT_ENV, [bindingEnvVarName(name)]: "not-json" });
     }
-    const s = storage(name)
+    const s = storage(name);
 
-    const err = await s.head("whatever").catch((e: unknown) => e)
+    const err = await s.head("whatever").catch((e: unknown) => e);
 
-    expect(err).toBeInstanceOf(AlienError)
-    const alienErr = err as AlienError
-    expect(alienErr.code).toBe("BINDING_CONFIG_INVALID")
-    expect(alienErr.message).toContain(bindingEnvVarName(name))
-  })
-})
+    expect(err).toBeInstanceOf(AlienError);
+    const alienErr = err as AlienError;
+    expect(alienErr.code).toBe("BINDING_CONFIG_INVALID");
+    expect(alienErr.message).toContain(bindingEnvVarName(name));
+  });
+});
 
 describe("unsupported provider tag", () => {
   it("throws UNSUPPORTED_BINDING_PROVIDER for a recognized-but-unimplemented kv provider", async () => {
-    const name = isBun ? "bun-redis" : `redis-${randomUUID()}`
+    const name = isBun ? "bun-redis" : `redis-${randomUUID()}`;
     if (!isBun) {
       installBindingEnv({
         ...LOCAL_DEPLOYMENT_ENV,
@@ -69,15 +69,15 @@ describe("unsupported provider tag", () => {
           service: "redis",
           connectionUrl: "redis://localhost:6379",
         }),
-      })
+      });
     }
-    const k = kv(name)
+    const k = kv(name);
 
-    const err = await k.exists("whatever").catch((e: unknown) => e)
+    const err = await k.exists("whatever").catch((e: unknown) => e);
 
-    expect(err).toBeInstanceOf(AlienError)
-    const alienErr = err as AlienError
-    expect(alienErr.code).toBe("UNSUPPORTED_BINDING_PROVIDER")
-    expect(alienErr.message).toContain(bindingEnvVarName(name))
-  })
-})
+    expect(err).toBeInstanceOf(AlienError);
+    const alienErr = err as AlienError;
+    expect(alienErr.code).toBe("UNSUPPORTED_BINDING_PROVIDER");
+    expect(alienErr.message).toContain(bindingEnvVarName(name));
+  });
+});

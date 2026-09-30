@@ -1,15 +1,15 @@
 {
   "name": "ai-quickstart-ts",
   "version": "1.0.0",
-  "type": "module",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "alien dev",
     "build": "alien build --platform local"
   },
   "dependencies": {
-    "@alienplatform/sdk": "^1.8.0",
     "@alienplatform/core": "^1.8.0",
+    "@alienplatform/sdk": "^1.8.0",
     "hono": "^4.0.0"
   },
   "devDependencies": {

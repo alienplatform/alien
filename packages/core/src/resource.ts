@@ -1,8 +1,8 @@
-import type { BaseResource, ResourceRef } from "./generated/index.js"
-import type { StackInputRef } from "./input.js"
+import type { BaseResource, ResourceRef } from "./generated/index.js";
+import type { StackInputRef } from "./input.js";
 
-export type { ResourceType } from "./generated/index.js"
-export { ResourceTypeSchema } from "./generated/index.js"
+export type { ResourceType } from "./generated/index.js";
+export { ResourceTypeSchema } from "./generated/index.js";
 
 /**
  * Represents a generic cloud resource within the Alien framework.
@@ -17,7 +17,7 @@ export class Resource {
    * plain declaration would put `enabledWhen: undefined` on every resource, including
    * ungated ones, which shows up in the stack snapshots.
    */
-  declare readonly enabledWhen?: string
+  declare readonly enabledWhen?: string;
 
   /**
    * Creates a new Resource instance.
@@ -29,7 +29,7 @@ export class Resource {
     enabledWhen?: string,
   ) {
     if (enabledWhen !== undefined) {
-      this.enabledWhen = enabledWhen
+      this.enabledWhen = enabledWhen;
     }
   }
 
@@ -39,7 +39,7 @@ export class Resource {
    * @returns A ResourceRef object containing the type and name of this resource.
    */
   public ref(): ResourceRef {
-    return { type: this.config.type, id: this.config.id }
+    return { type: this.config.type, id: this.config.id };
   }
 }
 
@@ -48,7 +48,7 @@ export class Resource {
  * `.enabled()` gate without each builder reimplementing it.
  */
 export abstract class ResourceBuilder {
-  private _enabledWhen?: string
+  private _enabledWhen?: string;
 
   /**
    * Creates this resource only when the given boolean stack input is true.
@@ -60,8 +60,8 @@ export abstract class ResourceBuilder {
    * @returns The builder instance.
    */
   public enabled(input: StackInputRef<boolean>): this {
-    this._enabledWhen = input.id
-    return this
+    this._enabledWhen = input.id;
+    return this;
   }
 
   /**
@@ -70,6 +70,6 @@ export abstract class ResourceBuilder {
    * @returns An immutable Resource.
    */
   protected resource(config: BaseResource): Resource {
-    return new Resource(config, this._enabledWhen)
+    return new Resource(config, this._enabledWhen);
   }
 }

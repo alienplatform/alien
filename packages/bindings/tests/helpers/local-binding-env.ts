@@ -35,14 +35,14 @@
  * with `ENVIRONMENT_VARIABLE_MISSING` before it ever reaches the binding.
  */
 
-import { mkdtempSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /** The env var every binding operation needs in addition to its own JSON. */
 export const LOCAL_DEPLOYMENT_ENV: Record<string, string> = {
   ALIEN_DEPLOYMENT_TYPE: "local",
-}
+};
 
 /**
  * Derive the `ALIEN_<NAME>_BINDING` env var name for `bindingName`, mirroring
@@ -51,7 +51,7 @@ export const LOCAL_DEPLOYMENT_ENV: Record<string, string> = {
  * `bindingEnvVarName("my-files") === "ALIEN_MY_FILES_BINDING"`.
  */
 export function bindingEnvVarName(bindingName: string): string {
-  return `ALIEN_${bindingName.replace(/-/g, "_").toUpperCase()}_BINDING`
+  return `ALIEN_${bindingName.replace(/-/g, "_").toUpperCase()}_BINDING`;
 }
 
 /**
@@ -62,22 +62,22 @@ export function bindingEnvVarName(bindingName: string): string {
  * instance across files (Bun's single-process test runner does; Vitest's
  * per-file isolation doesn't, but the same call is a harmless no-op there).
  */
-const createdDirs = new Set<string>()
-const createdEnvKeys = new Set<string>()
+const createdDirs = new Set<string>();
+const createdEnvKeys = new Set<string>();
 
 /** Install a fixture in the process environment used by the public factories. */
 export function installBindingEnv(env: Record<string, string>): void {
   for (const [key, value] of Object.entries(env)) {
-    process.env[key] = value
-    if (key !== "ALIEN_DEPLOYMENT_TYPE") createdEnvKeys.add(key)
+    process.env[key] = value;
+    if (key !== "ALIEN_DEPLOYMENT_TYPE") createdEnvKeys.add(key);
   }
 }
 
 /** Create a fresh, empty temp directory for one binding's on-disk state. */
 export function makeTempDir(label: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `alien-bindings-test-${label}-`))
-  createdDirs.add(dir)
-  return dir
+  const dir = mkdtempSync(join(tmpdir(), `alien-bindings-test-${label}-`));
+  createdDirs.add(dir);
+  return dir;
 }
 
 /**
@@ -87,17 +87,17 @@ export function makeTempDir(label: string): string {
  */
 export function cleanupTempDirs(): void {
   for (const dir of createdDirs) {
-    rmSync(dir, { recursive: true, force: true })
+    rmSync(dir, { recursive: true, force: true });
   }
-  createdDirs.clear()
-  for (const key of createdEnvKeys) delete process.env[key]
-  createdEnvKeys.clear()
+  createdDirs.clear();
+  for (const key of createdEnvKeys) delete process.env[key];
+  createdEnvKeys.clear();
 }
 
 /** An env map plus the temp directory backing it, for tests that want to inspect disk state. */
 export interface LocalBindingFixture {
-  env: Record<string, string>
-  dir: string
+  env: Record<string, string>;
+  dir: string;
 }
 
 /** Build the env for a `local-storage` binding rooted at a fresh temp dir. */
@@ -114,9 +114,9 @@ export function localStorageBindingEnv(
         storagePath: dir,
       }),
     },
-  }
-  installBindingEnv(fixture.env)
-  return fixture
+  };
+  installBindingEnv(fixture.env);
+  return fixture;
 }
 
 /** Build the env for a `local-kv` binding rooted at a fresh temp dir. */
@@ -124,9 +124,9 @@ export function localKvBindingEnv(
   bindingName: string,
   options: { dir?: string; keyPrefix?: string } = {},
 ): LocalBindingFixture {
-  const dir = options.dir ?? makeTempDir(`kv-${bindingName}`)
-  const binding: Record<string, unknown> = { service: "local-kv", dataDir: dir }
-  if (options.keyPrefix !== undefined) binding.keyPrefix = options.keyPrefix
+  const dir = options.dir ?? makeTempDir(`kv-${bindingName}`);
+  const binding: Record<string, unknown> = { service: "local-kv", dataDir: dir };
+  if (options.keyPrefix !== undefined) binding.keyPrefix = options.keyPrefix;
 
   const fixture = {
     dir,
@@ -134,9 +134,9 @@ export function localKvBindingEnv(
       ...LOCAL_DEPLOYMENT_ENV,
       [bindingEnvVarName(bindingName)]: JSON.stringify(binding),
     },
-  }
-  installBindingEnv(fixture.env)
-  return fixture
+  };
+  installBindingEnv(fixture.env);
+  return fixture;
 }
 
 /** Build the env for a `local-queue` binding rooted at a fresh temp dir. */
@@ -153,9 +153,9 @@ export function localQueueBindingEnv(
         queuePath: dir,
       }),
     },
-  }
-  installBindingEnv(fixture.env)
-  return fixture
+  };
+  installBindingEnv(fixture.env);
+  return fixture;
 }
 
 /** Build the env for a `local-vault` binding rooted at a fresh temp dir. */
@@ -174,9 +174,9 @@ export function localVaultBindingEnv(
         dataDir: dir,
       }),
     },
-  }
-  installBindingEnv(fixture.env)
-  return fixture
+  };
+  installBindingEnv(fixture.env);
+  return fixture;
 }
 
 /**
@@ -198,7 +198,7 @@ export const POSTGRES_FIXTURE = {
   database: "app",
   username: "alien",
   password: "a!b*c'd(e)f@/",
-} as const
+} as const;
 
 /** Build the env for a `local-postgres` binding (resolves to `sslmode=disable`). */
 export function localPostgresBindingEnv(bindingName: string): void {
@@ -208,7 +208,7 @@ export function localPostgresBindingEnv(bindingName: string): void {
       service: "local-postgres",
       ...POSTGRES_FIXTURE,
     }),
-  })
+  });
 }
 
 /** Build the env for an `external` (BYO) Postgres binding using verified TLS. */
@@ -220,7 +220,7 @@ export function externalPostgresBindingEnv(bindingName: string): void {
       ...POSTGRES_FIXTURE,
       sslMode: "verify-full",
     }),
-  })
+  });
 }
 
 /** Build the env for a local linked-container binding. */
@@ -233,15 +233,15 @@ export function localContainerBindingEnv(bindingName: string): void {
       internalUrl: "http://database.internal:5432",
       publicUrl: "http://localhost:15432",
     }),
-  })
+  });
 }
 
 /** Return the sole element of `items`, throwing (with a useful message) if there isn't exactly one. */
 export function only<T>(items: T[]): T {
   if (items.length !== 1) {
-    throw new Error(`expected exactly one item, got ${items.length}: ${JSON.stringify(items)}`)
+    throw new Error(`expected exactly one item, got ${items.length}: ${JSON.stringify(items)}`);
   }
-  const [item] = items
-  if (item === undefined) throw new Error("unreachable: length check above guarantees an element")
-  return item
+  const [item] = items;
+  if (item === undefined) throw new Error("unreachable: length check above guarantees an element");
+  return item;
 }

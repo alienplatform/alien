@@ -1,11 +1,11 @@
-"use client"
+"use client";
 
-import { useChat } from "@ai-sdk/react"
-import { useEffect, useRef, useState } from "react"
-import { DataDrawer } from "./components/data-drawer"
-import { GrainBackground } from "./components/grain-background"
-import { Message } from "./components/message"
-import { Spinner } from "./components/spinner"
+import { useChat } from "@ai-sdk/react";
+import { useEffect, useRef, useState } from "react";
+import { DataDrawer } from "./components/data-drawer";
+import { GrainBackground } from "./components/grain-background";
+import { Message } from "./components/message";
+import { Spinner } from "./components/spinner";
 
 // Matched to the seeded dataset so first-run questions land.
 const SUGGESTIONS = [
@@ -13,43 +13,43 @@ const SUGGESTIONS = [
   "Who are our top 5 customers by MRR?",
   "How many orders are pending, and what are they worth?",
   "Break down our customers by country.",
-]
+];
 
 export default function Chat() {
-  const [input, setInput] = useState("")
-  const [models, setModels] = useState<string[]>([])
-  const [model, setModel] = useState("")
-  const { messages, sendMessage, status, stop, error, regenerate } = useChat()
-  const bottomRef = useRef<HTMLDivElement>(null)
-  const composerRef = useRef<HTMLTextAreaElement>(null)
+  const [input, setInput] = useState("");
+  const [models, setModels] = useState<string[]>([]);
+  const [model, setModel] = useState("");
+  const { messages, sendMessage, status, stop, error, regenerate } = useChat();
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
-  const busy = status === "submitted" || status === "streaming"
+  const busy = status === "submitted" || status === "streaming";
 
   useEffect(() => {
     fetch("/api/models")
-      .then(r => r.json())
+      .then((r) => r.json())
       .then((d: { models: string[] }) => {
-        setModels(d.models)
-        if (d.models[0]) setModel(d.models[0])
+        setModels(d.models);
+        if (d.models[0]) setModel(d.models[0]);
       })
-      .catch(() => {})
-  }, [])
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages]) // oxlint-disable-line react/exhaustive-effect-dependencies -- scroll on every stream update
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]); // oxlint-disable-line react/exhaustive-effect-dependencies -- scroll on every stream update
 
   function ask(text: string) {
     // Before the picker loads, omit the field and let the server pick a default.
-    sendMessage({ text }, { body: { model: model || undefined } })
-    composerRef.current?.focus()
+    sendMessage({ text }, { body: { model: model || undefined } });
+    composerRef.current?.focus();
   }
 
   function submit() {
-    const text = input.trim()
-    if (!text || busy) return
-    ask(text)
-    setInput("")
+    const text = input.trim();
+    if (!text || busy) return;
+    ask(text);
+    setInput("");
   }
 
   return (
@@ -62,10 +62,10 @@ export default function Chat() {
           <DataDrawer />
           <select
             value={model}
-            onChange={e => setModel(e.target.value)}
+            onChange={(e) => setModel(e.target.value)}
             className="cursor-pointer rounded-full border border-edge bg-transparent px-3 py-1.5 font-mono text-xs text-zinc-100 outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
           >
-            {models.map(m => (
+            {models.map((m) => (
               <option key={m} value={m} className="bg-zinc-950">
                 {m}
               </option>
@@ -92,7 +92,7 @@ export default function Chat() {
                 </p>
               </div>
               <div className="grid w-full gap-2 sm:grid-cols-2">
-                {SUGGESTIONS.map(suggestion => (
+                {SUGGESTIONS.map((suggestion) => (
                   <button
                     key={suggestion}
                     type="button"
@@ -106,7 +106,7 @@ export default function Chat() {
             </div>
           ) : (
             <div className="space-y-6">
-              {messages.map(message => (
+              {messages.map((message) => (
                 <Message key={message.id} message={message} />
               ))}
               {status === "submitted" && (
@@ -136,9 +136,9 @@ export default function Chat() {
       <footer className="relative px-4 pb-4">
         <form
           className="relative mx-auto max-w-3xl"
-          onSubmit={e => {
-            e.preventDefault()
-            submit()
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit();
           }}
         >
           <textarea
@@ -148,11 +148,11 @@ export default function Chat() {
             // oxlint-disable-next-line jsx-a11y/no-autofocus -- the chat input is the page's primary control
             autoFocus
             placeholder="Ask about the company's data…"
-            onChange={e => setInput(e.currentTarget.value)}
-            onKeyDown={e => {
+            onChange={(e) => setInput(e.currentTarget.value)}
+            onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault()
-                submit()
+                e.preventDefault();
+                submit();
               }
             }}
             className="block max-h-40 w-full resize-none rounded-xl border border-white/40 bg-card/80 py-3 pl-4 pr-12 outline-none backdrop-blur-sm field-sizing-content caret-white placeholder:text-zinc-400 focus:border-white/70 focus:ring-2 focus:ring-white/25"
@@ -179,7 +179,7 @@ export default function Chat() {
         </form>
       </footer>
     </div>
-  )
+  );
 }
 
 function ArrowUpIcon() {
@@ -198,7 +198,7 @@ function ArrowUpIcon() {
       <path d="M12 19V5" />
       <path d="m5 12 7-7 7 7" />
     </svg>
-  )
+  );
 }
 
 function StopIcon() {
@@ -206,5 +206,5 @@ function StopIcon() {
     <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
       <rect width="12" height="12" rx="2" />
     </svg>
-  )
+  );
 }

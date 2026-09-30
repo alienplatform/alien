@@ -13,34 +13,34 @@
  * it is registered (graceful drain-on-shutdown is a planned future feature).
  */
 
-import { createClient } from "nice-grpc"
-import { getGrpcEndpointConfig, getOrCreateChannel } from "./channel.js"
-import { installWorkerConsole } from "./console.js"
-import { EventLoop } from "./event-loop.js"
-import { wrapGrpcCall } from "./grpc-utils.js"
+import { createClient } from "nice-grpc";
+import { getGrpcEndpointConfig, getOrCreateChannel } from "./channel.js";
+import { installWorkerConsole } from "./console.js";
+import { EventLoop } from "./event-loop.js";
+import { wrapGrpcCall } from "./grpc-utils.js";
 import {
   getControlServiceDefinition,
   getWaitUntilServiceDefinition,
-} from "./service-definitions.js"
-import { WaitUntilManager } from "./wait-until-manager.js"
+} from "./service-definitions.js";
+import { WaitUntilManager } from "./wait-until-manager.js";
 
-installWorkerConsole()
+installWorkerConsole();
 
 // Minimal ambient declaration for the Bun runtime global. Worker binaries run
 // under Bun; the SDK is type-checked by tsc, which has no Bun types. We use
 // only `Bun.serve`, so declare just that.
 declare const Bun: {
   serve(options: {
-    fetch: (request: Request) => Response | Promise<Response>
-    hostname?: string
-    port?: number
-    idleTimeout?: number
-  }): { port: number }
-}
+    fetch: (request: Request) => Response | Promise<Response>;
+    hostname?: string;
+    port?: number;
+    idleTimeout?: number;
+  }): { port: number };
+};
 
 /** Instance ID for this worker process. */
 function generateInstanceId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
 /**
@@ -51,13 +51,15 @@ function resolveFetchHandler(
   app: unknown,
 ): ((request: Request) => Response | Promise<Response>) | undefined {
   const defaultExport =
-    app && typeof app === "object" && "default" in app ? (app as { default: unknown }).default : app
+    app && typeof app === "object" && "default" in app
+      ? (app as { default: unknown }).default
+      : app;
   if (!defaultExport || typeof defaultExport !== "object" || !("fetch" in defaultExport)) {
-    return undefined
+    return undefined;
   }
-  const fetchHandler = (defaultExport as { fetch: unknown }).fetch
-  if (typeof fetchHandler !== "function") return undefined
-  return (fetchHandler as (request: Request) => Response | Promise<Response>).bind(defaultExport)
+  const fetchHandler = (defaultExport as { fetch: unknown }).fetch;
+  if (typeof fetchHandler !== "function") return undefined;
+  return (fetchHandler as (request: Request) => Response | Promise<Response>).bind(defaultExport);
 }
 
 /**
@@ -78,18 +80,18 @@ function resolveFetchHandler(
  *   method for HTTP apps), or `undefined` for handler-only Workers.
  */
 export async function runWorker(app?: unknown): Promise<void> {
-  const { address, generation } = getGrpcEndpointConfig()
-  const channel = await getOrCreateChannel(address)
-  const instanceId = generateInstanceId()
-  const controlService = getControlServiceDefinition(generation)
-  const waitUntilService = getWaitUntilServiceDefinition(generation)
+  const { address, generation } = getGrpcEndpointConfig();
+  const channel = await getOrCreateChannel(address);
+  const instanceId = generateInstanceId();
+  const controlService = getControlServiceDefinition(generation);
+  const waitUntilService = getWaitUntilServiceDefinition(generation);
 
   // Serve the HTTP handler (or a minimal readiness server) and register the
   // port. Workers always listen on loopback with a dynamic port:
   // alien-worker-runtime is co-located (same container or host), proxies all
   // external traffic, and learns the port via RegisterHttpServer. Nothing else
   // may reach this server, so 127.0.0.1 is the only correct interface.
-  const fetchHandler = resolveFetchHandler(app)
+  const fetchHandler = resolveFetchHandler(app);
   const server = Bun.serve({
     // No HTTP framework — a minimal server so the runtime can probe readiness
     // and route health checks. Commands and events are delivered over gRPC.
@@ -97,20 +99,20 @@ export async function runWorker(app?: unknown): Promise<void> {
     hostname: "127.0.0.1",
     port: 0,
     idleTimeout: 255,
-  })
+  });
 
-  await registerHttpServer(channel, server.port, controlService)
+  await registerHttpServer(channel, server.port, controlService);
 
   // Report each waitUntil background task to the runtime as it is registered.
   // Graceful drain-on-shutdown (waiting for tracked tasks before exit) is a
   // planned future feature — see wait-until-manager.ts.
-  const waitUntilManager = new WaitUntilManager(channel, instanceId, waitUntilService)
-  waitUntilManager.install()
+  const waitUntilManager = new WaitUntilManager(channel, instanceId, waitUntilService);
+  waitUntilManager.install();
 
   // Register handlers and enter the dispatch loop (runs until the process exits).
-  const eventLoop = new EventLoop(channel, instanceId, address, controlService)
-  await eventLoop.registerHandlers()
-  await eventLoop.start()
+  const eventLoop = new EventLoop(channel, instanceId, address, controlService);
+  await eventLoop.registerHandlers();
+  await eventLoop.start();
 }
 
 /**
@@ -121,8 +123,8 @@ async function registerHttpServer(
   port: number,
   service: ReturnType<typeof getControlServiceDefinition>,
 ): Promise<void> {
-  const client = createClient(service, channel)
+  const client = createClient(service, channel);
   await wrapGrpcCall("ControlService", "RegisterHttpServer", async () => {
-    await client.registerHttpServer({ port })
-  })
+    await client.registerHttpServer({ port });
+  });
 }

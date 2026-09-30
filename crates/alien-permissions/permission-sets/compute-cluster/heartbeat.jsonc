@@ -13,18 +13,18 @@
             "autoscaling:DescribeScalingActivities",
             "ec2:DescribeInstances",
             "ec2:DescribeInstanceStatus",
-            "ec2:DescribeTags"
-          ]
+            "ec2:DescribeTags",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
+            "resources": ["*"],
           },
           "resource": {
-            "resources": ["*"]
-          }
-        }
-      }
+            "resources": ["*"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -34,34 +34,34 @@
             "compute.instanceGroupManagers.get",
             "compute.zoneOperations.get",
             "compute.instances.list",
-            "compute.instances.get"
-          ]
+            "compute.instances.get",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}"
-          }
-        }
-      }
+            "scope": "projects/${projectName}",
+          },
+        },
+      },
     ],
     "azure": [
       // Resource SKU availability is subscription-specific and cannot be read through a
       // resource-group-scoped role assignment.
       {
         "grant": {
-          "actions": ["Microsoft.Compute/skus/read"]
+          "actions": ["Microsoft.Compute/skus/read"],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}"
+            "scope": "/subscriptions/${subscriptionId}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}"
-          }
-        }
+            "scope": "/subscriptions/${subscriptionId}",
+          },
+        },
       },
       {
         "grant": {
@@ -70,18 +70,18 @@
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/read",
             "Microsoft.Compute/virtualMachineScaleSets/instanceView/read",
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/instanceView/read",
-            "Microsoft.Compute/locations/operations/read"
-          ]
+            "Microsoft.Compute/locations/operations/read",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
+          },
+        },
+      },
+    ],
+  },
 }

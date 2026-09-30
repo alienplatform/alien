@@ -8,7 +8,7 @@
         "label": "opensearch-data-plane",
         "description": "Call the OpenSearch Serverless data plane. AOSS uses a single IAM action (aoss:APIAccessAll); fine-grained index/document permissions are enforced by the collection's data-access policy, which the AWS emitter scopes to roles holding this permission set.",
         "grant": {
-          "actions": ["aoss:APIAccessAll"]
+          "actions": ["aoss:APIAccessAll"],
         },
         // Collection ARNs use the server-assigned collection id
         // (arn:aws:aoss:<region>:<account>:collection/<id>), which doesn't
@@ -17,13 +17,13 @@
         // the resource to the exact collection ARN via Fn::GetAtt.
         "binding": {
           "stack": {
-            "resources": ["arn:aws:aoss:${awsRegion}:${awsAccountId}:collection/*"]
+            "resources": ["arn:aws:aoss:${awsRegion}:${awsAccountId}:collection/*"],
           },
           "resource": {
-            "resources": ["arn:aws:aoss:${awsRegion}:${awsAccountId}:collection/*"]
-          }
-        }
-      }
-    ]
-  }
+            "resources": ["arn:aws:aoss:${awsRegion}:${awsAccountId}:collection/*"],
+          },
+        },
+      },
+    ],
+  },
 }

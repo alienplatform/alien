@@ -5,32 +5,32 @@
     "aws": [
       {
         "grant": {
-          "actions": ["lambda:InvokeFunction", "lambda:InvokeAsync"]
+          "actions": ["lambda:InvokeFunction", "lambda:InvokeAsync"],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"]
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"]
-          }
-        }
-      }
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
         "grant": {
-          "predefinedRoles": ["roles/run.invoker", "roles/run.jobsExecutorWithOverrides"]
+          "predefinedRoles": ["roles/run.invoker", "roles/run.jobsExecutorWithOverrides"],
         },
         // Cloud Run does not support IAM conditions (resource.name/resource.type) for any operation.
         // All conditions silently fail. Stack: scope-only. Resource: scoped to specific service.
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
           "resource": {
-            "scope": "projects/${projectName}/locations/${region}/services/${resourceName}"
-          }
-        }
-      }
+            "scope": "projects/${projectName}/locations/${region}/services/${resourceName}",
+          },
+        },
+      },
     ],
     "azure": [
       {
@@ -43,19 +43,19 @@
             "Microsoft.App/containerApps/sourceControls/read",
             "Microsoft.App/containerApps/revisions/activate/action",
             "Microsoft.App/containerApps/revisions/deactivate/action",
-            "Microsoft.App/containerApps/revisions/restart/action"
+            "Microsoft.App/containerApps/revisions/restart/action",
           ],
-          "dataActions": []
+          "dataActions": [],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/containerApps/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/containerApps/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

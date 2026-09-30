@@ -16,8 +16,8 @@
             "ec2:CreateNatGateway",
             "ec2:AllocateAddress",
             "ec2:CreateSecurityGroup",
-            "ec2:CreateTags"
-          ]
+            "ec2:CreateTags",
+          ],
         },
         "binding": {
           "stack": {
@@ -28,16 +28,16 @@
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:route-table/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:natgateway/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:elastic-ip/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
             ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       // Existing network resources can be changed only after they carry Alien boundary tags.
       {
@@ -61,8 +61,8 @@
             "ec2:AuthorizeSecurityGroupEgress",
             "ec2:RevokeSecurityGroupIngress",
             "ec2:RevokeSecurityGroupEgress",
-            "ec2:DescribeVpcAttribute"
-          ]
+            "ec2:DescribeVpcAttribute",
+          ],
         },
         "binding": {
           "stack": {
@@ -73,16 +73,16 @@
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:route-table/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:natgateway/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:elastic-ip/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
             ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       // AWS requires Resource: "*" for these read-only discovery APIs.
       {
@@ -98,15 +98,15 @@
             "ec2:DescribeSecurityGroups",
             "ec2:DescribeSecurityGroupRules",
             "ec2:DescribeTags",
-            "servicequotas:GetServiceQuota"
-          ]
+            "servicequotas:GetServiceQuota",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
-          }
-        }
-      }
+            "resources": ["*"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -144,32 +144,32 @@
             "compute.regionOperations.get",
             "compute.regionOperations.list",
             // Project access
-            "resourcemanager.projects.get"
-          ]
+            "resourcemanager.projects.get",
+          ],
         },
         // Compute/VPC/Network does not support resource-level IAM.
         // Resource binding is the same as stack (project-level).
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}"
-          }
-        }
-      }
+            "scope": "projects/${projectName}",
+          },
+        },
+      },
     ],
     "azure": [
       {
         "grant": {
-          "predefinedRoles": ["Network Contributor"]
+          "predefinedRoles": ["Network Contributor"],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
+          },
+        },
+      },
+    ],
+  },
 }

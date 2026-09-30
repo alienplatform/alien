@@ -12,17 +12,17 @@ import {
   type PublicEndpoint,
   type ResourceSpec,
   type ResourceType,
-} from "./generated/index.js"
-import { type Resource, ResourceBuilder } from "./resource.js"
+} from "./generated/index.js";
+import { type Resource, ResourceBuilder } from "./resource.js";
 
 export type PublicEndpointOptions =
   | "http"
   | "tcp"
   | {
-      protocol: "http" | "tcp"
-      hostLabel?: string
-      wildcardSubdomains?: boolean
-    }
+      protocol: "http" | "tcp";
+      hostLabel?: string;
+      wildcardSubdomains?: boolean;
+    };
 
 export type {
   Container as ContainerConfig,
@@ -42,14 +42,14 @@ export type {
   PublicEndpoint,
   ReplicaStatus,
   ResourceSpec,
-} from "./generated/index.js"
+} from "./generated/index.js";
 export {
   ContainerAutoscalingSchema,
   ContainerCodeSchema,
   ContainerPortSchema,
   ContainerSchema as ContainerConfigSchema,
   ExposeProtocolSchema,
-} from "./generated/index.js"
+} from "./generated/index.js";
 
 export interface PersistentStorageOptions {
   /**
@@ -57,7 +57,7 @@ export interface PersistentStorageOptions {
    *
    * Defaults to `/data`.
    */
-  mountPath?: string
+  mountPath?: string;
 }
 
 /**
@@ -76,15 +76,15 @@ export class Container extends ResourceBuilder {
     kubernetesSecretMounts: [],
     stateful: false,
     // cluster is optional - if not set, ComputeClusterMutation will auto-assign
-  }
+  };
 
   /**
    * Creates a new Container builder.
    * @param id Identifier for the container. Must be DNS-compatible: lowercase alphanumeric with hyphens.
    */
   constructor(id: string) {
-    super()
-    this._config.id = id
+    super();
+    this._config.id = id;
   }
 
   /**
@@ -93,7 +93,7 @@ export class Container extends ResourceBuilder {
    * @returns The "container" resource type.
    */
   public static any(): ResourceType {
-    return "container"
+    return "container";
   }
 
   /**
@@ -102,8 +102,8 @@ export class Container extends ResourceBuilder {
    * @returns The Container builder instance.
    */
   public cluster(clusterId: string): this {
-    this._config.cluster = clusterId
-    return this
+    this._config.cluster = clusterId;
+    return this;
   }
 
   /**
@@ -112,8 +112,8 @@ export class Container extends ResourceBuilder {
    * @returns The Container builder instance.
    */
   public code(code: ContainerCode): this {
-    this._config.code = code
-    return this
+    this._config.code = code;
+    return this;
   }
 
   /**
@@ -130,11 +130,11 @@ export class Container extends ResourceBuilder {
    */
   public cpu(value: number | ResourceSpec): this {
     if (typeof value === "number") {
-      this._config.cpu = { min: value.toString(), desired: value.toString() }
+      this._config.cpu = { min: value.toString(), desired: value.toString() };
     } else {
-      this._config.cpu = value
+      this._config.cpu = value;
     }
-    return this
+    return this;
   }
 
   /**
@@ -149,8 +149,8 @@ export class Container extends ResourceBuilder {
    * @returns The Container builder instance.
    */
   public memory(value: string | ResourceSpec): this {
-    this._config.memory = typeof value === "string" ? { min: value, desired: value } : value
-    return this
+    this._config.memory = typeof value === "string" ? { min: value, desired: value } : value;
+    return this;
   }
 
   /**
@@ -166,12 +166,12 @@ export class Container extends ResourceBuilder {
         min,
         desired: min,
         max: min * 10, // Default max is 10x min
-      }
+      };
     } else {
-      this._config.autoscaling.min = min
-      this._config.autoscaling.desired = min
+      this._config.autoscaling.min = min;
+      this._config.autoscaling.desired = min;
     }
-    return this
+    return this;
   }
 
   /**
@@ -185,11 +185,11 @@ export class Container extends ResourceBuilder {
         min: 1,
         desired: 1,
         max,
-      }
+      };
     } else {
-      this._config.autoscaling.max = max
+      this._config.autoscaling.max = max;
     }
-    return this
+    return this;
   }
 
   /**
@@ -199,9 +199,9 @@ export class Container extends ResourceBuilder {
    * @returns The Container builder instance.
    */
   public replicas(count: number): this {
-    this._config.replicas = count
-    this._config.autoscaling = undefined
-    return this
+    this._config.replicas = count;
+    this._config.autoscaling = undefined;
+    return this;
   }
 
   /**
@@ -210,8 +210,8 @@ export class Container extends ResourceBuilder {
    * @returns The Container builder instance.
    */
   public autoScale(config: ContainerAutoscaling): this {
-    this._config.autoscaling = config
-    return this
+    this._config.autoscaling = config;
+    return this;
   }
 
   /**
@@ -221,8 +221,8 @@ export class Container extends ResourceBuilder {
    * @returns The Container builder instance.
    */
   public stateful(enabled: boolean): this {
-    this._config.stateful = enabled
-    return this
+    this._config.stateful = enabled;
+    return this;
   }
 
   /**
@@ -233,10 +233,10 @@ export class Container extends ResourceBuilder {
    */
   public port(port: number): this {
     if (!this._config.ports) {
-      this._config.ports = []
+      this._config.ports = [];
     }
-    this._config.ports.push({ port })
-    return this
+    this._config.ports.push({ port });
+    return this;
   }
 
   /**
@@ -246,10 +246,10 @@ export class Container extends ResourceBuilder {
    */
   public ports(ports: number[]): this {
     if (!this._config.ports) {
-      this._config.ports = []
+      this._config.ports = [];
     }
-    this._config.ports.push(...ports.map(port => ({ port })))
-    return this
+    this._config.ports.push(...ports.map((port) => ({ port })));
+    return this;
   }
 
   /**
@@ -265,20 +265,20 @@ export class Container extends ResourceBuilder {
    */
   public publicEndpoint(name: string, port: number, options: PublicEndpointOptions = "http"): this {
     if (!this._config.ports) {
-      this._config.ports = []
+      this._config.ports = [];
     }
     if (!this._config.publicEndpoints) {
-      this._config.publicEndpoints = []
+      this._config.publicEndpoints = [];
     }
     const endpoint =
       typeof options === "string"
         ? { protocol: options, hostLabel: undefined, wildcardSubdomains: false }
-        : options
+        : options;
 
-    if (!this._config.ports.some(p => p.port === port)) {
+    if (!this._config.ports.some((p) => p.port === port)) {
       this._config.ports.push({
         port,
-      })
+      });
     }
     this._config.publicEndpoints.push({
       name,
@@ -286,8 +286,8 @@ export class Container extends ResourceBuilder {
       protocol: endpoint.protocol,
       hostLabel: endpoint.hostLabel,
       wildcardSubdomains: endpoint.wildcardSubdomains ?? false,
-    } satisfies PublicEndpoint)
-    return this
+    } satisfies PublicEndpoint);
+    return this;
   }
 
   /**
@@ -296,8 +296,8 @@ export class Container extends ResourceBuilder {
    * @returns The Container builder instance.
    */
   public environment(vars: Record<string, string>): this {
-    this._config.environment = { ...this._config.environment, ...vars }
-    return this
+    this._config.environment = { ...this._config.environment, ...vars };
+    return this;
   }
 
   /**
@@ -307,8 +307,8 @@ export class Container extends ResourceBuilder {
    * @returns The Container builder instance.
    */
   public ephemeralStorage(size: string): this {
-    this._config.ephemeralStorage = size
-    return this
+    this._config.ephemeralStorage = size;
+    return this;
   }
 
   /**
@@ -322,36 +322,36 @@ export class Container extends ResourceBuilder {
     const persistentStorage: PersistentStorage = {
       size,
       mountPath: options.mountPath ?? "/data",
-    }
+    };
 
-    this._config.persistentStorage = persistentStorage
-    this._config.stateful = true
-    return this
+    this._config.persistentStorage = persistentStorage;
+    this._config.stateful = true;
+    return this;
   }
 
   /** Mounts an existing Secret from the deployment's Kubernetes namespace. */
   public kubernetesSecretMount(mount: KubernetesSecretMount): this {
-    this._config.kubernetesSecretMounts ??= []
-    this._config.kubernetesSecretMounts.push(mount)
-    return this
+    this._config.kubernetesSecretMounts ??= [];
+    this._config.kubernetesSecretMounts.push(mount);
+    return this;
   }
 
   /** Restarts a pod when this Kubernetes HTTP liveness probe fails. */
   public kubernetesLivenessProbe(probe: KubernetesHttpProbe): this {
-    this._config.kubernetesLivenessProbe = probe
-    return this
+    this._config.kubernetesLivenessProbe = probe;
+    return this;
   }
 
   /** Excludes a pod from Service endpoints until this Kubernetes HTTP readiness probe passes. */
   public kubernetesReadinessProbe(probe: KubernetesHttpProbe): this {
-    this._config.kubernetesReadinessProbe = probe
-    return this
+    this._config.kubernetesReadinessProbe = probe;
+    return this;
   }
 
   /** Sets a portable container security profile and process identity. */
   public security(settings: ContainerSecurity): this {
-    this._config.security = settings
-    return this
+    this._config.security = settings;
+    return this;
   }
 
   /**
@@ -360,8 +360,8 @@ export class Container extends ResourceBuilder {
    * @returns The Container builder instance.
    */
   public gpu(config: ContainerGpuSpec): this {
-    this._config.gpu = config
-    return this
+    this._config.gpu = config;
+    return this;
   }
 
   /**
@@ -370,8 +370,8 @@ export class Container extends ResourceBuilder {
    * @returns The Container builder instance.
    */
   public healthCheck(config: HealthCheck): this {
-    this._config.healthCheck = config
-    return this
+    this._config.healthCheck = config;
+    return this;
   }
 
   /**
@@ -385,8 +385,8 @@ export class Container extends ResourceBuilder {
       method: config.method,
       timeoutSeconds: 1,
       failureThreshold: 3,
-    }
-    return this
+    };
+    return this;
   }
 
   /**
@@ -395,8 +395,8 @@ export class Container extends ResourceBuilder {
    * @returns The Container builder instance.
    */
   public permissions(profile: string): this {
-    this._config.permissions = profile
-    return this
+    this._config.permissions = profile;
+    return this;
   }
 
   /**
@@ -405,8 +405,8 @@ export class Container extends ResourceBuilder {
    * @returns The Container builder instance.
    */
   public pool(poolName: string): this {
-    this._config.pool = poolName
-    return this
+    this._config.pool = poolName;
+    return this;
   }
 
   /**
@@ -415,8 +415,8 @@ export class Container extends ResourceBuilder {
    * @returns The Container builder instance.
    */
   public command(command: string[]): this {
-    this._config.command = command
-    return this
+    this._config.command = command;
+    return this;
   }
 
   /**
@@ -425,8 +425,8 @@ export class Container extends ResourceBuilder {
    * The value is expressed in seconds. Valid values are 1 through 86400.
    */
   public stopGracePeriod(seconds: number): this {
-    this._config.stopGracePeriodSeconds = seconds
-    return this
+    this._config.stopGracePeriodSeconds = seconds;
+    return this;
   }
 
   /**
@@ -436,10 +436,10 @@ export class Container extends ResourceBuilder {
    */
   public link(resource: Resource): this {
     if (!this._config.links) {
-      this._config.links = []
+      this._config.links = [];
     }
-    this._config.links.push(resource.ref())
-    return this
+    this._config.links.push(resource.ref());
+    return this;
   }
 
   /**
@@ -450,8 +450,8 @@ export class Container extends ResourceBuilder {
    * @returns The Container builder instance.
    */
   public commandsEnabled(enabled: boolean): this {
-    this._config.commandsEnabled = enabled
-    return this
+    this._config.commandsEnabled = enabled;
+    return this;
   }
 
   /**
@@ -460,11 +460,11 @@ export class Container extends ResourceBuilder {
    * @throws Error if the container configuration is invalid.
    */
   public build(): Resource {
-    const config = ContainerSchema.parse(this._config)
+    const config = ContainerSchema.parse(this._config);
 
     return this.resource({
       type: "container",
       ...config,
-    })
+    });
   }
 }

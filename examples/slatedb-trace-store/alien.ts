@@ -1,13 +1,13 @@
-import * as alien from "@alienplatform/core"
+import * as alien from "@alienplatform/core";
 
-const data = new alien.Storage("data").lifecycleRules([{ prefix: "staging/v1/", days: 7 }]).build()
-const ingestion = new alien.Queue("ingestion").build()
+const data = new alien.Storage("data").lifecycleRules([{ prefix: "staging/v1/", days: 7 }]).build();
+const ingestion = new alien.Queue("ingestion").build();
 
 const code = {
   type: "source" as const,
   src: ".",
   toolchain: { type: "rust" as const, binaryName: "slatedb-trace-store" },
-}
+};
 
 const api = new alien.Container("api")
   .code(code)
@@ -26,7 +26,7 @@ const api = new alien.Container("api")
   .permissions("api")
   .link(data)
   .link(ingestion)
-  .build()
+  .build();
 
 const writer = new alien.Container("writer")
   .code(code)
@@ -39,7 +39,7 @@ const writer = new alien.Container("writer")
   .permissions("writer")
   .link(data)
   .link(ingestion)
-  .build()
+  .build();
 
 export default new alien.Stack("slatedb-trace-store")
   .platforms(["aws", "gcp", "azure"])
@@ -59,4 +59,4 @@ export default new alien.Stack("slatedb-trace-store")
       },
     },
   })
-  .build()
+  .build();

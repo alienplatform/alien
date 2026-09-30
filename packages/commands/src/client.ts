@@ -18,13 +18,13 @@ import {
   AlienError,
   CommandStatusResponseSchema,
   CreateCommandResponseSchema,
-} from "@alienplatform/core"
+} from "@alienplatform/core";
 import {
   type CommandConnectionProvider,
   FixedCommandConnectionProvider,
   HostedCommandConnectionProvider,
   requestWithRefreshingConnection,
-} from "./bootstrap.js"
+} from "./bootstrap.js";
 import {
   CommandCreationFailedError,
   CommandExpiredError,
@@ -34,33 +34,33 @@ import {
   ManagerHttpError,
   ResponseDecodingFailedError,
   StorageOperationFailedError,
-} from "./errors.js"
-import { downloadPresigned, redactUrlForError } from "./presigned.js"
+} from "./errors.js";
+import { downloadPresigned, redactUrlForError } from "./presigned.js";
 import type {
   BodySpec,
   CommandResponse,
   CommandState,
   CommandStatusResponse,
   CreateCommandResponse,
-} from "./protocol.js"
-import { parseWireResponse, type WireSchema } from "./wire.js"
+} from "./protocol.js";
+import { parseWireResponse, type WireSchema } from "./wire.js";
 
 /**
  * Configuration for {@link CommandsClient}.
  */
 export interface CommandsClientConfig {
   /** Manager URL (e.g. "https://manager.example.com"). Trailing slashes are stripped. */
-  managerUrl: string
+  managerUrl: string;
   /** Deployment ID to invoke commands on. */
-  deploymentId: string
+  deploymentId: string;
   /** Bearer token (deployment token or workspace token). */
-  token: string
+  token: string;
   /** Default invoke timeout in milliseconds (default: 60000). */
-  timeoutMs?: number
+  timeoutMs?: number;
   /** Allow reading local files for storage responses (default: false, local dev only). */
-  allowLocalStorage?: boolean
+  allowLocalStorage?: boolean;
   /** `fetch` implementation (defaults to the global `fetch`). */
-  fetch?: typeof fetch
+  fetch?: typeof fetch;
 }
 
 /**
@@ -68,17 +68,17 @@ export interface CommandsClientConfig {
  */
 export interface CommandsClientDeploymentConfig {
   /** Deployment ID to invoke commands on. */
-  deploymentId: string
+  deploymentId: string;
   /** Alien API key used to discover the manager and mint command-only access. */
-  apiKey: string
+  apiKey: string;
   /** Alien Platform API base URL (default: "https://api.alien.dev"). */
-  platformUrl?: string
+  platformUrl?: string;
   /** Default invoke timeout in milliseconds (default: 60000). */
-  timeoutMs?: number
+  timeoutMs?: number;
   /** Allow reading local files for storage responses (default: false, local dev only). */
-  allowLocalStorage?: boolean
+  allowLocalStorage?: boolean;
   /** `fetch` implementation (defaults to the global `fetch`). */
-  fetch?: typeof fetch
+  fetch?: typeof fetch;
 }
 
 /**
@@ -86,19 +86,19 @@ export interface CommandsClientDeploymentConfig {
  */
 export interface InvokeOptions {
   /** Wall-clock timeout in milliseconds (default: the client's `timeoutMs`). */
-  timeoutMs?: number
+  timeoutMs?: number;
   /** Optional server-side deadline for command completion. */
-  deadline?: Date
+  deadline?: Date;
   /** Optional idempotency key — the server dedupes retried creates by this key. */
-  idempotencyKey?: string
+  idempotencyKey?: string;
   /** Target command-capable resource id; a `.target(name)` builder overrides this. */
-  targetResourceId?: string
+  targetResourceId?: string;
   /** Initial polling interval in milliseconds (default: 500). */
-  pollIntervalMs?: number
+  pollIntervalMs?: number;
   /** Maximum polling interval in milliseconds (default: 5000). */
-  maxPollIntervalMs?: number
+  maxPollIntervalMs?: number;
   /** Polling backoff multiplier (default: 1.5). */
-  pollBackoff?: number
+  pollBackoff?: number;
 }
 
 /**
@@ -109,11 +109,11 @@ export interface InvokeOptions {
  * browser `btoa`.
  */
 function base64Encode(data: unknown): string {
-  const json = JSON.stringify(data)
+  const json = JSON.stringify(data);
   if (json === undefined) {
-    throw new TypeError("Command input must be JSON-serializable")
+    throw new TypeError("Command input must be JSON-serializable");
   }
-  return Buffer.from(json, "utf-8").toString("base64")
+  return Buffer.from(json, "utf-8").toString("base64");
 }
 
 /**
@@ -122,7 +122,7 @@ function base64Encode(data: unknown): string {
  * rather than branching on a browser `atob`, which mangles multibyte UTF-8.
  */
 function base64Decode(encoded: string): string {
-  return Buffer.from(encoded, "base64").toString("utf-8")
+  return Buffer.from(encoded, "base64").toString("utf-8");
 }
 
 /**
@@ -133,7 +133,7 @@ function createBodySpec(data: unknown): BodySpec {
   return {
     mode: "inline",
     inlineBase64: base64Encode(data),
-  }
+  };
 }
 
 /**
@@ -146,8 +146,8 @@ async function decodeBodySpec(
   allowLocalStorage: boolean,
 ): Promise<unknown> {
   if (body.mode === "inline") {
-    const json = base64Decode(body.inlineBase64)
-    return JSON.parse(json)
+    const json = base64Decode(body.inlineBase64);
+    return JSON.parse(json);
   }
 
   if (body.mode === "storage") {
@@ -159,34 +159,34 @@ async function decodeBodySpec(
           command,
           reason: "Storage response missing storageGetRequest",
         }),
-      )
+      );
     }
 
-    const request = body.storageGetRequest
+    const request = body.storageGetRequest;
     const url =
       request.backend.type === "http"
         ? redactUrlForError(request.backend.url)
-        : `local://${request.backend.filePath}`
+        : `local://${request.backend.filePath}`;
 
     try {
       // POLICY: the sender only touches the local (dev-only) backend when the
       // client was configured with `allowLocalStorage: true`.
-      const bytes = await downloadPresigned(request, { allowLocal: allowLocalStorage })
-      return JSON.parse(new TextDecoder().decode(bytes))
+      const bytes = await downloadPresigned(request, { allowLocal: allowLocalStorage });
+      return JSON.parse(new TextDecoder().decode(bytes));
     } catch (error) {
       if (error instanceof AlienError) {
-        throw error
+        throw error;
       }
 
       // Wrap fetch/filesystem/parse errors
-      const alienError = await AlienError.from(error)
+      const alienError = await AlienError.from(error);
       throw alienError.withContext(
         StorageOperationFailedError.create({
           operation: "download",
           url,
           reason: error instanceof Error ? error.message : String(error),
         }),
-      )
+      );
     }
   }
 
@@ -196,37 +196,37 @@ async function decodeBodySpec(
       command,
       reason: `Unknown body mode: ${(body as { mode: string }).mode}`,
     }),
-  )
+  );
 }
 
 /**
  * Check if a state is terminal.
  */
 function isTerminalState(state: CommandState): boolean {
-  return state === "SUCCEEDED" || state === "FAILED" || state === "EXPIRED"
+  return state === "SUCCEEDED" || state === "FAILED" || state === "EXPIRED";
 }
 
 /**
  * Command sender for invoking deployment commands.
  */
 export class CommandsClient {
-  private readonly deploymentId: string
-  private readonly defaultTimeout: number
-  private readonly allowLocalStorage: boolean
-  private readonly fetchImpl: typeof fetch
-  private connectionProvider: CommandConnectionProvider
+  private readonly deploymentId: string;
+  private readonly defaultTimeout: number;
+  private readonly allowLocalStorage: boolean;
+  private readonly fetchImpl: typeof fetch;
+  private connectionProvider: CommandConnectionProvider;
 
   constructor(config: CommandsClientConfig) {
-    this.deploymentId = config.deploymentId
-    this.defaultTimeout = config.timeoutMs ?? 60_000
-    this.allowLocalStorage = config.allowLocalStorage ?? false
-    this.fetchImpl = config.fetch ?? globalThis.fetch
+    this.deploymentId = config.deploymentId;
+    this.defaultTimeout = config.timeoutMs ?? 60_000;
+    this.allowLocalStorage = config.allowLocalStorage ?? false;
+    this.fetchImpl = config.fetch ?? globalThis.fetch;
     this.connectionProvider = new FixedCommandConnectionProvider({
       role: "sender",
       managerUrl: config.managerUrl,
       token: config.token,
       expiresAt: new Date(8_640_000_000_000_000),
-    })
+    });
   }
 
   /**
@@ -242,8 +242,8 @@ export class CommandsClient {
       role: "sender",
       platformUrl: config.platformUrl,
       fetch: config.fetch,
-    })
-    const initial = await provider.get()
+    });
+    const initial = await provider.get();
     const client = new CommandsClient({
       managerUrl: initial.managerUrl,
       deploymentId: config.deploymentId,
@@ -251,9 +251,9 @@ export class CommandsClient {
       timeoutMs: config.timeoutMs,
       allowLocalStorage: config.allowLocalStorage,
       fetch: config.fetch,
-    })
-    client.connectionProvider = provider
-    return client
+    });
+    client.connectionProvider = provider;
+    return client;
   }
 
   /**
@@ -266,7 +266,7 @@ export class CommandsClient {
    * runtime conflict this builder tries to detect.
    */
   target(name: string): TargetedCommands {
-    return new TargetedCommands(this, name)
+    return new TargetedCommands(this, name);
   }
 
   /**
@@ -282,33 +282,33 @@ export class CommandsClient {
     input: unknown,
     options?: InvokeOptions,
   ): Promise<TResponse> {
-    const timeout = options?.timeoutMs ?? this.defaultTimeout
-    const startTime = Date.now()
+    const timeout = options?.timeoutMs ?? this.defaultTimeout;
+    const startTime = Date.now();
 
     // Step 1: Create command
-    const createResponse = await this.createCommand(command, input, options)
+    const createResponse = await this.createCommand(command, input, options);
 
     // Step 2: Poll for completion
-    const pollInterval = options?.pollIntervalMs ?? 500
-    const maxPollInterval = options?.maxPollIntervalMs ?? 5000
-    const pollBackoff = options?.pollBackoff ?? 1.5
-    let currentInterval = pollInterval
+    const pollInterval = options?.pollIntervalMs ?? 500;
+    const maxPollInterval = options?.maxPollIntervalMs ?? 5000;
+    const pollBackoff = options?.pollBackoff ?? 1.5;
+    let currentInterval = pollInterval;
 
     while (Date.now() - startTime < timeout) {
-      await this.sleep(currentInterval)
+      await this.sleep(currentInterval);
 
-      const status = await this.getCommandStatus(createResponse.commandId)
+      const status = await this.getCommandStatus(createResponse.commandId);
 
       if (isTerminalState(status.state)) {
-        return await this.handleTerminalState(command, status)
+        return await this.handleTerminalState(command, status);
       }
 
       // Exponential backoff
-      currentInterval = Math.min(currentInterval * pollBackoff, maxPollInterval)
+      currentInterval = Math.min(currentInterval * pollBackoff, maxPollInterval);
     }
 
     // Timeout
-    const finalStatus = await this.getCommandStatus(createResponse.commandId)
+    const finalStatus = await this.getCommandStatus(createResponse.commandId);
     throw new AlienError(
       CommandTimeoutError.create({
         commandId: createResponse.commandId,
@@ -316,7 +316,7 @@ export class CommandsClient {
         timeoutMs: timeout,
         lastState: finalStatus.state,
       }),
-    )
+    );
   }
 
   /**
@@ -338,11 +338,11 @@ export class CommandsClient {
    * untouched.
    */
   private buildManagerUrl(managerUrl: string, path: string): string {
-    const url = new URL(managerUrl)
-    const basePath = url.pathname.replace(/\/+$/, "")
-    const suffix = path.startsWith("/") ? path : `/${path}`
-    url.pathname = `${basePath}${suffix}`
-    return url.toString()
+    const url = new URL(managerUrl);
+    const basePath = url.pathname.replace(/\/+$/, "");
+    const suffix = path.startsWith("/") ? path : `/${path}`;
+    url.pathname = `${basePath}${suffix}`;
+    return url.toString();
   }
 
   private async managerFetch<T>(
@@ -350,26 +350,26 @@ export class CommandsClient {
     path: string,
     schema: WireSchema<T>,
     options: {
-      body?: unknown
-      describeError: (reason: string) => Parameters<AlienError["withContext"]>[0]
+      body?: unknown;
+      describeError: (reason: string) => Parameters<AlienError["withContext"]>[0];
     },
   ): Promise<T> {
     try {
       const { response, url } = await requestWithRefreshingConnection(
         this.connectionProvider,
-        async connection => {
-          const url = this.buildManagerUrl(connection.managerUrl, path)
-          const headers: Record<string, string> = { Authorization: `Bearer ${connection.token}` }
-          const init: RequestInit = { method, headers }
+        async (connection) => {
+          const url = this.buildManagerUrl(connection.managerUrl, path);
+          const headers: Record<string, string> = { Authorization: `Bearer ${connection.token}` };
+          const init: RequestInit = { method, headers };
           if (options.body !== undefined) {
-            headers["Content-Type"] = "application/json"
-            init.body = JSON.stringify(options.body)
+            headers["Content-Type"] = "application/json";
+            init.body = JSON.stringify(options.body);
           }
-          return { response: await this.fetchImpl(url, init), url }
+          return { response: await this.fetchImpl(url, init), url };
         },
-      )
+      );
       if (!response.ok) {
-        const errorBody = await response.text().catch(() => "")
+        const errorBody = await response.text().catch(() => "");
         throw new AlienError(
           ManagerHttpError.create({
             method,
@@ -378,18 +378,18 @@ export class CommandsClient {
             statusText: response.statusText,
             body: errorBody,
           }),
-        )
+        );
       }
 
-      return parseWireResponse(schema, await response.json(), method, url)
+      return parseWireResponse(schema, await response.json(), method, url);
     } catch (error) {
       if (error instanceof AlienError) {
-        throw error
+        throw error;
       }
-      const alienError = await AlienError.from(error)
+      const alienError = await AlienError.from(error);
       throw alienError.withContext(
         options.describeError(error instanceof Error ? error.message : String(error)),
-      )
+      );
     }
   }
 
@@ -410,13 +410,13 @@ export class CommandsClient {
         idempotencyKey: options?.idempotencyKey,
         targetResourceId: options?.targetResourceId,
       },
-      describeError: reason =>
+      describeError: (reason) =>
         CommandCreationFailedError.create({
           deploymentId: this.deploymentId,
           command,
           reason,
         }),
-    })
+    });
   }
 
   /**
@@ -424,8 +424,8 @@ export class CommandsClient {
    */
   private getCommandStatus(commandId: string): Promise<CommandStatusResponse> {
     return this.managerFetch("GET", `/v1/commands/${commandId}`, CommandStatusResponseSchema, {
-      describeError: reason => CommandStatusFailedError.create({ commandId, reason }),
-    })
+      describeError: (reason) => CommandStatusFailedError.create({ commandId, reason }),
+    });
   }
 
   /**
@@ -441,7 +441,7 @@ export class CommandsClient {
           commandId: status.commandId,
           command,
         }),
-      )
+      );
     }
 
     if (!status.response) {
@@ -451,10 +451,10 @@ export class CommandsClient {
           command,
           reason: "Terminal state but no response present",
         }),
-      )
+      );
     }
 
-    const response: CommandResponse = status.response
+    const response: CommandResponse = status.response;
 
     if (response.status === "error") {
       throw new AlienError(
@@ -465,7 +465,7 @@ export class CommandsClient {
           errorMessage: response.message,
           errorDetails: response.details ?? undefined,
         }),
-      )
+      );
     }
 
     // Decode success response
@@ -475,10 +475,10 @@ export class CommandsClient {
         status.commandId,
         command,
         this.allowLocalStorage,
-      )) as TResponse
+      )) as TResponse;
     } catch (error) {
       if (error instanceof AlienError) {
-        throw error
+        throw error;
       }
 
       throw new AlienError(
@@ -487,7 +487,7 @@ export class CommandsClient {
           command,
           reason: error instanceof Error ? error.message : String(error),
         }),
-      )
+      );
     }
   }
 
@@ -495,7 +495,7 @@ export class CommandsClient {
    * Sleep helper.
    */
   private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms))
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
 
@@ -525,6 +525,6 @@ export class TargetedCommands {
     return this.client.invoke<TResponse>(command, input, {
       ...options,
       targetResourceId: this.resourceId,
-    })
+    });
   }
 }

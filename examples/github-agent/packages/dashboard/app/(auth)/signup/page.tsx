@@ -1,47 +1,47 @@
-"use client"
+"use client";
 
-import { IconBrandGithub, IconLoader2 } from "@tabler/icons-react"
-import Link from "next/link"
-import { useRouter } from "next/navigation"
-import { useState } from "react"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { signUp } from "@/lib/auth-client"
+import { IconBrandGithub, IconLoader2 } from "@tabler/icons-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { signUp } from "@/lib/auth-client";
 
 export default function SignUpPage() {
-  const router = useRouter()
-  const [name, setName] = useState("")
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
-  const [error, setError] = useState("")
-  const [loading, setLoading] = useState(false)
+  const router = useRouter();
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError("")
-    setLoading(true)
+    e.preventDefault();
+    setError("");
+    setLoading(true);
 
     try {
       const result = await signUp.email({
         name,
         email,
         password,
-      })
+      });
 
       if (result.error) {
-        setError(result.error.message || "Failed to sign up")
-        setLoading(false)
-        return
+        setError(result.error.message || "Failed to sign up");
+        setLoading(false);
+        return;
       }
 
-      router.push("/")
+      router.push("/");
     } catch {
-      setError("An unexpected error occurred")
-      setLoading(false)
+      setError("An unexpected error occurred");
+      setLoading(false);
     }
-  }
+  };
 
   return (
     <div className="flex w-full max-w-sm flex-col gap-6">
@@ -70,7 +70,7 @@ export default function SignUpPage() {
                 type="text"
                 placeholder="John Doe"
                 value={name}
-                onChange={e => setName(e.target.value)}
+                onChange={(e) => setName(e.target.value)}
                 required
                 className="h-10"
               />
@@ -82,7 +82,7 @@ export default function SignUpPage() {
                 type="email"
                 placeholder="you@example.com"
                 value={email}
-                onChange={e => setEmail(e.target.value)}
+                onChange={(e) => setEmail(e.target.value)}
                 required
                 className="h-10"
               />
@@ -94,7 +94,7 @@ export default function SignUpPage() {
                 type="password"
                 placeholder="Create a password"
                 value={password}
-                onChange={e => setPassword(e.target.value)}
+                onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={8}
                 className="h-10"
@@ -124,5 +124,5 @@ export default function SignUpPage() {
         </CardContent>
       </Card>
     </div>
-  )
+  );
 }

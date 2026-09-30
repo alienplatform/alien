@@ -6,52 +6,52 @@
  * (`bun test`).
  */
 
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { AlienError } from "@alienplatform/core"
-import { afterEach, describe, expect, it, vi } from "vitest"
-import type { CommandResponse, Envelope, LeaseInfo } from "../src/protocol.js"
-import type { CommandContext } from "../src/receiver.js"
-import { commandBudget, createCommandReceiver } from "../src/receiver.js"
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AlienError } from "@alienplatform/core";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CommandResponse, Envelope, LeaseInfo } from "../src/protocol.js";
+import type { CommandContext } from "../src/receiver.js";
+import { commandBudget, createCommandReceiver } from "../src/receiver.js";
 import type {
   CapturedRequest,
   RouteHandler,
   RouteResult,
   StubServer,
-} from "./helpers/stub-server.js"
-import { encodeInlineJson, startStubServer } from "./helpers/stub-server.js"
+} from "./helpers/stub-server.js";
+import { encodeInlineJson, startStubServer } from "./helpers/stub-server.js";
 
-let server: StubServer | undefined
-let receiverStop: (() => void) | undefined
-let running: Promise<void> | undefined
+let server: StubServer | undefined;
+let receiverStop: (() => void) | undefined;
+let running: Promise<void> | undefined;
 // Reassignable route so the stub keeps its port while we bind the envelope
 // (which needs the base url) after the server is already listening.
-let route: RouteHandler = () => ({ status: 404 })
+let route: RouteHandler = () => ({ status: 404 });
 
 afterEach(async () => {
-  receiverStop?.()
-  await running?.catch(() => {})
-  await server?.close()
-  server = undefined
-  receiverStop = undefined
-  running = undefined
-  route = () => ({ status: 404 })
-  vi.restoreAllMocks()
-})
+  receiverStop?.();
+  await running?.catch(() => {});
+  await server?.close();
+  server = undefined;
+  receiverStop = undefined;
+  running = undefined;
+  route = () => ({ status: 404 });
+  vi.restoreAllMocks();
+});
 
 /** Start the stub once; its port never changes. Set the real route afterwards. */
 async function openServer(): Promise<StubServer> {
-  const s = await startStubServer(req => route(req))
-  server = s
-  return s
+  const s = await startStubServer((req) => route(req));
+  server = s;
+  return s;
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
-  const start = Date.now()
+  const start = Date.now();
   while (!predicate()) {
-    if (Date.now() - start > timeoutMs) throw new Error("waitFor timed out")
-    await new Promise(r => setTimeout(r, 2))
+    if (Date.now() - start > timeoutMs) throw new Error("waitFor timed out");
+    await new Promise((r) => setTimeout(r, 2));
   }
 }
 
@@ -61,14 +61,14 @@ const FULL_ENV = {
   ALIEN_DEPLOYMENT_ID: "dep-123",
   ALIEN_COMMANDS_TARGET_RESOURCE_ID: "agent",
   ALIEN_COMMANDS_TARGET_RESOURCE_TYPE: "daemon",
-} as const
+} as const;
 
 function inlineParams(value: unknown) {
-  return { mode: "inline" as const, inlineBase64: encodeInlineJson(value) }
+  return { mode: "inline" as const, inlineBase64: encodeInlineJson(value) };
 }
 
 function envelope(overrides: Partial<Envelope> & { baseUrl: string }): Envelope {
-  const { baseUrl, ...rest } = overrides
+  const { baseUrl, ...rest } = overrides;
   return {
     protocol: "arc.v1",
     deploymentId: "dep-123",
@@ -88,7 +88,7 @@ function envelope(overrides: Partial<Envelope> & { baseUrl: string }): Envelope 
       },
     },
     ...rest,
-  }
+  };
 }
 
 function lease(env: Envelope, over: Partial<LeaseInfo> = {}): LeaseInfo {
@@ -99,33 +99,33 @@ function lease(env: Envelope, over: Partial<LeaseInfo> = {}): LeaseInfo {
     attempt: env.attempt,
     envelope: env,
     ...over,
-  }
+  };
 }
 
 /** Serve a single lease batch on the first poll, empty batches afterwards. */
 function leaseOnce(leases: LeaseInfo[]): (req: CapturedRequest) => RouteResult | undefined {
-  let served = false
-  return req => {
+  let served = false;
+  return (req) => {
     if (req.method === "POST" && req.path === "/v1/commands/leases") {
-      if (served) return { json: { leases: [] } }
-      served = true
-      return { json: { leases } }
+      if (served) return { json: { leases: [] } };
+      served = true;
+      return { json: { leases } };
     }
-    return undefined
-  }
+    return undefined;
+  };
 }
 
 /** Find the submit PUT (a CommandResponse body) for a command id. */
 function submitBody(id: string): CommandResponse | undefined {
   const put = server?.requests.find(
-    r => r.method === "PUT" && r.path === `/v1/commands/${id}/response`,
-  )
-  return put?.body as CommandResponse | undefined
+    (r) => r.method === "PUT" && r.path === `/v1/commands/${id}/response`,
+  );
+  return put?.body as CommandResponse | undefined;
 }
 
 function decodeInline(response: Extract<CommandResponse, { status: "success" }>): unknown {
-  if (response.response.mode !== "inline") throw new Error("expected inline body")
-  return JSON.parse(Buffer.from(response.response.inlineBase64, "base64").toString("utf-8"))
+  if (response.response.mode !== "inline") throw new Error("expected inline body");
+  return JSON.parse(Buffer.from(response.response.inlineBase64, "base64").toString("utf-8"));
 }
 
 // ---------------------------------------------------------------------------
@@ -138,83 +138,85 @@ describe("createCommandReceiver env validation", () => {
       createCommandReceiver({
         env: { ...FULL_ENV, ALIEN_COMMANDS_TARGET_RESOURCE_TYPE: "container" },
       }),
-    ).not.toThrow()
-  })
+    ).not.toThrow();
+  });
 
   it("accepts a valid daemon config", () => {
-    expect(() => createCommandReceiver({ env: { ...FULL_ENV } })).not.toThrow()
-  })
+    expect(() => createCommandReceiver({ env: { ...FULL_ENV } })).not.toThrow();
+  });
 
   for (const missing of Object.keys(FULL_ENV)) {
     it(`fails fast naming ${missing} when it is missing`, () => {
-      const env: Record<string, string> = { ...FULL_ENV }
-      delete env[missing]
-      let err: unknown
+      const env: Record<string, string> = { ...FULL_ENV };
+      delete env[missing];
+      let err: unknown;
       try {
-        createCommandReceiver({ env })
+        createCommandReceiver({ env });
       } catch (e) {
-        err = e
+        err = e;
       }
-      expect(err).toBeInstanceOf(AlienError)
-      const alien = err as AlienError
-      expect(alien.code).toBe("COMMAND_RECEIVER_CONFIG_INVALID")
-      expect(alien.context).toMatchObject({ envVar: missing })
-    })
+      expect(err).toBeInstanceOf(AlienError);
+      const alien = err as AlienError;
+      expect(alien.code).toBe("COMMAND_RECEIVER_CONFIG_INVALID");
+      expect(alien.context).toMatchObject({ envVar: missing });
+    });
   }
 
   it("rejects an empty string value (fixture path)", () => {
-    let err: unknown
+    let err: unknown;
     try {
-      createCommandReceiver({ env: { ...FULL_ENV, ALIEN_COMMANDS_URL: "" } })
+      createCommandReceiver({ env: { ...FULL_ENV, ALIEN_COMMANDS_URL: "" } });
     } catch (e) {
-      err = e
+      err = e;
     }
-    expect((err as AlienError).code).toBe("COMMAND_RECEIVER_CONFIG_INVALID")
-    expect((err as AlienError).context).toMatchObject({ envVar: "ALIEN_COMMANDS_URL" })
-  })
+    expect((err as AlienError).code).toBe("COMMAND_RECEIVER_CONFIG_INVALID");
+    expect((err as AlienError).context).toMatchObject({ envVar: "ALIEN_COMMANDS_URL" });
+  });
 
   it("rejects a whitespace-only command token", () => {
-    let err: unknown
+    let err: unknown;
     try {
-      createCommandReceiver({ env: { ...FULL_ENV, ALIEN_COMMANDS_TOKEN: " \t\n " } })
+      createCommandReceiver({ env: { ...FULL_ENV, ALIEN_COMMANDS_TOKEN: " \t\n " } });
     } catch (error) {
-      err = error
+      err = error;
     }
-    expect((err as AlienError).code).toBe("COMMAND_RECEIVER_CONFIG_INVALID")
-    expect((err as AlienError).context).toMatchObject({ envVar: "ALIEN_COMMANDS_TOKEN" })
-  })
+    expect((err as AlienError).code).toBe("COMMAND_RECEIVER_CONFIG_INVALID");
+    expect((err as AlienError).context).toMatchObject({ envVar: "ALIEN_COMMANDS_TOKEN" });
+  });
 
   it("rejects the worker target type", () => {
-    let err: unknown
+    let err: unknown;
     try {
-      createCommandReceiver({ env: { ...FULL_ENV, ALIEN_COMMANDS_TARGET_RESOURCE_TYPE: "worker" } })
+      createCommandReceiver({
+        env: { ...FULL_ENV, ALIEN_COMMANDS_TARGET_RESOURCE_TYPE: "worker" },
+      });
     } catch (e) {
-      err = e
+      err = e;
     }
-    const alien = err as AlienError
-    expect(alien.code).toBe("COMMAND_RECEIVER_CONFIG_INVALID")
-    expect(alien.context).toMatchObject({ envVar: "ALIEN_COMMANDS_TARGET_RESOURCE_TYPE" })
-    expect(alien.message).toContain("container")
-    expect(alien.message).toContain("daemon")
-  })
+    const alien = err as AlienError;
+    expect(alien.code).toBe("COMMAND_RECEIVER_CONFIG_INVALID");
+    expect(alien.context).toMatchObject({ envVar: "ALIEN_COMMANDS_TARGET_RESOURCE_TYPE" });
+    expect(alien.message).toContain("container");
+    expect(alien.message).toContain("daemon");
+  });
 
   it("rejects an unparseable URL", () => {
-    let err: unknown
+    let err: unknown;
     try {
-      createCommandReceiver({ env: { ...FULL_ENV, ALIEN_COMMANDS_URL: "not a url" } })
+      createCommandReceiver({ env: { ...FULL_ENV, ALIEN_COMMANDS_URL: "not a url" } });
     } catch (e) {
-      err = e
+      err = e;
     }
-    expect((err as AlienError).code).toBe("COMMAND_RECEIVER_CONFIG_INVALID")
-    expect((err as AlienError).context).toMatchObject({ envVar: "ALIEN_COMMANDS_URL" })
-  })
+    expect((err as AlienError).code).toBe("COMMAND_RECEIVER_CONFIG_INVALID");
+    expect((err as AlienError).context).toMatchObject({ envVar: "ALIEN_COMMANDS_URL" });
+  });
 
   it("validates tunable environment values synchronously", () => {
     expect(() =>
       createCommandReceiver({
         env: { ...FULL_ENV, ALIEN_COMMANDS_POLL_JITTER: "1.1" },
       }),
-    ).toThrowError(/ALIEN_COMMANDS_POLL_JITTER/)
+    ).toThrowError(/ALIEN_COMMANDS_POLL_JITTER/);
     expect(() =>
       createCommandReceiver({
         env: {
@@ -223,53 +225,53 @@ describe("createCommandReceiver env validation", () => {
           ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS: "4999",
         },
       }),
-    ).toThrowError(/ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS/)
-  })
-})
+    ).toThrowError(/ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS/);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Lease → handle → submit round trips (against the stub)
 // ---------------------------------------------------------------------------
 
 describe("commandBudget", () => {
-  const SAFETY_MARGIN_MS = 5_000
+  const SAFETY_MARGIN_MS = 5_000;
 
   it("subtracts the 5s safety margin from the lease expiry when no deadline", () => {
-    const leaseExpiresAt = new Date(Date.now() + 60_000)
-    const budget = commandBudget(undefined, leaseExpiresAt.toISOString())
+    const leaseExpiresAt = new Date(Date.now() + 60_000);
+    const budget = commandBudget(undefined, leaseExpiresAt.toISOString());
     // The budget is the lease expiry minus the safety margin, not the raw expiry.
-    expect(budget.getTime()).toBe(leaseExpiresAt.getTime() - SAFETY_MARGIN_MS)
-  })
+    expect(budget.getTime()).toBe(leaseExpiresAt.getTime() - SAFETY_MARGIN_MS);
+  });
 
   it("clamps a deadline later than the margined lease bound down to it", () => {
-    const leaseExpiresAt = new Date(Date.now() + 60_000)
-    const lateDeadline = new Date(Date.now() + 120_000)
-    const budget = commandBudget(lateDeadline.toISOString(), leaseExpiresAt.toISOString())
-    expect(budget.getTime()).toBe(leaseExpiresAt.getTime() - SAFETY_MARGIN_MS)
-  })
+    const leaseExpiresAt = new Date(Date.now() + 60_000);
+    const lateDeadline = new Date(Date.now() + 120_000);
+    const budget = commandBudget(lateDeadline.toISOString(), leaseExpiresAt.toISOString());
+    expect(budget.getTime()).toBe(leaseExpiresAt.getTime() - SAFETY_MARGIN_MS);
+  });
 
   it("lets a deadline earlier than the margined lease bound win", () => {
-    const leaseExpiresAt = new Date(Date.now() + 60_000)
-    const earlyDeadline = new Date(Date.now() + 10_000)
-    const budget = commandBudget(earlyDeadline.toISOString(), leaseExpiresAt.toISOString())
-    expect(budget.getTime()).toBe(earlyDeadline.getTime())
-  })
+    const leaseExpiresAt = new Date(Date.now() + 60_000);
+    const earlyDeadline = new Date(Date.now() + 10_000);
+    const budget = commandBudget(earlyDeadline.toISOString(), leaseExpiresAt.toISOString());
+    expect(budget.getTime()).toBe(earlyDeadline.getTime());
+  });
 
   it("clamps to now when the lease is already within the safety margin", () => {
-    const before = Date.now()
-    const nearlyExpired = new Date(before + 2_000)
-    const budget = commandBudget(undefined, nearlyExpired.toISOString())
-    const after = Date.now()
+    const before = Date.now();
+    const nearlyExpired = new Date(before + 2_000);
+    const budget = commandBudget(undefined, nearlyExpired.toISOString());
+    const after = Date.now();
     // Never a time in the past: clamped to now, giving the handler zero budget.
-    expect(budget.getTime()).toBeGreaterThanOrEqual(before)
-    expect(budget.getTime()).toBeLessThanOrEqual(after)
-  })
-})
+    expect(budget.getTime()).toBeGreaterThanOrEqual(before);
+    expect(budget.getTime()).toBeLessThanOrEqual(after);
+  });
+});
 
 describe("CommandReceiver.run", () => {
   it("leases, gives the handler the input bytes/deadline/attempt, and submits the JSON success", async () => {
     // The stub needs the envelope, which needs the base url: bind, then reopen.
-    server = await openServer()
+    server = await openServer();
     const env = envelope({
       baseUrl: server.baseUrl,
       attempt: 2,
@@ -277,24 +279,24 @@ describe("CommandReceiver.run", () => {
         traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
         tracestate: "vendor=opaque-value",
       },
-    })
-    const serve = leaseOnce([lease(env, { attempt: 2 })])
-    route = req => serve(req) ?? { status: 200 }
+    });
+    const serve = leaseOnce([lease(env, { attempt: 2 })]);
+    route = (req) => serve(req) ?? { status: 200 };
 
     let seen:
       | {
-          input: string
-          deadline: number
-          attempt: number
-          commandId: string
-          target: CommandContext["target"]
-          traceContext: CommandContext["traceContext"]
+          input: string;
+          deadline: number;
+          attempt: number;
+          commandId: string;
+          target: CommandContext["target"];
+          traceContext: CommandContext["traceContext"];
         }
-      | undefined
+      | undefined;
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
-    })
+    });
     r.handleRaw("echo", (ctx: CommandContext) => {
       seen = {
         input: new TextDecoder().decode(ctx.input),
@@ -303,202 +305,204 @@ describe("CommandReceiver.run", () => {
         commandId: ctx.commandId,
         target: ctx.target,
         traceContext: ctx.traceContext,
-      }
-      return { echoed: JSON.parse(new TextDecoder().decode(ctx.input)) }
-    })
-    receiverStop = () => r.stop()
-    running = r.run()
+      };
+      return { echoed: JSON.parse(new TextDecoder().decode(ctx.input)) };
+    });
+    receiverStop = () => r.stop();
+    running = r.run();
 
-    await waitFor(() => submitBody("cmd_1") !== undefined)
-    r.stop()
-    await running
+    await waitFor(() => submitBody("cmd_1") !== undefined);
+    r.stop();
+    await running;
 
-    expect(seen?.input).toBe(JSON.stringify({ key: "value" }))
-    expect(seen?.attempt).toBe(2)
-    expect(seen?.commandId).toBe("cmd_1")
-    expect(seen?.target).toEqual({ resourceId: "agent", resourceType: "daemon" })
+    expect(seen?.input).toBe(JSON.stringify({ key: "value" }));
+    expect(seen?.attempt).toBe(2);
+    expect(seen?.commandId).toBe("cmd_1");
+    expect(seen?.target).toEqual({ resourceId: "agent", resourceType: "daemon" });
     expect(seen?.traceContext).toEqual({
       traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
       tracestate: "vendor=opaque-value",
-    })
-    expect(seen?.deadline).toBeGreaterThan(Date.now())
+    });
+    expect(seen?.deadline).toBeGreaterThan(Date.now());
 
-    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "success" }>
-    expect(body.status).toBe("success")
-    expect(decodeInline(body)).toEqual({ echoed: { key: "value" } })
-  })
+    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "success" }>;
+    expect(body.status).toBe("success");
+    expect(decodeInline(body)).toEqual({ echoed: { key: "value" } });
+  });
 
   it("submits UNKNOWN_COMMAND when no handler is registered", async () => {
-    server = await openServer()
-    const env = envelope({ baseUrl: server.baseUrl, command: "nobody-home" })
-    const serve = leaseOnce([lease(env)])
-    route = req => serve(req) ?? { status: 200 }
+    server = await openServer();
+    const env = envelope({ baseUrl: server.baseUrl, command: "nobody-home" });
+    const serve = leaseOnce([lease(env)]);
+    route = (req) => serve(req) ?? { status: 200 };
 
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
-    })
-    receiverStop = () => r.stop()
-    running = r.run()
+    });
+    receiverStop = () => r.stop();
+    running = r.run();
 
-    await waitFor(() => submitBody("cmd_1") !== undefined)
-    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "error" }>
-    expect(body.status).toBe("error")
-    expect(body.code).toBe("UNKNOWN_COMMAND")
-    expect(body.message).toContain("nobody-home")
-  })
+    await waitFor(() => submitBody("cmd_1") !== undefined);
+    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "error" }>;
+    expect(body.status).toBe("error");
+    expect(body.code).toBe("UNKNOWN_COMMAND");
+    expect(body.message).toContain("nobody-home");
+  });
 
   it("emits a structured 'Command processed' log with the pinned observability fields", async () => {
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {})
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
     try {
-      server = await openServer()
-      const env = envelope({ baseUrl: server.baseUrl, attempt: 2 })
-      const serve = leaseOnce([lease(env, { leaseId: "lease_obs", attempt: 2 })])
-      route = req => serve(req) ?? { status: 200 }
+      server = await openServer();
+      const env = envelope({ baseUrl: server.baseUrl, attempt: 2 });
+      const serve = leaseOnce([lease(env, { leaseId: "lease_obs", attempt: 2 })]);
+      route = (req) => serve(req) ?? { status: 200 };
 
       const r = createCommandReceiver({
         env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
         pollIntervalMs: 5,
-      })
-      r.handleRaw("echo", () => ({ ok: true }))
-      receiverStop = () => r.stop()
-      running = r.run()
+      });
+      r.handleRaw("echo", () => ({ ok: true }));
+      receiverStop = () => r.stop();
+      running = r.run();
 
-      await waitFor(() => submitBody("cmd_1") !== undefined)
+      await waitFor(() => submitBody("cmd_1") !== undefined);
       // The completion log fires after submit, inside processLease; give the
       // microtask a beat to flush before asserting.
-      await waitFor(() => infoSpy.mock.calls.some(c => String(c[0]).includes("Command processed")))
-      r.stop()
-      await running
+      await waitFor(() =>
+        infoSpy.mock.calls.some((c) => String(c[0]).includes("Command processed")),
+      );
+      r.stop();
+      await running;
 
       const line = infoSpy.mock.calls
-        .map(c => String(c[0]))
-        .find(l => l.includes("Command processed"))
-      expect(line).toBeDefined()
-      expect(line).toContain('"commandId":"cmd_1"')
-      expect(line).toContain('"leaseId":"lease_obs"')
-      expect(line).toContain('"targetResourceId":"agent"')
-      expect(line).toContain('"targetResourceType":"daemon"')
-      expect(line).toContain('"attempt":2')
-      expect(line).toContain('"handlerStatus":"success"')
-      expect(line).toContain('"submitStatus":"submitted"')
+        .map((c) => String(c[0]))
+        .find((l) => l.includes("Command processed"));
+      expect(line).toBeDefined();
+      expect(line).toContain('"commandId":"cmd_1"');
+      expect(line).toContain('"leaseId":"lease_obs"');
+      expect(line).toContain('"targetResourceId":"agent"');
+      expect(line).toContain('"targetResourceType":"daemon"');
+      expect(line).toContain('"attempt":2');
+      expect(line).toContain('"handlerStatus":"success"');
+      expect(line).toContain('"submitStatus":"submitted"');
     } finally {
-      infoSpy.mockRestore()
+      infoSpy.mockRestore();
     }
-  })
+  });
 
   it("maps a throwing handler to HANDLER_ERROR", async () => {
-    server = await openServer()
-    const env = envelope({ baseUrl: server.baseUrl })
-    const serve = leaseOnce([lease(env)])
-    route = req => serve(req) ?? { status: 200 }
+    server = await openServer();
+    const env = envelope({ baseUrl: server.baseUrl });
+    const serve = leaseOnce([lease(env)]);
+    route = (req) => serve(req) ?? { status: 200 };
 
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
-    })
+    });
     r.handleRaw("echo", () => {
-      throw new Error("database on fire")
-    })
-    receiverStop = () => r.stop()
-    running = r.run()
+      throw new Error("database on fire");
+    });
+    receiverStop = () => r.stop();
+    running = r.run();
 
-    await waitFor(() => submitBody("cmd_1") !== undefined)
-    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "error" }>
-    expect(body.code).toBe("HANDLER_ERROR")
-    expect(body.message).toContain("database on fire")
-  })
+    await waitFor(() => submitBody("cmd_1") !== undefined);
+    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "error" }>;
+    expect(body.code).toBe("HANDLER_ERROR");
+    expect(body.message).toContain("database on fire");
+  });
 
   it("preserves a throwing handler's non-empty string error code", async () => {
-    server = await openServer()
-    const env = envelope({ baseUrl: server.baseUrl })
-    const serve = leaseOnce([lease(env)])
-    route = req => serve(req) ?? { status: 200 }
+    server = await openServer();
+    const env = envelope({ baseUrl: server.baseUrl });
+    const serve = leaseOnce([lease(env)]);
+    route = (req) => serve(req) ?? { status: 200 };
 
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1` },
       pollIntervalMs: 5,
-    })
+    });
     r.handleRaw("echo", () => {
-      throw Object.assign(new Error("upstream unavailable"), { code: "UPSTREAM_UNAVAILABLE" })
-    })
-    receiverStop = () => r.stop()
-    running = r.run()
+      throw Object.assign(new Error("upstream unavailable"), { code: "UPSTREAM_UNAVAILABLE" });
+    });
+    receiverStop = () => r.stop();
+    running = r.run();
 
-    await waitFor(() => submitBody("cmd_1") !== undefined)
-    r.stop()
-    await running
+    await waitFor(() => submitBody("cmd_1") !== undefined);
+    r.stop();
+    await running;
 
-    const body = submitBody("cmd_1")
+    const body = submitBody("cmd_1");
     expect(body).toMatchObject({
       status: "error",
       code: "UPSTREAM_UNAVAILABLE",
       message: "upstream unavailable",
-    })
-  })
+    });
+  });
 
   it("aborts on budget expiry: fires the signal, submits HANDLER_TIMEOUT, drops the late result", async () => {
-    server = await openServer()
+    server = await openServer();
     const env = envelope({
       baseUrl: server.baseUrl,
       deadline: new Date(Date.now() + 30).toISOString(),
-    })
-    const serve = leaseOnce([lease(env)])
-    route = req => serve(req) ?? { status: 200 }
+    });
+    const serve = leaseOnce([lease(env)]);
+    route = (req) => serve(req) ?? { status: 200 };
 
-    let signalFired = false
-    let completed = false
+    let signalFired = false;
+    let completed = false;
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
-    })
+    });
     r.handleRaw("echo", async (ctx: CommandContext) => {
       ctx.signal.addEventListener("abort", () => {
-        signalFired = true
-      })
-      await new Promise(res => setTimeout(res, 150))
-      completed = true
-      return { done: true }
-    })
-    receiverStop = () => r.stop()
-    running = r.run()
+        signalFired = true;
+      });
+      await new Promise((res) => setTimeout(res, 150));
+      completed = true;
+      return { done: true };
+    });
+    receiverStop = () => r.stop();
+    running = r.run();
 
-    await waitFor(() => submitBody("cmd_1") !== undefined)
-    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "error" }>
-    expect(body.code).toBe("HANDLER_TIMEOUT")
-    expect(signalFired).toBe(true)
-    expect(completed).toBe(false)
+    await waitFor(() => submitBody("cmd_1") !== undefined);
+    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "error" }>;
+    expect(body.code).toBe("HANDLER_TIMEOUT");
+    expect(signalFired).toBe(true);
+    expect(completed).toBe(false);
 
     // Let the late handler resolve, then confirm no second submit happened.
-    await new Promise(res => setTimeout(res, 200))
+    await new Promise((res) => setTimeout(res, 200));
     const submits = server.requests.filter(
-      req => req.method === "PUT" && req.path === "/v1/commands/cmd_1/response",
-    )
-    expect(submits).toHaveLength(1)
-  })
+      (req) => req.method === "PUT" && req.path === "/v1/commands/cmd_1/response",
+    );
+    expect(submits).toHaveLength(1);
+  });
 
   it("passes the lease attempt through to the handler", async () => {
-    server = await openServer()
-    const env = envelope({ baseUrl: server.baseUrl, attempt: 4 })
-    const serve = leaseOnce([lease(env, { attempt: 4 })])
-    route = req => serve(req) ?? { status: 200 }
+    server = await openServer();
+    const env = envelope({ baseUrl: server.baseUrl, attempt: 4 });
+    const serve = leaseOnce([lease(env, { attempt: 4 })]);
+    route = (req) => serve(req) ?? { status: 200 };
 
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
-    })
-    r.handleRaw("echo", (ctx: CommandContext) => ({ attempt: ctx.attempt }))
-    receiverStop = () => r.stop()
-    running = r.run()
+    });
+    r.handleRaw("echo", (ctx: CommandContext) => ({ attempt: ctx.attempt }));
+    receiverStop = () => r.stop();
+    running = r.run();
 
-    await waitFor(() => submitBody("cmd_1") !== undefined)
-    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "success" }>
-    expect(decodeInline(body)).toEqual({ attempt: 4 })
-  })
+    await waitFor(() => submitBody("cmd_1") !== undefined);
+    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "success" }>;
+    expect(decodeInline(body)).toEqual({ attempt: 4 });
+  });
 
   it("decodes storage-mode (http backend) command input", async () => {
-    server = await openServer()
-    const params = { fromStorage: true, n: 9 }
+    server = await openServer();
+    const params = { fromStorage: true, n: 9 };
     const env = envelope({
       baseUrl: server.baseUrl,
       params: {
@@ -511,31 +515,31 @@ describe("CommandReceiver.run", () => {
           path: "blob",
         },
       },
-    })
-    const serve = leaseOnce([lease(env)])
-    route = req => {
-      if (req.method === "GET" && req.path === "/blob") return { text: JSON.stringify(params) }
-      return serve(req) ?? { status: 200 }
-    }
+    });
+    const serve = leaseOnce([lease(env)]);
+    route = (req) => {
+      if (req.method === "GET" && req.path === "/blob") return { text: JSON.stringify(params) };
+      return serve(req) ?? { status: 200 };
+    };
 
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
-    })
-    r.command("echo", params => params)
-    receiverStop = () => r.stop()
-    running = r.run()
+    });
+    r.command("echo", (params) => params);
+    receiverStop = () => r.stop();
+    running = r.run();
 
-    await waitFor(() => submitBody("cmd_1") !== undefined)
-    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "success" }>
-    expect(decodeInline(body)).toEqual(params)
-  })
+    await waitFor(() => submitBody("cmd_1") !== undefined);
+    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "success" }>;
+    expect(decodeInline(body)).toEqual(params);
+  });
 
   it("validates JSON with an asynchronous Standard Schema before running the handler", async () => {
-    server = await openServer()
-    const env = envelope({ baseUrl: server.baseUrl, params: inlineParams({ count: 3 }) })
-    const serve = leaseOnce([lease(env)])
-    route = req => serve(req) ?? { status: 200 }
+    server = await openServer();
+    const env = envelope({ baseUrl: server.baseUrl, params: inlineParams({ count: 3 }) });
+    const serve = leaseOnce([lease(env)]);
+    route = (req) => serve(req) ?? { status: 200 };
     const schema = {
       "~standard": {
         version: 1 as const,
@@ -549,48 +553,48 @@ describe("CommandReceiver.run", () => {
             ? { value: { count: value.count } }
             : { issues: [{ message: "count must be a number" }] },
       },
-    }
+    };
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
-    })
-    r.command("echo", schema, input => ({ doubled: input.count * 2 }))
-    receiverStop = () => r.stop()
-    running = r.run()
+    });
+    r.command("echo", schema, (input) => ({ doubled: input.count * 2 }));
+    receiverStop = () => r.stop();
+    running = r.run();
 
-    await waitFor(() => submitBody("cmd_1") !== undefined)
-    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "success" }>
-    expect(decodeInline(body)).toEqual({ doubled: 6 })
-  })
+    await waitFor(() => submitBody("cmd_1") !== undefined);
+    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "success" }>;
+    expect(decodeInline(body)).toEqual({ doubled: 6 });
+  });
 
   it("reports malformed JSON as a handler error without running the command", async () => {
-    server = await openServer()
+    server = await openServer();
     const env = envelope({
       baseUrl: server.baseUrl,
       params: { mode: "inline", inlineBase64: Buffer.from("{").toString("base64") },
-    })
-    const serve = leaseOnce([lease(env)])
-    route = req => serve(req) ?? { status: 200 }
-    const handler = vi.fn()
+    });
+    const serve = leaseOnce([lease(env)]);
+    route = (req) => serve(req) ?? { status: 200 };
+    const handler = vi.fn();
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
-    })
-    r.command("echo", handler)
-    receiverStop = () => r.stop()
-    running = r.run()
+    });
+    r.command("echo", handler);
+    receiverStop = () => r.stop();
+    running = r.run();
 
-    await waitFor(() => submitBody("cmd_1") !== undefined)
+    await waitFor(() => submitBody("cmd_1") !== undefined);
     expect(submitBody("cmd_1")).toMatchObject({
       status: "error",
       code: "HANDLER_ERROR",
       message: "Command input is not valid JSON",
-    })
-    expect(handler).not.toHaveBeenCalled()
-  })
+    });
+    expect(handler).not.toHaveBeenCalled();
+  });
 
   it("counts a slow storage GET against the same budget as the handler", async () => {
-    server = await openServer()
+    server = await openServer();
     const env = envelope({
       baseUrl: server.baseUrl,
       params: {
@@ -603,417 +607,421 @@ describe("CommandReceiver.run", () => {
           path: "slow-blob",
         },
       },
-    })
+    });
     const serve = leaseOnce([
       lease(env, { leaseExpiresAt: new Date(Date.now() + 5_150).toISOString() }),
-    ])
-    route = async req => {
+    ]);
+    route = async (req) => {
       if (req.method === "GET" && req.path === "/slow-blob") {
-        await new Promise(resolve => setTimeout(resolve, 500))
-        return { text: JSON.stringify({ late: true }) }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        return { text: JSON.stringify({ late: true }) };
       }
-      return serve(req) ?? { status: 200 }
-    }
+      return serve(req) ?? { status: 200 };
+    };
 
-    let handlerCalled = false
+    let handlerCalled = false;
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
       pollJitter: 0,
-    })
+    });
     r.handleRaw("echo", () => {
-      handlerCalled = true
-      return { shouldNotRun: true }
-    })
-    receiverStop = () => r.stop()
-    running = r.run()
+      handlerCalled = true;
+      return { shouldNotRun: true };
+    });
+    receiverStop = () => r.stop();
+    running = r.run();
 
-    await waitFor(() => submitBody("cmd_1") !== undefined)
-    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "error" }>
-    expect(body.code).toBe("HANDLER_TIMEOUT")
-    expect(handlerCalled).toBe(false)
-  })
+    await waitFor(() => submitBody("cmd_1") !== undefined);
+    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "error" }>;
+    expect(body.code).toBe("HANDLER_TIMEOUT");
+    expect(handlerCalled).toBe(false);
+  });
 
   it("caps response submission by the absolute lease expiry", async () => {
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {})
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
-    server = await openServer()
-    const env = envelope({ baseUrl: server.baseUrl })
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    server = await openServer();
+    const env = envelope({ baseUrl: server.baseUrl });
     const serve = leaseOnce([
       lease(env, { leaseExpiresAt: new Date(Date.now() + 100).toISOString() }),
-    ])
-    route = async req => {
+    ]);
+    route = async (req) => {
       if (req.method === "PUT" && req.path === "/v1/commands/cmd_1/response") {
-        await new Promise(resolve => setTimeout(resolve, 500))
-        return { status: 200 }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        return { status: 200 };
       }
-      return serve(req) ?? { status: 200 }
-    }
+      return serve(req) ?? { status: 200 };
+    };
 
-    let handlerCalled = false
+    let handlerCalled = false;
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
       pollJitter: 0,
-    })
+    });
     r.handleRaw("echo", () => {
-      handlerCalled = true
-      return { shouldNotRun: true }
-    })
-    receiverStop = () => r.stop()
-    const started = Date.now()
-    running = r.run()
+      handlerCalled = true;
+      return { shouldNotRun: true };
+    });
+    receiverStop = () => r.stop();
+    const started = Date.now();
+    running = r.run();
 
     await waitFor(() =>
-      infoSpy.mock.calls.some(call => String(call[0]).includes('"submitStatus":"failed"')),
-    )
-    expect(Date.now() - started).toBeLessThan(400)
-    expect(handlerCalled).toBe(false)
-    expect(errorSpy).toHaveBeenCalled()
-  })
+      infoSpy.mock.calls.some((call) => String(call[0]).includes('"submitStatus":"failed"')),
+    );
+    expect(Date.now() - started).toBeLessThan(400);
+    expect(handlerCalled).toBe(false);
+    expect(errorSpy).toHaveBeenCalled();
+  });
 
   it("overflows a large response to a presigned storage PUT", async () => {
-    server = await openServer()
-    const env = envelope({ baseUrl: server.baseUrl })
-    env.responseHandling.maxInlineBytes = 5 // force overflow
-    const serve = leaseOnce([lease(env)])
-    route = req => serve(req) ?? { status: 200 }
+    server = await openServer();
+    const env = envelope({ baseUrl: server.baseUrl });
+    env.responseHandling.maxInlineBytes = 5; // force overflow
+    const serve = leaseOnce([lease(env)]);
+    route = (req) => serve(req) ?? { status: 200 };
 
-    const big = { payload: "x".repeat(64) }
+    const big = { payload: "x".repeat(64) };
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
-    })
-    r.handleRaw("echo", () => big)
-    receiverStop = () => r.stop()
-    running = r.run()
+    });
+    r.handleRaw("echo", () => big);
+    receiverStop = () => r.stop();
+    running = r.run();
 
-    await waitFor(() => submitBody("cmd_1") !== undefined)
+    await waitFor(() => submitBody("cmd_1") !== undefined);
 
-    const upload = server.requests.find(req => req.method === "PUT" && req.path === "/storage-put")
-    expect(upload).toBeDefined()
+    const upload = server.requests.find(
+      (req) => req.method === "PUT" && req.path === "/storage-put",
+    );
+    expect(upload).toBeDefined();
 
-    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "success" }>
-    expect(body.response.mode).toBe("storage")
+    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "success" }>;
+    expect(body.response.mode).toBe("storage");
     if (body.response.mode === "storage") {
-      expect(body.response.storagePutUsed).toBe(true)
-      expect(body.response.size).toBe(JSON.stringify(big).length)
+      expect(body.response.storagePutUsed).toBe(true);
+      expect(body.response.size).toBe(JSON.stringify(big).length);
     }
-  })
+  });
 
   it("keeps a reverse-proxy prefix for storage upload and response submission", async () => {
-    server = await openServer()
-    const env = envelope({ baseUrl: "http://manager.internal" })
-    env.responseHandling.maxInlineBytes = 5
-    env.responseHandling.submitResponseUrl = "cmd_1/response?response_token=submit-token&expires=1"
+    server = await openServer();
+    const env = envelope({ baseUrl: "http://manager.internal" });
+    env.responseHandling.maxInlineBytes = 5;
+    env.responseHandling.submitResponseUrl = "cmd_1/response?response_token=submit-token&expires=1";
     env.responseHandling.storageUploadRequest.backend = {
       type: "http",
       url: "../storage-put?signature=upload-token",
       method: "PUT",
       headers: {},
-    }
+    };
 
-    let served = false
-    route = req => {
+    let served = false;
+    route = (req) => {
       if (req.method === "POST" && req.path === "/tenant/v1/commands/leases") {
-        if (served) return { json: { leases: [] } }
-        served = true
-        return { json: { leases: [lease(env)] } }
+        if (served) return { json: { leases: [] } };
+        served = true;
+        return { json: { leases: [lease(env)] } };
       }
       if (
         req.method === "PUT" &&
         (req.path === "/tenant/v1/storage-put?signature=upload-token" ||
           req.path === "/tenant/v1/commands/cmd_1/response?response_token=submit-token&expires=1")
       ) {
-        return { status: 200 }
+        return { status: 200 };
       }
-      return { status: 404 }
-    }
+      return { status: 404 };
+    };
 
     const receiver = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/tenant/v1/` },
       pollIntervalMs: 5,
       pollJitter: 0,
-    })
-    receiver.handleRaw("echo", () => ({ payload: "x".repeat(64) }))
-    receiverStop = () => receiver.stop()
-    running = receiver.run()
+    });
+    receiver.handleRaw("echo", () => ({ payload: "x".repeat(64) }));
+    receiverStop = () => receiver.stop();
+    running = receiver.run();
 
     await waitFor(() =>
       Boolean(
         server?.requests.some(
-          req =>
+          (req) =>
             req.method === "PUT" &&
             req.path === "/tenant/v1/commands/cmd_1/response?response_token=submit-token&expires=1",
         ),
       ),
-    )
+    );
 
     expect(
       server.requests.some(
-        req => req.method === "PUT" && req.path === "/tenant/v1/storage-put?signature=upload-token",
+        (req) =>
+          req.method === "PUT" && req.path === "/tenant/v1/storage-put?signature=upload-token",
       ),
-    ).toBe(true)
-  })
+    ).toBe(true);
+  });
 
   it("drains: stop() lets the in-flight command finish and stops further lease polls", async () => {
-    server = await openServer()
-    const env = envelope({ baseUrl: server.baseUrl })
-    const serve = leaseOnce([lease(env)])
-    route = req => serve(req) ?? { status: 200 }
+    server = await openServer();
+    const env = envelope({ baseUrl: server.baseUrl });
+    const serve = leaseOnce([lease(env)]);
+    route = (req) => serve(req) ?? { status: 200 };
 
-    let release!: () => void
-    const gate = new Promise<void>(res => {
-      release = res
-    })
+    let release!: () => void;
+    const gate = new Promise<void>((res) => {
+      release = res;
+    });
 
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
-    })
-    let handlerStarted = false
+    });
+    let handlerStarted = false;
     r.handleRaw("echo", async () => {
-      handlerStarted = true
-      await gate
-      return { drained: true }
-    })
+      handlerStarted = true;
+      await gate;
+      return { drained: true };
+    });
     receiverStop = () => {
-      release()
-      r.stop()
-    }
-    running = r.run()
+      release();
+      r.stop();
+    };
+    running = r.run();
 
-    await waitFor(() => handlerStarted)
-    r.stop() // request shutdown while the handler is still in flight
-    release() // let the in-flight handler complete
-    await running // run() only resolves after the in-flight command drains
+    await waitFor(() => handlerStarted);
+    r.stop(); // request shutdown while the handler is still in flight
+    release(); // let the in-flight handler complete
+    await running; // run() only resolves after the in-flight command drains
 
-    expect(submitBody("cmd_1")).toBeDefined()
+    expect(submitBody("cmd_1")).toBeDefined();
 
     // No further lease polls after run() returned.
     const leasePolls = () =>
-      server?.requests.filter(req => req.method === "POST" && req.path === "/v1/commands/leases")
-        .length ?? 0
-    const after = leasePolls()
-    await new Promise(res => setTimeout(res, 40)) // >> pollIntervalMs
-    expect(leasePolls()).toBe(after)
-  })
+      server?.requests.filter((req) => req.method === "POST" && req.path === "/v1/commands/leases")
+        .length ?? 0;
+    const after = leasePolls();
+    await new Promise((res) => setTimeout(res, 40)); // >> pollIntervalMs
+    expect(leasePolls()).toBe(after);
+  });
 
   it("aborts and releases a handler that exceeds the graceful drain timeout", async () => {
-    server = await openServer()
-    const env = envelope({ baseUrl: server.baseUrl })
-    const serve = leaseOnce([lease(env)])
-    route = req => serve(req) ?? { status: 200 }
+    server = await openServer();
+    const env = envelope({ baseUrl: server.baseUrl });
+    const serve = leaseOnce([lease(env)]);
+    route = (req) => serve(req) ?? { status: 200 };
 
-    let handlerStarted = false
-    let signalFired = false
+    let handlerStarted = false;
+    let signalFired = false;
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
       drainTimeoutMs: 10,
       pollJitter: 0,
-    })
-    r.handleRaw("echo", async ctx => {
-      handlerStarted = true
-      await new Promise<void>(resolve => {
+    });
+    r.handleRaw("echo", async (ctx) => {
+      handlerStarted = true;
+      await new Promise<void>((resolve) => {
         ctx.signal.addEventListener(
           "abort",
           () => {
-            signalFired = true
-            resolve()
+            signalFired = true;
+            resolve();
           },
           { once: true },
-        )
-      })
-      return { shouldNotSubmit: true }
-    })
-    receiverStop = () => r.stop()
-    running = r.run()
+        );
+      });
+      return { shouldNotSubmit: true };
+    });
+    receiverStop = () => r.stop();
+    running = r.run();
 
-    await waitFor(() => handlerStarted)
-    r.stop()
-    await running
+    await waitFor(() => handlerStarted);
+    r.stop();
+    await running;
 
-    expect(signalFired).toBe(true)
-    expect(submitBody("cmd_1")).toBeUndefined()
+    expect(signalFired).toBe(true);
+    expect(submitBody("cmd_1")).toBeUndefined();
     const release = server.requests.find(
-      req => req.method === "POST" && req.path === "/v1/commands/leases/lease_1/release",
-    )
-    expect(release?.headers.authorization).toBe("Bearer tok")
-  })
+      (req) => req.method === "POST" && req.path === "/v1/commands/leases/lease_1/release",
+    );
+    expect(release?.headers.authorization).toBe("Bearer tok");
+  });
 
   it("suppresses duplicate in-flight command ids and releases the duplicate lease", async () => {
-    server = await openServer()
-    const env = envelope({ baseUrl: server.baseUrl })
+    server = await openServer();
+    const env = envelope({ baseUrl: server.baseUrl });
     const serve = leaseOnce([
       lease(env, { leaseId: "lease_first" }),
       lease(env, { leaseId: "lease_duplicate" }),
-    ])
-    route = req => serve(req) ?? { status: 200 }
+    ]);
+    route = (req) => serve(req) ?? { status: 200 };
 
-    let calls = 0
-    let finish!: () => void
-    const gate = new Promise<void>(resolve => {
-      finish = resolve
-    })
+    let calls = 0;
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
       pollJitter: 0,
-    })
+    });
     r.handleRaw("echo", async () => {
-      calls += 1
-      await gate
-      return { ok: true }
-    })
+      calls += 1;
+      await gate;
+      return { ok: true };
+    });
     receiverStop = () => {
-      finish()
-      r.stop()
-    }
-    running = r.run()
+      finish();
+      r.stop();
+    };
+    running = r.run();
 
     await waitFor(() =>
       server!.requests.some(
-        req => req.method === "POST" && req.path === "/v1/commands/leases/lease_duplicate/release",
+        (req) =>
+          req.method === "POST" && req.path === "/v1/commands/leases/lease_duplicate/release",
       ),
-    )
-    expect(calls).toBe(1)
-    finish()
-    await waitFor(() => submitBody("cmd_1") !== undefined)
-    r.stop()
-    await running
-  })
+    );
+    expect(calls).toBe(1);
+    finish();
+    await waitFor(() => submitBody("cmd_1") !== undefined);
+    r.stop();
+    await running;
+  });
 
   it("does not poll beyond maxLeases while a handler is still active", async () => {
-    server = await openServer()
-    const env = envelope({ baseUrl: server.baseUrl })
-    const serve = leaseOnce([lease(env)])
-    route = req => serve(req) ?? { status: 200 }
+    server = await openServer();
+    const env = envelope({ baseUrl: server.baseUrl });
+    const serve = leaseOnce([lease(env)]);
+    route = (req) => serve(req) ?? { status: 200 };
 
-    let handlerStarted = false
-    let finish!: () => void
-    const gate = new Promise<void>(resolve => {
-      finish = resolve
-    })
+    let handlerStarted = false;
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       maxLeases: 1,
       pollIntervalMs: 5,
       pollJitter: 0,
-    })
+    });
     r.handleRaw("echo", async () => {
-      handlerStarted = true
-      await gate
-      return { ok: true }
-    })
+      handlerStarted = true;
+      await gate;
+      return { ok: true };
+    });
     receiverStop = () => {
-      finish()
-      r.stop()
-    }
-    running = r.run()
+      finish();
+      r.stop();
+    };
+    running = r.run();
 
-    await waitFor(() => handlerStarted)
-    await new Promise(resolve => setTimeout(resolve, 30))
+    await waitFor(() => handlerStarted);
+    await new Promise((resolve) => setTimeout(resolve, 30));
     expect(
-      server.requests.filter(req => req.method === "POST" && req.path === "/v1/commands/leases"),
-    ).toHaveLength(1)
+      server.requests.filter((req) => req.method === "POST" && req.path === "/v1/commands/leases"),
+    ).toHaveLength(1);
 
-    finish()
-    await waitFor(() => submitBody("cmd_1") !== undefined)
-    r.stop()
-    await running
-  })
+    finish();
+    await waitFor(() => submitBody("cmd_1") !== undefined);
+    r.stop();
+    await running;
+  });
 
   it("rereads a token file and retries once when lease acquisition returns 401", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "alien-command-token-"))
-    const tokenFile = join(directory, "token")
-    await writeFile(tokenFile, "old-token\n")
+    const directory = await mkdtemp(join(tmpdir(), "alien-command-token-"));
+    const tokenFile = join(directory, "token");
+    await writeFile(tokenFile, "old-token\n");
     try {
-      server = await openServer()
-      const env = envelope({ baseUrl: server.baseUrl })
-      let authorized = false
-      route = async req => {
+      server = await openServer();
+      const env = envelope({ baseUrl: server.baseUrl });
+      let authorized = false;
+      route = async (req) => {
         if (req.method === "POST" && req.path === "/v1/commands/leases") {
           if (!authorized) {
-            expect(req.headers.authorization).toBe("Bearer old-token")
-            authorized = true
-            await writeFile(tokenFile, "new-token\n")
-            return { status: 401 }
+            expect(req.headers.authorization).toBe("Bearer old-token");
+            authorized = true;
+            await writeFile(tokenFile, "new-token\n");
+            return { status: 401 };
           }
-          expect(req.headers.authorization).toBe("Bearer new-token")
-          return { json: { leases: [lease(env)] } }
+          expect(req.headers.authorization).toBe("Bearer new-token");
+          return { json: { leases: [lease(env)] } };
         }
-        return { status: 200 }
-      }
+        return { status: 200 };
+      };
 
       const envWithoutToken: Record<string, string | undefined> = {
         ...FULL_ENV,
         ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/`,
         ALIEN_COMMANDS_TOKEN_FILE: tokenFile,
-      }
-      envWithoutToken.ALIEN_COMMANDS_TOKEN = undefined
+      };
+      envWithoutToken.ALIEN_COMMANDS_TOKEN = undefined;
       const r = createCommandReceiver({
         env: envWithoutToken,
         pollIntervalMs: 5,
         pollJitter: 0,
-      })
-      r.handleRaw("echo", () => ({ ok: true }))
-      receiverStop = () => r.stop()
-      running = r.run()
+      });
+      r.handleRaw("echo", () => ({ ok: true }));
+      receiverStop = () => r.stop();
+      running = r.run();
 
-      await waitFor(() => submitBody("cmd_1") !== undefined)
-      r.stop()
-      await running
+      await waitFor(() => submitBody("cmd_1") !== undefined);
+      r.stop();
+      await running;
       const leaseRequests = server.requests.filter(
-        req => req.method === "POST" && req.path === "/v1/commands/leases",
-      )
-      expect(leaseRequests.slice(0, 2).map(req => req.headers.authorization)).toEqual([
+        (req) => req.method === "POST" && req.path === "/v1/commands/leases",
+      );
+      expect(leaseRequests.slice(0, 2).map((req) => req.headers.authorization)).toEqual([
         "Bearer old-token",
         "Bearer new-token",
-      ])
+      ]);
     } finally {
-      await rm(directory, { recursive: true, force: true })
+      await rm(directory, { recursive: true, force: true });
     }
-  })
+  });
 
   it("run rejects a terminal missing-token-file error", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "alien-command-token-missing-"))
-    const tokenFile = join(directory, "token")
+    const directory = await mkdtemp(join(tmpdir(), "alien-command-token-missing-"));
+    const tokenFile = join(directory, "token");
     try {
       const envWithoutToken: Record<string, string | undefined> = {
         ...FULL_ENV,
         ALIEN_COMMANDS_TOKEN_FILE: tokenFile,
-      }
-      envWithoutToken.ALIEN_COMMANDS_TOKEN = undefined
+      };
+      envWithoutToken.ALIEN_COMMANDS_TOKEN = undefined;
       const r = createCommandReceiver({
         env: envWithoutToken,
         pollIntervalMs: 5,
         pollJitter: 0,
-      })
+      });
 
       await expect(r.run()).rejects.toMatchObject({
         code: "COMMAND_RECEIVER_CONFIG_INVALID",
         retryable: false,
         context: { envVar: "ALIEN_COMMANDS_TOKEN_FILE" },
-      })
+      });
     } finally {
-      await rm(directory, { recursive: true, force: true })
+      await rm(directory, { recursive: true, force: true });
     }
-  })
+  });
 
   it("run rejects a terminal lease HTTP error without retrying", async () => {
-    server = await openServer()
-    route = req => {
+    server = await openServer();
+    route = (req) => {
       if (req.method === "POST" && req.path === "/v1/commands/leases") {
-        return { status: 403, text: "forbidden" }
+        return { status: 403, text: "forbidden" };
       }
-      return { status: 404 }
-    }
+      return { status: 404 };
+    };
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
       pollJitter: 0,
-    })
+    });
 
     await expect(r.run()).rejects.toMatchObject({
       code: "MANAGER_HTTP_ERROR",
@@ -1022,321 +1030,325 @@ describe("CommandReceiver.run", () => {
         method: "POST",
         status: 403,
       },
-    })
+    });
     expect(
-      server.requests.filter(req => req.method === "POST" && req.path === "/v1/commands/leases"),
-    ).toHaveLength(1)
-  })
+      server.requests.filter((req) => req.method === "POST" && req.path === "/v1/commands/leases"),
+    ).toHaveLength(1);
+  });
 
   it("submits INVALID_ENVELOPE for malformed inline base64 params (twin of Rust's decode_params_bytes)", async () => {
-    server = await openServer()
+    server = await openServer();
     const env = envelope({
       baseUrl: server.baseUrl,
       params: { mode: "inline", inlineBase64: "not-valid-base64!!" },
-    })
-    const serve = leaseOnce([lease(env)])
-    route = req => serve(req) ?? { status: 200 }
+    });
+    const serve = leaseOnce([lease(env)]);
+    route = (req) => serve(req) ?? { status: 200 };
 
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
-    })
-    r.handleRaw("echo", () => ({ ok: true }))
-    receiverStop = () => r.stop()
-    running = r.run()
+    });
+    r.handleRaw("echo", () => ({ ok: true }));
+    receiverStop = () => r.stop();
+    running = r.run();
 
-    await waitFor(() => submitBody("cmd_1") !== undefined)
-    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "error" }>
-    expect(body.status).toBe("error")
-    expect(body.code).toBe("INVALID_ENVELOPE")
-  })
+    await waitFor(() => submitBody("cmd_1") !== undefined);
+    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "error" }>;
+    expect(body.status).toBe("error");
+    expect(body.code).toBe("INVALID_ENVELOPE");
+  });
 
   it("submits INVALID_ENVELOPE when storage params are missing storageGetRequest (twin-pinned)", async () => {
-    server = await openServer()
+    server = await openServer();
     const env = envelope({
       baseUrl: server.baseUrl,
       params: { mode: "storage" },
-    })
-    const serve = leaseOnce([lease(env)])
-    route = req => serve(req) ?? { status: 200 }
+    });
+    const serve = leaseOnce([lease(env)]);
+    route = (req) => serve(req) ?? { status: 200 };
 
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
-    })
-    r.handleRaw("echo", () => ({ ok: true }))
-    receiverStop = () => r.stop()
-    running = r.run()
+    });
+    r.handleRaw("echo", () => ({ ok: true }));
+    receiverStop = () => r.stop();
+    running = r.run();
 
-    await waitFor(() => submitBody("cmd_1") !== undefined)
-    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "error" }>
-    expect(body.status).toBe("error")
-    expect(body.code).toBe("INVALID_ENVELOPE")
-  })
+    await waitFor(() => submitBody("cmd_1") !== undefined);
+    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "error" }>;
+    expect(body.status).toBe("error");
+    expect(body.code).toBe("INVALID_ENVELOPE");
+  });
 
   it("sends the lease POST with typed target, defaults, and bearer auth (mirrors Rust's lease_request_carries_typed_target_and_defaults)", async () => {
-    server = await openServer()
-    const env = envelope({ baseUrl: server.baseUrl })
-    const serve = leaseOnce([lease(env)])
-    route = req => serve(req) ?? { status: 200 }
+    server = await openServer();
+    const env = envelope({ baseUrl: server.baseUrl });
+    const serve = leaseOnce([lease(env)]);
+    route = (req) => serve(req) ?? { status: 200 };
 
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
-    })
-    r.handleRaw("echo", () => ({ ok: true }))
-    receiverStop = () => r.stop()
-    running = r.run()
+    });
+    r.handleRaw("echo", () => ({ ok: true }));
+    receiverStop = () => r.stop();
+    running = r.run();
 
-    await waitFor(() => submitBody("cmd_1") !== undefined)
+    await waitFor(() => submitBody("cmd_1") !== undefined);
 
     const leaseReq = server.requests.find(
-      req => req.method === "POST" && req.path === "/v1/commands/leases",
-    )
-    expect(leaseReq).toBeDefined()
+      (req) => req.method === "POST" && req.path === "/v1/commands/leases",
+    );
+    expect(leaseReq).toBeDefined();
     expect(leaseReq?.body).toEqual({
       deploymentId: "dep-123",
       target: { resourceId: "agent", resourceType: "daemon" },
       maxLeases: 1,
       leaseSeconds: 60,
-    })
-    expect(leaseReq?.headers.authorization).toBe("Bearer tok")
-  })
+    });
+    expect(leaseReq?.headers.authorization).toBe("Bearer tok");
+  });
 
   it("builds the lease endpoint from a query-string base URL without corrupting path/query (M1 — mirrors Rust's path_segments_mut)", async () => {
-    server = await openServer()
-    const env = envelope({ baseUrl: server.baseUrl })
+    server = await openServer();
+    const env = envelope({ baseUrl: server.baseUrl });
 
-    let leaseServed = false
-    let capturedLeasePath: string | undefined
-    route = req => {
+    let leaseServed = false;
+    let capturedLeasePath: string | undefined;
+    route = (req) => {
       if (req.method === "POST" && req.path.startsWith("/v1/commands/leases")) {
-        capturedLeasePath = req.path
-        if (leaseServed) return { json: { leases: [] } }
-        leaseServed = true
-        return { json: { leases: [lease(env)] } }
+        capturedLeasePath = req.path;
+        if (leaseServed) return { json: { leases: [] } };
+        leaseServed = true;
+        return { json: { leases: [lease(env)] } };
       }
-      if (req.method === "PUT") return { status: 200 }
-      return { status: 404 }
-    }
+      if (req.method === "PUT") return { status: 200 };
+      return { status: 404 };
+    };
 
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1?token=abc` },
       pollIntervalMs: 5,
-    })
-    r.handleRaw("echo", () => ({ ok: true }))
-    receiverStop = () => r.stop()
-    running = r.run()
+    });
+    r.handleRaw("echo", () => ({ ok: true }));
+    receiverStop = () => r.stop();
+    running = r.run();
 
-    await waitFor(() => submitBody("cmd_1") !== undefined)
-    expect(capturedLeasePath).toBe("/v1/commands/leases?token=abc")
-  })
+    await waitFor(() => submitBody("cmd_1") !== undefined);
+    expect(capturedLeasePath).toBe("/v1/commands/leases?token=abc");
+  });
 
   it("rejects an expired presigned upload before attempting the PUT (M2)", async () => {
-    server = await openServer()
-    const env = envelope({ baseUrl: server.baseUrl })
-    env.responseHandling.maxInlineBytes = 5 // force overflow to storage
+    server = await openServer();
+    const env = envelope({ baseUrl: server.baseUrl });
+    env.responseHandling.maxInlineBytes = 5; // force overflow to storage
     env.responseHandling.storageUploadRequest.expiration = new Date(
       Date.now() - 60_000,
-    ).toISOString()
-    const serve = leaseOnce([lease(env)])
-    route = req => serve(req) ?? { status: 200 }
+    ).toISOString();
+    const serve = leaseOnce([lease(env)]);
+    route = (req) => serve(req) ?? { status: 200 };
 
-    const big = { payload: "x".repeat(64) }
+    const big = { payload: "x".repeat(64) };
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
-    })
-    r.handleRaw("echo", () => big)
-    receiverStop = () => r.stop()
-    running = r.run()
+    });
+    r.handleRaw("echo", () => big);
+    receiverStop = () => r.stop();
+    running = r.run();
 
     await waitFor(
       () =>
-        (server?.requests.filter(req => req.method === "POST" && req.path === "/v1/commands/leases")
-          .length ?? 0) >= 1,
-    )
+        (server?.requests.filter(
+          (req) => req.method === "POST" && req.path === "/v1/commands/leases",
+        ).length ?? 0) >= 1,
+    );
     // No ack path exists for this failure — give the (rejected) submit attempt
     // time to run, then assert it never reached the storage PUT.
-    await new Promise(res => setTimeout(res, 60))
+    await new Promise((res) => setTimeout(res, 60));
 
-    const upload = server.requests.find(req => req.method === "PUT" && req.path === "/storage-put")
-    expect(upload).toBeUndefined()
-    expect(submitBody("cmd_1")).toBeUndefined()
-  })
+    const upload = server.requests.find(
+      (req) => req.method === "PUT" && req.path === "/storage-put",
+    );
+    expect(upload).toBeUndefined();
+    expect(submitBody("cmd_1")).toBeUndefined();
+  });
 
   it("rejects a path-traversal local upload backend before writing (M2)", async () => {
-    server = await openServer()
-    const env = envelope({ baseUrl: server.baseUrl })
-    env.responseHandling.maxInlineBytes = 5 // force overflow to storage
+    server = await openServer();
+    const env = envelope({ baseUrl: server.baseUrl });
+    env.responseHandling.maxInlineBytes = 5; // force overflow to storage
     env.responseHandling.storageUploadRequest = {
       backend: { type: "local", filePath: "../evil.json", operation: "put" },
       expiration: new Date(Date.now() + 3_600_000).toISOString(),
       operation: "put",
       path: "resp-path",
-    }
-    const serve = leaseOnce([lease(env)])
-    route = req => serve(req) ?? { status: 200 }
+    };
+    const serve = leaseOnce([lease(env)]);
+    route = (req) => serve(req) ?? { status: 200 };
 
-    const big = { payload: "x".repeat(64) }
+    const big = { payload: "x".repeat(64) };
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
-    })
-    r.handleRaw("echo", () => big)
-    receiverStop = () => r.stop()
-    running = r.run()
-
-    await waitFor(
-      () =>
-        (server?.requests.filter(req => req.method === "POST" && req.path === "/v1/commands/leases")
-          .length ?? 0) >= 1,
-    )
-    await new Promise(res => setTimeout(res, 60))
-
-    expect(submitBody("cmd_1")).toBeUndefined()
-  })
-
-  it("does not submit twice when the submit fails (no ack → redelivery)", async () => {
-    const echoedSecret = "must-never-reach-command-receiver-logs"
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
-    server = await openServer()
-    const env = envelope({ baseUrl: server.baseUrl })
-    const serve = leaseOnce([lease(env)])
-    route = req => {
-      if (req.method === "PUT" && req.path === "/v1/commands/cmd_1/response") {
-        return { status: 500, text: `echoed response_token=${echoedSecret}` }
-      }
-      return serve(req) ?? { status: 200 }
-    }
-
-    const r = createCommandReceiver({
-      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
-      pollIntervalMs: 5,
-    })
-    r.handleRaw("echo", () => ({ ok: true }))
-    receiverStop = () => r.stop()
-    running = r.run()
+    });
+    r.handleRaw("echo", () => big);
+    receiverStop = () => r.stop();
+    running = r.run();
 
     await waitFor(
       () =>
         (server?.requests.filter(
-          req => req.method === "PUT" && req.path === "/v1/commands/cmd_1/response",
+          (req) => req.method === "POST" && req.path === "/v1/commands/leases",
         ).length ?? 0) >= 1,
-    )
+    );
+    await new Promise((res) => setTimeout(res, 60));
+
+    expect(submitBody("cmd_1")).toBeUndefined();
+  });
+
+  it("does not submit twice when the submit fails (no ack → redelivery)", async () => {
+    const echoedSecret = "must-never-reach-command-receiver-logs";
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    server = await openServer();
+    const env = envelope({ baseUrl: server.baseUrl });
+    const serve = leaseOnce([lease(env)]);
+    route = (req) => {
+      if (req.method === "PUT" && req.path === "/v1/commands/cmd_1/response") {
+        return { status: 500, text: `echoed response_token=${echoedSecret}` };
+      }
+      return serve(req) ?? { status: 200 };
+    };
+
+    const r = createCommandReceiver({
+      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
+      pollIntervalMs: 5,
+    });
+    r.handleRaw("echo", () => ({ ok: true }));
+    receiverStop = () => r.stop();
+    running = r.run();
+
+    await waitFor(
+      () =>
+        (server?.requests.filter(
+          (req) => req.method === "PUT" && req.path === "/v1/commands/cmd_1/response",
+        ).length ?? 0) >= 1,
+    );
     // Give any (incorrect) retry a chance to happen.
-    await new Promise(res => setTimeout(res, 40))
+    await new Promise((res) => setTimeout(res, 40));
     const submits = server.requests.filter(
-      req => req.method === "PUT" && req.path === "/v1/commands/cmd_1/response",
-    )
-    expect(submits).toHaveLength(1)
-    expect(errorSpy).toHaveBeenCalled()
-    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(echoedSecret)
-  })
+      (req) => req.method === "PUT" && req.path === "/v1/commands/cmd_1/response",
+    );
+    expect(submits).toHaveLength(1);
+    expect(errorSpy).toHaveBeenCalled();
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(echoedSecret);
+  });
 
   it("logs safe transport diagnostics when response submission fails before HTTP", async () => {
-    const secret = "response_token=must-never-reach-command-receiver-logs"
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
-    server = await openServer()
-    const env = envelope({ baseUrl: server.baseUrl })
-    env.responseHandling.submitResponseUrl += `?${secret}`
-    const serve = leaseOnce([lease(env)])
-    route = req => serve(req) ?? { status: 200 }
+    const secret = "response_token=must-never-reach-command-receiver-logs";
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    server = await openServer();
+    const env = envelope({ baseUrl: server.baseUrl });
+    env.responseHandling.submitResponseUrl += `?${secret}`;
+    const serve = leaseOnce([lease(env)]);
+    route = (req) => serve(req) ?? { status: 200 };
 
     const failingFetch: typeof fetch = async (input, init) => {
       if (init?.method === "PUT") {
-        const error = new TypeError(`fetch failed for ${secret}`)
+        const error = new TypeError(`fetch failed for ${secret}`);
         Object.defineProperty(error, "cause", {
           value: { code: "ECONNRESET", message: secret },
-        })
-        throw error
+        });
+        throw error;
       }
-      return fetch(input, init)
-    }
+      return fetch(input, init);
+    };
 
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       fetch: failingFetch,
       pollIntervalMs: 5,
-    })
-    r.handleRaw("echo", () => ({ ok: true }))
-    receiverStop = () => r.stop()
-    running = r.run()
+    });
+    r.handleRaw("echo", () => ({ ok: true }));
+    receiverStop = () => r.stop();
+    running = r.run();
 
-    await waitFor(() => errorSpy.mock.calls.length >= 1)
-    const logs = JSON.stringify(errorSpy.mock.calls)
-    expect(logs).toContain("TypeError")
-    expect(logs).toContain("ECONNRESET")
-    expect(logs).not.toContain(secret)
-  })
+    await waitFor(() => errorSpy.mock.calls.length >= 1);
+    const logs = JSON.stringify(errorSpy.mock.calls);
+    expect(logs).toContain("TypeError");
+    expect(logs).toContain("ECONNRESET");
+    expect(logs).not.toContain(secret);
+  });
 
   it.each([409, 410])(
     "tolerates an idempotent %s response to duplicate submission",
-    async status => {
-      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    async (status) => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
-        server = await openServer()
-        const env = envelope({ baseUrl: server.baseUrl })
-        const serve = leaseOnce([lease(env)])
-        route = req => {
+        server = await openServer();
+        const env = envelope({ baseUrl: server.baseUrl });
+        const serve = leaseOnce([lease(env)]);
+        route = (req) => {
           if (req.method === "PUT" && req.path === "/v1/commands/cmd_1/response") {
-            return { status }
+            return { status };
           }
-          return serve(req) ?? { status: 200 }
-        }
+          return serve(req) ?? { status: 200 };
+        };
 
         const r = createCommandReceiver({
           env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
           pollIntervalMs: 5,
           pollJitter: 0,
-        })
-        r.handleRaw("echo", () => ({ ok: true }))
-        receiverStop = () => r.stop()
-        running = r.run()
+        });
+        r.handleRaw("echo", () => ({ ok: true }));
+        receiverStop = () => r.stop();
+        running = r.run();
 
-        await waitFor(() => submitBody("cmd_1") !== undefined)
-        r.stop()
-        await running
-        expect(errorSpy).not.toHaveBeenCalled()
+        await waitFor(() => submitBody("cmd_1") !== undefined);
+        r.stop();
+        await running;
+        expect(errorSpy).not.toHaveBeenCalled();
       } finally {
-        errorSpy.mockRestore()
+        errorSpy.mockRestore();
       }
     },
-  )
-})
+  );
+});
 
 describe("resolveEnvelopeUrls", () => {
   it("resolves lease URLs without URL.canParse on early Node 18 releases", async () => {
-    const { resolveEnvelopeUrls } = await import("../src/receiver.js")
-    const originalCanParse = Object.getOwnPropertyDescriptor(URL, "canParse")
-    const env = envelope({ baseUrl: "https://commands.example.com" })
-    env.responseHandling.submitResponseUrl = "cmd_1/response?response_token=t"
+    const { resolveEnvelopeUrls } = await import("../src/receiver.js");
+    const originalCanParse = Object.getOwnPropertyDescriptor(URL, "canParse");
+    const env = envelope({ baseUrl: "https://commands.example.com" });
+    env.responseHandling.submitResponseUrl = "cmd_1/response?response_token=t";
 
-    Object.defineProperty(URL, "canParse", { configurable: true, value: undefined })
+    Object.defineProperty(URL, "canParse", { configurable: true, value: undefined });
     try {
-      resolveEnvelopeUrls(env, "https://edge.example.com/tenant/v1/commands/leases")
+      resolveEnvelopeUrls(env, "https://edge.example.com/tenant/v1/commands/leases");
     } finally {
-      if (originalCanParse) Object.defineProperty(URL, "canParse", originalCanParse)
-      else Reflect.deleteProperty(URL, "canParse")
+      if (originalCanParse) Object.defineProperty(URL, "canParse", originalCanParse);
+      else Reflect.deleteProperty(URL, "canParse");
     }
 
     expect(env.responseHandling.submitResponseUrl).toBe(
       "https://edge.example.com/tenant/v1/commands/cmd_1/response?response_token=t",
-    )
-  })
+    );
+  });
 
   it("resolves manager references against the lease endpoint and keeps cloud URLs exact", async () => {
-    const { resolveEnvelopeUrls } = await import("../src/receiver.js")
+    const { resolveEnvelopeUrls } = await import("../src/receiver.js");
 
     // Every manager-served field retains the external prefix and signed query.
-    const env = envelope({ baseUrl: "http://ignored.example.com" })
-    env.responseHandling.submitResponseUrl = "cmd_1/response?response_token=t&expires=1"
+    const env = envelope({ baseUrl: "http://ignored.example.com" });
+    env.responseHandling.submitResponseUrl = "cmd_1/response?response_token=t&expires=1";
     env.responseHandling.storageUploadRequest.backend = {
       type: "http",
       url: "../storage/response-blob?sig=x",
       method: "PUT",
       headers: {},
-    }
+    };
     env.params = {
       mode: "storage",
       size: 2048,
@@ -1352,31 +1364,31 @@ describe("resolveEnvelopeUrls", () => {
         path: "commands/cmd_1/params",
       },
       storagePutUsed: true,
-    }
-    resolveEnvelopeUrls(env, "https://edge.example.com/tenant/v1/commands/leases")
+    };
+    resolveEnvelopeUrls(env, "https://edge.example.com/tenant/v1/commands/leases");
     expect(env.responseHandling.submitResponseUrl).toBe(
       "https://edge.example.com/tenant/v1/commands/cmd_1/response?response_token=t&expires=1",
-    )
+    );
     expect(env.responseHandling.storageUploadRequest.backend).toMatchObject({
       url: "https://edge.example.com/tenant/v1/storage/response-blob?sig=x",
-    })
+    });
     expect(env.params.storageGetRequest?.backend).toMatchObject({
       url: "https://edge.example.com/tenant/v1/commands/cmd_1/params?sig=params",
-    })
+    });
 
     // Do not parse and reserialize cloud-presigned URLs: signatures can be
     // sensitive to their exact byte representation.
-    const absolute = envelope({ baseUrl: "https://commands.example.com" })
-    const cloudUrl = "https://storage.example.com/upload?X-Signature=DoNotCanonicalize%2FValue"
+    const absolute = envelope({ baseUrl: "https://commands.example.com" });
+    const cloudUrl = "https://storage.example.com/upload?X-Signature=DoNotCanonicalize%2FValue";
     absolute.responseHandling.storageUploadRequest.backend = {
       type: "http",
       url: cloudUrl,
       method: "PUT",
       headers: {},
-    }
-    resolveEnvelopeUrls(absolute, "https://edge.example.com/tenant/v1/commands/leases")
+    };
+    resolveEnvelopeUrls(absolute, "https://edge.example.com/tenant/v1/commands/leases");
     expect(absolute.responseHandling.storageUploadRequest.backend).toMatchObject({
       url: cloudUrl,
-    })
-  })
-})
+    });
+  });
+});

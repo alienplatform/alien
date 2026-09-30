@@ -1,7 +1,7 @@
-import * as alien from "@alienplatform/core"
+import * as alien from "@alienplatform/core";
 
-const credentials = new alien.Vault("credentials").build()
-const cache = new alien.Kv("cache").build()
+const credentials = new alien.Vault("credentials").build();
+const cache = new alien.Kv("cache").build();
 
 const connector = new alien.Worker("connector")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
@@ -9,7 +9,7 @@ const connector = new alien.Worker("connector")
   .link(credentials)
   .link(cache)
   .permissions("execution")
-  .build()
+  .build();
 
 export default new alien.Stack("data-connector")
   .add(credentials, "frozen")
@@ -22,4 +22,4 @@ export default new alien.Stack("data-connector")
       },
     },
   })
-  .build()
+  .build();

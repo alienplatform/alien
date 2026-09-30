@@ -1,25 +1,25 @@
-import * as alien from "@alienplatform/core"
+import * as alien from "@alienplatform/core";
 
 // Postgres is Local-only in the OSS e2e suite: only the embedded Local controller ships in this repo,
 // so declaring it on a cloud target would ask the executor to provision a backend with no registered
 // controller. Gate on the target platform the e2e harness exposes to config evaluation.
-const isLocal = process.env.ALIEN_TARGET_PLATFORM === "local"
+const isLocal = process.env.ALIEN_TARGET_PLATFORM === "local";
 // Remote Storage is intentionally limited to native AWS/GCP/Azure deployments.
 const supportsRemoteStorage = ["aws", "gcp", "azure"].includes(
   process.env.ALIEN_TARGET_PLATFORM ?? "",
-)
+);
 
-const storage = new alien.Storage("alien-storage").build()
-const artifactRegistry = new alien.ArtifactRegistry("test-alien-artifact-registry").build()
-const vault = new alien.Vault("alien-vault").build()
-const kv = new alien.Kv("alien-kv").build()
-const queue = new alien.Queue("alien-queue").build()
+const storage = new alien.Storage("alien-storage").build();
+const artifactRegistry = new alien.ArtifactRegistry("test-alien-artifact-registry").build();
+const vault = new alien.Vault("alien-vault").build();
+const kv = new alien.Kv("alien-kv").build();
+const queue = new alien.Queue("alien-queue").build();
 // Dedicated queue for trigger-delivery tests. `alien-queue` is consumed by the
 // app's own send/receive/ack endpoint, so a platform queue trigger on it would
 // race that consumer. This queue has exactly one consumer: the queue trigger.
-const eventsQueue = new alien.Queue("alien-events-queue").build()
-const serviceAccount = new alien.ServiceAccount("test-alien-sa").build()
-const postgres = isLocal ? new alien.Postgres("alien-postgres").build() : undefined
+const eventsQueue = new alien.Queue("alien-events-queue").build();
+const serviceAccount = new alien.ServiceAccount("test-alien-sa").build();
+const postgres = isLocal ? new alien.Postgres("alien-postgres").build() : undefined;
 // Sandbox is Local-only: none of this suite's cloud targets has a sandbox controller registered
 // in this repo, so declaring one there would ask the executor to provision a backend nothing
 // drives.
@@ -30,7 +30,7 @@ const sandbox = isLocal
       .egress({ mode: "deny" })
       .lifecycle({})
       .build()
-  : undefined
+  : undefined;
 
 let workerBuilder = new alien.Worker("alien-rs-worker")
   .code({
@@ -59,14 +59,14 @@ let workerBuilder = new alien.Worker("alien-rs-worker")
   // src/bin/main.rs, which records the event in `alien-kv` for read-back.
   .trigger({ type: "queue", queue: eventsQueue.ref() })
   .trigger({ type: "storage", storage: storage.ref(), events: ["created"] })
-  .trigger({ type: "schedule", cron: "* * * * *" })
+  .trigger({ type: "schedule", cron: "* * * * *" });
 if (postgres) {
-  workerBuilder = workerBuilder.link(postgres)
+  workerBuilder = workerBuilder.link(postgres);
 }
 if (sandbox) {
-  workerBuilder = workerBuilder.link(sandbox)
+  workerBuilder = workerBuilder.link(sandbox);
 }
-const worker = workerBuilder.build()
+const worker = workerBuilder.build();
 
 const executionPermissions = [
   "storage/data-read",
@@ -80,12 +80,12 @@ const executionPermissions = [
   "queue/data-read",
   "queue/data-write",
   "worker/execute",
-]
+];
 if (postgres) {
-  executionPermissions.push("postgres/data-access")
+  executionPermissions.push("postgres/data-access");
 }
 if (sandbox) {
-  executionPermissions.push("sandbox/execute")
+  executionPermissions.push("sandbox/execute");
 }
 
 let stackBuilder = new alien.Stack("alien-rs-stack")
@@ -103,13 +103,13 @@ let stackBuilder = new alien.Stack("alien-rs-stack")
   .add(kv, "frozen")
   .add(queue, "frozen")
   .add(eventsQueue, "frozen")
-  .add(serviceAccount, "frozen")
+  .add(serviceAccount, "frozen");
 if (postgres) {
-  stackBuilder = stackBuilder.add(postgres, "live")
+  stackBuilder = stackBuilder.add(postgres, "live");
 }
 if (sandbox) {
-  stackBuilder = stackBuilder.add(sandbox, "frozen")
+  stackBuilder = stackBuilder.add(sandbox, "frozen");
 }
-const stack = stackBuilder.add(worker, "live").build()
+const stack = stackBuilder.add(worker, "live").build();
 
-export default stack
+export default stack;

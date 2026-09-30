@@ -13,10 +13,10 @@
 // `.target("indexer-daemon")` and gets two different answers — proof that the
 // command server routes by target resource id, not by command name alone.
 
-import * as alien from "@alienplatform/core"
+import * as alien from "@alienplatform/core";
 
 // Shared index the daemon maintains and both resources report on.
-const index = new alien.Kv("index").build()
+const index = new alien.Kv("index").build();
 
 // Worker: HTTP + the `status`/`search` commands via the SDK push registrar.
 const api = new alien.Worker("api")
@@ -25,7 +25,7 @@ const api = new alien.Worker("api")
   .publicEndpoint("api")
   .link(index)
   .permissions("execution")
-  .build()
+  .build();
 
 // Daemon: a resident process that leases the SAME command names through the
 // pull receiver and serves them from its own view of the index.
@@ -34,7 +34,7 @@ const indexer = new alien.Daemon("indexer-daemon")
   .commandsEnabled(true)
   .link(index)
   .permissions("execution")
-  .build()
+  .build();
 
 export default new alien.Stack("command-routing")
   .platforms(["local", "aws", "gcp", "azure", "kubernetes"])
@@ -48,4 +48,4 @@ export default new alien.Stack("command-routing")
       },
     },
   })
-  .build()
+  .build();

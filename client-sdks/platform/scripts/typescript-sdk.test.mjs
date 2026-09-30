@@ -1,23 +1,26 @@
-import assert from "node:assert/strict"
-import test from "node:test"
-import { HTTPClient } from "../typescript/esm/lib/http.js"
-import { DeploymentInfoHelm$inboundSchema } from "../typescript/esm/models/deploymentinfo.js"
-import { OperationsPermissionDiff$inboundSchema } from "../typescript/esm/models/index.js"
-import { PackageRule$inboundSchema, packageRuleFromJSON } from "../typescript/esm/models/package.js"
+import assert from "node:assert/strict";
+import test from "node:test";
+import { HTTPClient } from "../typescript/esm/lib/http.js";
+import { DeploymentInfoHelm$inboundSchema } from "../typescript/esm/models/deploymentinfo.js";
+import { OperationsPermissionDiff$inboundSchema } from "../typescript/esm/models/index.js";
+import {
+  PackageRule$inboundSchema,
+  packageRuleFromJSON,
+} from "../typescript/esm/models/package.js";
 import {
   KubernetesPermissions$outboundSchema,
   Rule$outboundSchema,
   Verb,
   kubernetesPermissionsToJSON,
   ruleToJSON,
-} from "../typescript/esm/models/publishoperationspluginrequest.js"
-import { PublishOperationsPluginResponse$inboundSchema } from "../typescript/esm/models/publishoperationspluginresponse.js"
+} from "../typescript/esm/models/publishoperationspluginrequest.js";
+import { PublishOperationsPluginResponse$inboundSchema } from "../typescript/esm/models/publishoperationspluginresponse.js";
 import {
   UpdateProjectBinaryTarget,
   UpdateProjectHelm$outboundSchema,
   updateProjectHelmToJSON,
-} from "../typescript/esm/models/updateproject.js"
-import { Alien } from "../typescript/esm/sdk/sdk.js"
+} from "../typescript/esm/models/updateproject.js";
+import { Alien } from "../typescript/esm/sdk/sdk.js";
 
 test("published package model imports still validate and serialize", () => {
   const rule = {
@@ -25,14 +28,14 @@ test("published package model imports still validate and serialize", () => {
     resource: "deployments",
     verbs: ["get"],
     reason: "Read workload state",
-  }
-  assert.deepEqual(PackageRule$inboundSchema.parse(rule), rule)
-  assert.deepEqual(packageRuleFromJSON(JSON.stringify(rule)), { ok: true, value: rule })
-  const helm = { enabled: true, chartName: "application", description: "Application deployment" }
-  assert.deepEqual(UpdateProjectHelm$outboundSchema.parse(helm), helm)
-  assert.deepEqual(JSON.parse(updateProjectHelmToJSON(helm)), helm)
-  assert.equal(UpdateProjectBinaryTarget.LinuxArm64, "linux-arm64")
-})
+  };
+  assert.deepEqual(PackageRule$inboundSchema.parse(rule), rule);
+  assert.deepEqual(packageRuleFromJSON(JSON.stringify(rule)), { ok: true, value: rule });
+  const helm = { enabled: true, chartName: "application", description: "Application deployment" };
+  assert.deepEqual(UpdateProjectHelm$outboundSchema.parse(helm), helm);
+  assert.deepEqual(JSON.parse(updateProjectHelmToJSON(helm)), helm);
+  assert.equal(UpdateProjectBinaryTarget.LinuxArm64, "linux-arm64");
+});
 
 test("Helm installation routing survives SDK response validation", () => {
   const helm = {
@@ -44,25 +47,25 @@ test("Helm installation routing survives SDK response validation", () => {
       managerUrl: "https://manager.example",
     },
     managerUrlOverride: "https://custom-manager.example",
-  }
-  assert.deepEqual(DeploymentInfoHelm$inboundSchema.parse(helm), helm)
+  };
+  assert.deepEqual(DeploymentInfoHelm$inboundSchema.parse(helm), helm);
   const previous = {
     ...helm,
     outputs: { chart: helm.outputs.chart, version: helm.outputs.version },
-  }
-  delete previous.managerUrlOverride
-  assert.deepEqual(DeploymentInfoHelm$inboundSchema.parse(previous), previous)
-})
+  };
+  delete previous.managerUrlOverride;
+  assert.deepEqual(DeploymentInfoHelm$inboundSchema.parse(previous), previous);
+});
 
 // Run after pnpm -C client-sdks/platform/typescript build. Exercise the shipped
 // JavaScript, including request serialization and response validation.
-const deploymentId = `dep_${"a".repeat(28)}`
+const deploymentId = `dep_${"a".repeat(28)}`;
 const rotation = {
   id: "rotation_test",
   revision: 1,
   status: "prepared",
   expiresAt: "2026-09-09T12:00:00.000Z",
-}
+};
 const event = {
   id: `event_${"a".repeat(28)}`,
   deploymentId,
@@ -70,7 +73,7 @@ const event = {
   workspaceId: `ws_${"a".repeat(24)}`,
   createdAt: "2026-09-08T12:00:00.000Z",
   state: "success",
-}
+};
 
 function client(fetcher) {
   return new Alien({
@@ -78,7 +81,7 @@ function client(fetcher) {
     apiKey: "ax_ws_test",
     workspace: "test-workspace",
     httpClient: new HTTPClient({ fetcher }),
-  })
+  });
 }
 
 test("legacy publish-plugin deep imports preserve Kubernetes permission exports", () => {
@@ -87,31 +90,31 @@ test("legacy publish-plugin deep imports preserve Kubernetes permission exports"
     resource: "deployments",
     verbs: [Verb.Get],
     reason: "Read deployment state",
-  }
-  const permissions = { schemaVersion: 1, rules: [rule] }
+  };
+  const permissions = { schemaVersion: 1, rules: [rule] };
 
-  assert.deepEqual(Rule$outboundSchema.parse(rule), rule)
-  assert.equal(ruleToJSON(rule), JSON.stringify(rule))
-  assert.deepEqual(KubernetesPermissions$outboundSchema.parse(permissions), permissions)
-  assert.equal(kubernetesPermissionsToJSON(permissions), JSON.stringify(permissions))
-})
+  assert.deepEqual(Rule$outboundSchema.parse(rule), rule);
+  assert.equal(ruleToJSON(rule), JSON.stringify(rule));
+  assert.deepEqual(KubernetesPermissions$outboundSchema.parse(permissions), permissions);
+  assert.equal(kubernetesPermissionsToJSON(permissions), JSON.stringify(permissions));
+});
 
 test("operations plugin responses retain the permission diff", () => {
   const permissionDiff = {
     aws: { added: [], removed: [] },
     gcp: { added: [], removed: [] },
     kubernetes: { added: [], removed: [] },
-  }
+  };
   const response = PublishOperationsPluginResponse$inboundSchema.parse({
     name: "registry",
     version: "1",
     tier: "mutating",
     enabled: true,
     permissionDiff,
-  })
-  assert.deepEqual(response.permissionDiff, permissionDiff)
-  assert.deepEqual(OperationsPermissionDiff$inboundSchema.parse(permissionDiff), permissionDiff)
-})
+  });
+  assert.deepEqual(response.permissionDiff, permissionDiff);
+  assert.deepEqual(OperationsPermissionDiff$inboundSchema.parse(permissionDiff), permissionDiff);
+});
 
 test("configured server query parameters survive operation globals", async () => {
   const sdk = new Alien({
@@ -119,41 +122,41 @@ test("configured server query parameters survive operation globals", async () =>
     apiKey: "ax_ws_test",
     workspace: "test-workspace",
     httpClient: new HTTPClient({
-      fetcher: async request => {
-        const url = new URL(request.url)
-        assert.equal(url.pathname, "/proxy/v1/events")
-        assert.equal(url.searchParams.get("token"), "preserved")
-        assert.equal(url.searchParams.get("workspace"), "test-workspace")
-        return Response.json({ items: [], nextCursor: null })
+      fetcher: async (request) => {
+        const url = new URL(request.url);
+        assert.equal(url.pathname, "/proxy/v1/events");
+        assert.equal(url.searchParams.get("token"), "preserved");
+        assert.equal(url.searchParams.get("workspace"), "test-workspace");
+        return Response.json({ items: [], nextCursor: null });
       },
     }),
-  })
+  });
 
-  await sdk.events.list()
-})
+  await sdk.events.list();
+});
 
 test("retry-after-ms and timeoutMs apply independently to each attempt", async () => {
-  const delays = []
-  const signals = []
-  const originalSetTimeout = globalThis.setTimeout
+  const delays = [];
+  const signals = [];
+  const originalSetTimeout = globalThis.setTimeout;
   globalThis.setTimeout = (callback, delay, ...args) => {
-    delays.push(delay)
-    queueMicrotask(() => callback(...args))
-    return 0
-  }
+    delays.push(delay);
+    queueMicrotask(() => callback(...args));
+    return 0;
+  };
   try {
-    let requests = 0
-    const sdk = client(async request => {
-      requests++
-      signals.push(request.signal)
+    let requests = 0;
+    const sdk = client(async (request) => {
+      requests++;
+      signals.push(request.signal);
       if (requests === 1) {
         return new Response("retry", {
           status: 503,
           headers: { "retry-after-ms": "17" },
-        })
+        });
       }
-      return Response.json({ ...event, data: { type: "Finished" } })
-    })
+      return Response.json({ ...event, data: { type: "Finished" } });
+    });
 
     await sdk.events.get(
       { id: event.id },
@@ -169,23 +172,23 @@ test("retry-after-ms and timeoutMs apply independently to each attempt", async (
           },
         },
       },
-    )
+    );
 
-    assert.equal(requests, 2)
-    assert.deepEqual(delays, [17])
-    assert.notEqual(signals[0], signals[1])
+    assert.equal(requests, 2);
+    assert.deepEqual(delays, [17]);
+    assert.notEqual(signals[0], signals[1]);
     assert.equal(
-      signals.every(signal => !signal.aborted),
+      signals.every((signal) => !signal.aborted),
       true,
-    )
+    );
   } finally {
-    globalThis.setTimeout = originalSetTimeout
+    globalThis.setTimeout = originalSetTimeout;
   }
-})
+});
 
 for (const data of [
   { type: "Finished" },
-  ...["prepared", "completed", "cancelled"].map(status => ({
+  ...["prepared", "completed", "cancelled"].map((status) => ({
     type: "DeploymentCredentialRotation",
     deploymentId,
     rotationId: rotation.id,
@@ -198,27 +201,27 @@ for (const data of [
 ]) {
   for (const operation of ["get", "list"]) {
     test(`Events.${operation} reads ${data.status ?? data.type}`, async () => {
-      let requests = 0
-      const sdk = client(async request => {
-        requests++
-        assert.equal(request.method, "GET")
+      let requests = 0;
+      const sdk = client(async (request) => {
+        requests++;
+        assert.equal(request.method, "GET");
         assert.equal(
           new URL(request.url).pathname,
           operation === "get" ? `/v1/events/${event.id}` : "/v1/events",
-        )
+        );
         return Response.json(
           operation === "get"
             ? { ...event, data }
             : { items: [{ ...event, data }], nextCursor: null },
-        )
-      })
+        );
+      });
       const result =
         operation === "get"
           ? await sdk.events.get({ id: event.id })
-          : (await sdk.events.list()).items[0]
-      assert.deepEqual(result.data, data)
-      assert.equal(requests, 1)
-    })
+          : (await sdk.events.list()).items[0];
+      assert.deepEqual(result.data, data);
+      assert.equal(requests, 1);
+    });
   }
 }
 
@@ -252,28 +255,28 @@ for (const scenario of [
   },
 ]) {
   test(`${scenario.operation} preserves its wire contract`, async () => {
-    let requests = 0
-    const sdk = client(async request => {
-      requests++
-      const url = new URL(request.url)
-      assert.equal(request.method, scenario.method)
+    let requests = 0;
+    const sdk = client(async (request) => {
+      requests++;
+      const url = new URL(request.url);
+      assert.equal(request.method, scenario.method);
       assert.equal(
         url.pathname,
         `/v1/deployments/${deploymentId}/credential-rotation${scenario.suffix}`,
-      )
-      assert.equal(url.searchParams.get("workspace"), "test-workspace")
-      assert.equal(request.headers.get("Authorization"), "Bearer ax_ws_test")
-      if (scenario.body) assert.deepEqual(await request.json(), scenario.body)
-      else assert.equal(await request.text(), "")
-      return Response.json(scenario.response)
-    })
+      );
+      assert.equal(url.searchParams.get("workspace"), "test-workspace");
+      assert.equal(request.headers.get("Authorization"), "Bearer ax_ws_test");
+      if (scenario.body) assert.deepEqual(await request.json(), scenario.body);
+      else assert.equal(await request.text(), "");
+      return Response.json(scenario.response);
+    });
     const result = await sdk[scenario.operation]({
       id: deploymentId,
       ...(scenario.body ? { requestBody: scenario.body } : {}),
-    })
-    assert.deepEqual(result, scenario.response)
-    assert.equal(requests, 1)
-  })
+    });
+    assert.deepEqual(result, scenario.response);
+    assert.equal(requests, 1);
+  });
 }
 
 test("Events.get still rejects malformed rotation events", async () => {
@@ -282,8 +285,8 @@ test("Events.get still rejects malformed rotation events", async () => {
       ...event,
       data: { type: "DeploymentCredentialRotation", status: "prepared" },
     }),
-  )
+  );
   await assert.rejects(sdk.events.get({ id: event.id }), {
     name: "ResponseValidationError",
-  })
-})
+  });
+});

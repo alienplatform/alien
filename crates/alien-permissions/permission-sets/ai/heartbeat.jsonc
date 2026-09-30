@@ -7,19 +7,19 @@
         "label": "check-bedrock-availability",
         "description": "Read Bedrock foundation model availability needed for application health checks.",
         "grant": {
-          "actions": ["bedrock:ListFoundationModels", "bedrock:GetFoundationModelAvailability"]
+          "actions": ["bedrock:ListFoundationModels", "bedrock:GetFoundationModelAvailability"],
         },
         "binding": {
           "stack": {
             // AWS does not support resource-level permissions for either action.
             // This grant exposes only provider catalog and availability metadata.
-            "resources": ["*"]
+            "resources": ["*"],
           },
           "resource": {
-            "resources": ["*"]
-          }
-        }
-      }
+            "resources": ["*"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -33,14 +33,14 @@
             "resourcemanager.projects.get",
             "aiplatform.models.list",
             "aiplatform.endpoints.list",
-            "aiplatform.endpoints.get"
-          ]
+            "aiplatform.endpoints.get",
+          ],
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}" }
-        }
-      }
+          "resource": { "scope": "projects/${projectName}" },
+        },
+      },
     ],
     "azure": [
       {
@@ -49,18 +49,18 @@
         "grant": {
           "actions": [
             "Microsoft.CognitiveServices/accounts/read",
-            "Microsoft.CognitiveServices/accounts/deployments/read"
-          ]
+            "Microsoft.CognitiveServices/accounts/deployments/read",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.CognitiveServices/accounts/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.CognitiveServices/accounts/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

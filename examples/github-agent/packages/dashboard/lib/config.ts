@@ -1,4 +1,4 @@
-import { Alien } from "@alienplatform/platform-api"
+import { Alien } from "@alienplatform/platform-api";
 
 /**
  * Configuration and SDK clients for the GitHub Agent dashboard.
@@ -12,27 +12,27 @@ import { Alien } from "@alienplatform/platform-api"
 
 // Validate and extract required environment variables
 function getRequiredEnv(key: string): string {
-  const value = process.env[key]
+  const value = process.env[key];
   if (!value) {
-    throw new Error(`Missing required environment variable: ${key}`)
+    throw new Error(`Missing required environment variable: ${key}`);
   }
-  return value
+  return value;
 }
 
 /**
  * Environment configuration
  */
 export const config: {
-  readonly alienApiUrl: string
-  readonly alienToken: string
-  readonly workspace: string
-  readonly project: string
+  readonly alienApiUrl: string;
+  readonly alienToken: string;
+  readonly workspace: string;
+  readonly project: string;
 } = {
   alienApiUrl: getRequiredEnv("ALIEN_API_URL"),
   alienToken: getRequiredEnv("ALIEN_TOKEN"),
   workspace: getRequiredEnv("ALIEN_WORKSPACE"),
   project: getRequiredEnv("ALIEN_PROJECT"),
-}
+};
 
 /**
  * Platform SDK client (server-side only)
@@ -48,4 +48,4 @@ export const config: {
 export const alien = new Alien({
   serverURL: config.alienApiUrl,
   apiKey: config.alienToken,
-})
+});

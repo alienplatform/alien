@@ -1,5 +1,5 @@
-import { AlienError } from "@alienplatform/core"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { AlienError } from "@alienplatform/core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   NativeAddon,
   RawBindingsHandle,
@@ -13,24 +13,24 @@ import type {
   RawSandboxHandle,
   RawStorageHandle,
   RawVaultHandle,
-} from "../loader.js"
+} from "../loader.js";
 
-const loadAddon = vi.hoisted(() => vi.fn<() => NativeAddon>())
+const loadAddon = vi.hoisted(() => vi.fn<() => NativeAddon>());
 
-vi.mock("../loader.js", async importOriginal => {
-  const actual = await importOriginal<typeof import("../loader.js")>()
-  return { ...actual, loadAddon }
-})
+vi.mock("../loader.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../loader.js")>();
+  return { ...actual, loadAddon };
+});
 
-import { Bindings } from "../remote.js"
+import { Bindings } from "../remote.js";
 
 function fakeRemoteAddon() {
   const head = vi.fn<RawRemoteStorageHandle["head"]>(async () => {
-    throw new Error("unused")
-  })
-  const put = vi.fn<RawRemoteStorageHandle["put"]>(async () => ({}))
+    throw new Error("unused");
+  });
+  const put = vi.fn<RawRemoteStorageHandle["put"]>(async () => ({}));
   const storage: RawRemoteStorageHandle = {
-    get: async path => ({
+    get: async (path) => ({
       data: Buffer.from(path),
       meta: { location: path, size: path.length, lastModified: "" },
       attributes: { metadata: {} },
@@ -39,35 +39,35 @@ function fakeRemoteAddon() {
     delete: async () => {},
     list: async () => [],
     head,
-  }
+  };
   const resolveStorage = vi.fn<(name: string) => Promise<RawRemoteStorageHandle>>(
     async () => storage,
-  )
+  );
   const localStorage: RawStorageHandle = {
     ...storage,
     copy: async () => {},
     signedUrl: async () => ({ url: "https://example.invalid", method: "GET", headers: {} }),
-  }
+  };
   const key: RawKeyHandle = {
     encrypt: async (plaintext, context) =>
       Buffer.concat([plaintext, Buffer.from(context?.tenant ?? "")]),
-    decrypt: async ciphertext => ciphertext,
-  }
-  const resolveKey = vi.fn<(name: string) => Promise<RawKeyHandle>>(async () => key)
+    decrypt: async (ciphertext) => ciphertext,
+  };
+  const resolveKey = vi.fn<(name: string) => Promise<RawKeyHandle>>(async () => key);
   const instance = (sandboxId: string | null | undefined) => ({
     sandboxId: sandboxId ?? "generated",
     state: "running",
     generation: 1,
-  })
-  const terminate = vi.fn<RawSandboxHandle["terminate"]>(async () => {})
+  });
+  const terminate = vi.fn<RawSandboxHandle["terminate"]>(async () => {});
   const sandbox: RawSandboxHandle = {
     capabilities: () => ["files", "reconnect"],
-    create: async sandboxId => instance(sandboxId),
+    create: async (sandboxId) => instance(sandboxId),
     get: async () => null,
-    getOrCreate: async sandboxId => ({ sandbox: instance(sandboxId), created: false }),
+    getOrCreate: async (sandboxId) => ({ sandbox: instance(sandboxId), created: false }),
     list: async () => [],
     runCommand: async () => {
-      throw new Error("unused")
+      throw new Error("unused");
     },
     startJob: async () => "j1",
     pollJob: async () => ({ running: false, frames: [], exit: { code: 0, truncated: false } }),
@@ -77,8 +77,8 @@ function fakeRemoteAddon() {
     pause: async () => {},
     resume: async () => {},
     terminate,
-  }
-  const resolveSandbox = vi.fn<(name: string) => Promise<RawSandboxHandle>>(async () => sandbox)
+  };
+  const resolveSandbox = vi.fn<(name: string) => Promise<RawSandboxHandle>>(async () => sandbox);
   const resolveAi = vi.fn<RawRemoteBindingsHandle["ai"]>(async () => ({
     resourceId: "models",
     bindingJson: JSON.stringify({ service: "bedrock", region: "us-east-1" }),
@@ -89,37 +89,37 @@ function fakeRemoteAddon() {
       credentials: { type: "sessionCredentials" },
     }),
     expiresAt: "2026-08-05T08:00:00Z",
-  }))
+  }));
 
   class FakeBindingsHandle implements RawBindingsHandle {
-    key = resolveKey
+    key = resolveKey;
 
     async storage(): Promise<RawStorageHandle> {
-      return localStorage
+      return localStorage;
     }
 
     async kv(): Promise<RawKvHandle> {
-      throw new Error("unused")
+      throw new Error("unused");
     }
 
     async queue(): Promise<RawQueueHandle> {
-      throw new Error("unused")
+      throw new Error("unused");
     }
 
     async vault(): Promise<RawVaultHandle> {
-      throw new Error("unused")
+      throw new Error("unused");
     }
 
     async container(): Promise<RawContainerHandle> {
-      throw new Error("unused")
+      throw new Error("unused");
     }
 
     async postgres(): Promise<RawPostgresHandle> {
-      throw new Error("unused")
+      throw new Error("unused");
     }
 
     async sandbox(): Promise<never> {
-      throw new Error("unused")
+      throw new Error("unused");
     }
   }
 
@@ -129,26 +129,26 @@ function fakeRemoteAddon() {
       externalId: string,
       token: string,
       apiBaseUrl?: string,
-    ) => Promise<RawRemoteBindingsHandle>
+    ) => Promise<RawRemoteBindingsHandle>;
 
     static forDeployment: (
       deploymentId: string,
       token: string,
       apiBaseUrl?: string,
-    ) => Promise<RawRemoteBindingsHandle>
+    ) => Promise<RawRemoteBindingsHandle>;
 
-    storage = resolveStorage
+    storage = resolveStorage;
 
-    key = resolveKey
+    key = resolveKey;
 
-    sandbox = resolveSandbox
+    sandbox = resolveSandbox;
 
-    ai = resolveAi
+    ai = resolveAi;
   }
 
   const forRemoteDeployment = vi.fn<
     (deploymentId: string, token: string, apiBaseUrl?: string) => Promise<RawRemoteBindingsHandle>
-  >(async () => new FakeRemoteBindingsHandle())
+  >(async () => new FakeRemoteBindingsHandle());
   const forRemoteCustomer = vi.fn<
     (
       project: string,
@@ -156,9 +156,9 @@ function fakeRemoteAddon() {
       token: string,
       apiBaseUrl?: string,
     ) => Promise<RawRemoteBindingsHandle>
-  >(async () => new FakeRemoteBindingsHandle())
-  FakeRemoteBindingsHandle.forCustomer = forRemoteCustomer
-  FakeRemoteBindingsHandle.forDeployment = forRemoteDeployment
+  >(async () => new FakeRemoteBindingsHandle());
+  FakeRemoteBindingsHandle.forCustomer = forRemoteCustomer;
+  FakeRemoteBindingsHandle.forDeployment = forRemoteDeployment;
 
   return {
     addon: {
@@ -175,108 +175,108 @@ function fakeRemoteAddon() {
     resolveSandbox,
     terminate,
     resolveAi,
-  }
+  };
 }
 
 beforeEach(() => {
-  loadAddon.mockReset()
-})
+  loadAddon.mockReset();
+});
 
 describe("Bindings.forRemoteCustomer", () => {
   it("forwards the Project, external ID, token, and API base URL", async () => {
-    const fixture = fakeRemoteAddon()
-    loadAddon.mockReturnValue(fixture.addon)
+    const fixture = fakeRemoteAddon();
+    loadAddon.mockReturnValue(fixture.addon);
 
     const bindings = await Bindings.forRemoteCustomer({
       project: "customer-files",
       externalId: "customer_123",
       token: "token_123",
       apiBaseUrl: "https://api.example.com",
-    })
+    });
 
     expect(fixture.forRemoteCustomer).toHaveBeenCalledWith(
       "customer-files",
       "customer_123",
       "token_123",
       "https://api.example.com",
-    )
-    expect(bindings.storage("storage")).toBeDefined()
-  })
-})
+    );
+    expect(bindings.storage("storage")).toBeDefined();
+  });
+});
 
 describe("Bindings.forRemoteDeployment", () => {
   it("forwards discovery arguments and exposes only remote Storage", async () => {
-    const fixture = fakeRemoteAddon()
-    loadAddon.mockReturnValue(fixture.addon)
+    const fixture = fakeRemoteAddon();
+    loadAddon.mockReturnValue(fixture.addon);
 
     const bindings = await Bindings.forRemoteDeployment({
       deploymentId: "dep_123",
       token: "token_123",
       apiBaseUrl: "https://api.example.com",
-    })
-    const storage = bindings.storage("archive")
+    });
+    const storage = bindings.storage("archive");
 
-    expect(loadAddon).toHaveBeenCalledTimes(1)
-    expect(fixture.forRemoteDeployment).toHaveBeenCalledOnce()
+    expect(loadAddon).toHaveBeenCalledTimes(1);
+    expect(fixture.forRemoteDeployment).toHaveBeenCalledOnce();
     expect(fixture.forRemoteDeployment).toHaveBeenCalledWith(
       "dep_123",
       "token_123",
       "https://api.example.com",
-    )
-    expect("kv" in bindings).toBe(false)
-    expect("queue" in bindings).toBe(false)
-    expect("vault" in bindings).toBe(false)
-    expect("key" in bindings).toBe(true)
-    expect(Object.keys(storage).sort()).toEqual(["delete", "get", "head", "list", "put"])
-  })
+    );
+    expect("kv" in bindings).toBe(false);
+    expect("queue" in bindings).toBe(false);
+    expect("vault" in bindings).toBe(false);
+    expect("key" in bindings).toBe(true);
+    expect(Object.keys(storage).sort()).toEqual(["delete", "get", "head", "list", "put"]);
+  });
 
   it("resolves a typed remote Key and forwards bytes and context", async () => {
-    const fixture = fakeRemoteAddon()
-    loadAddon.mockReturnValue(fixture.addon)
+    const fixture = fakeRemoteAddon();
+    loadAddon.mockReturnValue(fixture.addon);
     const bindings = await Bindings.forRemoteDeployment({
       deploymentId: "dep_123",
       token: "token_123",
-    })
+    });
 
     const ciphertext = await bindings
       .key("customer-key")
-      .encrypt(Buffer.from("root"), { context: { tenant: "acme" } })
+      .encrypt(Buffer.from("root"), { context: { tenant: "acme" } });
 
-    expect(ciphertext.toString()).toBe("rootacme")
-    expect(fixture.resolveKey).toHaveBeenCalledOnce()
-    expect(fixture.resolveKey).toHaveBeenCalledWith("customer-key")
-  })
+    expect(ciphertext.toString()).toBe("rootacme");
+    expect(fixture.resolveKey).toHaveBeenCalledOnce();
+    expect(fixture.resolveKey).toHaveBeenCalledWith("customer-key");
+  });
 
   it("resolves the deployment-level AI lease without a resource name", async () => {
-    const fixture = fakeRemoteAddon()
-    loadAddon.mockReturnValue(fixture.addon)
+    const fixture = fakeRemoteAddon();
+    loadAddon.mockReturnValue(fixture.addon);
     const bindings = await Bindings.forRemoteDeployment({
       deploymentId: "dep_123",
       token: "token_123",
-    })
+    });
 
-    const lease = await bindings.ai()
+    const lease = await bindings.ai();
 
-    expect(fixture.resolveAi).toHaveBeenCalledWith()
-    expect(lease.resourceId).toBe("models")
-    expect(lease.binding).toEqual({ service: "bedrock", region: "us-east-1" })
-    expect(lease.clientConfig.platform).toBe("aws")
-    expect(lease.expiresAt).toEqual(new Date("2026-08-05T08:00:00Z"))
-  })
+    expect(fixture.resolveAi).toHaveBeenCalledWith();
+    expect(lease.resourceId).toBe("models");
+    expect(lease.binding).toEqual({ service: "bedrock", region: "us-east-1" });
+    expect(lease.clientConfig.platform).toBe("aws");
+    expect(lease.expiresAt).toEqual(new Date("2026-08-05T08:00:00Z"));
+  });
 
   it("mirrors the in-cloud Sandbox surface and resolves each name lazily once", async () => {
-    const fixture = fakeRemoteAddon()
-    loadAddon.mockReturnValue(fixture.addon)
+    const fixture = fakeRemoteAddon();
+    loadAddon.mockReturnValue(fixture.addon);
     const bindings = await Bindings.forRemoteDeployment({
       deploymentId: "dep_123",
       token: "token_123",
-    })
+    });
 
-    const agent = bindings.sandbox("agent")
-    const build = bindings.sandbox("build")
+    const agent = bindings.sandbox("agent");
+    const build = bindings.sandbox("build");
 
-    expect(fixture.resolveSandbox).not.toHaveBeenCalled()
-    expect(bindings.sandbox("agent")).toBe(agent)
+    expect(fixture.resolveSandbox).not.toHaveBeenCalled();
+    expect(bindings.sandbox("agent")).toBe(agent);
     // A remote Sandbox is the in-cloud one, so a method missing here is a caller writing
     // against a surface the hosted path silently does not have.
     expect(Object.keys(agent).sort()).toEqual(
@@ -296,19 +296,19 @@ describe("Bindings.forRemoteDeployment", () => {
         "resume",
         "terminate",
       ].sort(),
-    )
+    );
 
-    await expect(agent.capabilities()).resolves.toEqual(["files", "reconnect"])
-    await agent.terminate("session_1")
-    await build.capabilities()
+    await expect(agent.capabilities()).resolves.toEqual(["files", "reconnect"]);
+    await agent.terminate("session_1");
+    await build.capabilities();
 
-    expect(fixture.forRemoteDeployment).toHaveBeenCalledOnce()
-    expect(fixture.resolveSandbox.mock.calls).toEqual([["agent"], ["build"]])
-    expect(fixture.terminate).toHaveBeenCalledWith("session_1")
-  })
+    expect(fixture.forRemoteDeployment).toHaveBeenCalledOnce();
+    expect(fixture.resolveSandbox.mock.calls).toEqual([["agent"], ["build"]]);
+    expect(fixture.terminate).toHaveBeenCalledWith("session_1");
+  });
 
   it("unwraps napi errors from Sandbox resolution and operations", async () => {
-    const fixture = fakeRemoteAddon()
+    const fixture = fakeRemoteAddon();
     fixture.resolveSandbox.mockRejectedValueOnce(
       new Error(
         JSON.stringify({
@@ -317,30 +317,30 @@ describe("Bindings.forRemoteDeployment", () => {
           retryable: false,
         }),
       ),
-    )
-    loadAddon.mockReturnValue(fixture.addon)
+    );
+    loadAddon.mockReturnValue(fixture.addon);
     const bindings = await Bindings.forRemoteDeployment({
       deploymentId: "dep_123",
       token: "token_123",
-    })
+    });
 
     await expect(bindings.sandbox("agent").capabilities()).rejects.toMatchObject({
       code: "REMOTE_BINDING_DENIED",
       message: "Remote binding access denied",
-    })
+    });
 
-    fixture.terminate.mockRejectedValueOnce(new Error("native transport failed"))
-    const operation = bindings.sandbox("build").terminate("session_1")
+    fixture.terminate.mockRejectedValueOnce(new Error("native transport failed"));
+    const operation = bindings.sandbox("build").terminate("session_1");
 
-    await expect(operation).rejects.toBeInstanceOf(AlienError)
+    await expect(operation).rejects.toBeInstanceOf(AlienError);
     await expect(operation).rejects.toMatchObject({
       code: "BINDINGS_ERROR",
       message: "native transport failed",
-    })
-  })
+    });
+  });
 
   it("reuses one native bindings handle and resolves each Storage handle lazily once", async () => {
-    const fixture = fakeRemoteAddon()
+    const fixture = fakeRemoteAddon();
     fixture.head.mockResolvedValue({
       meta: {
         location: "archive/a.txt",
@@ -348,77 +348,77 @@ describe("Bindings.forRemoteDeployment", () => {
         lastModified: "2026-01-01T00:00:00Z",
       },
       attributes: { metadata: {} },
-    })
-    loadAddon.mockReturnValue(fixture.addon)
+    });
+    loadAddon.mockReturnValue(fixture.addon);
 
     const bindings = await Bindings.forRemoteDeployment({
       deploymentId: "dep_123",
       token: "token_123",
-    })
-    const archive = bindings.storage("archive")
-    const logs = bindings.storage("logs")
+    });
+    const archive = bindings.storage("archive");
+    const logs = bindings.storage("logs");
 
-    expect(fixture.resolveStorage).not.toHaveBeenCalled()
-    expect(bindings.storage("archive")).toBe(archive)
-    await archive.head("a.txt")
-    await archive.get("a.txt")
-    await logs.head("b.txt")
+    expect(fixture.resolveStorage).not.toHaveBeenCalled();
+    expect(bindings.storage("archive")).toBe(archive);
+    await archive.head("a.txt");
+    await archive.get("a.txt");
+    await logs.head("b.txt");
 
-    expect(fixture.forRemoteDeployment).toHaveBeenCalledOnce()
-    expect(fixture.resolveStorage.mock.calls).toEqual([["archive"], ["logs"]])
-  })
+    expect(fixture.forRemoteDeployment).toHaveBeenCalledOnce();
+    expect(fixture.resolveStorage.mock.calls).toEqual([["archive"], ["logs"]]);
+  });
 
   it("forwards object attributes through remote Storage puts", async () => {
-    const fixture = fakeRemoteAddon()
-    loadAddon.mockReturnValue(fixture.addon)
+    const fixture = fakeRemoteAddon();
+    loadAddon.mockReturnValue(fixture.addon);
     const bindings = await Bindings.forRemoteDeployment({
       deploymentId: "dep_123",
       token: "token_123",
-    })
+    });
     const options = {
       attributes: {
         contentType: "application/json",
         metadata: { schema: "event-v1" },
       },
-    }
+    };
 
-    await bindings.storage("archive").put("events/1.json", Buffer.from("{}"), options)
+    await bindings.storage("archive").put("events/1.json", Buffer.from("{}"), options);
 
-    expect(fixture.put).toHaveBeenCalledWith("events/1.json", Buffer.from("{}"), options)
-  })
+    expect(fixture.put).toHaveBeenCalledWith("events/1.json", Buffer.from("{}"), options);
+  });
 
   it("unwraps napi errors from discovery and Storage operations", async () => {
-    const fixture = fakeRemoteAddon()
+    const fixture = fakeRemoteAddon();
     const discoveryError = new Error(
       JSON.stringify({
         code: "REMOTE_BINDING_DENIED",
         message: "Remote binding access denied",
         retryable: false,
       }),
-    )
-    fixture.forRemoteDeployment.mockRejectedValueOnce(discoveryError)
-    loadAddon.mockReturnValue(fixture.addon)
+    );
+    fixture.forRemoteDeployment.mockRejectedValueOnce(discoveryError);
+    loadAddon.mockReturnValue(fixture.addon);
 
     const denied = Bindings.forRemoteDeployment({
       deploymentId: "dep_123",
       token: "token_123",
-    })
+    });
     await expect(denied).rejects.toMatchObject({
       code: "REMOTE_BINDING_DENIED",
       message: "Remote binding access denied",
-    })
+    });
 
     const bindings = await Bindings.forRemoteDeployment({
       deploymentId: "dep_123",
       token: "token_123",
-    })
-    fixture.head.mockRejectedValueOnce(new Error("native transport failed"))
-    const operation = bindings.storage("archive").head("a.txt")
+    });
+    fixture.head.mockRejectedValueOnce(new Error("native transport failed"));
+    const operation = bindings.storage("archive").head("a.txt");
 
-    await expect(operation).rejects.toBeInstanceOf(AlienError)
+    await expect(operation).rejects.toBeInstanceOf(AlienError);
     await expect(operation).rejects.toMatchObject({
       code: "BINDINGS_ERROR",
       message: "native transport failed",
-    })
-  })
-})
+    });
+  });
+});

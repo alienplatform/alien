@@ -8,18 +8,18 @@
           "actions": [
             "Microsoft.Resources/subscriptions/resourceGroups/write",
             "Microsoft.Resources/subscriptions/resourceGroups/delete",
-            "Microsoft.Resources/subscriptions/resourceGroups/read"
-          ]
+            "Microsoft.Resources/subscriptions/resourceGroups/read",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}"
+            "scope": "/subscriptions/${subscriptionId}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

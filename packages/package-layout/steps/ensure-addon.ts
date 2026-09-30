@@ -11,32 +11,32 @@
 // so a narrower standalone feature graph cannot be reused by a later, broader
 // development-profile Cargo command.
 
-import { existsSync, readFileSync } from "node:fs"
-import { createRequire } from "node:module"
-import { dirname, join, relative } from "node:path"
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join, relative } from "node:path";
 // The napi triple mapping is owned by the bindings loader; reuse it here rather
 // than keeping a second copy (compile-smoke.ts imports it the same way).
-import { platformTriple } from "../../bindings/src/loader.ts"
-import { type CheckResult, type Ctx, lastLine, run } from "./shared.ts"
+import { platformTriple } from "../../bindings/src/loader.ts";
+import { type CheckResult, type Ctx, lastLine, run } from "./shared.ts";
 
-const GATEWAY_BINARY = "alien-ai-gateway"
-const GATEWAY_CRATE = "alien-ai-gateway"
+const GATEWAY_BINARY = "alien-ai-gateway";
+const GATEWAY_CRATE = "alien-ai-gateway";
 
 /** Resolve the napi CLI bin from the workspace install (avoids `npx` reaching the registry). */
 function napiBinPath(): string {
-  const napiRequire = createRequire(import.meta.url)
-  const napiPkgPath = napiRequire.resolve("@napi-rs/cli/package.json")
+  const napiRequire = createRequire(import.meta.url);
+  const napiPkgPath = napiRequire.resolve("@napi-rs/cli/package.json");
   const napiPkg = JSON.parse(readFileSync(napiPkgPath, "utf8")) as {
-    bin: string | Record<string, string>
-  }
-  const napiBinRel = typeof napiPkg.bin === "string" ? napiPkg.bin : napiPkg.bin.napi
-  return join(dirname(napiPkgPath), napiBinRel)
+    bin: string | Record<string, string>;
+  };
+  const napiBinRel = typeof napiPkg.bin === "string" ? napiPkg.bin : napiPkg.bin.napi;
+  return join(dirname(napiPkgPath), napiBinRel);
 }
 
 export function ensureAddon(ctx: Ctx): CheckResult[] {
-  const { scriptDir, fixtureDir, repoRoot } = ctx
-  const results: CheckResult[] = []
-  const triple = platformTriple()
+  const { scriptDir, fixtureDir, repoRoot } = ctx;
+  const results: CheckResult[] = [];
+  const triple = platformTriple();
 
   /**
    * Resolve (or build) the bindings host dev addon. Returns the dev-addon path
@@ -44,50 +44,50 @@ export function ensureAddon(ctx: Ctx): CheckResult[] {
    * via node_modules) or a build fails (a failure is pushed to `results`).
    */
   function resolveAddon(pkgName: string, crateName: string): string | undefined {
-    const crateDir = join(repoRoot, "crates", crateName)
-    const devAddonPath = join(crateDir, `${crateName}.${triple}.node`)
+    const crateDir = join(repoRoot, "crates", crateName);
+    const devAddonPath = join(crateDir, `${crateName}.${triple}.node`);
     const prebuildInstalledDir = join(
       fixtureDir,
       "node_modules",
       "@alienplatform",
       `${pkgName}-${triple}`,
-    )
+    );
 
     if (existsSync(prebuildInstalledDir)) {
       console.log(
         `[addon] per-platform ${pkgName} prebuild installed for '${triple}' — no source build needed.`,
-      )
-      return undefined
+      );
+      return undefined;
     }
     if (existsSync(devAddonPath)) {
       console.log(
         `[addon] using existing ${crateName} dev addon at ${relative(scriptDir, devAddonPath)} (fast path, no build).`,
-      )
-      return devAddonPath
+      );
+      return devAddonPath;
     }
     console.log(
       `[addon] no prebuild and no dev addon for ${crateName} '${triple}' — building one with \`napi build --platform --release\` in crates/${crateName} (CI path)...`,
-    )
+    );
     const build = run(
       process.execPath,
       [napiBinPath(), "build", "--platform", "--release"],
       crateDir,
-    )
+    );
     if (build.status === 0 && existsSync(devAddonPath)) {
-      console.log(`[addon] built ${relative(scriptDir, devAddonPath)}.`)
-      return devAddonPath
+      console.log(`[addon] built ${relative(scriptDir, devAddonPath)}.`);
+      return devAddonPath;
     }
     console.error(
       `[addon] ${crateName} source build failed; the runtime/compile checks below will fail to load the addon.`,
-    )
+    );
     results.push({
       check: "addon-build",
       package: pkgName,
       status: "fail",
       reason: `napi build --platform --release did not produce a .node for ${crateName} on this host`,
       evidence: lastLine(build.stderr) || lastLine(build.stdout) || `exit ${build.status}`,
-    })
-    return undefined
+    });
+    return undefined;
   }
 
   /**
@@ -101,51 +101,51 @@ export function ensureAddon(ctx: Ctx): CheckResult[] {
       "node_modules",
       "@alienplatform",
       `ai-gateway-${triple}`,
-    )
+    );
     if (existsSync(prebuildInstalledDir)) {
       console.log(
         `[gateway] per-platform ai-gateway binary prebuild installed for '${triple}'; no build needed.`,
-      )
-      return undefined
+      );
+      return undefined;
     }
     for (const profile of ["debug", "release"]) {
-      const candidate = join(repoRoot, "target", profile, GATEWAY_BINARY)
+      const candidate = join(repoRoot, "target", profile, GATEWAY_BINARY);
       if (existsSync(candidate)) {
         console.log(
           `[gateway] using existing ${profile} binary at ${relative(scriptDir, candidate)} (fast path, no build).`,
-        )
-        return candidate
+        );
+        return candidate;
       }
     }
     console.log(
       `[gateway] no prebuild and no built binary; building with \`cargo build --release --bin ${GATEWAY_BINARY} -p ${GATEWAY_CRATE}\` (isolated fallback)...`,
-    )
+    );
     const build = run(
       "cargo",
       ["build", "--release", "--bin", GATEWAY_BINARY, "-p", GATEWAY_CRATE],
       repoRoot,
-    )
-    const built = join(repoRoot, "target", "release", GATEWAY_BINARY)
+    );
+    const built = join(repoRoot, "target", "release", GATEWAY_BINARY);
     if (build.status === 0 && existsSync(built)) {
-      console.log(`[gateway] built ${relative(scriptDir, built)}.`)
-      return built
+      console.log(`[gateway] built ${relative(scriptDir, built)}.`);
+      return built;
     }
     console.error(
       `[gateway] cargo build of ${GATEWAY_BINARY} failed; the compile check below will fail to embed the gateway.`,
-    )
+    );
     results.push({
       check: "addon-build",
       package: "ai-gateway",
       status: "fail",
       reason: `cargo build --release --bin ${GATEWAY_BINARY} -p ${GATEWAY_CRATE} did not produce a binary on this host`,
       evidence: lastLine(build.stderr) || lastLine(build.stdout) || `exit ${build.status}`,
-    })
-    return undefined
+    });
+    return undefined;
   }
 
-  ctx.addonPath = resolveAddon("bindings", "alien-bindings-node")
-  ctx.aiBinaryPath = resolveGatewayBinary()
-  ctx.addonEnv = ctx.addonPath ? { ALIEN_BINDINGS_ADDON_PATH: ctx.addonPath } : undefined
+  ctx.addonPath = resolveAddon("bindings", "alien-bindings-node");
+  ctx.aiBinaryPath = resolveGatewayBinary();
+  ctx.addonEnv = ctx.addonPath ? { ALIEN_BINDINGS_ADDON_PATH: ctx.addonPath } : undefined;
 
-  return results
+  return results;
 }

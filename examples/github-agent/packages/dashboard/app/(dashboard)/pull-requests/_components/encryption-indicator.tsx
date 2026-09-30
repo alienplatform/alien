@@ -1,4 +1,4 @@
-"use client"
+"use client";
 
 import {
   IconExternalLink,
@@ -6,13 +6,13 @@ import {
   IconLock,
   IconServer,
   IconShieldCheck,
-} from "@tabler/icons-react"
-import React from "react"
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
-import { ShineBorder } from "@/components/ui/shine-border"
+} from "@tabler/icons-react";
+import React from "react";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+import { ShineBorder } from "@/components/ui/shine-border";
 
 interface EncryptionIndicatorProps {
-  agentEnvironment: string
+  agentEnvironment: string;
 }
 
 export function EncryptionIndicator({ agentEnvironment }: EncryptionIndicatorProps) {
@@ -94,5 +94,5 @@ export function EncryptionIndicator({ agentEnvironment }: EncryptionIndicatorPro
         </div>
       </HoverCardContent>
     </HoverCard>
-  )
+  );
 }

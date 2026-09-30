@@ -1,8 +1,8 @@
-import { type ResourceType, type Vault as VaultConfig, VaultSchema } from "./generated/index.js"
-import { type Resource, ResourceBuilder } from "./resource.js"
+import { type ResourceType, type Vault as VaultConfig, VaultSchema } from "./generated/index.js";
+import { type Resource, ResourceBuilder } from "./resource.js";
 
-export type { Vault as VaultConfig, VaultOutputs } from "./generated/index.js"
-export { VaultSchema as VaultConfigSchema } from "./generated/index.js"
+export type { Vault as VaultConfig, VaultOutputs } from "./generated/index.js";
+export { VaultSchema as VaultConfigSchema } from "./generated/index.js";
 
 /**
  * Represents a secure vault for storing secrets.
@@ -14,15 +14,15 @@ export { VaultSchema as VaultConfigSchema } from "./generated/index.js"
  * The vault acts as a namespace for secrets and controls access permissions for workers and services.
  */
 export class Vault extends ResourceBuilder {
-  private _config: Partial<VaultConfig> = {}
+  private _config: Partial<VaultConfig> = {};
 
   /**
    * Creates a new Vault builder.
    * @param id Identifier for the vault. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
   constructor(id: string) {
-    super()
-    this._config.id = id
+    super();
+    this._config.id = id;
   }
 
   /**
@@ -31,7 +31,7 @@ export class Vault extends ResourceBuilder {
    * @returns The "vault" resource type.
    */
   public static any(): ResourceType {
-    return "vault"
+    return "vault";
   }
 
   /**
@@ -40,11 +40,11 @@ export class Vault extends ResourceBuilder {
    * @throws Error if the vault configuration is invalid.
    */
   public build(): Resource {
-    const config = VaultSchema.parse(this._config)
+    const config = VaultSchema.parse(this._config);
 
     return this.resource({
       type: "vault",
       ...config,
-    })
+    });
   }
 }

@@ -16,61 +16,61 @@
             "s3:DeleteObjectVersion",
             "s3:PutObjectAcl",
             "s3:PutObjectTagging",
-            "s3:RestoreObject"
-          ]
+            "s3:RestoreObject",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:s3:::${stackPrefix}-*", "arn:aws:s3:::${stackPrefix}-*/*"]
+            "resources": ["arn:aws:s3:::${stackPrefix}-*", "arn:aws:s3:::${stackPrefix}-*/*"],
           },
           "resource": {
-            "resources": ["arn:aws:s3:::${resourceName}", "arn:aws:s3:::${resourceName}/*"]
-          }
-        }
-      }
+            "resources": ["arn:aws:s3:::${resourceName}", "arn:aws:s3:::${resourceName}/*"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
         "grant": {
-          "predefinedRoles": ["roles/storage.objectAdmin", "roles/storage.bucketViewer"]
+          "predefinedRoles": ["roles/storage.objectAdmin", "roles/storage.bucketViewer"],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}/buckets/${resourceName}"
-          }
-        }
+            "scope": "projects/${projectName}/buckets/${resourceName}",
+          },
+        },
       },
       {
         "grant": {
-          "permissions": ["iam.serviceAccounts.signBlob"]
+          "permissions": ["iam.serviceAccounts.signBlob"],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}"
-          }
-        }
-      }
+            "scope": "projects/${projectName}",
+          },
+        },
+      },
     ],
     "azure": [
       {
         "grant": {
-          "predefinedRoles": ["Storage Blob Data Contributor"]
+          "predefinedRoles": ["Storage Blob Data Contributor"],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}/blobServices/default/containers/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}/blobServices/default/containers/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

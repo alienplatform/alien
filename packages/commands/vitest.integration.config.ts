@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config"
+import { defineConfig } from "vitest/config";
 
 /**
  * Dedicated real-wire integration config (`test:integration`). Runs ONLY the
@@ -24,4 +24,4 @@ export default defineConfig({
     teardownTimeout: 10_000,
     pool: "forks",
   },
-})
+});

@@ -14,40 +14,40 @@
           //
           // Authorized against the image the sandbox was launched from, which is what bounds
           // it: a workload can only mint tokens for sandboxes started from its own image.
-          "actions": ["lambda:CreateMicrovmAuthToken"]
+          "actions": ["lambda:CreateMicrovmAuthToken"],
         },
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-*"
-            ]
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-*",
+            ],
           },
           "resource": {
             "resources": [
-              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}"
-            ]
-          }
-        }
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}",
+            ],
+          },
+        },
       },
       {
         "grant": {
           // State and endpoint of a sandbox this workload already holds a token for. Metadata:
           // it reveals nothing of what runs inside.
-          "actions": ["lambda:GetMicrovm"]
+          "actions": ["lambda:GetMicrovm"],
         },
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-*"
-            ]
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-*",
+            ],
           },
           "resource": {
             "resources": [
-              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}"
-            ]
-          }
-        }
-      }
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}",
+            ],
+          },
+        },
+      },
     ],
     "azure": [
       {
@@ -58,7 +58,7 @@
           // sandbox/management, because a set that reaches inside a sandbox must not be one of
           // the implicit-management sets; management grants only the granular lifecycle
           // `dataActions` for the same reason. Subscription Owner returns 403 against this plane.
-          "predefinedRoles": ["Container Apps SandboxGroup Data Owner"]
+          "predefinedRoles": ["Container Apps SandboxGroup Data Owner"],
         },
         // Resource-scoped only. This role reaches inside a sandbox, and the sole stack-level
         // scope Azure RBAC can express is the resource group — where it would reach inside every
@@ -66,10 +66,10 @@
         // resource link, which binds to the sandbox's own group.
         "binding": {
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${resourceName}"
-          }
-        }
-      }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${resourceName}",
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -77,17 +77,17 @@
         // alone — heartbeat, management and provision must never reach sandbox content. No safe
         // predefined role isolates it, so it is a residual custom-role permission.
         "grant": {
-          "permissions": ["aiplatform.sandboxEnvironments.execute"]
+          "permissions": ["aiplatform.sandboxEnvironments.execute"],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "projects/${projectName}",
+          },
+        },
+      },
+    ],
+  },
 }

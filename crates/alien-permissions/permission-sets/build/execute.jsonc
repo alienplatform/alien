@@ -14,18 +14,20 @@
             "codebuild:RetryBuildBatch",
             "codebuild:BatchGetBuilds",
             "codebuild:BatchGetBuildBatches",
-            "codebuild:ListBuildsForProject"
-          ]
+            "codebuild:ListBuildsForProject",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${stackPrefix}-*"]
+            "resources": [
+              "arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${stackPrefix}-*",
+            ],
           },
           "resource": {
-            "resources": ["arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${resourceName}"]
-          }
-        }
-      }
+            "resources": ["arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/${resourceName}"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -36,16 +38,16 @@
             "cloudbuild.builds.approve",
             "cloudbuild.builds.get",
             "cloudbuild.builds.list",
-            "iam.serviceAccounts.actAs"
-          ]
+            "iam.serviceAccounts.actAs",
+          ],
         },
         // Cloud Build IDs are auto-generated UUIDs — name-prefix conditions can never match.
         // Conditions are fundamentally broken for builds. Must use scope-only.
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}" }
-        }
-      }
+          "resource": { "scope": "projects/${projectName}" },
+        },
+      },
     ],
     "azure": [
       {
@@ -54,19 +56,19 @@
             "Microsoft.App/jobs/start/action",
             "Microsoft.App/jobs/stop/action",
             "Microsoft.App/jobs/executions/read",
-            "Microsoft.App/jobs/read"
+            "Microsoft.App/jobs/read",
           ],
-          "dataActions": []
+          "dataActions": [],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/jobs/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/jobs/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

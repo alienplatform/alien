@@ -13,12 +13,12 @@
  * scraping the human message — and maps it to a typed {@link AlienError}.
  */
 
-import { AlienError, defineError } from "@alienplatform/core"
-import * as z from "zod/v4"
+import { AlienError, defineError } from "@alienplatform/core";
+import * as z from "zod/v4";
 
 // Re-exported so consumers handle bindings errors without importing
 // `@alienplatform/core` directly.
-export { AlienError, defineError }
+export { AlienError, defineError };
 
 /**
  * Thrown on the first operation against a binding that has no
@@ -39,7 +39,7 @@ export const BindingNotConfiguredError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 400,
-})
+});
 
 /**
  * Thrown when the native addon reports a Postgres `sslmode` this package does not
@@ -59,7 +59,7 @@ export const UnknownPostgresSslModeError = defineError({
     `@alienplatform/bindings received an unknown Postgres sslmode '${sslmode}' from the native addon; expected one of ${expected.join(", ")}.`,
   retryable: false,
   internal: false,
-})
+});
 
 /**
  * Thrown when the native addon reports a Postgres TLS policy that cannot be
@@ -78,7 +78,7 @@ export const InvalidPostgresTlsConfigError = defineError({
     `@alienplatform/bindings received an invalid Postgres TLS configuration for sslmode '${sslmode}' from the native addon: ${reason}.`,
   retryable: false,
   internal: false,
-})
+});
 
 /**
  * Thrown when the native addon reports a sandbox state or output frame kind this wrapper
@@ -99,26 +99,26 @@ export const UnknownSandboxValueError = defineError({
     `@alienplatform/bindings received an unknown sandbox ${field} '${value}' from the native addon; expected one of ${expected.join(", ")}.`,
   retryable: false,
   internal: false,
-})
+});
 
 /** Fallback code for napi-internal errors whose message is not an envelope. */
-const GENERIC_BINDINGS_CODE = "BINDINGS_ERROR"
+const GENERIC_BINDINGS_CODE = "BINDINGS_ERROR";
 
 /** Envelope codes the wrapper maps to a dedicated typed error. */
-const BINDING_NOT_CONFIGURED = "BINDING_NOT_CONFIGURED"
+const BINDING_NOT_CONFIGURED = "BINDING_NOT_CONFIGURED";
 
 /** Envelope code for an operation the sandbox never reported the outcome of. */
-const SANDBOX_OUTCOME_UNKNOWN = "SANDBOX_OUTCOME_UNKNOWN"
+const SANDBOX_OUTCOME_UNKNOWN = "SANDBOX_OUTCOME_UNKNOWN";
 
 /** The structured payload the addon serializes into `err.message`. */
 interface NapiErrorEnvelope {
-  code: string
-  message: string
-  context?: Record<string, unknown>
-  retryable?: boolean
-  internal?: boolean
-  httpStatusCode?: number
-  hint?: string | null
+  code: string;
+  message: string;
+  context?: Record<string, unknown>;
+  retryable?: boolean;
+  internal?: boolean;
+  httpStatusCode?: number;
+  hint?: string | null;
 }
 
 /**
@@ -129,20 +129,20 @@ interface NapiErrorEnvelope {
  * `code`.
  */
 function parseEnvelope(rawMessage: string): NapiErrorEnvelope | undefined {
-  let parsed: unknown
+  let parsed: unknown;
   try {
-    parsed = JSON.parse(rawMessage)
+    parsed = JSON.parse(rawMessage);
   } catch {
-    return undefined
+    return undefined;
   }
   if (
     parsed !== null &&
     typeof parsed === "object" &&
     typeof (parsed as { code?: unknown }).code === "string"
   ) {
-    return parsed as NapiErrorEnvelope
+    return parsed as NapiErrorEnvelope;
   }
-  return undefined
+  return undefined;
 }
 
 /**
@@ -159,11 +159,11 @@ function parseEnvelope(rawMessage: string): NapiErrorEnvelope | undefined {
  */
 export function unwrapNapiError(err: unknown): AlienError {
   if (err instanceof AlienError) {
-    return err
+    return err;
   }
 
-  const rawMessage = err instanceof Error ? err.message : String(err)
-  const envelope = parseEnvelope(rawMessage)
+  const rawMessage = err instanceof Error ? err.message : String(err);
+  const envelope = parseEnvelope(rawMessage);
 
   if (!envelope) {
     return new AlienError({
@@ -171,10 +171,10 @@ export function unwrapNapiError(err: unknown): AlienError {
       message: rawMessage,
       retryable: false,
       internal: false,
-    })
+    });
   }
 
-  const context = envelope.context ?? {}
+  const context = envelope.context ?? {};
 
   if (envelope.code === BINDING_NOT_CONFIGURED) {
     // `.toOptions()` yields the generic `AlienError` (default context), avoiding
@@ -185,7 +185,7 @@ export function unwrapNapiError(err: unknown): AlienError {
         binding: String(context.binding_name ?? ""),
         envVar: String(context.env_var ?? ""),
       }).toOptions(),
-    )
+    );
   }
 
   return new AlienError({
@@ -196,7 +196,7 @@ export function unwrapNapiError(err: unknown): AlienError {
     httpStatusCode: envelope.httpStatusCode,
     hint: envelope.hint,
     context,
-  })
+  });
 }
 
 /**
@@ -211,8 +211,8 @@ export function unwrapNapiError(err: unknown): AlienError {
  * for a wrapped error, which is the one wrong answer that runs a command a second time.
  */
 export function isSandboxOutcomeUnknown(error: unknown): error is AlienError {
-  return error instanceof AlienError && error.hasErrorCode(SANDBOX_OUTCOME_UNKNOWN)
+  return error instanceof AlienError && error.hasErrorCode(SANDBOX_OUTCOME_UNKNOWN);
 }
 
 // Shared with the AI binding surface in @alienplatform/ai-gateway.
-export { BindingNotFoundError } from "@alienplatform/core"
+export { BindingNotFoundError } from "@alienplatform/core";

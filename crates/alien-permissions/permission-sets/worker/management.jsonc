@@ -28,8 +28,8 @@
             "lambda:GetCodeSigningConfig",
             "lambda:GetFunctionEventInvokeConfig",
             "lambda:AddPermission",
-            "lambda:RemovePermission"
-          ]
+            "lambda:RemovePermission",
+          ],
         },
         "binding": {
           "stack": {
@@ -37,9 +37,9 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"],
@@ -47,11 +47,11 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceId}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       {
         // Event source mapping actions do not authorize against function ARNs:
@@ -60,26 +60,26 @@
         "label": "manage-event-source-mappings",
         "description": "Read and update SQS event source mappings for this application's functions.",
         "grant": {
-          "actions": ["lambda:GetEventSourceMapping", "lambda:UpdateEventSourceMapping"]
+          "actions": ["lambda:GetEventSourceMapping", "lambda:UpdateEventSourceMapping"],
         },
         "binding": {
           "stack": {
             "resources": ["*"],
             "condition": {
               "StringLike": {
-                "lambda:FunctionArn": "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"
-              }
-            }
+                "lambda:FunctionArn": "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*",
+              },
+            },
           },
           "resource": {
             "resources": ["*"],
             "condition": {
               "StringLike": {
-                "lambda:FunctionArn": "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"
-              }
-            }
-          }
-        }
+                "lambda:FunctionArn": "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}",
+              },
+            },
+          },
+        },
       },
       {
         // ListEventSourceMappings supports neither resource-level scoping nor
@@ -88,16 +88,16 @@
         "label": "list-event-source-mappings",
         "description": "List event source mappings (AWS supports this action only on all resources).",
         "grant": {
-          "actions": ["lambda:ListEventSourceMappings"]
+          "actions": ["lambda:ListEventSourceMappings"],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
+            "resources": ["*"],
           },
           "resource": {
-            "resources": ["*"]
-          }
-        }
+            "resources": ["*"],
+          },
+        },
       },
       {
         // iam:PassRole remains name-scoped. AWS PassRole is evaluated against
@@ -106,52 +106,52 @@
         "label": "pass-lambda-execution-roles",
         "description": "Allow Lambda to use application-owned IAM execution roles.",
         "grant": {
-          "actions": ["iam:PassRole"]
+          "actions": ["iam:PassRole"],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"],
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
-          }
-        }
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"],
+          },
+        },
       },
       {
         "label": "get-ecr-login-token",
         "description": "Get an ECR authorization token so Lambda can pull deployment container images.",
         "grant": {
-          "actions": ["ecr:GetAuthorizationToken"]
+          "actions": ["ecr:GetAuthorizationToken"],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
+            "resources": ["*"],
           },
           "resource": {
-            "resources": ["*"]
-          }
-        }
+            "resources": ["*"],
+          },
+        },
       },
       {
         "label": "read-deployment-container-images",
         "description": "Read deployment container images from ECR for Lambda updates.",
         "grant": {
-          "actions": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+          "actions": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
+            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"],
           },
           "resource": {
-            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
-          }
-        }
+            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"],
+          },
+        },
       },
       {
         "label": "import-tls-certificates",
         "description": "Import TLS certificates for application-owned HTTPS endpoints.",
         "grant": {
-          "actions": ["acm:ImportCertificate", "acm:AddTagsToCertificate"]
+          "actions": ["acm:ImportCertificate", "acm:AddTagsToCertificate"],
         },
         "binding": {
           "stack": {
@@ -159,9 +159,9 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
@@ -169,11 +169,11 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceId}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       {
         "label": "manage-tls-certificates",
@@ -183,8 +183,8 @@
             "acm:ImportCertificate",
             "acm:AddTagsToCertificate",
             "acm:DeleteCertificate",
-            "acm:DescribeCertificate"
-          ]
+            "acm:DescribeCertificate",
+          ],
         },
         "binding": {
           "stack": {
@@ -192,9 +192,9 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
@@ -202,18 +202,18 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceId}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       {
         // API Gateway V1/V2 API/domain creation. The request must carry boundary tags.
         "label": "create-http-api-endpoints",
         "description": "Create API Gateway HTTP (V2) and REST (V1) APIs and custom domain names for application-owned public endpoints.",
         "grant": {
-          "actions": ["apigateway:POST", "apigateway:PUT"]
+          "actions": ["apigateway:POST", "apigateway:PUT"],
         },
         "binding": {
           "stack": {
@@ -221,38 +221,38 @@
               "arn:aws:apigateway:${awsRegion}::/apis",
               "arn:aws:apigateway:${awsRegion}::/restapis",
               "arn:aws:apigateway:${awsRegion}::/domainnames",
-              "arn:aws:apigateway:${awsRegion}::/tags/*"
+              "arn:aws:apigateway:${awsRegion}::/tags/*",
             ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": [
               "arn:aws:apigateway:${awsRegion}::/apis",
               "arn:aws:apigateway:${awsRegion}::/restapis",
               "arn:aws:apigateway:${awsRegion}::/domainnames",
-              "arn:aws:apigateway:${awsRegion}::/tags/*"
+              "arn:aws:apigateway:${awsRegion}::/tags/*",
             ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceId}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       {
         // API Gateway V1/V2 child creates run under already-tagged APIs/domains.
         "label": "create-http-api-routes",
         "description": "Create routes and mappings under API Gateway HTTP (V2) and REST (V1) APIs and domain names owned by this application.",
         "grant": {
-          "actions": ["apigateway:POST"]
+          "actions": ["apigateway:POST"],
         },
         "binding": {
           "stack": {
@@ -261,14 +261,14 @@
               "arn:aws:apigateway:${awsRegion}::/restapis/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings",
-              "arn:aws:apigateway:${awsRegion}::/domainnames/*/basepathmappings"
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/basepathmappings",
             ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": [
@@ -276,24 +276,24 @@
               "arn:aws:apigateway:${awsRegion}::/restapis/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings",
-              "arn:aws:apigateway:${awsRegion}::/domainnames/*/basepathmappings"
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/basepathmappings",
             ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceId}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       {
         // API Gateway V1/V2 tagged creates can perform implicit TagResource calls.
         "label": "tag-http-api-endpoints",
         "description": "Apply deployment tags to API Gateway HTTP (V2) and REST (V1) API resources created for public endpoints.",
         "grant": {
-          "actions": ["apigateway:TagResource", "apigateway:PUT"]
+          "actions": ["apigateway:TagResource", "apigateway:PUT"],
         },
         "binding": {
           "stack": {
@@ -303,14 +303,14 @@
               "arn:aws:apigateway:${awsRegion}::/apis/*/stages/*",
               "arn:aws:apigateway:${awsRegion}::/restapis/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*",
-              "arn:aws:apigateway:${awsRegion}::/tags/*"
+              "arn:aws:apigateway:${awsRegion}::/tags/*",
             ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": [
@@ -319,23 +319,23 @@
               "arn:aws:apigateway:${awsRegion}::/apis/*/stages/*",
               "arn:aws:apigateway:${awsRegion}::/restapis/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*",
-              "arn:aws:apigateway:${awsRegion}::/tags/*"
+              "arn:aws:apigateway:${awsRegion}::/tags/*",
             ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceId}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       {
         "label": "manage-http-api-endpoints",
         "description": "Read, update, and delete API Gateway HTTP (V2) and REST (V1) APIs, custom domain names, and mappings owned by this application.",
         "grant": {
-          "actions": ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"]
+          "actions": ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"],
         },
         "binding": {
           "stack": {
@@ -346,14 +346,14 @@
               "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*/basepathmappings",
-              "arn:aws:apigateway:${awsRegion}::/domainnames/*/basepathmappings/*"
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/basepathmappings/*",
             ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": [
@@ -363,24 +363,24 @@
               "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*/basepathmappings",
-              "arn:aws:apigateway:${awsRegion}::/domainnames/*/basepathmappings/*"
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/basepathmappings/*",
             ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceId}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       {
         // EventBridge schedule rules are created with Alien boundary tags.
         "label": "create-eventbridge-schedules",
         "description": "Create EventBridge schedule rules for application-owned scheduled functions.",
         "grant": {
-          "actions": ["events:PutRule", "events:TagResource"]
+          "actions": ["events:PutRule", "events:TagResource"],
         },
         "binding": {
           "stack": {
@@ -388,23 +388,23 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": [
-              "arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"
+              "arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*",
             ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceId}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
+                "aws:RequestTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
       },
       {
         "label": "manage-eventbridge-schedules",
@@ -414,8 +414,8 @@
             "events:DeleteRule",
             "events:DescribeRule",
             "events:PutTargets",
-            "events:RemoveTargets"
-          ]
+            "events:RemoveTargets",
+          ],
         },
         "binding": {
           "stack": {
@@ -423,24 +423,24 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
           },
           "resource": {
             "resources": [
-              "arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"
+              "arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*",
             ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceId}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
-      }
+                "aws:ResourceTag/${managedByTag}": "runtime",
+              },
+            },
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -490,8 +490,8 @@
             "pubsub.subscriptions.get",
             "pubsub.subscriptions.update",
             "iam.serviceAccounts.getIamPolicy",
-            "iam.serviceAccounts.setIamPolicy"
-          ]
+            "iam.serviceAccounts.setIamPolicy",
+          ],
         },
         // This permission set covers Cloud Run, Pub/Sub, IAM, and related
         // project-level APIs. It cannot be attached to a Cloud Run service IAM
@@ -499,8 +499,8 @@
         // are limited by the stack role/prefix contract.
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}" }
-        }
+          "resource": { "scope": "projects/${projectName}" },
+        },
       },
       {
         "label": "manage-cloud-run-https-endpoints",
@@ -533,14 +533,14 @@
             "compute.globalAddresses.get",
             "compute.globalForwardingRules.create",
             "compute.globalForwardingRules.delete",
-            "compute.globalForwardingRules.get"
-          ]
+            "compute.globalForwardingRules.get",
+          ],
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}" }
-        }
-      }
+          "resource": { "scope": "projects/${projectName}" },
+        },
+      },
     ],
     "azure": [
       {
@@ -574,23 +574,23 @@
             "Microsoft.Authorization/roleDefinitions/read",
             "Microsoft.Authorization/roleAssignments/read",
             "Microsoft.Authorization/roleAssignments/write",
-            "Microsoft.Authorization/roleAssignments/delete"
+            "Microsoft.Authorization/roleAssignments/delete",
           ],
           "dataActions": [
             "Microsoft.ServiceBus/namespaces/messages/send/action",
             "Microsoft.KeyVault/vaults/certificates/import/action",
-            "Microsoft.KeyVault/vaults/certificates/read"
-          ]
+            "Microsoft.KeyVault/vaults/certificates/read",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/containerApps/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/containerApps/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

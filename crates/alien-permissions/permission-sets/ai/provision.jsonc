@@ -12,18 +12,18 @@
             "iam:PutRolePolicy",
             "iam:GetRolePolicy",
             "iam:DeleteRolePolicy",
-            "iam:ListRolePolicies"
-          ]
+            "iam:ListRolePolicies",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"]
-          }
-        }
-      }
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -31,14 +31,14 @@
           "permissions": [
             "serviceusage.services.enable",
             "resourcemanager.projects.getIamPolicy",
-            "resourcemanager.projects.setIamPolicy"
-          ]
+            "resourcemanager.projects.setIamPolicy",
+          ],
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}" }
-        }
-      }
+          "resource": { "scope": "projects/${projectName}" },
+        },
+      },
     ],
     "azure": [
       {
@@ -52,18 +52,18 @@
             "Microsoft.CognitiveServices/accounts/deployments/read",
             "Microsoft.Authorization/roleAssignments/write",
             "Microsoft.Authorization/roleAssignments/delete",
-            "Microsoft.Authorization/roleAssignments/read"
-          ]
+            "Microsoft.Authorization/roleAssignments/read",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.CognitiveServices/accounts/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.CognitiveServices/accounts/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

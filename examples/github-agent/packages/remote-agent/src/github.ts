@@ -7,10 +7,10 @@ import type {
   PullRequestFile,
   PullRequestRisk,
   PullRequestSize,
-} from "./types.js"
+} from "./types.js";
 
-const MAX_PULL_REQUESTS = 30
-const REQUEST_CONCURRENCY = 5
+const MAX_PULL_REQUESTS = 30;
+const REQUEST_CONCURRENCY = 5;
 
 const DEMO_PULL_REQUESTS: PullRequest[] = [
   {
@@ -112,58 +112,58 @@ const DEMO_PULL_REQUESTS: PullRequest[] = [
     changedFiles: 1,
     files: [{ path: "src/ui/onboarding.tsx", changes: 44 }],
   },
-]
+];
 
 function isDemo(config: IntegrationConfig): boolean {
-  return !config.token || config.token === "demo"
+  return !config.token || config.token === "demo";
 }
 
 function getApiBase(config: IntegrationConfig): string {
   if (!config.baseUrl) {
-    return "https://api.github.com"
+    return "https://api.github.com";
   }
 
-  const trimmed = config.baseUrl.replace(/\/+$/, "")
+  const trimmed = config.baseUrl.replace(/\/+$/, "");
   if (trimmed.endsWith("/api/v3")) {
-    return trimmed
+    return trimmed;
   }
 
-  return `${trimmed}/api/v3`
+  return `${trimmed}/api/v3`;
 }
 
 function hoursBetween(start: string, end: string): number {
-  const startMs = new Date(start).getTime()
-  const endMs = new Date(end).getTime()
+  const startMs = new Date(start).getTime();
+  const endMs = new Date(end).getTime();
   if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= startMs) {
-    return 0
+    return 0;
   }
-  return (endMs - startMs) / 3_600_000
+  return (endMs - startMs) / 3_600_000;
 }
 
 function average(values: number[]): number {
   if (values.length === 0) {
-    return 0
+    return 0;
   }
-  const total = values.reduce((sum, value) => sum + value, 0)
-  return total / values.length
+  const total = values.reduce((sum, value) => sum + value, 0);
+  return total / values.length;
 }
 
 async function fetchJson<T>(url: string, token?: string): Promise<T> {
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
-  }
+  };
 
   if (token) {
-    headers.Authorization = `token ${token}`
+    headers.Authorization = `token ${token}`;
   }
 
-  const response = await fetch(url, { headers })
+  const response = await fetch(url, { headers });
   if (!response.ok) {
-    const body = await response.text()
-    throw new Error(`GitHub API error ${response.status} ${response.statusText}: ${body}`)
+    const body = await response.text();
+    throw new Error(`GitHub API error ${response.status} ${response.statusText}: ${body}`);
   }
 
-  return (await response.json()) as T
+  return (await response.json()) as T;
 }
 
 async function mapWithConcurrency<T, R>(
@@ -171,20 +171,20 @@ async function mapWithConcurrency<T, R>(
   concurrency: number,
   task: (item: T, index: number) => Promise<R>,
 ): Promise<R[]> {
-  const results: R[] = []
-  let nextIndex = 0
+  const results: R[] = [];
+  let nextIndex = 0;
 
   async function worker(): Promise<void> {
     while (nextIndex < items.length) {
-      const currentIndex = nextIndex
-      nextIndex += 1
-      results[currentIndex] = await task(items[currentIndex]!, currentIndex)
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await task(items[currentIndex]!, currentIndex);
     }
   }
 
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker())
-  await Promise.all(workers)
-  return results
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
 }
 
 async function fetchPullRequestFiles(
@@ -192,10 +192,10 @@ async function fetchPullRequestFiles(
   config: IntegrationConfig,
   prNumber: number,
 ): Promise<PullRequestFile[]> {
-  type GitHubFile = { filename: string; changes: number }
-  const url = `${apiBase}/repos/${config.owner}/${config.repo}/pulls/${prNumber}/files?per_page=100`
-  const files = await fetchJson<GitHubFile[]>(url, config.token)
-  return files.map(file => ({ path: file.filename, changes: file.changes ?? 0 }))
+  type GitHubFile = { filename: string; changes: number };
+  const url = `${apiBase}/repos/${config.owner}/${config.repo}/pulls/${prNumber}/files?per_page=100`;
+  const files = await fetchJson<GitHubFile[]>(url, config.token);
+  return files.map((file) => ({ path: file.filename, changes: file.changes ?? 0 }));
 }
 
 async function fetchPullRequestReviews(
@@ -203,14 +203,14 @@ async function fetchPullRequestReviews(
   config: IntegrationConfig,
   prNumber: number,
 ): Promise<string | undefined> {
-  type GitHubReview = { submitted_at?: string | null }
-  const url = `${apiBase}/repos/${config.owner}/${config.repo}/pulls/${prNumber}/reviews?per_page=100`
-  const reviews = await fetchJson<GitHubReview[]>(url, config.token)
+  type GitHubReview = { submitted_at?: string | null };
+  const url = `${apiBase}/repos/${config.owner}/${config.repo}/pulls/${prNumber}/reviews?per_page=100`;
+  const reviews = await fetchJson<GitHubReview[]>(url, config.token);
   const submittedTimes = reviews
-    .map(review => review.submitted_at)
+    .map((review) => review.submitted_at)
     .filter((value): value is string => Boolean(value))
-    .sort()
-  return submittedTimes[0]
+    .sort();
+  return submittedTimes[0];
 }
 
 async function fetchPullRequestDetails(
@@ -219,45 +219,45 @@ async function fetchPullRequestDetails(
   prNumber: number,
 ): Promise<Pick<PullRequest, "additions" | "deletions" | "changedFiles">> {
   type GitHubDetails = {
-    additions: number
-    deletions: number
-    changed_files: number
-  }
-  const url = `${apiBase}/repos/${config.owner}/${config.repo}/pulls/${prNumber}`
-  const details = await fetchJson<GitHubDetails>(url, config.token)
+    additions: number;
+    deletions: number;
+    changed_files: number;
+  };
+  const url = `${apiBase}/repos/${config.owner}/${config.repo}/pulls/${prNumber}`;
+  const details = await fetchJson<GitHubDetails>(url, config.token);
   return {
     additions: details.additions ?? 0,
     deletions: details.deletions ?? 0,
     changedFiles: details.changed_files ?? 0,
-  }
+  };
 }
 
 export async function fetchPullRequests(config: IntegrationConfig): Promise<PullRequest[]> {
   if (isDemo(config)) {
-    return DEMO_PULL_REQUESTS
+    return DEMO_PULL_REQUESTS;
   }
 
-  const apiBase = getApiBase(config)
-  const listUrl = `${apiBase}/repos/${config.owner}/${config.repo}/pulls?state=all&per_page=${MAX_PULL_REQUESTS}`
+  const apiBase = getApiBase(config);
+  const listUrl = `${apiBase}/repos/${config.owner}/${config.repo}/pulls?state=all&per_page=${MAX_PULL_REQUESTS}`;
 
   type GitHubPull = {
-    number: number
-    title: string
-    state: "open" | "closed"
-    html_url: string
-    created_at: string
-    merged_at?: string | null
-    closed_at?: string | null
-  }
+    number: number;
+    title: string;
+    state: "open" | "closed";
+    html_url: string;
+    created_at: string;
+    merged_at?: string | null;
+    closed_at?: string | null;
+  };
 
-  const pulls = await fetchJson<GitHubPull[]>(listUrl, config.token)
+  const pulls = await fetchJson<GitHubPull[]>(listUrl, config.token);
 
-  return mapWithConcurrency(pulls, REQUEST_CONCURRENCY, async pr => {
+  return mapWithConcurrency(pulls, REQUEST_CONCURRENCY, async (pr) => {
     const [details, files, firstReviewAt] = await Promise.all([
       fetchPullRequestDetails(apiBase, config, pr.number),
       fetchPullRequestFiles(apiBase, config, pr.number),
       fetchPullRequestReviews(apiBase, config, pr.number),
-    ])
+    ]);
 
     return {
       number: pr.number,
@@ -272,37 +272,38 @@ export async function fetchPullRequests(config: IntegrationConfig): Promise<Pull
       changedFiles: details.changedFiles,
       files,
       firstReviewAt: firstReviewAt ?? undefined,
-    }
-  })
+    };
+  });
 }
 
 export function classifyPullRequest(pr: PullRequest): PullRequestClassification {
-  const totalChanges = pr.additions + pr.deletions
-  let size: PullRequestSize = "small"
+  const totalChanges = pr.additions + pr.deletions;
+  let size: PullRequestSize = "small";
 
   if (totalChanges >= 500) {
-    size = "large"
+    size = "large";
   } else if (totalChanges >= 100) {
-    size = "medium"
+    size = "medium";
   }
 
-  const reviewDelay = pr.firstReviewAt ? hoursBetween(pr.createdAt, pr.firstReviewAt) : 24
-  const churnFactor = pr.changedFiles >= 12 ? 2 : pr.changedFiles >= 6 ? 1 : 0
-  const sizeFactor = totalChanges >= 900 ? 3 : totalChanges >= 400 ? 2 : totalChanges >= 150 ? 1 : 0
-  const reviewFactor = reviewDelay >= 24 ? 2 : reviewDelay >= 8 ? 1 : 0
+  const reviewDelay = pr.firstReviewAt ? hoursBetween(pr.createdAt, pr.firstReviewAt) : 24;
+  const churnFactor = pr.changedFiles >= 12 ? 2 : pr.changedFiles >= 6 ? 1 : 0;
+  const sizeFactor =
+    totalChanges >= 900 ? 3 : totalChanges >= 400 ? 2 : totalChanges >= 150 ? 1 : 0;
+  const reviewFactor = reviewDelay >= 24 ? 2 : reviewDelay >= 8 ? 1 : 0;
 
-  const riskScore = churnFactor + sizeFactor + reviewFactor
+  const riskScore = churnFactor + sizeFactor + reviewFactor;
 
-  let risk: PullRequestRisk = "low"
+  let risk: PullRequestRisk = "low";
   if (riskScore >= 6) {
-    risk = "critical"
+    risk = "critical";
   } else if (riskScore >= 4) {
-    risk = "high"
+    risk = "high";
   } else if (riskScore >= 2) {
-    risk = "medium"
+    risk = "medium";
   }
 
-  return { size, risk }
+  return { size, risk };
 }
 
 export function computeMetrics(classified: ClassifiedPullRequest[]): AnalysisMetrics {
@@ -310,43 +311,43 @@ export function computeMetrics(classified: ClassifiedPullRequest[]): AnalysisMet
     small: 0,
     medium: 0,
     large: 0,
-  }
+  };
   const byRisk: AnalysisMetrics["byRisk"] = {
     low: 0,
     medium: 0,
     high: 0,
     critical: 0,
-  }
+  };
 
-  const churnMap = new Map<string, number>()
-  const reviewTimes: number[] = []
-  const mergeTimes: number[] = []
+  const churnMap = new Map<string, number>();
+  const reviewTimes: number[] = [];
+  const mergeTimes: number[] = [];
 
   for (const { pr, classification } of classified) {
-    bySize[classification.size] += 1
-    byRisk[classification.risk] += 1
+    bySize[classification.size] += 1;
+    byRisk[classification.risk] += 1;
 
     if (pr.firstReviewAt) {
-      reviewTimes.push(hoursBetween(pr.createdAt, pr.firstReviewAt))
+      reviewTimes.push(hoursBetween(pr.createdAt, pr.firstReviewAt));
     }
     if (pr.mergedAt) {
-      mergeTimes.push(hoursBetween(pr.createdAt, pr.mergedAt))
+      mergeTimes.push(hoursBetween(pr.createdAt, pr.mergedAt));
     }
 
     for (const file of pr.files) {
-      const current = churnMap.get(file.path) ?? 0
-      churnMap.set(file.path, current + file.changes)
+      const current = churnMap.get(file.path) ?? 0;
+      churnMap.set(file.path, current + file.changes);
     }
   }
 
-  const avgReviewHours = average(reviewTimes)
-  const avgMergeHours = average(mergeTimes)
-  const reviewThroughputScore = Math.max(0, Math.min(100, Math.round(100 - avgReviewHours * 4)))
+  const avgReviewHours = average(reviewTimes);
+  const avgMergeHours = average(mergeTimes);
+  const reviewThroughputScore = Math.max(0, Math.min(100, Math.round(100 - avgReviewHours * 4)));
 
   const churnHotspots = Array.from(churnMap.entries())
     .map(([file, changes]) => ({ file, changes }))
     .sort((a, b) => b.changes - a.changes)
-    .slice(0, 5)
+    .slice(0, 5);
 
   return {
     totalPRs: classified.length,
@@ -356,11 +357,11 @@ export function computeMetrics(classified: ClassifiedPullRequest[]): AnalysisMet
     avgMergeTimeHours: Number(avgMergeHours.toFixed(2)),
     reviewThroughputScore,
     churnHotspots,
-  }
+  };
 }
 
 export function classifyPullRequests(prs: PullRequest[]): ClassifiedPullRequest[] {
-  return prs.map(pr => ({ pr, classification: classifyPullRequest(pr) }))
+  return prs.map((pr) => ({ pr, classification: classifyPullRequest(pr) }));
 }
 
 export async function applyLabels(
@@ -369,11 +370,11 @@ export async function applyLabels(
   labels: string[],
 ): Promise<void> {
   if (isDemo(config)) {
-    return
+    return;
   }
 
-  const apiBase = getApiBase(config)
-  const url = `${apiBase}/repos/${config.owner}/${config.repo}/issues/${prNumber}/labels`
+  const apiBase = getApiBase(config);
+  const url = `${apiBase}/repos/${config.owner}/${config.repo}/issues/${prNumber}/labels`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -382,10 +383,10 @@ export async function applyLabels(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ labels }),
-  })
+  });
 
   if (!response.ok) {
-    const body = await response.text()
-    throw new Error(`GitHub label error ${response.status} ${response.statusText}: ${body}`)
+    const body = await response.text();
+    throw new Error(`GitHub label error ${response.status} ${response.statusText}: ${body}`);
   }
 }

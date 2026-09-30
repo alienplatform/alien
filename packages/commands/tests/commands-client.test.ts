@@ -5,24 +5,24 @@
  * would. Runs identically under Node (`vitest run`) and Bun (`bun test`).
  */
 
-import { writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { AlienError } from "@alienplatform/core"
-import { afterEach, describe, expect, it } from "vitest"
-import { CommandsClient } from "../src/client.js"
-import type { CapturedRequest, RouteResult, StubServer } from "./helpers/stub-server.js"
-import { encodeInlineJson, startStubServer } from "./helpers/stub-server.js"
+import { writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AlienError } from "@alienplatform/core";
+import { afterEach, describe, expect, it } from "vitest";
+import { CommandsClient } from "../src/client.js";
+import type { CapturedRequest, RouteResult, StubServer } from "./helpers/stub-server.js";
+import { encodeInlineJson, startStubServer } from "./helpers/stub-server.js";
 
-let server: StubServer | undefined
+let server: StubServer | undefined;
 
 afterEach(async () => {
-  await server?.close()
-  server = undefined
-})
+  await server?.close();
+  server = undefined;
+});
 
 /** Fast polling so the wall-clock loop resolves in milliseconds, not seconds. */
-const FAST_POLL = { pollIntervalMs: 2, maxPollIntervalMs: 8 } as const
+const FAST_POLL = { pollIntervalMs: 2, maxPollIntervalMs: 8 } as const;
 
 function client(baseUrl: string, allowLocalStorage = false) {
   return new CommandsClient({
@@ -30,11 +30,11 @@ function client(baseUrl: string, allowLocalStorage = false) {
     deploymentId: "dep_1",
     token: "tok_secret",
     allowLocalStorage,
-  })
+  });
 }
 
 function createResponse(commandId = "cmd_1") {
-  return { commandId, created: true, state: "PENDING", inlineAllowedUpTo: 150_000, next: "poll" }
+  return { commandId, created: true, state: "PENDING", inlineAllowedUpTo: 150_000, next: "poll" };
 }
 
 function successStatus(commandId: string, value: unknown) {
@@ -47,19 +47,19 @@ function successStatus(commandId: string, value: unknown) {
       status: "success",
       response: { mode: "inline", inlineBase64: encodeInlineJson(value) },
     },
-  }
+  };
 }
 
 describe("CommandsClient.invoke", () => {
   it("creates, polls, and decodes an inline success response", async () => {
-    const returned = { report: "ok", rows: 3 }
-    let polls = 0
+    const returned = { report: "ok", rows: 3 };
+    let polls = 0;
     server = await startStubServer((req): RouteResult => {
       if (req.method === "POST" && req.path === "/v1/commands") {
-        return { json: createResponse() }
+        return { json: createResponse() };
       }
       // GET status: stay PENDING once, then succeed (proves the poll loop runs).
-      polls += 1
+      polls += 1;
       if (polls < 2) {
         return {
           json: {
@@ -68,29 +68,29 @@ describe("CommandsClient.invoke", () => {
             attempt: 1,
             target: { resourceId: "container-1", resourceType: "container" },
           },
-        }
+        };
       }
-      return { json: successStatus("cmd_1", returned) }
-    })
+      return { json: successStatus("cmd_1", returned) };
+    });
 
-    const result = await client(server.baseUrl).invoke("generate-report", { a: 1 }, FAST_POLL)
+    const result = await client(server.baseUrl).invoke("generate-report", { a: 1 }, FAST_POLL);
 
-    expect(result).toEqual(returned)
-    expect(polls).toBeGreaterThanOrEqual(2)
+    expect(result).toEqual(returned);
+    expect(polls).toBeGreaterThanOrEqual(2);
 
     // create request shape + bearer auth
-    const create = server.requests.find(r => r.method === "POST") as CapturedRequest
-    expect(create.headers.authorization).toBe("Bearer tok_secret")
-    const body = create.body as Record<string, unknown>
-    expect(body.deploymentId).toBe("dep_1")
-    expect(body.command).toBe("generate-report")
+    const create = server.requests.find((r) => r.method === "POST") as CapturedRequest;
+    expect(create.headers.authorization).toBe("Bearer tok_secret");
+    const body = create.body as Record<string, unknown>;
+    expect(body.deploymentId).toBe("dep_1");
+    expect(body.command).toBe("generate-report");
     // createBodySpec JSON-stringifies the input once, then base64s it.
-    expect(body.params).toEqual({ mode: "inline", inlineBase64: encodeInlineJson({ a: 1 }) })
-  })
+    expect(body.params).toEqual({ mode: "inline", inlineBase64: encodeInlineJson({ a: 1 }) });
+  });
 
   it("maps an error terminal state to DeploymentCommandError", async () => {
     server = await startStubServer((req): RouteResult => {
-      if (req.method === "POST") return { json: createResponse() }
+      if (req.method === "POST") return { json: createResponse() };
       return {
         json: {
           commandId: "cmd_1",
@@ -99,35 +99,35 @@ describe("CommandsClient.invoke", () => {
           target: { resourceId: "container-1", resourceType: "container" },
           response: { status: "error", code: "BOOM", message: "handler blew up", details: "stack" },
         },
-      }
-    })
+      };
+    });
 
     const err = await client(server.baseUrl)
       .invoke("do-thing", {}, FAST_POLL)
-      .catch((e: unknown) => e)
+      .catch((e: unknown) => e);
 
-    expect(err).toBeInstanceOf(AlienError)
-    const alien = err as AlienError
-    expect(alien.code).toBe("DEPLOYMENT_COMMAND_ERROR")
-    expect(alien.context).toMatchObject({ errorCode: "BOOM", errorMessage: "handler blew up" })
-  })
+    expect(err).toBeInstanceOf(AlienError);
+    const alien = err as AlienError;
+    expect(alien.code).toBe("DEPLOYMENT_COMMAND_ERROR");
+    expect(alien.context).toMatchObject({ errorCode: "BOOM", errorMessage: "handler blew up" });
+  });
 
   it("encodes string input as a JSON string", async () => {
-    server = await startStubServer(req => {
-      if (req.method === "POST") return { json: createResponse() }
-      return { json: successStatus("cmd_1", null) }
-    })
+    server = await startStubServer((req) => {
+      if (req.method === "POST") return { json: createResponse() };
+      return { json: successStatus("cmd_1", null) };
+    });
 
-    await client(server.baseUrl).invoke("echo", "hello", FAST_POLL)
+    await client(server.baseUrl).invoke("echo", "hello", FAST_POLL);
 
-    const create = server.requests.find(request => request.method === "POST") as CapturedRequest
-    const body = create.body as Record<string, unknown>
-    expect(body.params).toEqual({ mode: "inline", inlineBase64: encodeInlineJson("hello") })
-  })
+    const create = server.requests.find((request) => request.method === "POST") as CapturedRequest;
+    const body = create.body as Record<string, unknown>;
+    expect(body.params).toEqual({ mode: "inline", inlineBase64: encodeInlineJson("hello") });
+  });
 
   it("maps an EXPIRED terminal state to CommandExpiredError", async () => {
     server = await startStubServer((req): RouteResult => {
-      if (req.method === "POST") return { json: createResponse() }
+      if (req.method === "POST") return { json: createResponse() };
       return {
         json: {
           commandId: "cmd_1",
@@ -135,21 +135,21 @@ describe("CommandsClient.invoke", () => {
           attempt: 1,
           target: { resourceId: "container-1", resourceType: "container" },
         },
-      }
-    })
+      };
+    });
 
     const err = await client(server.baseUrl)
       .invoke("do-thing", {}, FAST_POLL)
-      .catch((e: unknown) => e)
+      .catch((e: unknown) => e);
 
-    expect((err as AlienError).code).toBe("COMMAND_EXPIRED")
-  })
+    expect((err as AlienError).code).toBe("COMMAND_EXPIRED");
+  });
 
   it("throws CommandTimeoutError (with lastState) when polling never terminates", async () => {
-    let polls = 0
+    let polls = 0;
     server = await startStubServer((req): RouteResult => {
-      if (req.method === "POST") return { json: createResponse() }
-      polls += 1
+      if (req.method === "POST") return { json: createResponse() };
+      polls += 1;
       return {
         json: {
           commandId: "cmd_1",
@@ -157,44 +157,44 @@ describe("CommandsClient.invoke", () => {
           attempt: 1,
           target: { resourceId: "container-1", resourceType: "container" },
         },
-      }
-    })
+      };
+    });
 
     const err = await client(server.baseUrl)
       .invoke("slow", {}, { timeoutMs: 30, ...FAST_POLL })
-      .catch((e: unknown) => e)
+      .catch((e: unknown) => e);
 
-    const alien = err as AlienError
-    expect(alien.code).toBe("COMMAND_TIMEOUT")
-    expect(alien.context).toMatchObject({ timeoutMs: 30, lastState: "DISPATCHED" })
+    const alien = err as AlienError;
+    expect(alien.code).toBe("COMMAND_TIMEOUT");
+    expect(alien.context).toMatchObject({ timeoutMs: 30, lastState: "DISPATCHED" });
     // Multiple polls happened before the wall-clock timeout tripped (backoff loop ran).
-    expect(polls).toBeGreaterThanOrEqual(2)
-  })
+    expect(polls).toBeGreaterThanOrEqual(2);
+  });
 
   it("threads idempotencyKey and deadline into the create body", async () => {
     server = await startStubServer((req): RouteResult => {
-      if (req.method === "POST") return { json: createResponse() }
-      return { json: successStatus("cmd_1", "done") }
-    })
+      if (req.method === "POST") return { json: createResponse() };
+      return { json: successStatus("cmd_1", "done") };
+    });
 
-    const deadline = new Date("2030-01-01T00:00:00.000Z")
+    const deadline = new Date("2030-01-01T00:00:00.000Z");
     await client(server.baseUrl).invoke(
       "x",
       {},
       { idempotencyKey: "idem-42", deadline, ...FAST_POLL },
-    )
+    );
 
-    const create = server.requests.find(r => r.method === "POST") as CapturedRequest
-    const body = create.body as Record<string, unknown>
-    expect(body.idempotencyKey).toBe("idem-42")
-    expect(body.deadline).toBe("2030-01-01T00:00:00.000Z")
-  })
+    const create = server.requests.find((r) => r.method === "POST") as CapturedRequest;
+    const body = create.body as Record<string, unknown>;
+    expect(body.idempotencyKey).toBe("idem-42");
+    expect(body.deadline).toBe("2030-01-01T00:00:00.000Z");
+  });
 
   it("decodes a storage-mode (http backend) success response", async () => {
-    const stored = { big: "payload", n: 7 }
+    const stored = { big: "payload", n: 7 };
     server = await startStubServer((req): RouteResult => {
-      if (req.method === "POST" && req.path === "/v1/commands") return { json: createResponse() }
-      if (req.method === "GET" && req.path === "/blob") return { text: JSON.stringify(stored) }
+      if (req.method === "POST" && req.path === "/v1/commands") return { json: createResponse() };
+      if (req.method === "GET" && req.path === "/blob") return { text: JSON.stringify(stored) };
       // status → storage response pointing at /blob on this same server
       return {
         json: {
@@ -221,19 +221,19 @@ describe("CommandsClient.invoke", () => {
             },
           },
         },
-      }
-    })
+      };
+    });
 
-    const result = await client(server.baseUrl).invoke("fetch-big", {}, FAST_POLL)
-    expect(result).toEqual(stored)
-  })
+    const result = await client(server.baseUrl).invoke("fetch-big", {}, FAST_POLL);
+    expect(result).toEqual(stored);
+  });
 
   it("does not expose a presigned URL token when storage JSON decoding fails", async () => {
-    const secret = "do-not-log-response-token"
+    const secret = "do-not-log-response-token";
     server = await startStubServer((req): RouteResult => {
-      if (req.method === "POST" && req.path === "/v1/commands") return { json: createResponse() }
+      if (req.method === "POST" && req.path === "/v1/commands") return { json: createResponse() };
       if (req.method === "GET" && req.path.startsWith("/blob?")) {
-        return { text: "not valid JSON" }
+        return { text: "not valid JSON" };
       }
       return {
         json: {
@@ -260,20 +260,20 @@ describe("CommandsClient.invoke", () => {
             },
           },
         },
-      }
-    })
+      };
+    });
 
     const error = await client(server.baseUrl)
       .invoke("fetch-invalid-json", {}, FAST_POLL)
-      .catch((cause: unknown) => cause)
+      .catch((cause: unknown) => cause);
 
-    expect(error).toBeInstanceOf(AlienError)
-    expect((error as AlienError).code).toBe("STORAGE_OPERATION_FAILED")
-    expect((error as AlienError).context).toMatchObject({ url: `${server.baseUrl}/blob` })
-    expect(JSON.stringify(error)).not.toContain(secret)
-    expect(String(error)).not.toContain(secret)
-  })
-})
+    expect(error).toBeInstanceOf(AlienError);
+    expect((error as AlienError).code).toBe("STORAGE_OPERATION_FAILED");
+    expect((error as AlienError).context).toMatchObject({ url: `${server.baseUrl}/blob` });
+    expect(JSON.stringify(error)).not.toContain(secret);
+    expect(String(error)).not.toContain(secret);
+  });
+});
 
 describe("CommandsClient storage decode edge cases", () => {
   /** Build a status stub that answers with a storage-mode success body. */
@@ -287,16 +287,16 @@ describe("CommandsClient storage decode edge cases", () => {
         status: "success",
         response: { mode: "storage", size: 10, ...bodyOverrides },
       },
-    }
+    };
   }
 
   it("reads a local-backend storage response when allowLocalStorage is set", async () => {
-    const stored = { local: true, n: 5 }
-    const filePath = join(tmpdir(), `alien-cmd-decode-${Date.now()}.json`)
-    await writeFile(filePath, JSON.stringify(stored), "utf-8")
+    const stored = { local: true, n: 5 };
+    const filePath = join(tmpdir(), `alien-cmd-decode-${Date.now()}.json`);
+    await writeFile(filePath, JSON.stringify(stored), "utf-8");
 
     server = await startStubServer((req): RouteResult => {
-      if (req.method === "POST") return { json: createResponse() }
+      if (req.method === "POST") return { json: createResponse() };
       return {
         json: storageStatus({
           storageGetRequest: {
@@ -306,16 +306,16 @@ describe("CommandsClient storage decode edge cases", () => {
             path: "local-blob",
           },
         }),
-      }
-    })
+      };
+    });
 
-    const result = await client(server.baseUrl, true).invoke("read-local", {}, FAST_POLL)
-    expect(result).toEqual(stored)
-  })
+    const result = await client(server.baseUrl, true).invoke("read-local", {}, FAST_POLL);
+    expect(result).toEqual(stored);
+  });
 
   it("refuses the local backend when allowLocalStorage is false", async () => {
     server = await startStubServer((req): RouteResult => {
-      if (req.method === "POST") return { json: createResponse() }
+      if (req.method === "POST") return { json: createResponse() };
       return {
         json: storageStatus({
           storageGetRequest: {
@@ -325,21 +325,21 @@ describe("CommandsClient storage decode edge cases", () => {
             path: "local-blob",
           },
         }),
-      }
-    })
+      };
+    });
 
     const err = await client(server.baseUrl, false)
       .invoke("read-local", {}, FAST_POLL)
-      .catch((e: unknown) => e)
-    expect((err as AlienError).code).toBe("STORAGE_OPERATION_FAILED")
+      .catch((e: unknown) => e);
+    expect((err as AlienError).code).toBe("STORAGE_OPERATION_FAILED");
     expect((err as AlienError).context).toMatchObject({
       reason: expect.stringContaining("not enabled"),
-    })
-  })
+    });
+  });
 
   it("rejects an expired presigned storage request", async () => {
     server = await startStubServer((req): RouteResult => {
-      if (req.method === "POST") return { json: createResponse() }
+      if (req.method === "POST") return { json: createResponse() };
       return {
         json: storageStatus({
           storageGetRequest: {
@@ -349,21 +349,21 @@ describe("CommandsClient storage decode edge cases", () => {
             path: "blob",
           },
         }),
-      }
-    })
+      };
+    });
 
     const err = await client(server.baseUrl)
       .invoke("fetch-expired", {}, FAST_POLL)
-      .catch((e: unknown) => e)
-    expect((err as AlienError).code).toBe("STORAGE_OPERATION_FAILED")
+      .catch((e: unknown) => e);
+    expect((err as AlienError).code).toBe("STORAGE_OPERATION_FAILED");
     expect((err as AlienError).context).toMatchObject({
       reason: expect.stringContaining("expired"),
-    })
-  })
+    });
+  });
 
   it("guards against path traversal in a local storage path", async () => {
     server = await startStubServer((req): RouteResult => {
-      if (req.method === "POST") return { json: createResponse() }
+      if (req.method === "POST") return { json: createResponse() };
       return {
         json: storageStatus({
           storageGetRequest: {
@@ -373,70 +373,70 @@ describe("CommandsClient storage decode edge cases", () => {
             path: "local-blob",
           },
         }),
-      }
-    })
+      };
+    });
 
     const err = await client(server.baseUrl, true)
       .invoke("traverse", {}, FAST_POLL)
-      .catch((e: unknown) => e)
-    expect((err as AlienError).code).toBe("STORAGE_OPERATION_FAILED")
+      .catch((e: unknown) => e);
+    expect((err as AlienError).code).toBe("STORAGE_OPERATION_FAILED");
     expect((err as AlienError).context).toMatchObject({
       reason: expect.stringContaining("Path traversal"),
-    })
-  })
-})
+    });
+  });
+});
 
 describe("CommandsClient wire validation", () => {
   it("rejects a malformed create response with MALFORMED_RESPONSE (not a downstream TypeError)", async () => {
     // 200 OK but the body is missing every required CreateCommandResponse field.
-    server = await startStubServer((): RouteResult => ({ json: { unexpected: true } }))
+    server = await startStubServer((): RouteResult => ({ json: { unexpected: true } }));
 
     const err = await client(server.baseUrl)
       .invoke("x", {}, FAST_POLL)
-      .catch((e: unknown) => e)
+      .catch((e: unknown) => e);
 
-    expect(err).toBeInstanceOf(AlienError)
-    expect((err as AlienError).code).toBe("MALFORMED_RESPONSE")
-    expect((err as AlienError).context).toMatchObject({ method: "POST" })
-  })
+    expect(err).toBeInstanceOf(AlienError);
+    expect((err as AlienError).code).toBe("MALFORMED_RESPONSE");
+    expect((err as AlienError).context).toMatchObject({ method: "POST" });
+  });
 
   it("rejects a malformed status response with MALFORMED_RESPONSE", async () => {
     server = await startStubServer((req): RouteResult => {
-      if (req.method === "POST") return { json: createResponse() }
+      if (req.method === "POST") return { json: createResponse() };
       // Missing `attempt`/`target`, so status validation fails.
-      return { json: { commandId: "cmd_1", state: "SUCCEEDED" } }
-    })
+      return { json: { commandId: "cmd_1", state: "SUCCEEDED" } };
+    });
 
     const err = await client(server.baseUrl)
       .invoke("x", {}, FAST_POLL)
-      .catch((e: unknown) => e)
+      .catch((e: unknown) => e);
 
-    expect(err).toBeInstanceOf(AlienError)
-    expect((err as AlienError).code).toBe("MALFORMED_RESPONSE")
-    expect((err as AlienError).context).toMatchObject({ method: "GET" })
-  })
+    expect(err).toBeInstanceOf(AlienError);
+    expect((err as AlienError).code).toBe("MALFORMED_RESPONSE");
+    expect((err as AlienError).context).toMatchObject({ method: "GET" });
+  });
 
   it("routes requests through an injected fetch implementation", async () => {
     server = await startStubServer((req): RouteResult => {
-      if (req.method === "POST") return { json: createResponse() }
-      return { json: successStatus("cmd_1", "ok") }
-    })
+      if (req.method === "POST") return { json: createResponse() };
+      return { json: successStatus("cmd_1", "ok") };
+    });
 
-    let calls = 0
+    let calls = 0;
     const injected: typeof fetch = (input, init) => {
-      calls += 1
-      return fetch(input, init)
-    }
+      calls += 1;
+      return fetch(input, init);
+    };
     const scoped = new CommandsClient({
       managerUrl: server.baseUrl,
       deploymentId: "dep_1",
       token: "tok_secret",
       fetch: injected,
-    })
+    });
 
-    await scoped.invoke("x", {}, FAST_POLL)
-    expect(calls).toBeGreaterThanOrEqual(2)
-  })
+    await scoped.invoke("x", {}, FAST_POLL);
+    expect(calls).toBeGreaterThanOrEqual(2);
+  });
 
   it("preserves a query string on the manager base URL", async () => {
     // A base URL carrying a query string (e.g. an auth token) must have that
@@ -445,56 +445,56 @@ describe("CommandsClient wire validation", () => {
     // `http://host?token=abc/v1/commands`; URL-based construction yields the
     // correct `http://host/v1/commands?token=abc`.
     server = await startStubServer((req): RouteResult => {
-      if (req.method === "POST") return { json: createResponse() }
-      return { json: successStatus("cmd_1", "ok") }
-    })
+      if (req.method === "POST") return { json: createResponse() };
+      return { json: successStatus("cmd_1", "ok") };
+    });
 
-    await client(`${server.baseUrl}?token=abc`).invoke("x", {}, FAST_POLL)
+    await client(`${server.baseUrl}?token=abc`).invoke("x", {}, FAST_POLL);
 
-    const create = server.requests.find(r => r.method === "POST") as CapturedRequest
+    const create = server.requests.find((r) => r.method === "POST") as CapturedRequest;
     // The path is intact and the query rides at the end, not spliced in front.
-    expect(create.path).toBe("/v1/commands?token=abc")
-    const status = server.requests.find(r => r.method === "GET") as CapturedRequest
-    expect(status.path).toBe("/v1/commands/cmd_1?token=abc")
-  })
-})
+    expect(create.path).toBe("/v1/commands?token=abc");
+    const status = server.requests.find((r) => r.method === "GET") as CapturedRequest;
+    expect(status.path).toBe("/v1/commands/cmd_1?token=abc");
+  });
+});
 
 describe("CommandsClient target threading", () => {
   it("sends targetResourceId from options.targetResourceId", async () => {
     server = await startStubServer((req): RouteResult => {
-      if (req.method === "POST") return { json: createResponse() }
-      return { json: successStatus("cmd_1", "ok") }
-    })
+      if (req.method === "POST") return { json: createResponse() };
+      return { json: successStatus("cmd_1", "ok") };
+    });
 
-    await client(server.baseUrl).invoke("x", {}, { targetResourceId: "daemon-3", ...FAST_POLL })
+    await client(server.baseUrl).invoke("x", {}, { targetResourceId: "daemon-3", ...FAST_POLL });
 
-    const create = server.requests.find(r => r.method === "POST") as CapturedRequest
-    expect((create.body as Record<string, unknown>).targetResourceId).toBe("daemon-3")
-  })
+    const create = server.requests.find((r) => r.method === "POST") as CapturedRequest;
+    expect((create.body as Record<string, unknown>).targetResourceId).toBe("daemon-3");
+  });
 
   it(".target(name) presets targetResourceId on the wire body", async () => {
     server = await startStubServer((req): RouteResult => {
-      if (req.method === "POST") return { json: createResponse() }
-      return { json: successStatus("cmd_1", "ok") }
-    })
+      if (req.method === "POST") return { json: createResponse() };
+      return { json: successStatus("cmd_1", "ok") };
+    });
 
-    await client(server.baseUrl).target("container-9").invoke("x", {}, FAST_POLL)
+    await client(server.baseUrl).target("container-9").invoke("x", {}, FAST_POLL);
 
-    const create = server.requests.find(r => r.method === "POST") as CapturedRequest
-    expect((create.body as Record<string, unknown>).targetResourceId).toBe("container-9")
-  })
+    const create = server.requests.find((r) => r.method === "POST") as CapturedRequest;
+    expect((create.body as Record<string, unknown>).targetResourceId).toBe("container-9");
+  });
 
   it(".target(name) wins over a conflicting options.targetResourceId (builder wins)", async () => {
     server = await startStubServer((req): RouteResult => {
-      if (req.method === "POST") return { json: createResponse() }
-      return { json: successStatus("cmd_1", "ok") }
-    })
+      if (req.method === "POST") return { json: createResponse() };
+      return { json: successStatus("cmd_1", "ok") };
+    });
 
     await client(server.baseUrl)
       .target("container-9")
-      .invoke("x", {}, { targetResourceId: "container-other", ...FAST_POLL })
+      .invoke("x", {}, { targetResourceId: "container-other", ...FAST_POLL });
 
-    const create = server.requests.find(r => r.method === "POST") as CapturedRequest
-    expect((create.body as Record<string, unknown>).targetResourceId).toBe("container-9")
-  })
-})
+    const create = server.requests.find((r) => r.method === "POST") as CapturedRequest;
+    expect((create.body as Record<string, unknown>).targetResourceId).toBe("container-9");
+  });
+});

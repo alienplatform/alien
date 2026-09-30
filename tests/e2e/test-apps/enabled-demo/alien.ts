@@ -1,4 +1,4 @@
-import * as alien from "@alienplatform/core"
+import * as alien from "@alienplatform/core";
 
 // A deployer-input gate per resource type, in matched on/off pairs. The e2e
 // answers every `*On` input true and every `*Off` input false at apply time,
@@ -77,7 +77,7 @@ const io = alien.inputs({
     label: "Enable the off worker",
     description: "Answered false by the e2e; its function must be absent.",
   }),
-})
+});
 
 // Ungated positive control: proves setup actually provisioned resources, so an
 // absent off-resource is a real gate outcome rather than an empty deployment.
@@ -85,16 +85,16 @@ const io = alien.inputs({
 // role at setup. A Live data resource would defer that grant to a runtime
 // PutRolePolicy on the setup-owned role, which the management role is not
 // permitted to do — orthogonal to the gate this app exists to exercise.
-const state = new alien.Kv("state").build()
+const state = new alien.Kv("state").build();
 
-const kvOn = new alien.Kv("optional-kv-on").enabled(io.kvOn).build()
-const kvOff = new alien.Kv("optional-kv-off").enabled(io.kvOff).build()
-const storageOn = new alien.Storage("optional-storage-on").enabled(io.storageOn).build()
-const storageOff = new alien.Storage("optional-storage-off").enabled(io.storageOff).build()
-const queueOn = new alien.Queue("optional-queue-on").enabled(io.queueOn).build()
-const queueOff = new alien.Queue("optional-queue-off").enabled(io.queueOff).build()
-const vaultOn = new alien.Vault("optional-vault-on").enabled(io.vaultOn).build()
-const vaultOff = new alien.Vault("optional-vault-off").enabled(io.vaultOff).build()
+const kvOn = new alien.Kv("optional-kv-on").enabled(io.kvOn).build();
+const kvOff = new alien.Kv("optional-kv-off").enabled(io.kvOff).build();
+const storageOn = new alien.Storage("optional-storage-on").enabled(io.storageOn).build();
+const storageOff = new alien.Storage("optional-storage-off").enabled(io.storageOff).build();
+const queueOn = new alien.Queue("optional-queue-on").enabled(io.queueOn).build();
+const queueOff = new alien.Queue("optional-queue-off").enabled(io.queueOff).build();
+const vaultOn = new alien.Vault("optional-vault-on").enabled(io.vaultOn).build();
+const vaultOff = new alien.Vault("optional-vault-off").enabled(io.vaultOff).build();
 
 // A compute gate is a live gate: the declined worker's function must never be
 // provisioned while its profile-derived service account still exists — the
@@ -105,12 +105,12 @@ const workerOn = new alien.Worker("optional-worker-on")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
   .permissions("optional-on")
   .enabled(io.workerOn)
-  .build()
+  .build();
 const workerOff = new alien.Worker("optional-worker-off")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
   .permissions("optional-off")
   .enabled(io.workerOff)
-  .build()
+  .build();
 
 // Ungated, linking both halves of two gated pairs so one deployment proves both answers.
 // The kv pair is frozen and fixed at install; the worker pair is live and grant-free, which
@@ -122,7 +122,7 @@ const agent = new alien.Worker("agent")
   .link(kvOff)
   .link(workerOn)
   .link(workerOff)
-  .build()
+  .build();
 
 export default new alien.Stack("enabled-demo")
   .inputs(io)
@@ -158,4 +158,4 @@ export default new alien.Stack("enabled-demo")
       "optional-off": {},
     },
   })
-  .build()
+  .build();

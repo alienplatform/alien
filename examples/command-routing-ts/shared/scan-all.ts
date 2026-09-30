@@ -13,43 +13,43 @@
  */
 
 /** kv key prefix under which every indexed document is stored. */
-export const DOC_PREFIX = "doc:"
+export const DOC_PREFIX = "doc:";
 
 export interface KvScanPage {
-  items: { key: string; value: Uint8Array }[]
-  nextCursor?: string
+  items: { key: string; value: Uint8Array }[];
+  nextCursor?: string;
 }
 
 export interface KvScanStore {
-  scan(prefix: string, limit?: number, cursor?: string): Promise<KvScanPage>
+  scan(prefix: string, limit?: number, cursor?: string): Promise<KvScanPage>;
 }
 
 /** Iterate every key under a prefix, following the scan cursor across pages. */
 export async function* scanAll(store: KvScanStore, prefix: string) {
-  let cursor: string | undefined
+  let cursor: string | undefined;
   do {
-    const page = await store.scan(prefix, undefined, cursor)
-    for (const item of page.items) yield item
-    cursor = page.nextCursor
-  } while (cursor)
+    const page = await store.scan(prefix, undefined, cursor);
+    for (const item of page.items) yield item;
+    cursor = page.nextCursor;
+  } while (cursor);
 }
 
 /** Count every document in the shared index. */
 export async function countDocs(store: KvScanStore): Promise<number> {
-  let count = 0
-  for await (const _ of scanAll(store, DOC_PREFIX)) count++
-  return count
+  let count = 0;
+  for await (const _ of scanAll(store, DOC_PREFIX)) count++;
+  return count;
 }
 
 /** Return the ids of documents whose text contains `term` (case-insensitive). */
 export async function searchIndex(store: KvScanStore, term: string): Promise<string[]> {
-  const hits: string[] = []
-  const needle = term.toLowerCase()
+  const hits: string[] = [];
+  const needle = term.toLowerCase();
   for await (const entry of scanAll(store, DOC_PREFIX)) {
-    const text = new TextDecoder().decode(entry.value)
+    const text = new TextDecoder().decode(entry.value);
     if (text.toLowerCase().includes(needle)) {
-      hits.push(entry.key.slice(DOC_PREFIX.length))
+      hits.push(entry.key.slice(DOC_PREFIX.length));
     }
   }
-  return hits
+  return hits;
 }

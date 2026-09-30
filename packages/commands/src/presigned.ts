@@ -12,59 +12,61 @@
  *   bodies.
  */
 
-import { AlienError } from "@alienplatform/core"
-import { StorageOperationFailedError } from "./errors.js"
-import type { PresignedRequest } from "./protocol.js"
+import { AlienError } from "@alienplatform/core";
+import { StorageOperationFailedError } from "./errors.js";
+import type { PresignedRequest } from "./protocol.js";
 
 export interface PresignedTransferOptions {
   /** fetch implementation for http backends (default: global fetch). */
-  fetchImpl?: typeof fetch
+  fetchImpl?: typeof fetch;
   /** Allow the local filesystem backend (see module docs for the policy). */
-  allowLocal: boolean
+  allowLocal: boolean;
   /** Optional caller-owned deadline/cancellation signal. */
-  signal?: AbortSignal
+  signal?: AbortSignal;
 }
 
-type Operation = "download" | "upload"
+type Operation = "download" | "upload";
 
 /**
  * Cap on a single presigned transfer. Without it a stalled connection hangs
  * the receiver's poll loop (fetch has no default timeout); generous because
  * bodies can be multi-megabyte over slow links.
  */
-const PRESIGNED_TIMEOUT_MS = 120_000
+const PRESIGNED_TIMEOUT_MS = 120_000;
 
 /** Keep the transfer cap while also respecting the caller's absolute budget. */
 function transferSignal(callerSignal: AbortSignal | undefined): AbortSignal {
-  const timeoutSignal = AbortSignal.timeout(PRESIGNED_TIMEOUT_MS)
-  return callerSignal === undefined ? timeoutSignal : AbortSignal.any([timeoutSignal, callerSignal])
+  const timeoutSignal = AbortSignal.timeout(PRESIGNED_TIMEOUT_MS);
+  return callerSignal === undefined
+    ? timeoutSignal
+    : AbortSignal.any([timeoutSignal, callerSignal]);
 }
 
 /** Remove bearer-equivalent URL credentials before reporting a failure. */
 export function redactUrlForError(raw: string): string {
   try {
-    const parsed = new URL(raw)
-    parsed.username = ""
-    parsed.password = ""
-    parsed.search = ""
-    parsed.hash = ""
-    return parsed.toString()
+    const parsed = new URL(raw);
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
   } catch {
     if (raw.startsWith("/") && !raw.startsWith("//")) {
-      return raw.split(/[?#]/, 1)[0] || "<invalid-url>"
+      return raw.split(/[?#]/, 1)[0] || "<invalid-url>";
     }
-    return "<invalid-url>"
+    return "<invalid-url>";
   }
 }
 
 /** URL used in error reports for a presigned request. */
 function errorUrl(request: PresignedRequest): string {
-  return request.backend.type === "http" ? redactUrlForError(request.backend.url) : "local"
+  return request.backend.type === "http" ? redactUrlForError(request.backend.url) : "local";
 }
 
 /** Reject a presigned request that expired before we could use it. */
 function assertNotExpired(request: PresignedRequest, operation: Operation): void {
-  const expiration = new Date(request.expiration)
+  const expiration = new Date(request.expiration);
   if (Date.now() > expiration.getTime()) {
     throw new AlienError(
       StorageOperationFailedError.create({
@@ -72,7 +74,7 @@ function assertNotExpired(request: PresignedRequest, operation: Operation): void
         url: errorUrl(request),
         reason: `Presigned request expired at ${expiration.toISOString()}`,
       }),
-    )
+    );
   }
 }
 
@@ -88,7 +90,7 @@ function requireLocalPath(filePath: string, operation: Operation, allowLocal: bo
         url: `local://${filePath}`,
         reason: "Local storage backend not enabled (set allowLocalStorage: true for local dev)",
       }),
-    )
+    );
   }
   if (filePath.includes("..")) {
     throw new AlienError(
@@ -97,9 +99,9 @@ function requireLocalPath(filePath: string, operation: Operation, allowLocal: bo
         url: `local://${filePath}`,
         reason: "Path traversal not allowed in local storage paths",
       }),
-    )
+    );
   }
-  return filePath
+  return filePath;
 }
 
 function unknownBackend(request: PresignedRequest, operation: Operation) {
@@ -109,7 +111,7 @@ function unknownBackend(request: PresignedRequest, operation: Operation) {
       url: "unknown",
       reason: `Unknown storage backend type: ${(request.backend as { type: string }).type}`,
     }),
-  )
+  );
 }
 
 /** Download the bytes behind a presigned GET request. */
@@ -117,17 +119,17 @@ export async function downloadPresigned(
   request: PresignedRequest,
   options: PresignedTransferOptions,
 ): Promise<Uint8Array> {
-  assertNotExpired(request, "download")
+  assertNotExpired(request, "download");
 
   if (request.backend.type === "http") {
-    const fetchImpl = options.fetchImpl ?? fetch
-    let response: Response
+    const fetchImpl = options.fetchImpl ?? fetch;
+    let response: Response;
     try {
       response = await fetchImpl(request.backend.url, {
         method: request.backend.method,
         headers: request.backend.headers,
         signal: transferSignal(options.signal),
-      })
+      });
     } catch {
       throw new AlienError(
         StorageOperationFailedError.create({
@@ -135,7 +137,7 @@ export async function downloadPresigned(
           url: redactUrlForError(request.backend.url),
           reason: "HTTP request failed before a response was received",
         }),
-      )
+      );
     }
     if (!response.ok) {
       throw new AlienError(
@@ -144,17 +146,17 @@ export async function downloadPresigned(
           url: redactUrlForError(request.backend.url),
           reason: `HTTP ${response.status} ${response.statusText}`,
         }),
-      )
+      );
     }
-    return new Uint8Array(await response.arrayBuffer())
+    return new Uint8Array(await response.arrayBuffer());
   }
 
   if (request.backend.type !== "local") {
-    throw unknownBackend(request, "download")
+    throw unknownBackend(request, "download");
   }
-  const filePath = requireLocalPath(request.backend.filePath, "download", options.allowLocal)
-  const { readFile } = await import("node:fs/promises")
-  return new Uint8Array(await readFile(filePath))
+  const filePath = requireLocalPath(request.backend.filePath, "download", options.allowLocal);
+  const { readFile } = await import("node:fs/promises");
+  return new Uint8Array(await readFile(filePath));
 }
 
 /** Upload bytes to the target of a presigned PUT request. */
@@ -163,21 +165,21 @@ export async function uploadPresigned(
   bytes: Uint8Array,
   options: PresignedTransferOptions,
 ): Promise<void> {
-  assertNotExpired(request, "upload")
+  assertNotExpired(request, "upload");
 
   if (request.backend.type === "http") {
-    const fetchImpl = options.fetchImpl ?? fetch
+    const fetchImpl = options.fetchImpl ?? fetch;
     // Copy into an ArrayBuffer-backed view. Callers may provide a view backed
     // by SharedArrayBuffer, which is intentionally not accepted by BodyInit.
-    const body = new Uint8Array(bytes)
-    let response: Response
+    const body = new Uint8Array(bytes);
+    let response: Response;
     try {
       response = await fetchImpl(request.backend.url, {
         method: request.backend.method,
         headers: request.backend.headers,
         body,
         signal: transferSignal(options.signal),
-      })
+      });
     } catch {
       throw new AlienError(
         StorageOperationFailedError.create({
@@ -185,7 +187,7 @@ export async function uploadPresigned(
           url: redactUrlForError(request.backend.url),
           reason: "HTTP request failed before a response was received",
         }),
-      )
+      );
     }
     if (!response.ok) {
       throw new AlienError(
@@ -194,15 +196,15 @@ export async function uploadPresigned(
           url: redactUrlForError(request.backend.url),
           reason: `Storage upload failed with status ${response.status}`,
         }),
-      )
+      );
     }
-    return
+    return;
   }
 
   if (request.backend.type !== "local") {
-    throw unknownBackend(request, "upload")
+    throw unknownBackend(request, "upload");
   }
-  const filePath = requireLocalPath(request.backend.filePath, "upload", options.allowLocal)
-  const { writeFile } = await import("node:fs/promises")
-  await writeFile(filePath, bytes)
+  const filePath = requireLocalPath(request.backend.filePath, "upload", options.allowLocal);
+  const { writeFile } = await import("node:fs/promises");
+  await writeFile(filePath, bytes);
 }

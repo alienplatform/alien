@@ -1,4 +1,4 @@
-"use client"
+"use client";
 
 import {
   IconAlertCircle,
@@ -10,14 +10,14 @@ import {
   IconRefresh,
   IconServer,
   IconSettings,
-} from "@tabler/icons-react"
-import Link from "next/link"
-import { useRouter } from "next/navigation"
-import { useEffect, useState } from "react"
-import { toast } from "sonner"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+} from "@tabler/icons-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -25,92 +25,92 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   useAddIntegration,
   useAgents,
   useAnalyzeIntegration,
   useIntegrations,
   useUpdateIntegration,
-} from "@/lib/queries"
+} from "@/lib/queries";
 
 interface Integration {
-  id: string
-  owner: string
-  repo: string
-  hasToken: boolean
-  baseUrl?: string
-  agentId?: string
-  isActive: boolean
-  createdAt: Date
+  id: string;
+  owner: string;
+  repo: string;
+  hasToken: boolean;
+  baseUrl?: string;
+  agentId?: string;
+  isActive: boolean;
+  createdAt: Date;
 }
 
 export default function IntegrationsPage() {
-  const router = useRouter()
-  const [addDialogOpen, setAddDialogOpen] = useState(false)
-  const [editDialogOpen, setEditDialogOpen] = useState(false)
-  const [editingIntegration, setEditingIntegration] = useState<Integration | null>(null)
-  const [owner, setOwner] = useState("")
-  const [repo, setRepo] = useState("")
-  const [token, setToken] = useState("")
-  const [baseUrl, setBaseUrl] = useState("")
-  const [selectedAgentId, setSelectedAgentId] = useState("")
-  const [editSelectedAgentId, setEditSelectedAgentId] = useState("")
+  const router = useRouter();
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingIntegration, setEditingIntegration] = useState<Integration | null>(null);
+  const [owner, setOwner] = useState("");
+  const [repo, setRepo] = useState("");
+  const [token, setToken] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [selectedAgentId, setSelectedAgentId] = useState("");
+  const [editSelectedAgentId, setEditSelectedAgentId] = useState("");
 
-  const { data: integrations = [], isLoading: integrationsLoading } = useIntegrations()
-  const { data: agents = [], isLoading: agentsLoading } = useAgents()
-  const addIntegration = useAddIntegration()
-  const analyzeIntegration = useAnalyzeIntegration()
-  const updateIntegration = useUpdateIntegration()
+  const { data: integrations = [], isLoading: integrationsLoading } = useIntegrations();
+  const { data: agents = [], isLoading: agentsLoading } = useAgents();
+  const addIntegration = useAddIntegration();
+  const analyzeIntegration = useAnalyzeIntegration();
+  const updateIntegration = useUpdateIntegration();
 
-  const loading = integrationsLoading || agentsLoading
-  const isFirstIntegration = integrations.length === 0
+  const loading = integrationsLoading || agentsLoading;
+  const isFirstIntegration = integrations.length === 0;
 
   // Auto-open add integration dialog for first-time users (smooth onboarding flow)
   useEffect(() => {
     if (!loading && agents.length > 0 && integrations.length === 0) {
       const timer = setTimeout(() => {
-        setAddDialogOpen(true)
-      }, 800) // Slight delay so the page loads first
-      return () => clearTimeout(timer)
+        setAddDialogOpen(true);
+      }, 800); // Slight delay so the page loads first
+      return () => clearTimeout(timer);
     }
-  }, [loading, agents.length, integrations.length])
+  }, [loading, agents.length, integrations.length]);
 
   // Auto-select first agent when available
   useEffect(() => {
     if (agents.length > 0 && !selectedAgentId) {
-      setSelectedAgentId(agents[0].id)
+      setSelectedAgentId(agents[0].id);
     }
-  }, [agents, selectedAgentId])
+  }, [agents, selectedAgentId]);
 
   // Initialize edit agent selection when dialog opens
   useEffect(() => {
     if (editDialogOpen && editingIntegration && editingIntegration.agentId) {
-      setEditSelectedAgentId(editingIntegration.agentId)
+      setEditSelectedAgentId(editingIntegration.agentId);
     } else if (editDialogOpen && agents.length > 0) {
-      setEditSelectedAgentId(agents[0].id)
+      setEditSelectedAgentId(agents[0].id);
     }
-  }, [editDialogOpen, editingIntegration, agents])
+  }, [editDialogOpen, editingIntegration, agents]);
 
   const handleAddIntegration = async (e: React.FormEvent) => {
-    e.preventDefault()
+    e.preventDefault();
 
     if (!selectedAgentId) {
-      toast.error("Please select an agent")
-      return
+      toast.error("Please select an agent");
+      return;
     }
 
-    const wasFirstIntegration = isFirstIntegration
+    const wasFirstIntegration = isFirstIntegration;
 
     try {
       await addIntegration.mutateAsync({
@@ -119,70 +119,70 @@ export default function IntegrationsPage() {
         token,
         baseUrl,
         agentId: selectedAgentId,
-      })
+      });
 
       toast.success("🎉 Integration added successfully!", {
         description: `${owner}/${repo} is now connected. ${wasFirstIntegration ? "Redirecting to dashboard..." : 'Click "Analyze" to fetch metrics.'}`,
         duration: wasFirstIntegration ? 2000 : 5000,
-      })
-      setAddDialogOpen(false)
-      setOwner("")
-      setRepo("")
-      setToken("")
-      setBaseUrl("")
+      });
+      setAddDialogOpen(false);
+      setOwner("");
+      setRepo("");
+      setToken("");
+      setBaseUrl("");
 
       // Redirect to dashboard after first integration
       if (wasFirstIntegration) {
         setTimeout(() => {
-          router.push("/")
-        }, 1500)
+          router.push("/");
+        }, 1500);
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to add integration")
+      toast.error(error instanceof Error ? error.message : "Failed to add integration");
     }
-  }
+  };
 
   const handleAnalyze = (integration: Integration) => {
     if (!integration.isActive) {
-      toast.error("Cannot analyze inactive integration. Please assign an agent first.")
-      return
+      toast.error("Cannot analyze inactive integration. Please assign an agent first.");
+      return;
     }
 
     toast.promise(analyzeIntegration.mutateAsync(integration.id), {
       loading: `Analyzing ${integration.owner}/${integration.repo}...`,
       success: "Analysis complete! Check the dashboard for updated metrics.",
       error: "Analysis failed",
-    })
-  }
+    });
+  };
 
   const handleEditIntegration = (integration: Integration) => {
-    setEditingIntegration(integration)
-    setEditDialogOpen(true)
-  }
+    setEditingIntegration(integration);
+    setEditDialogOpen(true);
+  };
 
   const handleSaveEdit = async (e: React.FormEvent) => {
-    e.preventDefault()
+    e.preventDefault();
 
     if (!editingIntegration || !editSelectedAgentId) {
-      toast.error("Please select an agent")
-      return
+      toast.error("Please select an agent");
+      return;
     }
 
     try {
       await updateIntegration.mutateAsync({
         integrationId: editingIntegration.id,
         agentId: editSelectedAgentId,
-      })
+      });
 
-      toast.success("Integration updated successfully")
-      setEditDialogOpen(false)
-      setEditingIntegration(null)
+      toast.success("Integration updated successfully");
+      setEditDialogOpen(false);
+      setEditingIntegration(null);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to update integration")
+      toast.error(error instanceof Error ? error.message : "Failed to update integration");
     }
-  }
+  };
 
-  const hasNoAgents = agents.length === 0
+  const hasNoAgents = agents.length === 0;
 
   return (
     <div className="@container/main flex flex-1 flex-col gap-4 p-4 md:gap-6 md:p-6">
@@ -241,7 +241,7 @@ export default function IntegrationsPage() {
                     id="owner"
                     placeholder="acme-corp"
                     value={owner}
-                    onChange={e => setOwner(e.target.value)}
+                    onChange={(e) => setOwner(e.target.value)}
                     required
                   />
                 </div>
@@ -251,7 +251,7 @@ export default function IntegrationsPage() {
                     id="repo"
                     placeholder="api"
                     value={repo}
-                    onChange={e => setRepo(e.target.value)}
+                    onChange={(e) => setRepo(e.target.value)}
                     required
                   />
                 </div>
@@ -264,7 +264,7 @@ export default function IntegrationsPage() {
                     type="password"
                     placeholder="ghp_xxx..."
                     value={token}
-                    onChange={e => setToken(e.target.value)}
+                    onChange={(e) => setToken(e.target.value)}
                   />
                   <p className="text-xs text-muted-foreground">
                     Leave blank for demo mode with mock data.
@@ -278,7 +278,7 @@ export default function IntegrationsPage() {
                     id="baseUrl"
                     placeholder="https://github.mycompany.com"
                     value={baseUrl}
-                    onChange={e => setBaseUrl(e.target.value)}
+                    onChange={(e) => setBaseUrl(e.target.value)}
                   />
                 </div>
                 <div className="rounded-lg bg-green-500/10 border border-green-500/20 p-3 flex items-start gap-2">
@@ -526,5 +526,5 @@ export default function IntegrationsPage() {
         </DialogContent>
       </Dialog>
     </div>
-  )
+  );
 }

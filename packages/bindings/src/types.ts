@@ -7,28 +7,28 @@
 /** Metadata for a single stored object. */
 export interface ObjectMeta {
   /** Object location (path) within the store. */
-  location: string
+  location: string;
   /** Object size in bytes. */
-  size: number
+  size: number;
   /** Last-modified timestamp as an RFC 3339 string. */
-  lastModified: string
+  lastModified: string;
   /** Provider entity tag, when available. */
-  eTag?: string
+  eTag?: string;
   /** Provider object version, when available. */
-  version?: string
+  version?: string;
 }
 
 /** HTTP method a presigned request may be issued for. */
-export type SignedUrlMethod = "GET" | "PUT" | "DELETE"
+export type SignedUrlMethod = "GET" | "PUT" | "DELETE";
 
 /** Options for {@link Storage.signedUrl}. */
 export interface SignedUrlOptions {
   /** Which operation the presigned request authorizes. */
-  method: SignedUrlMethod
+  method: SignedUrlMethod;
   /** Object path within the store. */
-  path: string
+  path: string;
   /** Validity window, in seconds. */
-  expiresIn: number
+  expiresIn: number;
 }
 
 /**
@@ -37,137 +37,137 @@ export interface SignedUrlOptions {
  * provider, including local stores whose URL is a `local://` scheme.
  */
 export interface PresignedRequest {
-  url: string
-  method: string
-  headers: Record<string, string>
+  url: string;
+  method: string;
+  headers: Record<string, string>;
 }
 
 /** Provider-neutral attributes returned with a stored object. */
 export interface StorageObjectAttributes {
   /** Stored MIME type. */
-  contentType?: string
+  contentType?: string;
   /** Stored browser content-disposition behavior. */
-  contentDisposition?: string
+  contentDisposition?: string;
   /** Stored content encoding. */
-  contentEncoding?: string
+  contentEncoding?: string;
   /** Stored content language. */
-  contentLanguage?: string
+  contentLanguage?: string;
   /** Stored cache-control policy. */
-  cacheControl?: string
+  cacheControl?: string;
   /** Provider storage class, when reported. */
-  storageClass?: string
+  storageClass?: string;
   /** User-defined object metadata. */
-  metadata: Record<string, string>
+  metadata: Record<string, string>;
 }
 
 /** Provider-neutral object attributes accepted by {@link Storage.put}. */
 export interface StoragePutAttributes {
   /** MIME type to store with the object. */
-  contentType?: string
+  contentType?: string;
   /** Browser content-disposition behavior to store with the object. */
-  contentDisposition?: string
+  contentDisposition?: string;
   /** Content encoding to store. GCS rejects `gzip` because it transcodes gzip responses. */
-  contentEncoding?: string
+  contentEncoding?: string;
   /** Content language to store with the object. */
-  contentLanguage?: string
+  contentLanguage?: string;
   /** Cache-control policy to store with the object. */
-  cacheControl?: string
+  cacheControl?: string;
   /** User-defined object metadata to store. */
-  metadata?: Record<string, string>
+  metadata?: Record<string, string>;
 }
 
 /** Options for {@link Storage.put}. */
 export interface StoragePutOptions {
   /** Atomic write precondition. `"absent"` creates only when the path does not exist. */
-  condition?: "absent"
-  attributes?: StoragePutAttributes
+  condition?: "absent";
+  attributes?: StoragePutAttributes;
 }
 
 /** Result of reading a stored object. */
 export interface StorageGetResult {
-  data: Buffer
-  meta: ObjectMeta
-  attributes: StorageObjectAttributes
+  data: Buffer;
+  meta: ObjectMeta;
+  attributes: StorageObjectAttributes;
 }
 
 /** Result of reading object information without its payload. */
 export interface StorageHeadResult {
-  meta: ObjectMeta
-  attributes: StorageObjectAttributes
+  meta: ObjectMeta;
+  attributes: StorageObjectAttributes;
 }
 
 /** Provider identifiers returned after a successful storage write. */
 export interface StoragePutResult {
-  eTag?: string
-  version?: string
+  eTag?: string;
+  version?: string;
 }
 
 /** A resolved object-storage binding. */
 export interface Storage {
   /** Fetch the object at `path`. */
-  get(path: string): Promise<StorageGetResult>
+  get(path: string): Promise<StorageGetResult>;
   /** Store `data` at `path`, optionally with provider-neutral object attributes. */
   put(
     path: string,
     data: Buffer | Uint8Array,
     options?: StoragePutOptions,
-  ): Promise<StoragePutResult>
+  ): Promise<StoragePutResult>;
   /** Delete the object at `path`. */
-  delete(path: string): Promise<void>
+  delete(path: string): Promise<void>;
   /** List objects, optionally filtered by `prefix`. */
-  list(prefix?: string): Promise<ObjectMeta[]>
+  list(prefix?: string): Promise<ObjectMeta[]>;
   /** Fetch metadata and attributes for `path` without downloading its payload. */
-  head(path: string): Promise<StorageHeadResult>
+  head(path: string): Promise<StorageHeadResult>;
   /** Copy the object at `from` to `to`. */
-  copy(from: string, to: string): Promise<void>
+  copy(from: string, to: string): Promise<void>;
   /** Create a presigned request for `path`. */
-  signedUrl(options: SignedUrlOptions): Promise<PresignedRequest>
+  signedUrl(options: SignedUrlOptions): Promise<PresignedRequest>;
 }
 
 /** Optional authenticated metadata for a Key operation. */
 export interface KeyOptions {
-  context?: Record<string, string>
+  context?: Record<string, string>;
 }
 
 /** A provider-backed key for encrypting and decrypting values up to 128 bytes. */
 export interface Key {
-  encrypt(plaintext: Buffer | Uint8Array, options?: KeyOptions): Promise<Buffer>
-  decrypt(ciphertext: Buffer | Uint8Array, options?: KeyOptions): Promise<Buffer>
+  encrypt(plaintext: Buffer | Uint8Array, options?: KeyOptions): Promise<Buffer>;
+  decrypt(ciphertext: Buffer | Uint8Array, options?: KeyOptions): Promise<Buffer>;
 }
 
 /** Storage operations available from an external deployment binding. */
-export type RemoteStorage = Pick<Storage, "get" | "put" | "delete" | "list" | "head">
+export type RemoteStorage = Pick<Storage, "get" | "put" | "delete" | "list" | "head">;
 
 /** Options for {@link Kv.set}. */
 export interface KvSetOptions {
   /** Time-to-live, in seconds. */
-  ttl?: number
+  ttl?: number;
   /**
    * Atomic write precondition. `null` means the key must be absent; an opaque
    * version means the key must still match an earlier read. Omit for an
    * unconditional write.
    */
-  ifVersion?: string | null
+  ifVersion?: string | null;
 }
 
 /** Options for {@link Kv.delete}. */
 export interface KvDeleteOptions {
   /** Delete only when the key still matches this opaque version. */
-  ifVersion?: string
+  ifVersion?: string;
 }
 
 /** A value and its opaque version. */
 export interface KvEntry<T> {
   /** The key. */
-  key: string
+  key: string;
   /** The decoded value. */
-  value: T
+  value: T;
   /** Opaque version for a later conditional set or delete. */
-  version: string
+  version: string;
 }
 
 /** A raw entry returned by a scan. */
-export type KvScanItem = KvEntry<Buffer>
+export type KvScanItem = KvEntry<Buffer>;
 
 /** A page of scan results. */
 export interface KvScanResult {
@@ -175,78 +175,78 @@ export interface KvScanResult {
    * Key-value pairs found on this page. Values are returned alongside their
    * keys (the provider already reads them), so a scan needs no follow-up `get`.
    */
-  items: KvScanItem[]
+  items: KvScanItem[];
   /** Opaque cursor for the next page, or `undefined` when exhausted. */
-  nextCursor?: string
+  nextCursor?: string;
 }
 
 /** A resolved key-value binding. */
 export interface Kv {
   /** Get the raw entry for `key`, or `null` if absent/expired. */
-  get(key: string): Promise<KvEntry<Buffer> | null>
+  get(key: string): Promise<KvEntry<Buffer> | null>;
   /** Get the entry for `key` with its value decoded as UTF-8 text. */
-  getText(key: string): Promise<KvEntry<string> | null>
+  getText(key: string): Promise<KvEntry<string> | null>;
   /** Get the entry for `key` with its value parsed as JSON. */
-  getJson<T = unknown>(key: string): Promise<KvEntry<T> | null>
+  getJson<T = unknown>(key: string): Promise<KvEntry<T> | null>;
   /**
    * Set `key` to the UTF-8 `value`. Conditional writes resolve `false` when
    * their version precondition is not met; all applied writes resolve `true`.
    */
-  set(key: string, value: string, options?: KvSetOptions): Promise<boolean>
+  set(key: string, value: string, options?: KvSetOptions): Promise<boolean>;
   /**
    * Set `key` to `value` serialized as JSON (via `JSON.stringify`). Conditional
    * writes resolve `false` when their version precondition is not
    * met; all applied writes resolve `true`.
    */
-  setJson(key: string, value: unknown, options?: KvSetOptions): Promise<boolean>
+  setJson(key: string, value: unknown, options?: KvSetOptions): Promise<boolean>;
   /** Delete `key`, optionally only when its version still matches. */
-  delete(key: string, options?: KvDeleteOptions): Promise<boolean>
+  delete(key: string, options?: KvDeleteOptions): Promise<boolean>;
   /** Check whether `key` exists. */
-  exists(key: string): Promise<boolean>
+  exists(key: string): Promise<boolean>;
   /** Scan keys under `prefix`, with optional pagination. */
-  scan(prefix: string, limit?: number, cursor?: string): Promise<KvScanResult>
+  scan(prefix: string, limit?: number, cursor?: string): Promise<KvScanResult>;
 }
 
 /** A message received from a queue. */
 export interface QueueMessage {
   /** Payload discriminant: `"json"` or `"text"`. */
-  payloadType: "json" | "text"
+  payloadType: "json" | "text";
   /**
    * The payload string: serialized JSON when `payloadType === "json"`, raw text
    * when `payloadType === "text"`.
    */
-  payload: string
+  payload: string;
   /** Opaque receipt handle for ack/nack. */
-  receiptHandle: string
+  receiptHandle: string;
   /**
    * Delivery attempt, 1-based (1 = first delivery). Providers that do not report
    * redelivery counts always set 1; use it to enforce retry limits.
    */
-  attempt: number
+  attempt: number;
 }
 
 /** A resolved queue binding. */
 export interface Queue {
   /** Send a JSON message (the object is serialized with `JSON.stringify`). */
-  send(message: unknown): Promise<void>
+  send(message: unknown): Promise<void>;
   /** Send a raw text message. */
-  sendText(text: string): Promise<void>
+  sendText(text: string): Promise<void>;
   /** Receive up to `max` messages. */
-  receive(max: number): Promise<QueueMessage[]>
+  receive(max: number): Promise<QueueMessage[]>;
   /** Acknowledge a message by its receipt handle. */
-  ack(receipt: string): Promise<void>
+  ack(receipt: string): Promise<void>;
   /** Negative-acknowledge a message, making it immediately redeliverable. */
-  nack(receipt: string): Promise<void>
+  nack(receipt: string): Promise<void>;
   /** Delete every message in the queue. */
-  purge(): Promise<void>
+  purge(): Promise<void>;
 }
 
 /** Read-only service discovery for a linked container. */
 export interface Container {
   /** Get the URL reachable from the deployment's private network. */
-  getInternalUrl(): Promise<string>
+  getInternalUrl(): Promise<string>;
   /** Get the public URL when the container is publicly exposed. */
-  getPublicUrl(): Promise<string | null>
+  getPublicUrl(): Promise<string | null>;
 }
 
 /**
@@ -255,7 +255,7 @@ export interface Container {
  * certificate and hostname verification, `verify-ca` for Cloud SQL over its
  * Private Service Connect IP, and `verify-full` for Aurora and Flexible Server.
  */
-export type PostgresSslMode = "disable" | "verify-ca" | "verify-full"
+export type PostgresSslMode = "disable" | "verify-ca" | "verify-full";
 
 /** TLS options for `verify-ca`, where the provider CA authenticates the server. */
 interface PostgresVerifyCaTlsOptions {
@@ -263,14 +263,14 @@ interface PostgresVerifyCaTlsOptions {
    * One or more PEM-encoded provider CA certificates. `verify-ca` cannot use the
    * operating system trust store because the certificate is specific to the instance.
    */
-  ca: [string, ...string[]]
+  ca: [string, ...string[]];
   /** Always true: an untrusted certificate fails the connection. */
-  rejectUnauthorized: true
+  rejectUnauthorized: true;
   /**
    * Skip hostname matching after the CA chain succeeds because Cloud SQL's
    * certificate does not contain the Private Service Connect IP being dialed.
    */
-  checkServerIdentity: () => undefined
+  checkServerIdentity: () => undefined;
 }
 
 /** TLS options for full certificate and hostname verification. */
@@ -279,15 +279,15 @@ interface PostgresVerifyFullTlsOptions {
    * PEM-encoded provider root CA certificates. Managed backends supply these;
    * an external database can omit them to use the operating system trust store.
    */
-  ca?: string[]
+  ca?: string[];
   /** Always true: an untrusted certificate fails the connection. */
-  rejectUnauthorized: true
+  rejectUnauthorized: true;
   /** `verify-full` must never override Node's hostname verification. */
-  checkServerIdentity?: never
+  checkServerIdentity?: never;
 }
 
 /** Verified TLS options ready to pass to node-postgres. */
-export type PostgresTlsOptions = PostgresVerifyCaTlsOptions | PostgresVerifyFullTlsOptions
+export type PostgresTlsOptions = PostgresVerifyCaTlsOptions | PostgresVerifyFullTlsOptions;
 
 /** Connection fields shared by every Postgres TLS mode. */
 interface PostgresConnectionFields {
@@ -296,36 +296,36 @@ interface PostgresConnectionFields {
    * password, and database are percent-encoded to the RFC 3986 unreserved set, so a
    * generated password containing URL-special characters can never corrupt the URL.
    */
-  connectionString: string
+  connectionString: string;
   /** Address to dial — the cluster writer endpoint for Aurora, the host elsewhere. */
-  host: string
+  host: string;
   /** TCP port. */
-  port: number
+  port: number;
   /** Database name. */
-  database: string
+  database: string;
   /** Role to connect as. */
-  username: string
+  username: string;
   /**
    * Connection password. For the managed cloud backends this was read from the
    * cloud secret store when the binding resolved; the binding itself only ever
    * carries a locator for it.
    */
-  password: string
+  password: string;
 }
 
 interface PostgresDisableConnection extends PostgresConnectionFields {
-  sslmode: "disable"
-  ssl: false
+  sslmode: "disable";
+  ssl: false;
 }
 
 interface PostgresVerifyCaConnection extends PostgresConnectionFields {
-  sslmode: "verify-ca"
-  ssl: PostgresVerifyCaTlsOptions
+  sslmode: "verify-ca";
+  ssl: PostgresVerifyCaTlsOptions;
 }
 
 interface PostgresVerifyFullConnection extends PostgresConnectionFields {
-  sslmode: "verify-full"
-  ssl: PostgresVerifyFullTlsOptions
+  sslmode: "verify-full";
+  ssl: PostgresVerifyFullTlsOptions;
 }
 
 /**
@@ -341,7 +341,7 @@ interface PostgresVerifyFullConnection extends PostgresConnectionFields {
 export type PostgresConnection =
   | PostgresDisableConnection
   | PostgresVerifyCaConnection
-  | PostgresVerifyFullConnection
+  | PostgresVerifyFullConnection;
 
 /**
  * A resolved Postgres binding.
@@ -358,23 +358,23 @@ export interface Postgres {
    * secret store with the workload's own identity; the resolved value is then reused,
    * so call the factory again to pick up a rotated password.
    */
-  connection(): Promise<PostgresConnection>
+  connection(): Promise<PostgresConnection>;
 }
 
 /** A resolved vault (secrets) binding. */
 export interface Vault {
   /** Get the secret named `name` as a string. */
-  get(name: string): Promise<string>
+  get(name: string): Promise<string>;
   /** Get the secret named `name`, parsed as JSON. */
-  getJson<T = unknown>(name: string): Promise<T>
+  getJson<T = unknown>(name: string): Promise<T>;
   /** Create or update the secret named `name` with a string value. */
-  put(name: string, value: string): Promise<void>
+  put(name: string, value: string): Promise<void>;
   /** Create or update the secret named `name`, serialized as JSON. */
-  putJson(name: string, value: unknown): Promise<void>
+  putJson(name: string, value: unknown): Promise<void>;
   /** Delete the secret named `name`. */
-  delete(name: string): Promise<void>
+  delete(name: string): Promise<void>;
   /** List the names of all secrets in this vault. */
-  list(): Promise<string[]>
+  list(): Promise<string[]>;
 }
 
 /** A live sandbox. */
@@ -386,19 +386,19 @@ export interface SandboxInstance {
    * requested at creation. Persist it durably before starting work so a replacement process can
    * reconnect with `get` or `getOrCreate`, or clean up with `terminate`.
    */
-  sandboxId: string
+  sandboxId: string;
   /** Lifecycle state. */
-  state: "starting" | "running" | "paused" | "terminated"
+  state: "starting" | "running" | "paused" | "terminated";
   /** Increments when a sandbox is replaced, so a stale handle is detectable. */
-  generation: number
+  generation: number;
 }
 
 /** A sandbox from `getOrCreate`, and which of the two things happened. */
 export interface ResolvedSandbox {
   /** The sandbox, whether it was made by this call or found. */
-  sandbox: SandboxInstance
+  sandbox: SandboxInstance;
   /** Whether this call is what created it. */
-  created: boolean
+  created: boolean;
 }
 
 /** What a sandbox is created with. */
@@ -411,23 +411,23 @@ export interface CreateSandboxOptions {
    * `SandboxInstance.sandboxId` returned by `create` or `getOrCreate`; do not assume this value is
    * the id of the resulting sandbox.
    */
-  sandboxId?: string
-  tenantKey?: string
+  sandboxId?: string;
+  tenantKey?: string;
   /** Environment every command in the sandbox starts with. */
-  env?: Record<string, string>
+  env?: Record<string, string>;
   /**
    * Wall-clock lifetime, after which the platform terminates the sandbox.
    *
    * Only a backend reporting `sandboxLifetime` takes one; the rest raise rather than run on past
    * it. A ceiling the deployment declared still applies, so this can only ever shorten a sandbox.
    */
-  timeoutMs?: number
+  timeoutMs?: number;
 }
 
 /** One frame of a running command's output. */
 export type CommandFrame =
   | { kind: "stdout" | "stderr"; seq: number; data: Buffer }
-  | { kind: "exit"; exitCode: number; truncated: boolean }
+  | { kind: "exit"; exitCode: number; truncated: boolean };
 
 /** What a command needs to run. */
 export interface RunCommandOptions {
@@ -444,35 +444,35 @@ export interface RunCommandOptions {
    * supervises the process it kills the process group and the sandbox stays usable. Either way
    * the command is stopped; only the sandbox's fate differs.
    */
-  timeoutMs: number
+  timeoutMs: number;
   /** Arguments for the program, each passed as one argument rather than re-parsed as text. */
-  args?: string[]
+  args?: string[];
   /** Working directory inside the sandbox. */
-  cwd?: string
+  cwd?: string;
   /** Environment for this command, on top of whatever the sandbox was created with. */
-  env?: Record<string, string>
+  env?: Record<string, string>;
 }
 
 /** How a job's command exited. */
 export interface JobExit {
-  code: number
-  truncated: boolean
+  code: number;
+  truncated: boolean;
 }
 
 /** Why a job ended without its command exiting. */
 export interface JobError {
   /** Machine-readable cause, e.g. `timeoutExceeded`. */
-  code: string
-  message: string
+  code: string;
+  message: string;
 }
 
 /** A job's output so far, and how it ended once it has. */
 export interface JobPoll {
-  running: boolean
+  running: boolean;
   /** Output produced after the polled sequence. The ending is `exit` or `error`, never a frame. */
-  frames: CommandFrame[]
-  exit?: JobExit
-  error?: JobError
+  frames: CommandFrame[];
+  exit?: JobExit;
+  error?: JobError;
 }
 
 /**
@@ -483,7 +483,7 @@ export interface JobPoll {
  */
 export interface Sandbox {
   /** Which operations this platform supports. */
-  capabilities(): Promise<string[]>
+  capabilities(): Promise<string[]>;
   /**
    * Creates a sandbox that can already take work.
    *
@@ -492,21 +492,21 @@ export interface Sandbox {
    * wait is part of this call and can take seconds; a sandbox that never becomes reachable
    * rejects rather than resolving into something unusable.
    */
-  create(options?: CreateSandboxOptions): Promise<SandboxInstance>
+  create(options?: CreateSandboxOptions): Promise<SandboxInstance>;
   /** Fetches a sandbox, or `null` if it does not exist. Requires `reconnect`. */
-  get(sandboxId: string): Promise<SandboxInstance | null>
+  get(sandboxId: string): Promise<SandboxInstance | null>;
   /**
    * Fetches a sandbox, creating it if absent, and reports which it did.
    *
    * `timeoutMs` bounds a sandbox this call creates; one that is found keeps the lifetime it was
    * created with, and `created` is how a caller tells the two apart.
    */
-  getOrCreate(options?: CreateSandboxOptions): Promise<ResolvedSandbox>
+  getOrCreate(options?: CreateSandboxOptions): Promise<ResolvedSandbox>;
   /**
    * Lists this binding's sandboxes. Not offered on AWS, Azure or GCP — those raise rather than
    * enumerate. Reach a sandbox whose id you hold with `get`.
    */
-  list(): Promise<SandboxInstance[]>
+  list(): Promise<SandboxInstance[]>;
   /**
    * Runs a command, yielding frames as the command produces them.
    *
@@ -517,7 +517,7 @@ export interface Sandbox {
     sandboxId: string,
     command: string,
     options: RunCommandOptions,
-  ): AsyncIterable<CommandFrame>
+  ): AsyncIterable<CommandFrame>;
   /**
    * Starts a command as a job and resolves with its id. Requires `jobs`.
    *
@@ -525,20 +525,20 @@ export interface Sandbox {
    * goes away can reach the job again by its id. A start that goes unanswered raises
    * `SANDBOX_OUTCOME_UNKNOWN` and must not be repeated — the sandbox may have taken the command.
    */
-  startJob(sandboxId: string, command: string, options: RunCommandOptions): Promise<string>
+  startJob(sandboxId: string, command: string, options: RunCommandOptions): Promise<string>;
   /**
    * Reads a job's output after `sinceSeq`, and its ending once it has one. Requires `jobs`.
    *
    * Omit `sinceSeq` to read from the first frame; afterwards pass the highest `seq` seen, which is
    * what makes a repeated poll return only what is new.
    */
-  pollJob(sandboxId: string, jobId: string, sinceSeq?: number): Promise<JobPoll>
+  pollJob(sandboxId: string, jobId: string, sinceSeq?: number): Promise<JobPoll>;
   /** Cancels a job, stopping its command. Requires `jobs`. */
-  cancelJob(sandboxId: string, jobId: string): Promise<void>
+  cancelJob(sandboxId: string, jobId: string): Promise<void>;
   /** Reads a file out of the sandbox. Requires `files`. */
-  readFile(sandboxId: string, path: string): Promise<Buffer>
+  readFile(sandboxId: string, path: string): Promise<Buffer>;
   /** Writes files into the sandbox. Requires `files`. Parent directories are created as needed. */
-  writeFiles(sandboxId: string, files: Record<string, Buffer | string>): Promise<void>
+  writeFiles(sandboxId: string, files: Record<string, Buffer | string>): Promise<void>;
   /**
    * Pauses a sandbox, preserving state. Requires `pauseResume`.
    *
@@ -548,9 +548,9 @@ export interface Sandbox {
    * On Azure the in-guest deadline is what stops an overrunning command, so one frozen by the
    * pause is ended by terminating the sandbox instead and a later `resume` finds nothing.
    */
-  pause(sandboxId: string): Promise<void>
+  pause(sandboxId: string): Promise<void>;
   /** Resumes a paused sandbox. Requires `pauseResume`. */
-  resume(sandboxId: string): Promise<void>
+  resume(sandboxId: string): Promise<void>;
   /** Destroys a sandbox. Idempotent. */
-  terminate(sandboxId: string): Promise<void>
+  terminate(sandboxId: string): Promise<void>;
 }

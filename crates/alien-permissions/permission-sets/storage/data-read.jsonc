@@ -8,17 +8,17 @@
         "label": "read-s3-objects",
         "description": "Read objects and object metadata from application-owned S3 buckets.",
         "grant": {
-          "actions": ["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAcl"]
+          "actions": ["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAcl"],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:s3:::${stackPrefix}-*", "arn:aws:s3:::${stackPrefix}-*/*"]
+            "resources": ["arn:aws:s3:::${stackPrefix}-*", "arn:aws:s3:::${stackPrefix}-*/*"],
           },
           "resource": {
-            "resources": ["arn:aws:s3:::${resourceName}", "arn:aws:s3:::${resourceName}/*"]
-          }
-        }
-      }
+            "resources": ["arn:aws:s3:::${resourceName}", "arn:aws:s3:::${resourceName}/*"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -32,50 +32,50 @@
             "storage.objects.list",
             "storage.objects.getIamPolicy",
             "storage.multipartUploads.list",
-            "storage.multipartUploads.listParts"
-          ]
+            "storage.multipartUploads.listParts",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}/buckets/${resourceName}"
-          }
-        }
+            "scope": "projects/${projectName}/buckets/${resourceName}",
+          },
+        },
       },
       {
         "label": "sign-cloud-storage-download-urls",
         "description": "Sign Cloud Storage download URLs on behalf of this application's service account.",
         "grant": {
-          "permissions": ["iam.serviceAccounts.signBlob"]
+          "permissions": ["iam.serviceAccounts.signBlob"],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}"
-          }
-        }
-      }
+            "scope": "projects/${projectName}",
+          },
+        },
+      },
     ],
     "azure": [
       {
         "label": "read-blob-storage-objects",
         "description": "Read objects from application-owned Azure Blob Storage containers.",
         "grant": {
-          "predefinedRoles": ["Storage Blob Data Reader"]
+          "predefinedRoles": ["Storage Blob Data Reader"],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}/blobServices/default/containers/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}/blobServices/default/containers/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

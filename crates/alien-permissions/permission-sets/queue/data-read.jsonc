@@ -11,46 +11,46 @@
             "sqs:DeleteMessage",
             "sqs:ChangeMessageVisibility",
             "sqs:GetQueueAttributes",
-            "sqs:GetQueueUrl"
-          ]
+            "sqs:GetQueueUrl",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"]
-          }
-        }
-      }
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
         "grant": {
-          "predefinedRoles": ["roles/pubsub.subscriber", "roles/pubsub.viewer"]
+          "predefinedRoles": ["roles/pubsub.subscriber", "roles/pubsub.viewer"],
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
           "resource": {
-            "scope": "projects/${projectName}/subscriptions/${resourceName}"
-          }
-        }
-      }
+            "scope": "projects/${projectName}/subscriptions/${resourceName}",
+          },
+        },
+      },
     ],
     "azure": [
       {
         "grant": {
-          "predefinedRoles": ["Azure Service Bus Data Receiver"]
+          "predefinedRoles": ["Azure Service Bus Data Receiver"],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb/queues/${resourceName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb/queues/${resourceName}",
+          },
+        },
+      },
+    ],
+  },
 }

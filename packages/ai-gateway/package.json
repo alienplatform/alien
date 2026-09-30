@@ -1,6 +1,23 @@
 {
   "name": "@alienplatform/ai-gateway",
   "version": "3.3.25",
+  "description": "Thin TypeScript wrapper that spawns the Alien AI gateway (a Rust binary) and points an OpenAI-compatible client at it",
+  "keywords": [
+    "ai",
+    "alien",
+    "gateway"
+  ],
+  "homepage": "https://alien.dev",
+  "license": "FSL-1.1-Apache-2.0",
+  "author": "Alien Software, Inc. <hi@alien.dev>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alienplatform/alien.git",
+    "directory": "packages/ai-gateway"
+  },
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "sideEffects": false,
   "types": "./dist/index.d.ts",
@@ -14,12 +31,8 @@
       "import": "./dist/native.js"
     }
   },
-  "files": [
-    "dist"
-  ],
-  "engines": {
-    "node": ">=18",
-    "bun": ">=1.0.23"
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsdown && tsc -p tsconfig.build.json --emitDeclarationOnly",
@@ -28,22 +41,9 @@
     "format-and-lint": "oxfmt --check \"**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}\" && oxlint .",
     "format-and-lint:fix": "oxfmt --write \"**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}\" && oxlint --fix ."
   },
-  "keywords": [
-    "ai",
-    "alien",
-    "gateway"
-  ],
-  "author": "Alien Software, Inc. <hi@alien.dev>",
-  "license": "FSL-1.1-Apache-2.0",
-  "description": "Thin TypeScript wrapper that spawns the Alien AI gateway (a Rust binary) and points an OpenAI-compatible client at it",
-  "homepage": "https://alien.dev",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/alienplatform/alien.git",
-    "directory": "packages/ai-gateway"
-  },
-  "publishConfig": {
-    "access": "public"
+  "dependencies": {
+    "@alienplatform/core": "workspace:^",
+    "zod": "4.5.2"
   },
   "devDependencies": {
     "@alienplatform/typescript-config": "workspace:^",
@@ -53,10 +53,6 @@
     "typescript": "~5.9.0",
     "vitest": "^4.0.0"
   },
-  "dependencies": {
-    "@alienplatform/core": "workspace:^",
-    "zod": "4.5.2"
-  },
   "peerDependencies": {
     "openai": "^4 || ^7.0.0"
   },
@@ -64,5 +60,9 @@
     "openai": {
       "optional": true
     }
+  },
+  "engines": {
+    "bun": ">=1.0.23",
+    "node": ">=18"
   }
 }

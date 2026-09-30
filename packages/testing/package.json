@@ -2,14 +2,17 @@
   "name": "@alienplatform/testing",
   "version": "3.3.25",
   "description": "Testing framework for Alien applications",
-  "author": "Alien Software, Inc. <hi@alien.dev>",
-  "license": "FSL-1.1-Apache-2.0",
   "homepage": "https://alien.dev",
+  "license": "FSL-1.1-Apache-2.0",
+  "author": "Alien Software, Inc. <hi@alien.dev>",
   "repository": {
     "type": "git",
     "url": "https://github.com/alienplatform/alien.git",
     "directory": "packages/testing"
   },
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -19,9 +22,6 @@
       "import": "./dist/index.js"
     }
   },
-  "files": [
-    "dist"
-  ],
   "publishConfig": {
     "access": "public"
   },
@@ -37,6 +37,17 @@
     "@alienplatform/core": "workspace:*",
     "get-port": "^7.1.0",
     "zod": "4.5.2"
+  },
+  "devDependencies": {
+    "@alienplatform/typescript-config": "workspace:^",
+    "@aws-sdk/client-ssm": "^3.0.0",
+    "@azure/identity": "^4.0.0",
+    "@azure/keyvault-secrets": "^4.0.0",
+    "@google-cloud/secret-manager": "^6.0.0",
+    "@types/node": "^24.0.15",
+    "tsdown": "^0.13.0",
+    "typescript": "~5.9.0",
+    "vitest": "^4.0.0"
   },
   "peerDependencies": {
     "@aws-sdk/client-ssm": "^3.0.0",
@@ -57,16 +68,5 @@
     "@azure/identity": {
       "optional": true
     }
-  },
-  "devDependencies": {
-    "@alienplatform/typescript-config": "workspace:^",
-    "@aws-sdk/client-ssm": "^3.0.0",
-    "@azure/identity": "^4.0.0",
-    "@azure/keyvault-secrets": "^4.0.0",
-    "@google-cloud/secret-manager": "^6.0.0",
-    "@types/node": "^24.0.15",
-    "tsdown": "^0.13.0",
-    "typescript": "~5.9.0",
-    "vitest": "^4.0.0"
   }
 }

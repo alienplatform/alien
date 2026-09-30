@@ -1,82 +1,82 @@
-import { AlienError } from "@alienplatform/core"
-import * as z from "zod/v4"
+import { AlienError } from "@alienplatform/core";
+import * as z from "zod/v4";
 import {
   CommandBootstrapConfigInvalidError,
   CommandBootstrapFailedError,
   MalformedResponseError,
   PlatformHttpError,
-} from "./errors.js"
-import type { CommandTargetType } from "./protocol.js"
-import { parseWireResponse } from "./wire.js"
+} from "./errors.js";
+import type { CommandTargetType } from "./protocol.js";
+import { parseWireResponse } from "./wire.js";
 
-const DEFAULT_PLATFORM_URL = "https://api.alien.dev"
-const BOOTSTRAP_PATH = "/v1/commands/bootstrap"
-const BOOTSTRAP_TIMEOUT_MS = 30_000
-const REFRESH_SKEW_MS = 30_000
+const DEFAULT_PLATFORM_URL = "https://api.alien.dev";
+const BOOTSTRAP_PATH = "/v1/commands/bootstrap";
+const BOOTSTRAP_TIMEOUT_MS = 30_000;
+const REFRESH_SKEW_MS = 30_000;
 
 const BootstrapConnectionSchema = z.object({
   managerUrl: z.url(),
   token: z.string().min(1),
   expiresAt: z.iso.datetime({ offset: true }),
-})
+});
 
 const CommandTargetSchema = z.object({
   resourceId: z.string().min(1),
   resourceType: z.enum(["container", "daemon"]),
-})
+});
 
 const SenderBootstrapResponseSchema = BootstrapConnectionSchema.extend({
   target: z.undefined().optional(),
-})
+});
 
 const ReceiverBootstrapResponseSchema = BootstrapConnectionSchema.extend({
   target: CommandTargetSchema,
-})
+});
 
 interface CommandConnectionBase {
-  managerUrl: string
-  token: string
-  expiresAt: Date
+  managerUrl: string;
+  token: string;
+  expiresAt: Date;
 }
 
 export interface SenderCommandConnection extends CommandConnectionBase {
-  role: "sender"
+  role: "sender";
 }
 
 export interface ReceiverCommandConnection extends CommandConnectionBase {
-  role: "receiver"
+  role: "receiver";
   target: {
-    resourceId: string
-    resourceType: Exclude<CommandTargetType, "worker">
-  }
+    resourceId: string;
+    resourceType: Exclude<CommandTargetType, "worker">;
+  };
 }
 
-export type CommandConnection = SenderCommandConnection | ReceiverCommandConnection
+export type CommandConnection = SenderCommandConnection | ReceiverCommandConnection;
 
 interface HostedConnectionOptionsBase {
-  deploymentId: string
-  apiKey: string
-  platformUrl?: string
-  fetch?: typeof fetch
+  deploymentId: string;
+  apiKey: string;
+  platformUrl?: string;
+  fetch?: typeof fetch;
 }
 
 type HostedConnectionOptions = HostedConnectionOptionsBase &
-  ({ role: "sender"; target?: never } | { role: "receiver"; target: string })
+  ({ role: "sender"; target?: never } | { role: "receiver"; target: string });
 
 type BootstrapRequest =
   | { deploymentId: string; role: "sender" }
-  | { deploymentId: string; role: "receiver"; target: string }
+  | { deploymentId: string; role: "receiver"; target: string };
 
 export interface RefreshingConnectionProvider<Connection> {
-  get(signal?: AbortSignal): Promise<Connection>
+  get(signal?: AbortSignal): Promise<Connection>;
   /**
    * Refresh credentials after an authentication failure. Returns `undefined`
    * when this connection is fixed and the request must not be retried.
    */
-  refresh(signal?: AbortSignal): Promise<Connection | undefined>
+  refresh(signal?: AbortSignal): Promise<Connection | undefined>;
 }
 
-export type CommandConnectionProvider = RefreshingConnectionProvider<CommandConnection>
+export type CommandConnectionProvider = RefreshingConnectionProvider<CommandConnection>;
 
 /**
  * Execute an authenticated request and retry it once when the server rejects
@@ -90,25 +90,25 @@ export async function requestWithRefreshingConnection<
   request: (connection: Connection) => Promise<Result>,
   signal?: AbortSignal,
 ): Promise<Result> {
-  let result = await request(await provider.get(signal))
-  if (result.response.status !== 401) return result
+  let result = await request(await provider.get(signal));
+  if (result.response.status !== 401) return result;
 
-  const refreshed = await provider.refresh(signal)
-  if (refreshed === undefined) return result
+  const refreshed = await provider.refresh(signal);
+  if (refreshed === undefined) return result;
 
-  result = await request(refreshed)
-  return result
+  result = await request(refreshed);
+  return result;
 }
 
 export class FixedCommandConnectionProvider implements CommandConnectionProvider {
   constructor(private readonly connection: CommandConnection) {}
 
   get(): Promise<CommandConnection> {
-    return Promise.resolve(this.connection)
+    return Promise.resolve(this.connection);
   }
 
   refresh(): Promise<undefined> {
-    return Promise.resolve(undefined)
+    return Promise.resolve(undefined);
   }
 }
 
@@ -118,18 +118,18 @@ export class FixedCommandConnectionProvider implements CommandConnectionProvider
  * bootstrap endpoint.
  */
 export class HostedCommandConnectionProvider implements CommandConnectionProvider {
-  private readonly request: BootstrapRequest
-  private readonly apiKey: string
-  private readonly platformUrl: string
-  private readonly fetchImpl: typeof fetch
-  private current: CommandConnection | undefined
-  private refreshInFlight: Promise<CommandConnection> | undefined
+  private readonly request: BootstrapRequest;
+  private readonly apiKey: string;
+  private readonly platformUrl: string;
+  private readonly fetchImpl: typeof fetch;
+  private current: CommandConnection | undefined;
+  private refreshInFlight: Promise<CommandConnection> | undefined;
 
   constructor(options: HostedConnectionOptions) {
-    const deploymentId = requireNonEmpty(options.deploymentId, "deploymentId")
-    this.apiKey = requireNonEmpty(options.apiKey, "apiKey")
+    const deploymentId = requireNonEmpty(options.deploymentId, "deploymentId");
+    this.apiKey = requireNonEmpty(options.apiKey, "apiKey");
     if (options.role === "sender" && options.target !== undefined) {
-      throw invalidConfig("target", "target is only valid for receiver bootstrap")
+      throw invalidConfig("target", "target is only valid for receiver bootstrap");
     }
     this.request =
       options.role === "sender"
@@ -138,9 +138,9 @@ export class HostedCommandConnectionProvider implements CommandConnectionProvide
             deploymentId,
             role: "receiver",
             target: requireNonEmpty(options.target, "target"),
-          }
-    this.platformUrl = validatePlatformUrl(options.platformUrl ?? DEFAULT_PLATFORM_URL)
-    this.fetchImpl = options.fetch ?? globalThis.fetch
+          };
+    this.platformUrl = validatePlatformUrl(options.platformUrl ?? DEFAULT_PLATFORM_URL);
+    this.fetchImpl = options.fetch ?? globalThis.fetch;
   }
 
   async get(signal?: AbortSignal): Promise<CommandConnection> {
@@ -148,41 +148,41 @@ export class HostedCommandConnectionProvider implements CommandConnectionProvide
       this.current !== undefined &&
       this.current.expiresAt.getTime() - Date.now() > REFRESH_SKEW_MS
     ) {
-      return this.current
+      return this.current;
     }
-    return this.refresh(signal)
+    return this.refresh(signal);
   }
 
   async refresh(signal?: AbortSignal): Promise<CommandConnection> {
     if (this.refreshInFlight !== undefined) {
-      return this.refreshInFlight
+      return this.refreshInFlight;
     }
 
-    const refresh = this.bootstrap(signal)
-    this.refreshInFlight = refresh
+    const refresh = this.bootstrap(signal);
+    this.refreshInFlight = refresh;
     try {
-      const connection = await refresh
-      this.current = connection
-      return connection
+      const connection = await refresh;
+      this.current = connection;
+      return connection;
     } finally {
       if (this.refreshInFlight === refresh) {
-        this.refreshInFlight = undefined
+        this.refreshInFlight = undefined;
       }
     }
   }
 
   private async bootstrap(signal?: AbortSignal): Promise<CommandConnection> {
-    const url = buildBootstrapUrl(this.platformUrl)
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), BOOTSTRAP_TIMEOUT_MS)
-    const abort = () => controller.abort(signal?.reason)
+    const url = buildBootstrapUrl(this.platformUrl);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), BOOTSTRAP_TIMEOUT_MS);
+    const abort = () => controller.abort(signal?.reason);
     if (signal?.aborted) {
-      abort()
+      abort();
     } else {
-      signal?.addEventListener("abort", abort, { once: true })
+      signal?.addEventListener("abort", abort, { once: true });
     }
 
-    let response: Response
+    let response: Response;
     try {
       response = await this.fetchImpl(url, {
         method: "POST",
@@ -192,7 +192,7 @@ export class HostedCommandConnectionProvider implements CommandConnectionProvide
         },
         body: JSON.stringify(this.request),
         signal: controller.signal,
-      })
+      });
     } catch (error) {
       throw (await AlienError.from(error)).withContext(
         CommandBootstrapFailedError.create({
@@ -200,10 +200,10 @@ export class HostedCommandConnectionProvider implements CommandConnectionProvide
           role: this.request.role,
           reason: error instanceof Error ? error.message : String(error),
         }),
-      )
+      );
     } finally {
-      clearTimeout(timeout)
-      signal?.removeEventListener("abort", abort)
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
     }
 
     if (!response.ok) {
@@ -212,8 +212,8 @@ export class HostedCommandConnectionProvider implements CommandConnectionProvide
         url,
         status: response.status,
         statusText: response.statusText,
-      }
-      const definition = PlatformHttpError.create(context)
+      };
+      const definition = PlatformHttpError.create(context);
       throw new AlienError({
         code: definition.metadata.code,
         message: definition.metadata.message(context),
@@ -221,12 +221,12 @@ export class HostedCommandConnectionProvider implements CommandConnectionProvide
         internal: definition.metadata.internal,
         httpStatusCode: definition.metadata.httpStatusCode,
         context,
-      })
+      });
     }
 
-    let value: unknown
+    let value: unknown;
     try {
-      value = await response.json()
+      value = await response.json();
     } catch (error) {
       throw new AlienError(
         MalformedResponseError.create({
@@ -234,71 +234,71 @@ export class HostedCommandConnectionProvider implements CommandConnectionProvide
           url,
           reason: error instanceof Error ? error.message : String(error),
         }),
-      )
+      );
     }
     if (this.request.role === "sender") {
-      const parsed = parseWireResponse(SenderBootstrapResponseSchema, value, "POST", url)
+      const parsed = parseWireResponse(SenderBootstrapResponseSchema, value, "POST", url);
       return {
         role: "sender",
         managerUrl: parsed.managerUrl,
         token: parsed.token,
         expiresAt: new Date(parsed.expiresAt),
-      }
+      };
     }
 
-    const parsed = parseWireResponse(ReceiverBootstrapResponseSchema, value, "POST", url)
+    const parsed = parseWireResponse(ReceiverBootstrapResponseSchema, value, "POST", url);
     return {
       role: "receiver",
       managerUrl: parsed.managerUrl,
       token: parsed.token,
       expiresAt: new Date(parsed.expiresAt),
       target: parsed.target,
-    }
+    };
   }
 }
 
 export function managerCommandsUrl(managerUrl: string): string {
-  let url: URL
+  let url: URL;
   try {
-    url = new URL(managerUrl)
+    url = new URL(managerUrl);
   } catch {
-    throw invalidConfig("managerUrl", `managerUrl is not a valid URL: ${managerUrl}`)
+    throw invalidConfig("managerUrl", `managerUrl is not a valid URL: ${managerUrl}`);
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw invalidConfig("managerUrl", "managerUrl must use HTTP or HTTPS")
+    throw invalidConfig("managerUrl", "managerUrl must use HTTP or HTTPS");
   }
-  const basePath = url.pathname.replace(/\/+$/, "")
-  url.pathname = `${basePath}/v1`
-  return url.toString()
+  const basePath = url.pathname.replace(/\/+$/, "");
+  url.pathname = `${basePath}/v1`;
+  return url.toString();
 }
 
 function buildBootstrapUrl(platformUrl: string): string {
-  const url = new URL(platformUrl)
-  const basePath = url.pathname.replace(/\/+$/, "")
-  url.pathname = `${basePath}${BOOTSTRAP_PATH}`
-  return url.toString()
+  const url = new URL(platformUrl);
+  const basePath = url.pathname.replace(/\/+$/, "");
+  url.pathname = `${basePath}${BOOTSTRAP_PATH}`;
+  return url.toString();
 }
 
 function validatePlatformUrl(value: string): string {
-  let url: URL
+  let url: URL;
   try {
-    url = new URL(value)
+    url = new URL(value);
   } catch {
-    throw invalidConfig("platformUrl", `platformUrl is not a valid URL: ${value}`)
+    throw invalidConfig("platformUrl", `platformUrl is not a valid URL: ${value}`);
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw invalidConfig("platformUrl", "platformUrl must use HTTP or HTTPS")
+    throw invalidConfig("platformUrl", "platformUrl must use HTTP or HTTPS");
   }
-  return value
+  return value;
 }
 
 function requireNonEmpty(value: string | undefined, field: string): string {
   if (value === undefined || value.trim() === "") {
-    throw invalidConfig(field, `${field} must not be empty`)
+    throw invalidConfig(field, `${field} must not be empty`);
   }
-  return value
+  return value;
 }
 
 function invalidConfig(field: string, reason: string) {
-  return new AlienError(CommandBootstrapConfigInvalidError.create({ field, reason }))
+  return new AlienError(CommandBootstrapConfigInvalidError.create({ field, reason }));
 }

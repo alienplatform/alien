@@ -28,14 +28,14 @@
  */
 
 // Shared error primitives, re-exported for consumer error handling.
-export { AlienError, defineError } from "@alienplatform/core"
+export { AlienError, defineError } from "@alienplatform/core";
 export type {
   CommandsClientConfig,
   CommandsClientDeploymentConfig,
   InvokeOptions,
-} from "./client.js"
+} from "./client.js";
 // Sender
-export { CommandsClient, TargetedCommands } from "./client.js"
+export { CommandsClient, TargetedCommands } from "./client.js";
 // Error set
 export {
   CommandBootstrapConfigInvalidError,
@@ -52,7 +52,7 @@ export {
   PlatformHttpError,
   ResponseDecodingFailedError,
   StorageOperationFailedError,
-} from "./errors.js"
+} from "./errors.js";
 // Wire protocol types
 export type {
   BodySpec,
@@ -75,7 +75,7 @@ export type {
   SubmitResponseRequest,
   UploadCompleteRequest,
   UploadCompleteResponse,
-} from "./protocol.js"
+} from "./protocol.js";
 export type {
   CommandContext,
   CommandHandler,
@@ -85,6 +85,6 @@ export type {
   RawCommandHandler,
   StandardSchema,
   StandardSchemaOutput,
-} from "./receiver.js"
+} from "./receiver.js";
 // Receiver
-export { createCommandReceiver } from "./receiver.js"
+export { createCommandReceiver } from "./receiver.js";

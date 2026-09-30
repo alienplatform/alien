@@ -1,4 +1,4 @@
-"use client"
+"use client";
 
 import {
   IconBrandGithub,
@@ -7,14 +7,14 @@ import {
   IconPlug,
   IconServer,
   IconSettings,
-} from "@tabler/icons-react"
-import Link from "next/link"
-import { usePathname } from "next/navigation"
-import type * as React from "react"
-import { NavMain } from "@/components/nav-main"
-import { NavSecondary } from "@/components/nav-secondary"
-import { NavUser } from "@/components/nav-user"
-import { TeamSwitcher } from "@/components/team-switcher"
+} from "@tabler/icons-react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import type * as React from "react";
+import { NavMain } from "@/components/nav-main";
+import { NavSecondary } from "@/components/nav-secondary";
+import { NavUser } from "@/components/nav-user";
+import { TeamSwitcher } from "@/components/team-switcher";
 import {
   Sidebar,
   SidebarContent,
@@ -23,13 +23,13 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-} from "@/components/ui/sidebar"
+} from "@/components/ui/sidebar";
 
 interface Organization {
-  id: string
-  name: string
-  slug: string | null
-  logo: string | null
+  id: string;
+  name: string;
+  slug: string | null;
+  logo: string | null;
 }
 
 const navMain = [
@@ -48,7 +48,7 @@ const navMain = [
     url: "/integrations",
     icon: IconPlug,
   },
-]
+];
 
 const navSecondary = [
   {
@@ -62,16 +62,16 @@ const navSecondary = [
     icon: IconHelp,
     external: true,
   },
-]
+];
 
 interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
   user?: {
-    name: string
-    email: string
-    avatar?: string
-  }
-  organizations?: Organization[]
-  activeOrganizationId?: string | null
+    name: string;
+    email: string;
+    avatar?: string;
+  };
+  organizations?: Organization[];
+  activeOrganizationId?: string | null;
 }
 
 export function AppSidebar({
@@ -80,12 +80,12 @@ export function AppSidebar({
   activeOrganizationId,
   ...props
 }: AppSidebarProps) {
-  const pathname = usePathname()
+  const pathname = usePathname();
 
-  const navMainWithActive = navMain.map(item => ({
+  const navMainWithActive = navMain.map((item) => ({
     ...item,
     isActive: pathname === item.url || (item.url !== "/" && pathname.startsWith(item.url)),
-  }))
+  }));
 
   return (
     <Sidebar collapsible="offcanvas" {...props}>
@@ -115,5 +115,5 @@ export function AppSidebar({
         <NavUser user={user || { name: "Demo User", email: "demo@example.com" }} />
       </SidebarFooter>
     </Sidebar>
-  )
+  );
 }

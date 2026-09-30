@@ -1,9 +1,9 @@
-"use client"
+"use client";
 
-import { IconEye } from "@tabler/icons-react"
-import Link from "next/link"
-import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, XAxis, YAxis } from "recharts"
-import { Button } from "@/components/ui/button"
+import { IconEye } from "@tabler/icons-react";
+import Link from "next/link";
+import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, XAxis, YAxis } from "recharts";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardAction,
@@ -11,24 +11,24 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card"
+} from "@/components/ui/card";
 import {
   type ChartConfig,
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
-} from "@/components/ui/chart"
+} from "@/components/ui/chart";
 
 interface PrRiskChartProps {
   data: {
-    low: number
-    medium: number
-    high: number
-    critical: number
-  }
-  integrationId: string
-  agentId: string
-  repoName?: string
+    low: number;
+    medium: number;
+    high: number;
+    critical: number;
+  };
+  integrationId: string;
+  agentId: string;
+  repoName?: string;
 }
 
 const chartConfig = {
@@ -48,7 +48,7 @@ const chartConfig = {
     label: "Critical",
     color: "oklch(0.637 0.237 25.331)",
   },
-} satisfies ChartConfig
+} satisfies ChartConfig;
 
 export function PrRiskChart({ data, integrationId, agentId, repoName }: PrRiskChartProps) {
   const chartData = [
@@ -56,7 +56,7 @@ export function PrRiskChart({ data, integrationId, agentId, repoName }: PrRiskCh
     { name: "Medium", value: data.medium, fill: chartConfig.medium.color },
     { name: "High", value: data.high, fill: chartConfig.high.color },
     { name: "Critical", value: data.critical, fill: chartConfig.critical.color },
-  ]
+  ];
 
   return (
     <Card>
@@ -101,7 +101,7 @@ export function PrRiskChart({ data, integrationId, agentId, repoName }: PrRiskCh
           </ResponsiveContainer>
         </ChartContainer>
         <div className="flex justify-center gap-4 mt-4 flex-wrap">
-          {chartData.map(item => (
+          {chartData.map((item) => (
             <div key={item.name} className="flex items-center gap-2">
               <div className="h-3 w-3 rounded-sm" style={{ backgroundColor: item.fill }} />
               <span className="text-sm text-muted-foreground">
@@ -112,5 +112,5 @@ export function PrRiskChart({ data, integrationId, agentId, repoName }: PrRiskCh
         </div>
       </CardContent>
     </Card>
-  )
+  );
 }

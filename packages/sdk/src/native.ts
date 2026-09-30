@@ -21,11 +21,11 @@
  * static asset imports inside each `/native` only run where the asset was staged.
  */
 
-import { installEmbeddedGateway } from "@alienplatform/ai-gateway/native"
-import { installEmbeddedAddon as installBindingsAddon } from "@alienplatform/bindings/native"
+import { installEmbeddedGateway } from "@alienplatform/ai-gateway/native";
+import { installEmbeddedAddon as installBindingsAddon } from "@alienplatform/bindings/native";
 
 /** Register the bun-embedded bindings addon and ai-gateway binary with their loaders. */
 export function installEmbeddedAddon(): void {
-  installBindingsAddon()
-  installEmbeddedGateway()
+  installBindingsAddon();
+  installEmbeddedGateway();
 }

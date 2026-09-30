@@ -11,17 +11,17 @@
  * instead of the suite quietly passing for the wrong reason.
  */
 
-import { describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest";
 
 describe("runtime canary", () => {
   it("proves which runtime executed this file", () => {
-    const isBun = typeof (globalThis as { Bun?: unknown }).Bun !== "undefined"
-    console.log(`[runtime-canary] executing under ${isBun ? "Bun" : "Node"}`)
+    const isBun = typeof (globalThis as { Bun?: unknown }).Bun !== "undefined";
+    console.log(`[runtime-canary] executing under ${isBun ? "Bun" : "Node"}`);
 
     if (process.env.BUN_EXPECTED === "1") {
-      expect(isBun).toBe(true)
+      expect(isBun).toBe(true);
     } else {
-      expect(isBun).toBe(false)
+      expect(isBun).toBe(false);
     }
-  })
-})
+  });
+});

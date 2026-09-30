@@ -7,15 +7,15 @@
  * shared context through the steps and reports their combined results.
  */
 
-import { spawnSync } from "node:child_process"
+import { spawnSync } from "node:child_process";
 
 /** One reported operation in the executable consumer proof. */
 export interface CheckResult {
-  check: string
-  package: string
-  status: "pass" | "fail"
-  reason: string
-  evidence: string
+  check: string;
+  package: string;
+  status: "pass" | "fail";
+  reason: string;
+  evidence: string;
   /**
    * Set only for checks run once per JS runtime (the `import`/`error-code`
    * family from src/imports.ts, executed under both Bun and Node). Used by
@@ -23,7 +23,7 @@ export interface CheckResult {
    * absent for checks that run exactly once regardless of runtime (pack,
    * install, typecheck, packed-contents, compile).
    */
-  runtime?: "bun" | "node"
+  runtime?: "bun" | "node";
 }
 
 /**
@@ -33,26 +33,26 @@ export interface CheckResult {
  * import, compile).
  */
 export interface Ctx {
-  scriptDir: string
-  packagesDir: string
-  tarballsDir: string
-  fixtureDir: string
-  repoRoot: string
-  bunAvailable: boolean
+  scriptDir: string;
+  packagesDir: string;
+  tarballsDir: string;
+  fixtureDir: string;
+  repoRoot: string;
+  bunAvailable: boolean;
   /** name -> absolute tarball path, for packages that packed successfully. */
-  tarballs: Map<string, string>
+  tarballs: Map<string, string>;
   /** Resolved bindings dev-addon path, when one had to be located or built for this host. */
-  addonPath?: string
+  addonPath?: string;
   /** Resolved ai-gateway launcher-binary path, when one is available for this host. */
-  aiBinaryPath?: string
+  aiBinaryPath?: string;
   /** Env carrying ALIEN_BINDINGS_ADDON_PATH for subprocesses, when `addonPath` is set. */
-  addonEnv?: NodeJS.ProcessEnv
+  addonEnv?: NodeJS.ProcessEnv;
 }
 
 export interface RunOutput {
-  status: number | null
-  stdout: string
-  stderr: string
+  status: number | null;
+  stdout: string;
+  stderr: string;
 }
 
 export function run(
@@ -65,24 +65,24 @@ export function run(
     cwd,
     encoding: "utf8",
     env: env ? { ...process.env, ...env } : undefined,
-  })
+  });
   if (proc.error) {
-    return { status: null, stdout: proc.stdout ?? "", stderr: String(proc.error) }
+    return { status: null, stdout: proc.stdout ?? "", stderr: String(proc.error) };
   }
-  return { status: proc.status, stdout: proc.stdout ?? "", stderr: proc.stderr ?? "" }
+  return { status: proc.status, stdout: proc.stdout ?? "", stderr: proc.stderr ?? "" };
 }
 
 export function lastLine(text: string): string {
   const lines = text
     .split("\n")
-    .map(line => line.trim())
-    .filter(line => line.length > 0)
-  return lines.at(-1) ?? ""
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  return lines.at(-1) ?? "";
 }
 
 /** Escapes a string for literal use inside a RegExp. */
 export function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 // Hard denylist: never allowed in a packed tarball, regardless of `files` or
@@ -93,4 +93,4 @@ export const HARD_DENYLIST_PATTERNS: RegExp[] = [
   /(^|\/)\.env$/,
   /\.tgz$/,
   /(^|\/)\.turbo\//,
-]
+];

@@ -1,49 +1,49 @@
-import { describe, expect, it } from "vitest"
-import type { NativeAddon } from "../loader.js"
-import { assertAddonVersion, platformTriple } from "../loader.js"
+import { describe, expect, it } from "vitest";
+import type { NativeAddon } from "../loader.js";
+import { assertAddonVersion, platformTriple } from "../loader.js";
 
 function addonReporting(version: string): NativeAddon {
   class BindingsHandle {
     key(): never {
-      throw new Error("not used by version validation")
+      throw new Error("not used by version validation");
     }
     storage(): never {
-      throw new Error("not used by version validation")
+      throw new Error("not used by version validation");
     }
     kv(): never {
-      throw new Error("not used by version validation")
+      throw new Error("not used by version validation");
     }
     queue(): never {
-      throw new Error("not used by version validation")
+      throw new Error("not used by version validation");
     }
     vault(): never {
-      throw new Error("not used by version validation")
+      throw new Error("not used by version validation");
     }
     container(): never {
-      throw new Error("not used by version validation")
+      throw new Error("not used by version validation");
     }
     postgres(): never {
-      throw new Error("not used by version validation")
+      throw new Error("not used by version validation");
     }
     sandbox(): never {
-      throw new Error("not used by version validation")
+      throw new Error("not used by version validation");
     }
   }
 
   const RemoteBindingsHandle: NativeAddon["RemoteBindingsHandle"] = {
     async forCustomer(): Promise<never> {
-      throw new Error("not used by version validation")
+      throw new Error("not used by version validation");
     },
     async forDeployment(): Promise<never> {
-      throw new Error("not used by version validation")
+      throw new Error("not used by version validation");
     },
-  }
+  };
 
   return {
     BindingsHandle,
     RemoteBindingsHandle,
     version: () => version,
-  }
+  };
 }
 
 describe("platformTriple", () => {
@@ -60,8 +60,8 @@ describe("platformTriple", () => {
     ["linux", "x64", "gnu", "linux-x64-gnu"],
     ["linux", "arm64", "gnu", "linux-arm64-gnu"],
   ] as const)("maps %s/%s (%s) to %s", (platform, arch, libc, triple) => {
-    expect(platformTriple(platform, arch, libc)).toBe(triple)
-  })
+    expect(platformTriple(platform, arch, libc)).toBe(triple);
+  });
 
   it.each([
     ["linux", "x64"],
@@ -71,15 +71,15 @@ describe("platformTriple", () => {
     // naming musl rather than silently selecting a glibc triple.
     expect(() => platformTriple(platform, arch, "musl")).toThrow(
       `@alienplatform/bindings has no native addon for musl-based Linux (arch '${arch}').`,
-    )
-  })
+    );
+  });
 
   it("throws a clear error for an unsupported platform/arch pair", () => {
     expect(() => platformTriple("win32", "x64", "gnu")).toThrow(
       "@alienplatform/bindings has no native addon for platform 'win32' arch 'x64'.",
-    )
-  })
-})
+    );
+  });
+});
 
 describe("assertAddonVersion", () => {
   it("accepts the platform prebuild from the wrapper's release", () => {
@@ -89,8 +89,8 @@ describe("assertAddonVersion", () => {
         "1.14.1",
         "published prebuild '@alienplatform/bindings-darwin-arm64'",
       ),
-    ).not.toThrow()
-  })
+    ).not.toThrow();
+  });
 
   it("rejects a platform prebuild from a different release with actionable details", () => {
     expect(() =>
@@ -101,6 +101,6 @@ describe("assertAddonVersion", () => {
       ),
     ).toThrow(
       "native addon version mismatch for published prebuild '@alienplatform/bindings-darwin-arm64': addon reports '1.13.0', wrapper is '1.14.1'. Reinstall @alienplatform/bindings",
-    )
-  })
-})
+    );
+  });
+});

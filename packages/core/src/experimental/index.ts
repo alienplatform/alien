@@ -7,4 +7,4 @@
  * resources. Their resource type identifiers live under the `experimental/`
  * namespace (e.g. `experimental/aws-opensearch`).
  */
-export * from "./aws-opensearch.js"
+export * from "./aws-opensearch.js";

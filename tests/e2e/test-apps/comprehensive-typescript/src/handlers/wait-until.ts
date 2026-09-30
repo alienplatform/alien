@@ -1,53 +1,53 @@
-import { storage, waitUntil } from "@alienplatform/sdk"
-import { Hono } from "hono"
-import { toExternalOperationError } from "../helpers.js"
+import { storage, waitUntil } from "@alienplatform/sdk";
+import { Hono } from "hono";
+import { toExternalOperationError } from "../helpers.js";
 
-const app = new Hono()
+const app = new Hono();
 
-app.post("/wait-until-test", async c => {
-  const { storageBindingName, testData, delayMs } = await c.req.json()
-  const testId = crypto.randomUUID()
+app.post("/wait-until-test", async (c) => {
+  const { storageBindingName, testData, delayMs } = await c.req.json();
+  const testId = crypto.randomUUID();
 
   waitUntil(
     (async () => {
-      await new Promise(resolve => setTimeout(resolve, delayMs || 1000))
-      const s = storage(storageBindingName || "alien-storage")
+      await new Promise((resolve) => setTimeout(resolve, delayMs || 1000));
+      const s = storage(storageBindingName || "alien-storage");
       await s.put(
         `wait_until_test_${testId}.txt`,
         new TextEncoder().encode(testData || "background-task-done"),
-      )
+      );
     })(),
-  )
+  );
 
-  return c.json({ success: true, testId, message: "Background task scheduled" })
-})
+  return c.json({ success: true, testId, message: "Background task scheduled" });
+});
 
-app.get("/wait-until-verify/:testId/:storageBindingName", async c => {
-  const testId = c.req.param("testId")
-  const storageBindingName = c.req.param("storageBindingName")
+app.get("/wait-until-verify/:testId/:storageBindingName", async (c) => {
+  const testId = c.req.param("testId");
+  const storageBindingName = c.req.param("storageBindingName");
   try {
-    const s = storage(storageBindingName)
+    const s = storage(storageBindingName);
     // Storage has no `exists`; a missing object surfaces as a thrown NotFound
     // from `get`, which the catch below maps to "not completed yet".
-    const result = await s.get(`wait_until_test_${testId}.txt`)
-    const fileContent = new TextDecoder().decode(result.data)
+    const result = await s.get(`wait_until_test_${testId}.txt`);
+    const fileContent = new TextDecoder().decode(result.data);
     return c.json({
       success: true,
       testId,
       backgroundTaskCompleted: true,
       fileContent,
       message: "Background task completed",
-    })
+    });
   } catch (error: unknown) {
-    const alienError = await toExternalOperationError(error, "wait-until-verify")
+    const alienError = await toExternalOperationError(error, "wait-until-verify");
     return c.json({
       success: false,
       testId,
       backgroundTaskCompleted: false,
       message: alienError.message,
       code: alienError.code,
-    })
+    });
   }
-})
+});
 
-export default app
+export default app;

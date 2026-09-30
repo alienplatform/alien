@@ -7,14 +7,14 @@
         "label": "use-for-storage",
         "description": "Generate storage data keys and decrypt encrypted storage objects.",
         "grant": {
-          "actions": ["kms:GenerateDataKey", "kms:Decrypt"]
+          "actions": ["kms:GenerateDataKey", "kms:Decrypt"],
         },
         "binding": {
           "resource": {
-            "resources": ["${resourceName}"]
-          }
-        }
-      }
-    ]
-  }
+            "resources": ["${resourceName}"],
+          },
+        },
+      },
+    ],
+  },
 }

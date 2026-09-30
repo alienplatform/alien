@@ -15,9 +15,9 @@
  * must exist for the loader's `platformTriple()` to resolve on either libc.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { join, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const TRIPLES = [
   { triple: "darwin-arm64", os: "darwin", cpu: "arm64" },
@@ -26,16 +26,16 @@ const TRIPLES = [
   { triple: "linux-x64-musl", os: "linux", cpu: "x64", libc: "musl" },
   { triple: "linux-arm64-gnu", os: "linux", cpu: "arm64", libc: "glibc" },
   { triple: "linux-arm64-musl", os: "linux", cpu: "arm64", libc: "musl" },
-]
+];
 
 const pkgDir = process.argv[2]
   ? resolve(process.argv[2])
-  : fileURLToPath(new URL("..", import.meta.url))
-const { version } = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8"))
+  : fileURLToPath(new URL("..", import.meta.url));
+const { version } = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8"));
 
 for (const { triple, os, cpu, libc } of TRIPLES) {
-  const dir = join(pkgDir, "npm", triple)
-  mkdirSync(dir, { recursive: true })
+  const dir = join(pkgDir, "npm", triple);
+  mkdirSync(dir, { recursive: true });
   const manifest = {
     name: `@alienplatform/ai-gateway-${triple}`,
     version,
@@ -43,8 +43,8 @@ for (const { triple, os, cpu, libc } of TRIPLES) {
     os: [os],
     cpu: [cpu],
     files: ["alien-ai-gateway"],
-  }
-  if (libc) Object.assign(manifest, { libc: [libc] })
-  writeFileSync(join(dir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`)
-  console.log(`Generated npm/${triple}/package.json at ${version}`)
+  };
+  if (libc) Object.assign(manifest, { libc: [libc] });
+  writeFileSync(join(dir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  console.log(`Generated npm/${triple}/package.json at ${version}`);
 }

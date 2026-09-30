@@ -8,8 +8,8 @@
  * later dereferenced.
  */
 
-import { AlienError } from "@alienplatform/core"
-import { MalformedResponseError } from "./errors.js"
+import { AlienError } from "@alienplatform/core";
+import { MalformedResponseError } from "./errors.js";
 
 /**
  * Minimal structural view of a zod schema — just the `safeParse` we use. Lets
@@ -19,7 +19,7 @@ import { MalformedResponseError } from "./errors.js"
 export interface WireSchema<T> {
   safeParse(
     value: unknown,
-  ): { success: true; data: T } | { success: false; error: { message: string } }
+  ): { success: true; data: T } | { success: false; error: { message: string } };
 }
 
 /**
@@ -33,9 +33,11 @@ export function parseWireResponse<T>(
   method: string,
   url: string,
 ): T {
-  const result = schema.safeParse(value)
+  const result = schema.safeParse(value);
   if (result.success) {
-    return result.data
+    return result.data;
   }
-  throw new AlienError(MalformedResponseError.create({ method, url, reason: result.error.message }))
+  throw new AlienError(
+    MalformedResponseError.create({ method, url, reason: result.error.message }),
+  );
 }

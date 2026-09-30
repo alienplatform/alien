@@ -10,5 +10,5 @@ export default function Home() {
         Try the API route at <a href="/api/health">/api/health</a>.
       </p>
     </main>
-  )
+  );
 }

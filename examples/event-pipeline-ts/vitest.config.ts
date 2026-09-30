@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config"
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
@@ -7,4 +7,4 @@ export default defineConfig({
     hookTimeout: 300_000, // 5 min for beforeAll/afterAll
     pool: "forks", // Use forks to ensure clean process state
   },
-})
+});

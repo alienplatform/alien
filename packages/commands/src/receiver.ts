@@ -34,15 +34,15 @@
  * ```
  */
 
-import { AlienError, LeaseResponseSchema } from "@alienplatform/core"
-import { requestWithRefreshingConnection } from "./bootstrap.js"
+import { AlienError, LeaseResponseSchema } from "@alienplatform/core";
+import { requestWithRefreshingConnection } from "./bootstrap.js";
 import {
   CommandReceiverConfigInvalidError,
   InvalidEnvelopeError,
   ManagerHttpError,
   StorageOperationFailedError,
-} from "./errors.js"
-import { downloadPresigned, redactUrlForError, uploadPresigned } from "./presigned.js"
+} from "./errors.js";
+import { downloadPresigned, redactUrlForError, uploadPresigned } from "./presigned.js";
 import type {
   BodySpec,
   CommandResponse,
@@ -52,7 +52,7 @@ import type {
   LeaseRequest,
   PresignedRequest,
   TraceContext,
-} from "./protocol.js"
+} from "./protocol.js";
 import {
   type CommandReceiverOptions,
   type CommandReceiverRuntimeOptions,
@@ -62,10 +62,10 @@ import {
   type ReceiverConnectionProvider,
   type ReceiverRuntimeConfig,
   resolveReceiverConfig,
-} from "./receiver-config.js"
-import { parseWireResponse } from "./wire.js"
+} from "./receiver-config.js";
+import { parseWireResponse } from "./wire.js";
 
-export type { CommandReceiverOptions, HostedCommandReceiverOptions } from "./receiver-config.js"
+export type { CommandReceiverOptions, HostedCommandReceiverOptions } from "./receiver-config.js";
 
 /**
  * Presigned-transfer policy for receivers: the local backend is always
@@ -73,14 +73,14 @@ export type { CommandReceiverOptions, HostedCommandReceiverOptions } from "./rec
  * how the local platform delivers bodies. (Senders gate it behind the
  * `allowLocalStorage` client option instead.)
  */
-const RECEIVER_ALLOW_LOCAL = true
+const RECEIVER_ALLOW_LOCAL = true;
 
 /** Error code submitted when a leased command has no registered handler. */
-export const ERROR_CODE_UNKNOWN_COMMAND = "UNKNOWN_COMMAND"
+export const ERROR_CODE_UNKNOWN_COMMAND = "UNKNOWN_COMMAND";
 /** Error code submitted when a handler exceeds its execution budget. */
-export const ERROR_CODE_HANDLER_TIMEOUT = "HANDLER_TIMEOUT"
+export const ERROR_CODE_HANDLER_TIMEOUT = "HANDLER_TIMEOUT";
 /** Error code submitted when a handler throws/rejects (or its response fails to serialize). */
-export const ERROR_CODE_HANDLER_ERROR = "HANDLER_ERROR"
+export const ERROR_CODE_HANDLER_ERROR = "HANDLER_ERROR";
 
 /**
  * Safety margin subtracted from a lease's expiry when computing the execution
@@ -90,14 +90,14 @@ export const ERROR_CODE_HANDLER_ERROR = "HANDLER_ERROR"
  * duplicate is still in flight. Twin of the Rust receiver's
  * `LEASE_SAFETY_MARGIN` (5s).
  */
-const LEASE_SAFETY_MARGIN_MS = 5_000
+const LEASE_SAFETY_MARGIN_MS = 5_000;
 /**
  * Timeout on control-plane HTTP calls (lease acquire, response submit), in
  * ms. `fetch` has no default timeout, so a hung call would otherwise freeze
  * the poll loop indefinitely. Twin of the Rust receiver's 30s reqwest
  * timeout.
  */
-const CONTROL_TIMEOUT_MS = 30_000
+const CONTROL_TIMEOUT_MS = 30_000;
 
 /**
  * Per-command context passed to a {@link CommandHandler}.
@@ -112,32 +112,32 @@ export interface CommandContext {
    * after decode, prior to any handler-side parsing. This is byte-for-byte
    * identical to the Rust receiver's `ctx.input`.
    */
-  input: Uint8Array
+  input: Uint8Array;
   /**
    * Fires when the execution budget expires. The handler promise is abandoned
    * regardless; observe this to stop cooperative work the handler started.
    * Twin of the Rust `ctx.cancellation` token.
    */
-  signal: AbortSignal
+  signal: AbortSignal;
   /**
    * The effective execution budget: `min(envelope.deadline, leaseExpiresAt)`.
    * Always present while a lease is held.
    */
-  deadline: Date
+  deadline: Date;
   /** Unique command identifier. */
-  commandId: string
+  commandId: string;
   /** The resource identity this receiver owns. */
   target: {
-    resourceId: string
-    resourceType: Exclude<CommandTargetType, "worker">
-  }
+    resourceId: string;
+    resourceType: Exclude<CommandTargetType, "worker">;
+  };
   /** Optional W3C trace context propagated from the command envelope. */
-  traceContext?: TraceContext
+  traceContext?: TraceContext;
   /**
    * Delivery attempt, starting at 1. Greater than 1 means redelivery
    * (at-least-once semantics); handlers must tolerate running more than once.
    */
-  attempt: number
+  attempt: number;
 }
 
 /**
@@ -146,13 +146,13 @@ export interface CommandContext {
  * (`JSON.stringify`-encoded). Throwing/rejecting submits the error's non-empty
  * string `code` when present, otherwise `HANDLER_ERROR`.
  */
-export type RawCommandHandler = (ctx: CommandContext) => unknown | Promise<unknown>
+export type RawCommandHandler = (ctx: CommandContext) => unknown | Promise<unknown>;
 
 /** The part of Standard Schema v1 used to validate command inputs. */
 export interface StandardSchema<Input = unknown, Output = Input> {
   readonly "~standard": {
-    readonly version: 1
-    readonly vendor: string
+    readonly version: 1;
+    readonly vendor: string;
     readonly validate: (
       value: unknown,
     ) =>
@@ -161,21 +161,21 @@ export interface StandardSchema<Input = unknown, Output = Input> {
       | Promise<
           | { readonly value: Output; readonly issues?: undefined }
           | { readonly issues: ReadonlyArray<{ readonly message: string }> }
-        >
-    readonly types?: { readonly input: Input; readonly output: Output }
-  }
+        >;
+    readonly types?: { readonly input: Input; readonly output: Output };
+  };
 }
 
 /** Infer the validated output type of a Standard Schema. */
 export type StandardSchemaOutput<Schema extends StandardSchema> = NonNullable<
   Schema["~standard"]["types"]
->["output"]
+>["output"];
 
 /** A JSON command handler. */
 export type CommandHandler<Input = unknown> = (
   input: Input,
   context: CommandContext,
-) => unknown | Promise<unknown>
+) => unknown | Promise<unknown>;
 
 /**
  * The pull receiver handle. Register handlers with {@link CommandReceiver.command},
@@ -184,15 +184,15 @@ export type CommandHandler<Input = unknown> = (
  */
 export interface CommandReceiver {
   /** Register a schema-less JSON command. Its input is deliberately `unknown`. */
-  command(name: string, handler: CommandHandler<unknown>): CommandReceiver
+  command(name: string, handler: CommandHandler<unknown>): CommandReceiver;
   /** Register a JSON command validated by a Standard Schema v1 validator. */
   command<Schema extends StandardSchema>(
     name: string,
     schema: Schema,
     handler: CommandHandler<StandardSchemaOutput<Schema>>,
-  ): CommandReceiver
+  ): CommandReceiver;
   /** Register an advanced handler that receives the encoded input bytes. */
-  handleRaw(name: string, handler: RawCommandHandler): CommandReceiver
+  handleRaw(name: string, handler: RawCommandHandler): CommandReceiver;
   /**
    * Drive the lease loop until {@link CommandReceiver.stop} is called. No new
    * lease poll *starts* once draining begins; a poll already in flight
@@ -201,9 +201,9 @@ export interface CommandReceiver {
    * Retryable or unknown transport failures continue polling; non-retryable
    * {@link AlienError}s terminate the receiver after draining.
    */
-  run(): Promise<void>
+  run(): Promise<void>;
   /** Signal the receiver to drain and stop (see {@link CommandReceiver.run}). */
-  stop(): void
+  stop(): void;
 }
 
 /**
@@ -216,175 +216,175 @@ export interface CommandReceiver {
  * `container` or `daemon`; `worker` (and anything else) is rejected — a receiver
  * must not guess its target type.
  */
-export function createCommandReceiver(options: HostedCommandReceiverOptions): CommandReceiver
-export function createCommandReceiver(options?: CommandReceiverOptions): CommandReceiver
+export function createCommandReceiver(options: HostedCommandReceiverOptions): CommandReceiver;
+export function createCommandReceiver(options?: CommandReceiverOptions): CommandReceiver;
 export function createCommandReceiver(
   options: CommandReceiverOptions | HostedCommandReceiverOptions = {},
 ): CommandReceiver {
-  const { connectionProvider, runtimeConfig } = resolveReceiverConfig(options)
-  return new PullCommandReceiver(connectionProvider, runtimeConfig, options)
+  const { connectionProvider, runtimeConfig } = resolveReceiverConfig(options);
+  return new PullCommandReceiver(connectionProvider, runtimeConfig, options);
 }
 
 interface ActiveLease {
-  lease: LeaseInfo
-  controller: AbortController
-  task: Promise<void>
+  lease: LeaseInfo;
+  controller: AbortController;
+  task: Promise<void>;
 }
 
 interface AcquiredLease {
-  lease: LeaseInfo
-  connection: ReceiverConnection
+  lease: LeaseInfo;
+  connection: ReceiverConnection;
 }
 
 class PullCommandReceiver implements CommandReceiver {
-  private readonly connectionProvider: ReceiverConnectionProvider
-  private readonly fetchImpl: typeof fetch
-  private readonly pollIntervalMs: number
-  private readonly leaseSeconds: number
-  private readonly maxLeases: number
-  private readonly pollMaxIntervalMs: number
-  private readonly pollJitter: number
-  private readonly drainTimeoutMs: number
-  private readonly handlers = new Map<string, RawCommandHandler>()
-  private readonly shutdown = new AbortController()
-  private readonly active = new Map<string, ActiveLease>()
+  private readonly connectionProvider: ReceiverConnectionProvider;
+  private readonly fetchImpl: typeof fetch;
+  private readonly pollIntervalMs: number;
+  private readonly leaseSeconds: number;
+  private readonly maxLeases: number;
+  private readonly pollMaxIntervalMs: number;
+  private readonly pollJitter: number;
+  private readonly drainTimeoutMs: number;
+  private readonly handlers = new Map<string, RawCommandHandler>();
+  private readonly shutdown = new AbortController();
+  private readonly active = new Map<string, ActiveLease>();
 
   constructor(
     connectionProvider: ReceiverConnectionProvider,
     config: ReceiverRuntimeConfig,
     options: CommandReceiverRuntimeOptions,
   ) {
-    this.connectionProvider = connectionProvider
-    this.fetchImpl = options.fetch ?? globalThis.fetch
-    this.pollIntervalMs = config.pollIntervalMs
-    this.pollMaxIntervalMs = config.pollMaxIntervalMs
-    this.pollJitter = config.pollJitter
-    this.leaseSeconds = config.leaseSeconds
-    this.maxLeases = config.maxLeases
-    this.drainTimeoutMs = config.drainTimeoutMs
+    this.connectionProvider = connectionProvider;
+    this.fetchImpl = options.fetch ?? globalThis.fetch;
+    this.pollIntervalMs = config.pollIntervalMs;
+    this.pollMaxIntervalMs = config.pollMaxIntervalMs;
+    this.pollJitter = config.pollJitter;
+    this.leaseSeconds = config.leaseSeconds;
+    this.maxLeases = config.maxLeases;
+    this.drainTimeoutMs = config.drainTimeoutMs;
   }
 
-  command(name: string, handler: CommandHandler<unknown>): CommandReceiver
+  command(name: string, handler: CommandHandler<unknown>): CommandReceiver;
   command<Schema extends StandardSchema>(
     name: string,
     schema: Schema,
     handler: CommandHandler<StandardSchemaOutput<Schema>>,
-  ): CommandReceiver
+  ): CommandReceiver;
   command<Schema extends StandardSchema>(
     name: string,
     schemaOrHandler: Schema | CommandHandler<unknown>,
     validatedHandler?: CommandHandler<StandardSchemaOutput<Schema>>,
   ): CommandReceiver {
-    const schema = validatedHandler === undefined ? undefined : (schemaOrHandler as Schema)
-    const handler = (validatedHandler ?? schemaOrHandler) as CommandHandler<unknown>
-    return this.handleRaw(name, async context => {
-      let input: unknown
+    const schema = validatedHandler === undefined ? undefined : (schemaOrHandler as Schema);
+    const handler = (validatedHandler ?? schemaOrHandler) as CommandHandler<unknown>;
+    return this.handleRaw(name, async (context) => {
+      let input: unknown;
       try {
-        input = JSON.parse(new TextDecoder().decode(context.input))
+        input = JSON.parse(new TextDecoder().decode(context.input));
       } catch {
-        throw new Error("Command input is not valid JSON")
+        throw new Error("Command input is not valid JSON");
       }
       if (schema !== undefined) {
-        const result = await schema["~standard"].validate(input)
+        const result = await schema["~standard"].validate(input);
         if (result.issues !== undefined) {
-          const details = result.issues.map(issue => issue.message).join("; ")
-          throw new Error(`Command input failed validation${details ? `: ${details}` : ""}`)
+          const details = result.issues.map((issue) => issue.message).join("; ");
+          throw new Error(`Command input failed validation${details ? `: ${details}` : ""}`);
         }
-        input = result.value
+        input = result.value;
       }
-      return await handler(input, context)
-    })
+      return await handler(input, context);
+    });
   }
 
   handleRaw(name: string, handler: RawCommandHandler): CommandReceiver {
-    this.handlers.set(name, handler)
-    return this
+    this.handlers.set(name, handler);
+    return this;
   }
 
   stop(): void {
-    this.shutdown.abort()
+    this.shutdown.abort();
   }
 
   async run(): Promise<void> {
-    const inFlight = new Set<Promise<void>>()
-    let nextPollMs = this.pollIntervalMs
-    let terminalError: AlienError | undefined
+    const inFlight = new Set<Promise<void>>();
+    let nextPollMs = this.pollIntervalMs;
+    let terminalError: AlienError | undefined;
 
     // Mirrors the Rust run loop: check shutdown at the top of each iteration
     // (no new poll starts once draining begins), acquire leases (a poll already
     // in flight completes and its leases are dispatched), then sleep-or-stop.
     while (!this.shutdown.signal.aborted) {
-      let leases: AcquiredLease[] = []
-      let sleepMs = nextPollMs
-      const available = Math.max(0, this.maxLeases - this.active.size)
+      let leases: AcquiredLease[] = [];
+      let sleepMs = nextPollMs;
+      const available = Math.max(0, this.maxLeases - this.active.size);
       if (available === 0) {
-        sleepMs = this.pollIntervalMs
-        nextPollMs = this.pollIntervalMs
+        sleepMs = this.pollIntervalMs;
+        nextPollMs = this.pollIntervalMs;
       } else {
         try {
-          leases = await this.acquireLeases(available)
+          leases = await this.acquireLeases(available);
           if (leases.length > 0) {
-            sleepMs = this.pollIntervalMs
-            nextPollMs = this.pollIntervalMs
+            sleepMs = this.pollIntervalMs;
+            nextPollMs = this.pollIntervalMs;
           } else {
-            nextPollMs = this.nextBackoff(nextPollMs)
+            nextPollMs = this.nextBackoff(nextPollMs);
           }
         } catch (error) {
-          if (this.shutdown.signal.aborted) break
+          if (this.shutdown.signal.aborted) break;
           if (error instanceof AlienError && !error.retryable) {
-            terminalError = error
-            break
+            terminalError = error;
+            break;
           }
           // Retryable Alien errors and unknown transport errors are logged and
           // retried next interval.
-          logWarn("Failed to acquire command leases, will retry", error)
-          nextPollMs = this.nextBackoff(nextPollMs)
+          logWarn("Failed to acquire command leases, will retry", error);
+          nextPollMs = this.nextBackoff(nextPollMs);
         }
       }
 
       for (const { lease, connection } of leases) {
         if (this.active.has(lease.commandId)) {
-          await this.releaseLease(lease.leaseId)
-          continue
+          await this.releaseLease(lease.leaseId);
+          continue;
         }
-        const controller = new AbortController()
+        const controller = new AbortController();
         const task = this.processLease(lease, controller, connection).finally(() => {
-          const current = this.active.get(lease.commandId)
-          if (current?.lease.leaseId === lease.leaseId) this.active.delete(lease.commandId)
-        })
-        this.active.set(lease.commandId, { lease, controller, task })
-        inFlight.add(task)
-        void task.finally(() => inFlight.delete(task))
+          const current = this.active.get(lease.commandId);
+          if (current?.lease.leaseId === lease.leaseId) this.active.delete(lease.commandId);
+        });
+        this.active.set(lease.commandId, { lease, controller, task });
+        inFlight.add(task);
+        void task.finally(() => inFlight.delete(task));
       }
 
       if (this.shutdown.signal.aborted) {
-        break
+        break;
       }
-      await this.sleepOrStop(this.withJitter(sleepMs))
+      await this.sleepOrStop(this.withJitter(sleepMs));
     }
 
-    let drainTimer: ReturnType<typeof setTimeout> | undefined
+    let drainTimer: ReturnType<typeof setTimeout> | undefined;
     const drained = await Promise.race([
       Promise.all(inFlight).then(() => true),
-      new Promise<false>(resolve => {
-        drainTimer = setTimeout(() => resolve(false), this.drainTimeoutMs)
+      new Promise<false>((resolve) => {
+        drainTimer = setTimeout(() => resolve(false), this.drainTimeoutMs);
       }),
-    ])
-    if (drainTimer !== undefined) clearTimeout(drainTimer)
+    ]);
+    if (drainTimer !== undefined) clearTimeout(drainTimer);
     if (!drained) {
-      for (const active of this.active.values()) active.controller.abort()
+      for (const active of this.active.values()) active.controller.abort();
     }
-    await Promise.all(inFlight)
-    if (terminalError !== undefined) throw terminalError
+    await Promise.all(inFlight);
+    if (terminalError !== undefined) throw terminalError;
   }
 
   private nextBackoff(current: number): number {
-    return Math.min(this.pollMaxIntervalMs, Math.max(this.pollIntervalMs, current * 2))
+    return Math.min(this.pollMaxIntervalMs, Math.max(this.pollIntervalMs, current * 2));
   }
 
   private withJitter(ms: number): number {
-    const factor = 1 + (Math.random() * 2 - 1) * this.pollJitter
-    return Math.max(0, Math.round(ms * factor))
+    const factor = 1 + (Math.random() * 2 - 1) * this.pollJitter;
+    return Math.max(0, Math.round(ms * factor));
   }
 
   /** Build the lease request this receiver sends (pure — unit-testable). */
@@ -397,11 +397,11 @@ class PullCommandReceiver implements CommandReceiver {
       },
       maxLeases,
       leaseSeconds: this.leaseSeconds,
-    }
+    };
   }
 
   private async acquireLeases(maxLeases: number): Promise<AcquiredLease[]> {
-    const { response, endpoint, connection } = await this.authenticatedFetch(connection => ({
+    const { response, endpoint, connection } = await this.authenticatedFetch((connection) => ({
       endpoint: buildLeaseEndpoint(connection.url),
       init: {
         method: "POST",
@@ -413,7 +413,7 @@ class PullCommandReceiver implements CommandReceiver {
         // whole poll loop, so cap it well under the lease duration.
         signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
       },
-    }))
+    }));
 
     if (!response.ok) {
       const context = {
@@ -421,8 +421,8 @@ class PullCommandReceiver implements CommandReceiver {
         url: endpoint,
         status: response.status,
         statusText: response.statusText,
-      }
-      const definition = ManagerHttpError.create(context)
+      };
+      const definition = ManagerHttpError.create(context);
       throw new AlienError({
         code: definition.metadata.code,
         message: definition.metadata.message(context),
@@ -430,40 +430,40 @@ class PullCommandReceiver implements CommandReceiver {
         internal: definition.metadata.internal,
         httpStatusCode: definition.metadata.httpStatusCode,
         context,
-      })
+      });
     }
 
-    const parsed = parseWireResponse(LeaseResponseSchema, await response.json(), "POST", endpoint)
+    const parsed = parseWireResponse(LeaseResponseSchema, await response.json(), "POST", endpoint);
     // Lease-served envelopes carry manager URLs relative to the exact lease
     // endpoint. Resolving against the endpoint that succeeded preserves both
     // its reachable origin and any reverse-proxy path prefix. Absolute cloud-
     // presigned storage URLs pass through byte-for-byte.
     for (const lease of parsed.leases) {
-      resolveEnvelopeUrls(lease.envelope, endpoint)
+      resolveEnvelopeUrls(lease.envelope, endpoint);
     }
-    return parsed.leases.map(lease => ({ lease, connection }))
+    return parsed.leases.map((lease) => ({ lease, connection }));
   }
 
   private async authenticatedFetch(
     buildRequest: (connection: ReceiverConnection) => {
-      endpoint: string
-      init: RequestInit
+      endpoint: string;
+      init: RequestInit;
     },
   ): Promise<{ response: Response; endpoint: string; connection: ReceiverConnection }> {
     return requestWithRefreshingConnection(
       this.connectionProvider,
-      async connection => {
-        const { endpoint, init } = buildRequest(connection)
-        const headers = new Headers(init.headers)
-        headers.set("Authorization", `Bearer ${connection.token}`)
+      async (connection) => {
+        const { endpoint, init } = buildRequest(connection);
+        const headers = new Headers(init.headers);
+        headers.set("Authorization", `Bearer ${connection.token}`);
         return {
           response: await this.fetchImpl(endpoint, { ...init, headers }),
           endpoint,
           connection,
-        }
+        };
       },
       this.shutdown.signal,
-    )
+    );
   }
 
   /**
@@ -480,20 +480,20 @@ class PullCommandReceiver implements CommandReceiver {
     const executionBudget = commandBudget(
       lease.envelope.deadline ?? undefined,
       lease.leaseExpiresAt,
-    )
-    const response = await this.executeLease(lease, controller, executionBudget, identity)
+    );
+    const response = await this.executeLease(lease, controller, executionBudget, identity);
     if (response === undefined) {
-      await this.releaseLease(lease.leaseId)
-      return
+      await this.releaseLease(lease.leaseId);
+      return;
     }
-    const handlerStatus = commandResponseStatus(response)
-    let submitStatus: SubmitStatus = "submitted"
+    const handlerStatus = commandResponseStatus(response);
+    let submitStatus: SubmitStatus = "submitted";
     try {
-      await this.submitResponse(lease.envelope, response, lease.leaseExpiresAt)
+      await this.submitResponse(lease.envelope, response, lease.leaseExpiresAt);
     } catch (error) {
       // No ack: the lease will expire and the command is redelivered.
-      submitStatus = "failed"
-      logError(`Failed to submit response for command '${lease.commandId}'`, error)
+      submitStatus = "failed";
+      logError(`Failed to submit response for command '${lease.commandId}'`, error);
     }
 
     // One structured observability line per command, carrying the pinned
@@ -507,7 +507,7 @@ class PullCommandReceiver implements CommandReceiver {
       deadline: lease.envelope.deadline ?? null,
       handlerStatus,
       submitStatus,
-    })
+    });
   }
 
   /**
@@ -520,24 +520,24 @@ class PullCommandReceiver implements CommandReceiver {
     budget: Date,
     identity: ReceiverConnection,
   ): Promise<CommandResponse | undefined> {
-    const { envelope, attempt } = lease
-    const handler = this.handlers.get(envelope.command)
+    const { envelope, attempt } = lease;
+    const handler = this.handlers.get(envelope.command);
     if (!handler) {
       return errorResponse(
         ERROR_CODE_UNKNOWN_COMMAND,
         `No handler registered for command '${envelope.command}'`,
-      )
+      );
     }
 
     const execute = async (): Promise<CommandResponse> => {
-      let input: Uint8Array
+      let input: Uint8Array;
       try {
-        input = await decodeParamsBytes(envelope, this.fetchImpl, controller.signal)
+        input = await decodeParamsBytes(envelope, this.fetchImpl, controller.signal);
       } catch (error) {
         // Decode failure is submitted under the decode error's own code, not a
         // receiver-specific one.
-        const code = error instanceof AlienError ? error.code : ERROR_CODE_HANDLER_ERROR
-        return errorResponse(code, error instanceof Error ? error.message : String(error))
+        const code = error instanceof AlienError ? error.code : ERROR_CODE_HANDLER_ERROR;
+        return errorResponse(code, error instanceof Error ? error.message : String(error));
       }
 
       const ctx: CommandContext = {
@@ -551,16 +551,16 @@ class PullCommandReceiver implements CommandReceiver {
           resourceType: identity.resourceType,
         },
         traceContext: envelope.traceContext ?? undefined,
-      }
-      return invokeHandler(handler, ctx)
-    }
+      };
+      return invokeHandler(handler, ctx);
+    };
 
-    return runUnderBudget(execute, budget, controller, envelope.command)
+    return runUnderBudget(execute, budget, controller, envelope.command);
   }
 
   private async releaseLease(leaseId: string): Promise<void> {
     try {
-      const { response } = await this.authenticatedFetch(connection => ({
+      const { response } = await this.authenticatedFetch((connection) => ({
         endpoint: buildReleaseEndpoint(connection.url, leaseId),
         init: {
           method: "POST",
@@ -568,15 +568,15 @@ class PullCommandReceiver implements CommandReceiver {
           body: JSON.stringify({ leaseId }),
           signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
         },
-      }))
-      if (response.ok || response.status === 409 || response.status === 410) return
-      const body = await response.text().catch(() => "")
+      }));
+      if (response.ok || response.status === 409 || response.status === 410) return;
+      const body = await response.text().catch(() => "");
       logWarn(
         `Failed to release command lease '${leaseId}' (${response.status}: ${body})`,
         response,
-      )
+      );
     } catch (error) {
-      logWarn(`Failed to release command lease '${leaseId}'`, error)
+      logWarn(`Failed to release command lease '${leaseId}'`, error);
     }
   }
 
@@ -585,7 +585,7 @@ class PullCommandReceiver implements CommandReceiver {
     response: CommandResponse,
     leaseExpiresAt: string,
   ): Promise<void> {
-    const remainingLeaseMs = new Date(leaseExpiresAt).getTime() - Date.now()
+    const remainingLeaseMs = new Date(leaseExpiresAt).getTime() - Date.now();
     if (remainingLeaseMs <= 0) {
       throw new AlienError(
         StorageOperationFailedError.create({
@@ -593,44 +593,44 @@ class PullCommandReceiver implements CommandReceiver {
           url: redactUrlForError(envelope.responseHandling.submitResponseUrl),
           reason: "Lease expired before response submission could start",
         }),
-      )
+      );
     }
     // One signal covers storage overflow plus the final status PUT. Reusing it
     // prevents either stage from starting a fresh timeout and extending the
     // lease. The normal 30-second control cap still applies.
-    const submissionTimeoutMs = Math.min(CONTROL_TIMEOUT_MS, remainingLeaseMs)
-    const submissionSignal = AbortSignal.timeout(submissionTimeoutMs)
-    let finalResponse = response
+    const submissionTimeoutMs = Math.min(CONTROL_TIMEOUT_MS, remainingLeaseMs);
+    const submissionSignal = AbortSignal.timeout(submissionTimeoutMs);
+    let finalResponse = response;
 
     if (response.status === "success" && response.response.mode === "inline") {
-      const bytes = base64ToBytes(response.response.inlineBase64)
-      const maxInline = envelope.responseHandling.maxInlineBytes
+      const bytes = base64ToBytes(response.response.inlineBase64);
+      const maxInline = envelope.responseHandling.maxInlineBytes;
       if (bytes.byteLength > maxInline) {
         // Large response: upload to storage first, then reference it.
         await this.uploadResponseToStorage(
           envelope.responseHandling.storageUploadRequest,
           bytes,
           submissionSignal,
-        )
+        );
         finalResponse = {
           status: "success",
           response: { mode: "storage", size: bytes.byteLength, storagePutUsed: true },
-        }
+        };
       }
     }
 
     // Lease ingestion resolves the pre-authorized submit reference against the
     // exact endpoint used to acquire it. It is fully qualified here and carries
     // no bearer header, matching the Rust twin's submit path.
-    const submitUrl = envelope.responseHandling.submitResponseUrl
-    let res: Response
+    const submitUrl = envelope.responseHandling.submitResponseUrl;
+    let res: Response;
     try {
       res = await this.fetchImpl(submitUrl, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(finalResponse),
         signal: submissionSignal,
-      })
+      });
     } catch (error) {
       throw (await AlienError.from(error)).withContext(
         StorageOperationFailedError.create({
@@ -638,7 +638,7 @@ class PullCommandReceiver implements CommandReceiver {
           url: redactUrlForError(submitUrl),
           reason: describeResponseSubmissionFailure(error, submissionSignal, submissionTimeoutMs),
         }),
-      )
+      );
     }
 
     if (!res.ok && res.status !== 409 && res.status !== 410) {
@@ -650,7 +650,7 @@ class PullCommandReceiver implements CommandReceiver {
           // or another signed URL, so its body is not diagnostic-safe.
           reason: `Response submission failed with status ${res.status}`,
         }),
-      )
+      );
     }
   }
 
@@ -663,25 +663,25 @@ class PullCommandReceiver implements CommandReceiver {
       fetchImpl: this.fetchImpl,
       allowLocal: RECEIVER_ALLOW_LOCAL,
       signal,
-    })
+    });
   }
 
   private sleepOrStop(ms: number): Promise<void> {
-    return new Promise<void>(resolve => {
+    return new Promise<void>((resolve) => {
       if (this.shutdown.signal.aborted) {
-        resolve()
-        return
+        resolve();
+        return;
       }
       const timer = setTimeout(() => {
-        this.shutdown.signal.removeEventListener("abort", onAbort)
-        resolve()
-      }, ms)
+        this.shutdown.signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
       const onAbort = () => {
-        clearTimeout(timer)
-        resolve()
-      }
-      this.shutdown.signal.addEventListener("abort", onAbort, { once: true })
-    })
+        clearTimeout(timer);
+        resolve();
+      };
+      this.shutdown.signal.addEventListener("abort", onAbort, { once: true });
+    });
   }
 }
 
@@ -698,11 +698,11 @@ export function commandBudget(deadline: string | undefined, leaseExpiresAt: stri
   const leaseBound = Math.max(
     Date.now(),
     new Date(leaseExpiresAt).getTime() - LEASE_SAFETY_MARGIN_MS,
-  )
+  );
   if (deadline === undefined) {
-    return new Date(leaseBound)
+    return new Date(leaseBound);
   }
-  return new Date(Math.min(new Date(deadline).getTime(), leaseBound))
+  return new Date(Math.min(new Date(deadline).getTime(), leaseBound));
 }
 
 /**
@@ -722,16 +722,16 @@ export function commandBudget(deadline: string | undefined, leaseExpiresAt: stri
  * URL — in practice, anything that isn't HTTP(S). This mirrors that check.
  */
 export function buildLeaseEndpoint(baseUrl: string): string {
-  let url: URL
+  let url: URL;
   try {
-    url = new URL(baseUrl)
+    url = new URL(baseUrl);
   } catch {
     throw new AlienError(
       CommandReceiverConfigInvalidError.create({
         envVar: ENV_ALIEN_COMMANDS_URL,
         reason: `${ENV_ALIEN_COMMANDS_URL} '${baseUrl}' must be an HTTP(S) URL with a path`,
       }),
-    )
+    );
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new AlienError(
@@ -739,27 +739,27 @@ export function buildLeaseEndpoint(baseUrl: string): string {
         envVar: ENV_ALIEN_COMMANDS_URL,
         reason: `${ENV_ALIEN_COMMANDS_URL} '${baseUrl}' must be an HTTP(S) URL with a path`,
       }),
-    )
+    );
   }
 
   // `pop_if_empty` equivalent: a trailing slash produces a trailing empty
   // path segment; drop exactly one so we don't double up the separator.
-  const segments = url.pathname.split("/")
+  const segments = url.pathname.split("/");
   if (segments[segments.length - 1] === "") {
-    segments.pop()
+    segments.pop();
   }
-  segments.push("commands", "leases")
-  url.pathname = segments.join("/")
-  return url.toString()
+  segments.push("commands", "leases");
+  url.pathname = segments.join("/");
+  return url.toString();
 }
 
 /** Build the authenticated lease-release endpoint without corrupting base queries. */
 export function buildReleaseEndpoint(baseUrl: string, leaseId: string): string {
-  const url = new URL(buildLeaseEndpoint(baseUrl))
-  const segments = url.pathname.split("/")
-  segments.push(encodeURIComponent(leaseId), "release")
-  url.pathname = segments.join("/")
-  return url.toString()
+  const url = new URL(buildLeaseEndpoint(baseUrl));
+  const segments = url.pathname.split("/");
+  segments.push(encodeURIComponent(leaseId), "release");
+  url.pathname = segments.join("/");
+  return url.toString();
 }
 
 /**
@@ -772,33 +772,35 @@ export function buildReleaseEndpoint(baseUrl: string, leaseId: string): string {
  * URLs pass through byte-for-byte. Twin of Rust `resolve_envelope_urls`.
  */
 export function resolveEnvelopeUrls(envelope: Envelope, leaseEndpoint: string): void {
-  let base: URL
+  let base: URL;
   try {
-    base = new URL(leaseEndpoint)
+    base = new URL(leaseEndpoint);
   } catch {
     // Unparseable base (already rejected at construction): leave the
     // envelope as served.
-    return
+    return;
   }
   const resolve = (target: string) => {
-    if (target.startsWith("//")) return target
+    if (target.startsWith("//")) return target;
     try {
       // oxlint-disable-next-line no-new -- constructor check supports Node 18.0 through 18.16
-      new URL(target)
-      return target
+      new URL(target);
+      return target;
     } catch {
       try {
-        return new URL(target, base).toString()
+        return new URL(target, base).toString();
       } catch {
-        return target
+        return target;
       }
     }
-  }
+  };
 
-  envelope.responseHandling.submitResponseUrl = resolve(envelope.responseHandling.submitResponseUrl)
-  const upload = envelope.responseHandling.storageUploadRequest
+  envelope.responseHandling.submitResponseUrl = resolve(
+    envelope.responseHandling.submitResponseUrl,
+  );
+  const upload = envelope.responseHandling.storageUploadRequest;
   if (upload.backend.type === "http") {
-    upload.backend.url = resolve(upload.backend.url)
+    upload.backend.url = resolve(upload.backend.url);
   }
   if (
     envelope.params.mode === "storage" &&
@@ -806,7 +808,7 @@ export function resolveEnvelopeUrls(envelope: Envelope, leaseEndpoint: string): 
   ) {
     envelope.params.storageGetRequest.backend.url = resolve(
       envelope.params.storageGetRequest.backend.url,
-    )
+    );
   }
 }
 
@@ -821,65 +823,65 @@ async function runUnderBudget(
   controller: AbortController,
   command: string,
 ): Promise<CommandResponse | undefined> {
-  const remainingMs = Math.max(0, budget.getTime() - Date.now())
+  const remainingMs = Math.max(0, budget.getTime() - Date.now());
   if (remainingMs === 0) {
-    controller.abort()
-    return handlerTimeoutResponse(command, budget)
+    controller.abort();
+    return handlerTimeoutResponse(command, budget);
   }
 
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const budgetPromise = new Promise<{ kind: "timeout" }>(resolve => {
-    timer = setTimeout(() => resolve({ kind: "timeout" }), remainingMs)
-  })
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const budgetPromise = new Promise<{ kind: "timeout" }>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "timeout" }), remainingMs);
+  });
 
   const operationPromise = Promise.resolve()
     .then(operation)
     .then(
-      response => ({ kind: "return" as const, response }),
+      (response) => ({ kind: "return" as const, response }),
       (error: unknown) => ({ kind: "throw" as const, error }),
-    )
+    );
 
-  const shutdownPromise = new Promise<{ kind: "shutdown" }>(resolve => {
+  const shutdownPromise = new Promise<{ kind: "shutdown" }>((resolve) => {
     if (controller.signal.aborted) {
-      resolve({ kind: "shutdown" })
-      return
+      resolve({ kind: "shutdown" });
+      return;
     }
     controller.signal.addEventListener("abort", () => resolve({ kind: "shutdown" }), {
       once: true,
-    })
-  })
+    });
+  });
 
-  const outcome = await Promise.race([operationPromise, budgetPromise, shutdownPromise])
+  const outcome = await Promise.race([operationPromise, budgetPromise, shutdownPromise]);
   if (timer !== undefined) {
-    clearTimeout(timer)
+    clearTimeout(timer);
   }
 
   if (outcome.kind === "timeout") {
     // Budget expired: fire the signal for cooperative work; abandon the handler
     // promise so a late settlement can't double-submit.
-    controller.abort()
-    void operationPromise.catch(() => {})
-    return handlerTimeoutResponse(command, budget)
+    controller.abort();
+    void operationPromise.catch(() => {});
+    return handlerTimeoutResponse(command, budget);
   }
 
   if (outcome.kind === "shutdown") {
-    void operationPromise.catch(() => {})
-    return undefined
+    void operationPromise.catch(() => {});
+    return undefined;
   }
 
   if (outcome.kind === "throw") {
-    const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
-    return errorResponse(handlerErrorCode(outcome.error), message)
+    const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
+    return errorResponse(handlerErrorCode(outcome.error), message);
   }
 
-  return outcome.response
+  return outcome.response;
 }
 
 function handlerTimeoutResponse(command: string, budget: Date): CommandResponse {
   return errorResponse(
     ERROR_CODE_HANDLER_TIMEOUT,
     `Command '${command}' exceeded its execution budget (${budget.toISOString()})`,
-  )
+  );
 }
 
 /** Invoke and JSON-encode a handler without creating a new execution budget. */
@@ -887,33 +889,33 @@ async function invokeHandler(
   handler: RawCommandHandler,
   ctx: CommandContext,
 ): Promise<CommandResponse> {
-  let value: unknown
+  let value: unknown;
   try {
-    value = await handler(ctx)
+    value = await handler(ctx);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    return errorResponse(handlerErrorCode(error), message)
+    const message = error instanceof Error ? error.message : String(error);
+    return errorResponse(handlerErrorCode(error), message);
   }
 
   // Success: JSON-encode the return value.
-  let json: string
+  let json: string;
   try {
-    json = JSON.stringify(value) ?? "null"
+    json = JSON.stringify(value) ?? "null";
   } catch (error) {
     return errorResponse(
       ERROR_CODE_HANDLER_ERROR,
       `Failed to serialize handler response: ${error instanceof Error ? error.message : String(error)}`,
-    )
+    );
   }
-  return successResponse(new TextEncoder().encode(json))
+  return successResponse(new TextEncoder().encode(json));
 }
 
 function handlerErrorCode(error: unknown): string {
   if (typeof error !== "object" || error === null || !("code" in error)) {
-    return ERROR_CODE_HANDLER_ERROR
+    return ERROR_CODE_HANDLER_ERROR;
   }
-  const code = error.code
-  return typeof code === "string" && code.length > 0 ? code : ERROR_CODE_HANDLER_ERROR
+  const code = error.code;
+  return typeof code === "string" && code.length > 0 ? code : ERROR_CODE_HANDLER_ERROR;
 }
 
 /**
@@ -926,9 +928,9 @@ export async function decodeParamsBytes(
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
 ): Promise<Uint8Array> {
-  const params = envelope.params
+  const params = envelope.params;
   if (params.mode === "inline") {
-    return decodeInlineParamsBase64(params.inlineBase64)
+    return decodeInlineParamsBase64(params.inlineBase64);
   }
 
   // Storage mode: download from the presigned request.
@@ -938,30 +940,30 @@ export async function decodeParamsBytes(
         field: "params.storageGetRequest",
         reason: "Storage params missing storageGetRequest",
       }),
-    )
+    );
   }
 
   return downloadPresigned(params.storageGetRequest, {
     fetchImpl,
     allowLocal: RECEIVER_ALLOW_LOCAL,
     signal,
-  })
+  });
 }
 
 function successResponse(bytes: Uint8Array): CommandResponse {
-  return { status: "success", response: bytesToInlineBody(bytes) }
+  return { status: "success", response: bytesToInlineBody(bytes) };
 }
 
 function errorResponse(code: string, message: string): CommandResponse {
-  return { status: "error", code, message }
+  return { status: "error", code, message };
 }
 
 function bytesToInlineBody(bytes: Uint8Array): BodySpec {
-  return { mode: "inline", inlineBase64: bytesToBase64(bytes) }
+  return { mode: "inline", inlineBase64: bytesToBase64(bytes) };
 }
 
 function base64ToBytes(base64: string): Uint8Array {
-  return new Uint8Array(Buffer.from(base64, "base64"))
+  return new Uint8Array(Buffer.from(base64, "base64"));
 }
 
 /**
@@ -972,7 +974,7 @@ function base64ToBytes(base64: string): Uint8Array {
  * needs this check in front of it to fail loudly instead of decoding to
  * truncated garbage bytes.
  */
-const STRICT_BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+const STRICT_BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 /**
  * Decode inline command params bytes, matching the Rust twin's strict
@@ -986,17 +988,17 @@ function decodeInlineParamsBase64(inlineBase64: string): Uint8Array {
         field: "params.inlineBase64",
         reason: "Failed to decode base64 params",
       }),
-    )
+    );
   }
-  return base64ToBytes(inlineBase64)
+  return base64ToBytes(inlineBase64);
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("base64")
+  return Buffer.from(bytes).toString("base64");
 }
 
 /** Submit-response outcome label for the `Command processed` observability line. */
-type SubmitStatus = "submitted" | "failed"
+type SubmitStatus = "submitted" | "failed";
 
 /**
  * Handler-status label for a produced response: `"success"` for a success
@@ -1005,35 +1007,35 @@ type SubmitStatus = "submitted" | "failed"
  * the Rust receiver's `command_response_status`.
  */
 function commandResponseStatus(response: CommandResponse): string {
-  return response.status === "success" ? "success" : response.code
+  return response.status === "success" ? "success" : response.code;
 }
 
 /** The pinned per-command observability fields (twin of the Rust event). */
 interface CommandProcessedFields {
-  commandId: string
-  leaseId: string
-  targetResourceId: string
-  targetResourceType: CommandTargetType
-  attempt: number
-  deadline: string | null
-  handlerStatus: string
-  submitStatus: SubmitStatus
+  commandId: string;
+  leaseId: string;
+  targetResourceId: string;
+  targetResourceType: CommandTargetType;
+  attempt: number;
+  deadline: string | null;
+  handlerStatus: string;
+  submitStatus: SubmitStatus;
 }
 
 function logCommandProcessed(fields: CommandProcessedFields): void {
-  console.info(`[command-receiver] Command processed ${JSON.stringify(fields)}`)
+  console.info(`[command-receiver] Command processed ${JSON.stringify(fields)}`);
 }
 
 function logWarn(message: string, error: unknown): void {
-  console.warn(`[command-receiver] ${message}: ${describeError(error)}`)
+  console.warn(`[command-receiver] ${message}: ${describeError(error)}`);
 }
 
 function logError(message: string, error: unknown): void {
-  console.error(`[command-receiver] ${message}: ${describeError(error)}`)
+  console.error(`[command-receiver] ${message}: ${describeError(error)}`);
 }
 
 function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  return error instanceof Error ? error.message : String(error);
 }
 
 function describeResponseSubmissionFailure(
@@ -1042,28 +1044,28 @@ function describeResponseSubmissionFailure(
   timeoutMs: number,
 ): string {
   if (signal.aborted) {
-    return `Response submission timed out after ${timeoutMs}ms before a response was received`
+    return `Response submission timed out after ${timeoutMs}ms before a response was received`;
   }
 
-  const details = safeTransportErrorDetails(error)
+  const details = safeTransportErrorDetails(error);
   return details === undefined
     ? "Response submission failed before a response was received"
-    : `Response submission failed before a response was received (${details})`
+    : `Response submission failed before a response was received (${details})`;
 }
 
 function safeTransportErrorDetails(error: unknown): string | undefined {
-  if (!(error instanceof Error)) return undefined
+  if (!(error instanceof Error)) return undefined;
 
-  const name = safeDiagnosticToken(error.name)
+  const name = safeDiagnosticToken(error.name);
   const causeCode =
     typeof error.cause === "object" && error.cause !== null && "code" in error.cause
       ? safeDiagnosticToken(error.cause.code)
-      : undefined
+      : undefined;
 
-  if (name !== undefined && causeCode !== undefined) return `${name}; cause=${causeCode}`
-  return name
+  if (name !== undefined && causeCode !== undefined) return `${name}; cause=${causeCode}`;
+  return name;
 }
 
 function safeDiagnosticToken(value: unknown): string | undefined {
-  return typeof value === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(value) ? value : undefined
+  return typeof value === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(value) ? value : undefined;
 }

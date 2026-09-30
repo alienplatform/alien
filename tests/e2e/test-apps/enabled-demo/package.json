@@ -1,16 +1,16 @@
 {
   "name": "enabled-demo",
   "version": "1.0.0",
-  "type": "module",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "tsdown --watch --no-clean",
     "build": "tsdown",
     "test:ts": "tsc --noEmit"
   },
   "dependencies": {
-    "@alienplatform/sdk": "workspace:*",
     "@alienplatform/core": "workspace:*",
+    "@alienplatform/sdk": "workspace:*",
     "hono": "^4.0.0"
   },
   "devDependencies": {

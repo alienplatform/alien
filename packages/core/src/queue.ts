@@ -1,23 +1,23 @@
-import { type Queue as QueueConfig, QueueSchema, type ResourceType } from "./generated/index.js"
-import { type Resource, ResourceBuilder } from "./resource.js"
+import { type Queue as QueueConfig, QueueSchema, type ResourceType } from "./generated/index.js";
+import { type Resource, ResourceBuilder } from "./resource.js";
 
-export type { Queue as QueueConfig, QueueOutputs } from "./generated/index.js"
-export { QueueSchema as QueueConfigSchema } from "./generated/index.js"
+export type { Queue as QueueConfig, QueueOutputs } from "./generated/index.js";
+export { QueueSchema as QueueConfigSchema } from "./generated/index.js";
 
 /**
  * Represents a message queue resource with minimal, portable semantics.
  * Queue integrates with platform-native services (AWS SQS, GCP Pub/Sub, Azure Service Bus).
  */
 export class Queue extends ResourceBuilder {
-  private _config: Partial<QueueConfig> = {}
+  private _config: Partial<QueueConfig> = {};
 
   /**
    * Creates a new Queue builder.
    * @param id Identifier for the queue. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
   constructor(id: string) {
-    super()
-    this._config.id = id
+    super();
+    this._config.id = id;
   }
 
   /**
@@ -26,7 +26,7 @@ export class Queue extends ResourceBuilder {
    * @returns The "queue" resource type.
    */
   public static any(): ResourceType {
-    return "queue"
+    return "queue";
   }
 
   /**
@@ -35,11 +35,11 @@ export class Queue extends ResourceBuilder {
    * @throws Error if the queue configuration is invalid.
    */
   public build(): Resource {
-    const config = QueueSchema.parse(this._config)
+    const config = QueueSchema.parse(this._config);
 
     return this.resource({
       type: "queue",
       ...config,
-    })
+    });
   }
 }

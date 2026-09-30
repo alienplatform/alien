@@ -1,8 +1,8 @@
 {
   "name": "byo-encryption-key",
   "version": "1.0.0",
-  "type": "module",
   "private": true,
+  "type": "module",
   "dependencies": {
     "@alienplatform/core": "workspace:*"
   },

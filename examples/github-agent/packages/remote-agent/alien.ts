@@ -4,9 +4,9 @@
  * Provides a vault for GitHub integrations and a commands-enabled worker
  * that can be invoked by the control plane or directly over HTTP.
  */
-import * as alien from "@alienplatform/core"
+import * as alien from "@alienplatform/core";
 
-const integrations = new alien.Vault("integrations").build()
+const integrations = new alien.Vault("integrations").build();
 
 const agent = new alien.Worker("agent")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
@@ -15,7 +15,7 @@ const agent = new alien.Worker("agent")
   .commandsEnabled(true)
   .publicEndpoint("api")
   .permissions("execution")
-  .build()
+  .build();
 
 export default new alien.Stack("github-agent")
   .platforms(["aws", "gcp", "azure", "kubernetes"])
@@ -26,4 +26,4 @@ export default new alien.Stack("github-agent")
       execution: {},
     },
   })
-  .build()
+  .build();

@@ -37,44 +37,44 @@
             "aoss:ListAccessPolicies",
             "aoss:TagResource",
             "aoss:UntagResource",
-            "aoss:ListTagsForResource"
-          ]
+            "aoss:ListTagsForResource",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
+            "resources": ["*"],
           },
           "resource": {
-            "resources": ["*"]
-          }
-        }
+            "resources": ["*"],
+          },
+        },
       },
       {
         // The first collection in an account creates the
         // AWSServiceRoleForAmazonOpenSearchServerless service-linked role
         // (CloudWatch metrics publishing), pinned to the aoss service name.
         "grant": {
-          "actions": ["iam:CreateServiceLinkedRole"]
+          "actions": ["iam:CreateServiceLinkedRole"],
         },
         "binding": {
           "stack": {
             "resources": ["*"],
             "condition": {
               "StringEquals": {
-                "iam:AWSServiceName": "observability.aoss.amazonaws.com"
-              }
-            }
+                "iam:AWSServiceName": "observability.aoss.amazonaws.com",
+              },
+            },
           },
           "resource": {
             "resources": ["*"],
             "condition": {
               "StringEquals": {
-                "iam:AWSServiceName": "observability.aoss.amazonaws.com"
-              }
-            }
-          }
-        }
-      }
-    ]
-  }
+                "iam:AWSServiceName": "observability.aoss.amazonaws.com",
+              },
+            },
+          },
+        },
+      },
+    ],
+  },
 }

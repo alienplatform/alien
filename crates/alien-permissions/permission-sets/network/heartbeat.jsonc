@@ -14,15 +14,15 @@
             "ec2:DescribeInternetGateways",
             "ec2:DescribeNatGateways",
             "ec2:DescribeAddresses",
-            "ec2:DescribeAvailabilityZones"
-          ]
+            "ec2:DescribeAvailabilityZones",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
-          }
-        }
-      }
+            "resources": ["*"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -31,15 +31,15 @@
             "compute.networks.get",
             "compute.subnetworks.get",
             "compute.firewalls.get",
-            "compute.routers.get"
-          ]
+            "compute.routers.get",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
-          }
-        }
-      }
+            "scope": "projects/${projectName}",
+          },
+        },
+      },
     ],
     "azure": [
       {
@@ -49,16 +49,16 @@
             "Microsoft.Network/virtualNetworks/subnets/read",
             "Microsoft.Network/networkSecurityGroups/read",
             "Microsoft.Network/publicIPAddresses/read",
-            "Microsoft.Network/loadBalancers/read"
+            "Microsoft.Network/loadBalancers/read",
           ],
-          "dataActions": []
+          "dataActions": [],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
+          },
+        },
+      },
+    ],
+  },
 }

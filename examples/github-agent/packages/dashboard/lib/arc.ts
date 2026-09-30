@@ -1,5 +1,5 @@
-import { CommandsClient } from "@alienplatform/commands"
-import { alien, config } from "./config"
+import { CommandsClient } from "@alienplatform/commands";
+import { alien, config } from "./config";
 
 /**
  * Get a commands client for a specific deployment.
@@ -11,14 +11,14 @@ export async function getCommandsClient(deploymentId: string) {
   const info = await alien.deployments.getInfo({
     workspace: config.workspace,
     id: deploymentId,
-  })
+  });
 
   return new CommandsClient({
     managerUrl: info.arc?.url || config.alienApiUrl,
     deploymentId: info.arc?.deploymentId || deploymentId,
     token: config.alienToken,
     allowLocalStorage: config.alienApiUrl.includes("localhost"),
-  })
+  });
 }
 
 /**
@@ -31,47 +31,47 @@ export async function invokeCommand<T = unknown>(
   command: string,
   params: Record<string, unknown>,
 ): Promise<T> {
-  const client = await getCommandsClient(deploymentId)
-  return (await client.invoke(command, params)) as T
+  const client = await getCommandsClient(deploymentId);
+  return (await client.invoke(command, params)) as T;
 }
 
 // Types for deployment commands
 export interface IntegrationConfig {
-  owner: string
-  repo: string
-  token?: string
-  baseUrl?: string
+  owner: string;
+  repo: string;
+  token?: string;
+  baseUrl?: string;
 }
 
 export interface AnalysisMetrics {
-  totalPRs: number
+  totalPRs: number;
   bySize: {
-    small: number
-    medium: number
-    large: number
-  }
+    small: number;
+    medium: number;
+    large: number;
+  };
   byRisk: {
-    low: number
-    medium: number
-    high: number
-    critical: number
-  }
-  avgTimeToFirstReviewHours: number
-  avgMergeTimeHours: number
-  reviewThroughputScore: number
-  churnHotspots: Array<{ file: string; changes: number }>
+    low: number;
+    medium: number;
+    high: number;
+    critical: number;
+  };
+  avgTimeToFirstReviewHours: number;
+  avgMergeTimeHours: number;
+  reviewThroughputScore: number;
+  churnHotspots: Array<{ file: string; changes: number }>;
 }
 
 export interface ClassifiedPR {
-  number: number
-  title: string
-  state: string
-  url: string
-  createdAt: string
-  mergedAt?: string
-  additions: number
-  deletions: number
-  changedFiles: number
-  size: "small" | "medium" | "large"
-  risk: "low" | "medium" | "high" | "critical"
+  number: number;
+  title: string;
+  state: string;
+  url: string;
+  createdAt: string;
+  mergedAt?: string;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  size: "small" | "medium" | "large";
+  risk: "low" | "medium" | "high" | "critical";
 }

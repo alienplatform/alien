@@ -1,6 +1,6 @@
-"use client"
+"use client";
 
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, XAxis } from "recharts"
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, XAxis } from "recharts";
 import {
   Card,
   CardAction,
@@ -8,27 +8,27 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card"
+} from "@/components/ui/card";
 import {
   type ChartConfig,
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
-} from "@/components/ui/chart"
+} from "@/components/ui/chart";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"
+} from "@/components/ui/select";
 
 interface MetricsHistoryChartProps {
   data: Array<{
-    date: string
-    totalPRs: number
-    reviewTime: number
-  }>
+    date: string;
+    totalPRs: number;
+    reviewTime: number;
+  }>;
 }
 
 const chartConfig = {
@@ -40,7 +40,7 @@ const chartConfig = {
     label: "Review Time (h)",
     color: "var(--chart-2)",
   },
-} satisfies ChartConfig
+} satisfies ChartConfig;
 
 export function MetricsHistoryChart({ data }: MetricsHistoryChartProps) {
   return (
@@ -78,23 +78,23 @@ export function MetricsHistoryChart({ data }: MetricsHistoryChartProps) {
                 axisLine={false}
                 tickMargin={8}
                 minTickGap={32}
-                tickFormatter={value => {
-                  const date = new Date(value)
+                tickFormatter={(value) => {
+                  const date = new Date(value);
                   return date.toLocaleDateString("en-US", {
                     month: "short",
                     day: "numeric",
-                  })
+                  });
                 }}
               />
               <ChartTooltip
                 cursor={false}
                 content={
                   <ChartTooltipContent
-                    labelFormatter={value => {
+                    labelFormatter={(value) => {
                       return new Date(value).toLocaleDateString("en-US", {
                         month: "short",
                         day: "numeric",
-                      })
+                      });
                     }}
                     indicator="dot"
                   />
@@ -112,5 +112,5 @@ export function MetricsHistoryChart({ data }: MetricsHistoryChartProps) {
         </ChartContainer>
       </CardContent>
     </Card>
-  )
+  );
 }

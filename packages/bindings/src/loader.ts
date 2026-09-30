@@ -30,116 +30,116 @@
  * requires no addon.
  */
 
-import { existsSync } from "node:fs"
-import { createRequire } from "node:module"
-import { dirname, join } from "node:path"
-import { fileURLToPath } from "node:url"
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
   StorageGetResult,
   StorageHeadResult,
   StoragePutOptions,
   StoragePutResult,
-} from "./types.js"
+} from "./types.js";
 
-const require = createRequire(import.meta.url)
+const require = createRequire(import.meta.url);
 
 /** Raw napi scan page. */
 export interface RawKvItem {
-  key: string
-  value: Buffer
-  version: string
+  key: string;
+  value: Buffer;
+  version: string;
 }
 
 /** Raw napi scan result. */
 export interface RawScanResult {
-  items: RawKvItem[]
-  nextCursor?: string
+  items: RawKvItem[];
+  nextCursor?: string;
 }
 
 /** Raw napi object metadata. */
 export interface RawObjectMeta {
-  location: string
-  size: number
-  lastModified: string
-  eTag?: string
-  version?: string
+  location: string;
+  size: number;
+  lastModified: string;
+  eTag?: string;
+  version?: string;
 }
 
 /** Raw napi presigned request. */
 export interface RawPresignedRequest {
-  url: string
-  method: string
-  headers: Record<string, string>
+  url: string;
+  method: string;
+  headers: Record<string, string>;
 }
 
 /** Raw napi queue message. */
 export interface RawQueueMessage {
-  payloadType: "json" | "text"
-  payload: string
-  receiptHandle: string
-  attempt: number
+  payloadType: "json" | "text";
+  payload: string;
+  receiptHandle: string;
+  attempt: number;
 }
 
 /** Raw napi storage handle. */
 export interface RawStorageHandle {
-  get(path: string): Promise<StorageGetResult>
-  put(path: string, data: Buffer, options?: StoragePutOptions | null): Promise<StoragePutResult>
-  delete(path: string): Promise<void>
-  list(prefix?: string | null): Promise<RawObjectMeta[]>
-  head(path: string): Promise<StorageHeadResult>
-  copy(from: string, to: string): Promise<void>
-  signedUrl(method: string, path: string, expiresInSecs: number): Promise<RawPresignedRequest>
+  get(path: string): Promise<StorageGetResult>;
+  put(path: string, data: Buffer, options?: StoragePutOptions | null): Promise<StoragePutResult>;
+  delete(path: string): Promise<void>;
+  list(prefix?: string | null): Promise<RawObjectMeta[]>;
+  head(path: string): Promise<StorageHeadResult>;
+  copy(from: string, to: string): Promise<void>;
+  signedUrl(method: string, path: string, expiresInSecs: number): Promise<RawPresignedRequest>;
 }
 
 export interface RawKeyHandle {
-  encrypt(plaintext: Buffer, context?: Record<string, string> | null): Promise<Buffer>
-  decrypt(ciphertext: Buffer, context?: Record<string, string> | null): Promise<Buffer>
+  encrypt(plaintext: Buffer, context?: Record<string, string> | null): Promise<Buffer>;
+  decrypt(ciphertext: Buffer, context?: Record<string, string> | null): Promise<Buffer>;
 }
 
 /** Raw napi remote Storage v0 handle. */
 export interface RawRemoteStorageHandle {
-  get(path: string): Promise<StorageGetResult>
-  put(path: string, data: Buffer, options?: StoragePutOptions | null): Promise<StoragePutResult>
-  delete(path: string): Promise<void>
-  list(prefix?: string | null): Promise<RawObjectMeta[]>
-  head(path: string): Promise<StorageHeadResult>
+  get(path: string): Promise<StorageGetResult>;
+  put(path: string, data: Buffer, options?: StoragePutOptions | null): Promise<StoragePutResult>;
+  delete(path: string): Promise<void>;
+  list(prefix?: string | null): Promise<RawObjectMeta[]>;
+  head(path: string): Promise<StorageHeadResult>;
 }
 
 export interface RawRemoteAiLease {
-  resourceId: string
-  bindingJson: string
-  clientConfigJson: string
-  expiresAt: string
+  resourceId: string;
+  bindingJson: string;
+  clientConfigJson: string;
+  expiresAt: string;
 }
 
 /** Raw napi key-value handle. */
 export interface RawKvHandle {
-  get(key: string): Promise<RawKvItem | null>
+  get(key: string): Promise<RawKvItem | null>;
   put(
     key: string,
     value: Buffer,
     ttlSecs?: number | null,
     condition?: "absent" | "version" | null,
     version?: string | null,
-  ): Promise<boolean>
-  delete(key: string, ifVersion?: string | null): Promise<boolean>
-  exists(key: string): Promise<boolean>
-  scan(prefix: string, limit?: number | null, cursor?: string | null): Promise<RawScanResult>
+  ): Promise<boolean>;
+  delete(key: string, ifVersion?: string | null): Promise<boolean>;
+  exists(key: string): Promise<boolean>;
+  scan(prefix: string, limit?: number | null, cursor?: string | null): Promise<RawScanResult>;
 }
 
 /** Raw napi queue handle, already scoped to its configured queue. */
 export interface RawQueueHandle {
-  sendJson(jsonString: string): Promise<void>
-  sendText(text: string): Promise<void>
-  receive(max: number): Promise<RawQueueMessage[]>
-  ack(receipt: string): Promise<void>
-  nack(receipt: string): Promise<void>
-  purge(): Promise<void>
+  sendJson(jsonString: string): Promise<void>;
+  sendText(text: string): Promise<void>;
+  receive(max: number): Promise<RawQueueMessage[]>;
+  ack(receipt: string): Promise<void>;
+  nack(receipt: string): Promise<void>;
+  purge(): Promise<void>;
 }
 
 export interface RawContainerHandle {
-  getInternalUrl(): Promise<string>
-  getPublicUrl(): Promise<string | null>
+  getInternalUrl(): Promise<string>;
+  getPublicUrl(): Promise<string | null>;
 }
 
 /**
@@ -147,14 +147,14 @@ export interface RawContainerHandle {
  * Rust `SslMode` emits.
  */
 export interface RawPostgresConnection {
-  connectionString: string
-  host: string
-  port: number
-  database: string
-  username: string
-  password: string
-  sslmode: unknown
-  caCertificates: unknown
+  connectionString: string;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password: string;
+  sslmode: unknown;
+  caCertificates: unknown;
 }
 
 /**
@@ -163,69 +163,69 @@ export interface RawPostgresConnection {
  * its secret store) by the time the handle exists.
  */
 export interface RawPostgresHandle {
-  connection(): RawPostgresConnection
+  connection(): RawPostgresConnection;
 }
 
 /** Raw napi vault handle. */
 export interface RawVaultHandle {
-  getSecret(name: string): Promise<string>
-  setSecret(name: string, value: string): Promise<void>
-  deleteSecret(name: string): Promise<void>
-  listSecrets(): Promise<string[]>
+  getSecret(name: string): Promise<string>;
+  setSecret(name: string, value: string): Promise<void>;
+  deleteSecret(name: string): Promise<void>;
+  listSecrets(): Promise<string[]>;
 }
 
 /** One frame of a running command's output, as the addon returns it. */
 export interface RawCommandFrame {
-  kind: string
-  seq?: number
-  data?: Buffer
-  exitCode?: number
-  truncated?: boolean
+  kind: string;
+  seq?: number;
+  data?: Buffer;
+  exitCode?: number;
+  truncated?: boolean;
 }
 
 /** Raw napi command stream, pulled one frame at a time. */
 export interface RawCommandStreamHandle {
-  next(): Promise<RawCommandFrame | null>
-  close(): Promise<void>
+  next(): Promise<RawCommandFrame | null>;
+  close(): Promise<void>;
 }
 
 /** A job's output so far, as the addon returns it. */
 export interface RawJobPoll {
-  running: boolean
-  frames: RawCommandFrame[]
-  exit?: { code: number; truncated: boolean } | null
-  error?: { code: string; message: string } | null
+  running: boolean;
+  frames: RawCommandFrame[];
+  exit?: { code: number; truncated: boolean } | null;
+  error?: { code: string; message: string } | null;
 }
 
 /** A live sandbox, as the addon returns it. */
 export interface RawSandboxInstance {
-  sandboxId: string
-  state: string
-  generation: number
+  sandboxId: string;
+  state: string;
+  generation: number;
 }
 
 export interface RawResolvedSandbox {
-  sandbox: RawSandboxInstance
-  created: boolean
+  sandbox: RawSandboxInstance;
+  created: boolean;
 }
 
 /** Raw napi sandbox handle. */
 export interface RawSandboxHandle {
-  capabilities(): string[]
+  capabilities(): string[];
   create(
     sandboxId?: string | null,
     tenantKey?: string | null,
     env?: Record<string, string> | null,
     timeoutMs?: number | null,
-  ): Promise<RawSandboxInstance>
-  get(sandboxId: string): Promise<RawSandboxInstance | null>
+  ): Promise<RawSandboxInstance>;
+  get(sandboxId: string): Promise<RawSandboxInstance | null>;
   getOrCreate(
     sandboxId?: string | null,
     tenantKey?: string | null,
     env?: Record<string, string> | null,
     timeoutMs?: number | null,
-  ): Promise<RawResolvedSandbox>
-  list(): Promise<RawSandboxInstance[]>
+  ): Promise<RawResolvedSandbox>;
+  list(): Promise<RawSandboxInstance[]>;
   runCommand(
     sandboxId: string,
     command: string,
@@ -233,7 +233,7 @@ export interface RawSandboxHandle {
     timeoutMs: number,
     cwd?: string | null,
     env?: Record<string, string> | null,
-  ): Promise<RawCommandStreamHandle>
+  ): Promise<RawCommandStreamHandle>;
   startJob(
     sandboxId: string,
     command: string,
@@ -241,39 +241,39 @@ export interface RawSandboxHandle {
     timeoutMs: number,
     cwd?: string | null,
     env?: Record<string, string> | null,
-  ): Promise<string>
-  pollJob(sandboxId: string, jobId: string, sinceSeq?: number | null): Promise<RawJobPoll>
-  cancelJob(sandboxId: string, jobId: string): Promise<void>
-  readFile(sandboxId: string, path: string): Promise<Buffer>
-  writeFile(sandboxId: string, path: string, contents: Buffer): Promise<void>
-  pause(sandboxId: string): Promise<void>
-  resume(sandboxId: string): Promise<void>
-  terminate(sandboxId: string): Promise<void>
+  ): Promise<string>;
+  pollJob(sandboxId: string, jobId: string, sinceSeq?: number | null): Promise<RawJobPoll>;
+  cancelJob(sandboxId: string, jobId: string): Promise<void>;
+  readFile(sandboxId: string, path: string): Promise<Buffer>;
+  writeFile(sandboxId: string, path: string, contents: Buffer): Promise<void>;
+  pause(sandboxId: string): Promise<void>;
+  resume(sandboxId: string): Promise<void>;
+  terminate(sandboxId: string): Promise<void>;
 }
 
 /** Raw napi bindings entry point. Construction validates the environment. */
 export interface RawBindingsHandle {
-  storage(name: string): Promise<RawStorageHandle>
-  key(name: string): Promise<RawKeyHandle>
-  kv(name: string): Promise<RawKvHandle>
-  queue(name: string): Promise<RawQueueHandle>
-  vault(name: string): Promise<RawVaultHandle>
-  container(name: string): Promise<RawContainerHandle>
-  postgres(name: string): Promise<RawPostgresHandle>
-  sandbox(name: string): Promise<RawSandboxHandle>
+  storage(name: string): Promise<RawStorageHandle>;
+  key(name: string): Promise<RawKeyHandle>;
+  kv(name: string): Promise<RawKvHandle>;
+  queue(name: string): Promise<RawQueueHandle>;
+  vault(name: string): Promise<RawVaultHandle>;
+  container(name: string): Promise<RawContainerHandle>;
+  postgres(name: string): Promise<RawPostgresHandle>;
+  sandbox(name: string): Promise<RawSandboxHandle>;
 }
 
 /** Raw napi remote bindings entry point. */
 export interface RawRemoteBindingsHandle {
-  storage(name: string): Promise<RawRemoteStorageHandle>
-  key(name: string): Promise<RawKeyHandle>
-  sandbox(name: string): Promise<RawSandboxHandle>
-  ai(): Promise<RawRemoteAiLease>
+  storage(name: string): Promise<RawRemoteStorageHandle>;
+  key(name: string): Promise<RawKeyHandle>;
+  sandbox(name: string): Promise<RawSandboxHandle>;
+  ai(): Promise<RawRemoteAiLease>;
 }
 
 /** Native environment-backed bindings class. */
 export interface RawBindingsHandleConstructor {
-  new (): RawBindingsHandle
+  new (): RawBindingsHandle;
 }
 
 /** Native remote bindings class. */
@@ -283,23 +283,23 @@ export interface RawRemoteBindingsHandleConstructor {
     externalId: string,
     token: string,
     apiBaseUrl?: string,
-  ): Promise<RawRemoteBindingsHandle>
+  ): Promise<RawRemoteBindingsHandle>;
   forDeployment(
     deploymentId: string,
     token: string,
     apiBaseUrl?: string,
-  ): Promise<RawRemoteBindingsHandle>
+  ): Promise<RawRemoteBindingsHandle>;
 }
 
 /** The complete napi addon module surface consumed by the wrapper. */
 export interface NativeAddon {
-  BindingsHandle: RawBindingsHandleConstructor
-  RemoteBindingsHandle: RawRemoteBindingsHandleConstructor
-  version(): string
+  BindingsHandle: RawBindingsHandleConstructor;
+  RemoteBindingsHandle: RawRemoteBindingsHandleConstructor;
+  version(): string;
 }
 
 /** The Linux C library a prebuild is compiled against. */
-export type LinuxLibc = "gnu" | "musl"
+export type LinuxLibc = "gnu" | "musl";
 
 /**
  * Detect the Linux C library (glibc vs musl) of the current process, using the
@@ -315,13 +315,13 @@ export function detectLinuxLibc(): LinuxLibc {
   const report =
     typeof process.report?.getReport === "function"
       ? (process.report.getReport() as { header?: { glibcVersionRuntime?: string } })
-      : undefined
+      : undefined;
   if (report?.header) {
     // glibc runtimes populate this field; musl runtimes leave it absent.
-    return report.header.glibcVersionRuntime ? "gnu" : "musl"
+    return report.header.glibcVersionRuntime ? "gnu" : "musl";
   }
   // Process report unavailable: Alpine ships this marker and has no glibc.
-  return existsSync("/etc/alpine-release") ? "musl" : "gnu"
+  return existsSync("/etc/alpine-release") ? "musl" : "gnu";
 }
 
 /**
@@ -344,18 +344,18 @@ export function platformTriple(
   arch: NodeJS.Architecture = process.arch,
   libc: LinuxLibc = platform === "linux" ? detectLinuxLibc() : "gnu",
 ): string {
-  if (platform === "darwin" && arch === "arm64") return "darwin-arm64"
-  if (platform === "darwin" && arch === "x64") return "darwin-x64"
+  if (platform === "darwin" && arch === "arm64") return "darwin-arm64";
+  if (platform === "darwin" && arch === "x64") return "darwin-x64";
   if (platform === "linux" && libc === "musl") {
     throw new Error(
       `@alienplatform/bindings has no native addon for musl-based Linux (arch '${arch}'). Prebuilds are published for glibc Linux only (the '…-gnu' triples); run on a glibc-based image (for example debian- or ubuntu-slim) instead.`,
-    )
+    );
   }
-  if (platform === "linux" && arch === "x64") return "linux-x64-gnu"
-  if (platform === "linux" && arch === "arm64") return "linux-arm64-gnu"
+  if (platform === "linux" && arch === "x64") return "linux-x64-gnu";
+  if (platform === "linux" && arch === "arm64") return "linux-arm64-gnu";
   throw new Error(
     `@alienplatform/bindings has no native addon for platform '${platform}' arch '${arch}'.`,
-  )
+  );
 }
 
 /**
@@ -368,23 +368,23 @@ export function findLocalAddon(
   triple: string,
   startDir: string = dirname(fileURLToPath(import.meta.url)),
 ): string | undefined {
-  const fileName = `alien-bindings-node.${triple}.node`
-  let dir = startDir
+  const fileName = `alien-bindings-node.${triple}.node`;
+  let dir = startDir;
   // Bounded walk to the filesystem root.
   for (;;) {
-    const candidate = join(dir, "crates", "alien-bindings-node", fileName)
-    if (existsSync(candidate)) return candidate
-    const parent = dirname(dir)
-    if (parent === dir) return undefined
-    dir = parent
+    const candidate = join(dir, "crates", "alien-bindings-node", fileName);
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
   }
 }
 
 /** This package's own `version` field, read from `package.json` at the package root. */
 function packageVersion(): string {
-  const dir = dirname(fileURLToPath(import.meta.url))
-  const packageJson = require(join(dir, "..", "package.json")) as { version: string }
-  return packageJson.version
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const packageJson = require(join(dir, "..", "package.json")) as { version: string };
+  return packageJson.version;
 }
 
 /**
@@ -397,16 +397,16 @@ function packageVersion(): string {
  * an incompatible napi surface, so fail with the two observed versions.
  */
 export function assertAddonVersion(addon: NativeAddon, expected: string, source: string): void {
-  const actual = addon.version()
+  const actual = addon.version();
   if (actual !== expected) {
     throw new Error(
       `@alienplatform/bindings native addon version mismatch for ${source}: addon reports '${actual}', wrapper is '${expected}'. Reinstall @alienplatform/bindings so the wrapper and platform prebuild use the same version.`,
-    )
+    );
   }
 }
 
-let cached: NativeAddon | undefined
-let embedded: NativeAddon | undefined
+let cached: NativeAddon | undefined;
+let embedded: NativeAddon | undefined;
 
 /**
  * Register an addon that is already resident in the process — the one bun
@@ -421,7 +421,7 @@ let embedded: NativeAddon | undefined
  * and {@link loadAddon} falls through to its normal resolution.
  */
 export function registerEmbeddedAddon(addon: NativeAddon): void {
-  embedded = addon
+  embedded = addon;
 }
 
 /**
@@ -429,48 +429,48 @@ export function registerEmbeddedAddon(addon: NativeAddon): void {
  * the current platform. Called lazily on the first binding operation.
  */
 export function loadAddon(): NativeAddon {
-  if (cached) return cached
+  if (cached) return cached;
 
   // A compiled binary registers its embedded addon up front; prefer it over the
   // filesystem/prebuild resolution below, which cannot work inside the binary.
   if (embedded) {
-    cached = embedded
-    return cached
+    cached = embedded;
+    return cached;
   }
 
-  const override = process.env.ALIEN_BINDINGS_ADDON_PATH
+  const override = process.env.ALIEN_BINDINGS_ADDON_PATH;
   if (override) {
-    cached = require(override) as NativeAddon
-    return cached
+    cached = require(override) as NativeAddon;
+    return cached;
   }
 
-  const triple = platformTriple()
-  const pkg = `@alienplatform/bindings-${triple}`
+  const triple = platformTriple();
+  const pkg = `@alienplatform/bindings-${triple}`;
 
-  let publishedPath: string | undefined
+  let publishedPath: string | undefined;
   try {
-    publishedPath = require.resolve(pkg)
+    publishedPath = require.resolve(pkg);
   } catch {
     // Prebuild not installed — fall through to the dev-built addon.
   }
   if (publishedPath) {
-    const addon = require(publishedPath) as NativeAddon
-    assertAddonVersion(addon, packageVersion(), `published prebuild '${pkg}'`)
-    cached = addon
-    return cached
+    const addon = require(publishedPath) as NativeAddon;
+    assertAddonVersion(addon, packageVersion(), `published prebuild '${pkg}'`);
+    cached = addon;
+    return cached;
   }
 
-  const local = findLocalAddon(triple)
+  const local = findLocalAddon(triple);
   if (local) {
-    const addon = require(local) as NativeAddon
-    const expected = packageVersion()
+    const addon = require(local) as NativeAddon;
+    const expected = packageVersion();
     // Trust the local addon only when its reported version matches the installed
     // package version. A mismatch means a stale build left over from an earlier
     // checkout (ABI/version skew) and must not be loaded.
     try {
-      assertAddonVersion(addon, expected, `locally-built addon at '${local}'`)
-      cached = addon
-      return cached
+      assertAddonVersion(addon, expected, `locally-built addon at '${local}'`);
+      cached = addon;
+      return cached;
     } catch (error) {
       // Stale locally-built addon (ABI/version skew) — warn and fall through to
       // the standard "cannot load" error below rather than serving a mismatched
@@ -479,11 +479,11 @@ export function loadAddon(): NativeAddon {
       // immediately with reinstall guidance.
       console.warn(
         `${error instanceof Error ? error.message : String(error)} Rebuild it with \`napi build --platform\` in crates/alien-bindings-node.`,
-      )
+      );
     }
   }
 
   throw new Error(
     `Cannot load the @alienplatform/bindings native addon for '${triple}'. Install the '${pkg}' prebuild, or build it locally with \`napi build --platform\` in crates/alien-bindings-node, or set ALIEN_BINDINGS_ADDON_PATH to a built .node file.`,
-  )
+  );
 }

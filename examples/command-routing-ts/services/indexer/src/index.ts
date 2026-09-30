@@ -8,19 +8,19 @@
 // It registers `status` and `search` — the SAME names the api Worker registers.
 // A caller reaches this one with `.target("indexer-daemon")`.
 
-import { kv } from "@alienplatform/bindings"
-import { createCommandReceiver } from "@alienplatform/commands"
-import { countDocs, searchIndex } from "../../../shared/scan-all"
+import { kv } from "@alienplatform/bindings";
+import { createCommandReceiver } from "@alienplatform/commands";
+import { countDocs, searchIndex } from "../../../shared/scan-all";
 
-const RESOURCE = "indexer-daemon"
-const index = kv("index")
+const RESOURCE = "indexer-daemon";
+const index = kv("index");
 
 const SEED_DOCS: Record<string, string> = {
   "getting-started": "How to deploy your first Alien stack",
   commands: "Invoke commands on a deployment by target resource id",
   bindings: "Storage, kv, queue, and vault bindings run in-process",
   daemons: "A daemon is a resident process that leases commands",
-}
+};
 
 // Background work that justifies this being a daemon: keep the shared index
 // populated. In a real agent this would crawl a source; here it seeds a handful
@@ -28,18 +28,18 @@ const SEED_DOCS: Record<string, string> = {
 async function buildIndex(signal: AbortSignal): Promise<void> {
   while (!signal.aborted) {
     for (const [id, text] of Object.entries(SEED_DOCS)) {
-      await index.set(`doc:${id}`, text)
+      await index.set(`doc:${id}`, text);
     }
-    await new Promise(resolve => setTimeout(resolve, 30_000))
+    await new Promise((resolve) => setTimeout(resolve, 30_000));
   }
 }
 
-const controller = new AbortController()
-void buildIndex(controller.signal).catch(error => {
-  console.error("indexer loop failed", error)
-})
+const controller = new AbortController();
+void buildIndex(controller.signal).catch((error) => {
+  console.error("indexer loop failed", error);
+});
 
-const receiver = createCommandReceiver()
+const receiver = createCommandReceiver();
 
 // Overlapping command #1: `status`. Answered by the daemon, so `role` is
 // "daemon" and `model` is "pull".
@@ -49,30 +49,30 @@ receiver.command("status", async () => ({
   model: "pull",
   documents: await countDocs(index),
   at: new Date().toISOString(),
-}))
+}));
 
 // Overlapping command #2: `search`, reading the index this daemon maintains.
-receiver.command("search", async input => {
+receiver.command("search", async (input) => {
   if (
     typeof input !== "object" ||
     input === null ||
     !("term" in input) ||
     typeof input.term !== "string"
   ) {
-    throw new TypeError("term must be a string")
+    throw new TypeError("term must be a string");
   }
-  const { term } = input
-  return { resource: RESOURCE, term, hits: await searchIndex(index, term) }
-})
+  const { term } = input;
+  return { resource: RESOURCE, term, hits: await searchIndex(index, term) };
+});
 
-console.log(`${RESOURCE} leasing commands`)
+console.log(`${RESOURCE} leasing commands`);
 
 // A source-built daemon compiles to a single binary that embeds the bindings
 // native addon, which requires a CommonJS bundle — and CommonJS forbids
 // top-level await. Drive the receiver from an async entry point instead.
 async function main(): Promise<void> {
-  await receiver.run()
-  controller.abort()
+  await receiver.run();
+  controller.abort();
 }
 
-void main()
+void main();

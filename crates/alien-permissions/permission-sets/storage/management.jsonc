@@ -13,18 +13,18 @@
             "s3:GetBucketAcl",
             "s3:GetEncryptionConfiguration",
             "s3:GetBucketPublicAccessBlock",
-            "s3:ListBucketVersions"
-          ]
+            "s3:ListBucketVersions",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:s3:::${stackPrefix}-*"]
+            "resources": ["arn:aws:s3:::${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:s3:::${resourceName}"]
-          }
-        }
-      }
+            "resources": ["arn:aws:s3:::${resourceName}"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -42,18 +42,18 @@
             "storage.bucketOperations.cancel",
             "storage.hmacKeys.get",
             "storage.hmacKeys.list",
-            "storage.hmacKeys.update"
-          ]
+            "storage.hmacKeys.update",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}/buckets/${resourceName}"
-          }
-        }
-      }
+            "scope": "projects/${projectName}/buckets/${resourceName}",
+          },
+        },
+      },
     ],
     "azure": [
       {
@@ -61,18 +61,18 @@
           "actions": [
             "Microsoft.Storage/storageAccounts/read",
             "Microsoft.Storage/storageAccounts/blobServices/containers/read",
-            "Microsoft.Storage/storageAccounts/blobServices/containers/write"
-          ]
+            "Microsoft.Storage/storageAccounts/blobServices/containers/write",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}",
+          },
+        },
+      },
+    ],
+  },
 }

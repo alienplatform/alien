@@ -1,15 +1,33 @@
 {
   "name": "@alienplatform/core",
   "version": "3.3.25",
-  "type": "module",
+  "description": "Core types and schemas for the Alien platform",
+  "keywords": [
+    "alien",
+    "cloud",
+    "deployment",
+    "infrastructure"
+  ],
+  "homepage": "https://alien.dev",
+  "license": "FSL-1.1-Apache-2.0",
+  "author": "Alien Software, Inc. <hi@alien.dev>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alienplatform/alien.git",
+    "directory": "packages/core"
+  },
   "files": [
     "dist"
   ],
+  "type": "module",
   "exports": {
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     }
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsdown",
@@ -19,23 +37,10 @@
     "format-and-lint": "oxfmt --check \"**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}\" && oxlint .",
     "format-and-lint:fix": "oxfmt --write \"**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}\" && oxlint --fix ."
   },
-  "keywords": [
-    "alien",
-    "cloud",
-    "deployment",
-    "infrastructure"
-  ],
-  "author": "Alien Software, Inc. <hi@alien.dev>",
-  "license": "FSL-1.1-Apache-2.0",
-  "description": "Core types and schemas for the Alien platform",
-  "homepage": "https://alien.dev",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/alienplatform/alien.git",
-    "directory": "packages/core"
-  },
-  "publishConfig": {
-    "access": "public"
+  "dependencies": {
+    "@openapi-contrib/json-schema-to-openapi-schema": "^4.0.0",
+    "serialize-error": "^12.0.0",
+    "zod": "4.5.2"
   },
   "devDependencies": {
     "@alienplatform/typescript-config": "workspace:^",
@@ -48,10 +53,5 @@
     "tsdown": "^0.13.0",
     "typescript": "~5.9.0",
     "vitest": "^4.0.0"
-  },
-  "dependencies": {
-    "@openapi-contrib/json-schema-to-openapi-schema": "^4.0.0",
-    "serialize-error": "^12.0.0",
-    "zod": "4.5.2"
   }
 }

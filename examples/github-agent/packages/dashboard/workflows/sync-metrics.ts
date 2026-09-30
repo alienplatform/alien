@@ -1,44 +1,44 @@
-"use workflow"
+"use workflow";
 
-import { sleep } from "workflow"
+import { sleep } from "workflow";
 
 type AnalysisMetrics = {
-  totalPRs: number
-  bySize: { small: number; medium: number; large: number }
-  byRisk: { low: number; medium: number; high: number; critical: number }
-  avgTimeToFirstReviewHours: number
-  avgMergeTimeHours: number
-  reviewThroughputScore: number
-  churnHotspots: Array<{ file: string; changes: number }>
-}
+  totalPRs: number;
+  bySize: { small: number; medium: number; large: number };
+  byRisk: { low: number; medium: number; high: number; critical: number };
+  avgTimeToFirstReviewHours: number;
+  avgMergeTimeHours: number;
+  reviewThroughputScore: number;
+  churnHotspots: Array<{ file: string; changes: number }>;
+};
 
 async function fetchMetricsFromAgent(integrationId: string, agentId: string) {
-  "use step"
+  "use step";
 
-  const { invokeCommand } = await import("@/lib/arc")
+  const { invokeCommand } = await import("@/lib/arc");
 
   try {
     const metrics = await invokeCommand<AnalysisMetrics>(agentId, "analyze-repository", {
       integrationId,
-    })
+    });
 
-    return { success: true as const, metrics }
+    return { success: true as const, metrics };
   } catch (error) {
     return {
       success: false as const,
       error: error instanceof Error ? error.message : "Unknown error",
-    }
+    };
   }
 }
 
 async function saveMetricsToDB(integrationId: string, metrics: AnalysisMetrics) {
-  "use step"
+  "use step";
 
-  const { db } = await import("@/lib/db")
-  const { metricsHistory, syncStatus } = await import("@/lib/schema")
-  const { eq } = await import("drizzle-orm")
+  const { db } = await import("@/lib/db");
+  const { metricsHistory, syncStatus } = await import("@/lib/schema");
+  const { eq } = await import("drizzle-orm");
 
-  const now = new Date()
+  const now = new Date();
 
   // Save metrics history
   await db.insert(metricsHistory).values({
@@ -57,12 +57,12 @@ async function saveMetricsToDB(integrationId: string, metrics: AnalysisMetrics) 
     reviewThroughputScore: metrics.reviewThroughputScore,
     churnHotspots: JSON.stringify(metrics.churnHotspots),
     syncedAt: now,
-  })
+  });
 
   // Update sync status
   const existingSync = await db.query.syncStatus.findFirst({
     where: eq(syncStatus.integrationId, integrationId),
-  })
+  });
 
   if (existingSync) {
     await db
@@ -73,7 +73,7 @@ async function saveMetricsToDB(integrationId: string, metrics: AnalysisMetrics) 
         lastSyncError: null,
         nextSyncAt: new Date(now.getTime() + 5000), // 5 seconds from now
       })
-      .where(eq(syncStatus.id, existingSync.id))
+      .where(eq(syncStatus.id, existingSync.id));
   } else {
     await db.insert(syncStatus).values({
       id: `sync_${integrationId}`,
@@ -82,21 +82,21 @@ async function saveMetricsToDB(integrationId: string, metrics: AnalysisMetrics) 
       lastSyncStatus: "success",
       lastSyncError: null,
       nextSyncAt: new Date(now.getTime() + 5000),
-    })
+    });
   }
 }
 
 async function updateSyncError(integrationId: string, error: string) {
-  "use step"
+  "use step";
 
-  const { db } = await import("@/lib/db")
-  const { syncStatus } = await import("@/lib/schema")
-  const { eq } = await import("drizzle-orm")
+  const { db } = await import("@/lib/db");
+  const { syncStatus } = await import("@/lib/schema");
+  const { eq } = await import("drizzle-orm");
 
-  const now = new Date()
+  const now = new Date();
   const existingSync = await db.query.syncStatus.findFirst({
     where: eq(syncStatus.integrationId, integrationId),
-  })
+  });
 
   if (existingSync) {
     await db
@@ -107,7 +107,7 @@ async function updateSyncError(integrationId: string, error: string) {
         lastSyncError: error,
         nextSyncAt: new Date(now.getTime() + 5000),
       })
-      .where(eq(syncStatus.id, existingSync.id))
+      .where(eq(syncStatus.id, existingSync.id));
   } else {
     await db.insert(syncStatus).values({
       id: `sync_${integrationId}`,
@@ -116,48 +116,48 @@ async function updateSyncError(integrationId: string, error: string) {
       lastSyncStatus: "error",
       lastSyncError: error,
       nextSyncAt: new Date(now.getTime() + 5000),
-    })
+    });
   }
 }
 
 async function getOrganizationIntegrations(organizationId: string) {
-  "use step"
+  "use step";
 
-  const { db } = await import("@/lib/db")
-  const { integration } = await import("@/lib/schema")
-  const { eq } = await import("drizzle-orm")
+  const { db } = await import("@/lib/db");
+  const { integration } = await import("@/lib/schema");
+  const { eq } = await import("drizzle-orm");
 
   return await db.query.integration.findMany({
     where: eq(integration.organizationId, organizationId),
-  })
+  });
 }
 
 export async function syncIntegrationMetrics(integrationId: string, agentId: string) {
   // Fetch metrics from the agent
-  const result = await fetchMetricsFromAgent(integrationId, agentId)
+  const result = await fetchMetricsFromAgent(integrationId, agentId);
 
   if (!result.success) {
-    await updateSyncError(integrationId, result.error)
-    return { success: false, error: result.error }
+    await updateSyncError(integrationId, result.error);
+    return { success: false, error: result.error };
   }
 
   // Save to database
-  await saveMetricsToDB(integrationId, result.metrics)
+  await saveMetricsToDB(integrationId, result.metrics);
 
-  return { success: true }
+  return { success: true };
 }
 
 export async function syncAllIntegrationsLoop(organizationId: string, agentId: string) {
   while (true) {
     // Get all organization integrations
-    const integrations = await getOrganizationIntegrations(organizationId)
+    const integrations = await getOrganizationIntegrations(organizationId);
 
     // Sync each integration
     for (const int of integrations) {
-      await syncIntegrationMetrics(int.id, agentId)
+      await syncIntegrationMetrics(int.id, agentId);
     }
 
     // Wait 5 seconds before next sync
-    await sleep("5s")
+    await sleep("5s");
   }
 }

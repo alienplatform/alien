@@ -1,4 +1,4 @@
-import type { AIReview, PullRequest } from "./schemas.js"
+import type { AIReview, PullRequest } from "./schemas.js";
 
 /**
  * Generate AI-powered code review for a pull request.
@@ -278,7 +278,7 @@ This would enable proactive alerting before issues impact users.
 This code is production-ready. Ship it with confidence.`,
       reviewedAt: "2024-01-08T10:00:00Z",
     },
-  }
+  };
 
   // Return mock review for known PRs, or generate a basic one
   return (
@@ -293,5 +293,5 @@ This code is production-ready. Ship it with confidence.`,
         "## Standard Review\n\nThis pull request has been reviewed and appears to follow standard practices. No critical issues detected.",
       reviewedAt: new Date().toISOString(),
     }
-  )
+  );
 }

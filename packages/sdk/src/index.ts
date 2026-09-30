@@ -42,14 +42,14 @@ export type {
   StorageEvent,
   StorageEventType,
   WorkerCommandContext,
-} from "./worker-runtime/registry.js"
+} from "./worker-runtime/registry.js";
 export {
   command,
   onCronEvent,
   onQueueMessage,
   onStorageEvent,
   waitUntil,
-} from "./worker-runtime/registry.js"
+} from "./worker-runtime/registry.js";
 
 // ============================================================================
 // Binding factories — re-exported from @alienplatform/bindings
@@ -73,8 +73,8 @@ export type {
   SandboxInstance,
   Storage,
   Vault,
-} from "@alienplatform/bindings"
-export { container, kv, postgres, queue, sandbox, storage, vault } from "@alienplatform/bindings"
+} from "@alienplatform/bindings";
+export { container, kv, postgres, queue, sandbox, storage, vault } from "@alienplatform/bindings";
 
 // ============================================================================
 // AI: re-exported from @alienplatform/ai-gateway (a spawned Rust gateway process)
@@ -88,7 +88,7 @@ export type {
   ChatCompletionCreateParams,
   ExternalAiBinding,
   ResponseCreateParams,
-} from "@alienplatform/ai-gateway"
+} from "@alienplatform/ai-gateway";
 export {
   Ai,
   ai,
@@ -96,12 +96,12 @@ export {
   isExternalAiBinding,
   parseAiBinding,
   startAiGateway,
-} from "@alienplatform/ai-gateway"
+} from "@alienplatform/ai-gateway";
 
 // ============================================================================
 // Errors — re-exported from @alienplatform/bindings and @alienplatform/core
 // ============================================================================
 
-export { AiTransportError, AiUpstreamError } from "@alienplatform/ai-gateway"
-export { BindingNotConfiguredError } from "@alienplatform/bindings"
-export { AlienError, BindingNotFoundError, InvalidBindingConfigError } from "@alienplatform/core"
+export { AiTransportError, AiUpstreamError } from "@alienplatform/ai-gateway";
+export { BindingNotConfiguredError } from "@alienplatform/bindings";
+export { AlienError, BindingNotFoundError, InvalidBindingConfigError } from "@alienplatform/core";

@@ -1,18 +1,18 @@
 {
   "name": "@alienplatform/bindings-linux-arm64-gnu",
   "version": "3.3.25",
-  "cpu": [
-    "arm64"
-  ],
-  "main": "alien-bindings-node.linux-arm64-gnu.node",
+  "description": "napi-rs addon exposing alien-bindings storage/kv/queue/vault to JavaScript",
   "files": [
     "alien-bindings-node.linux-arm64-gnu.node"
   ],
-  "description": "napi-rs addon exposing alien-bindings storage/kv/queue/vault to JavaScript",
   "os": [
     "linux"
   ],
+  "cpu": [
+    "arm64"
+  ],
   "libc": [
     "glibc"
-  ]
+  ],
+  "main": "alien-bindings-node.linux-arm64-gnu.node"
 }

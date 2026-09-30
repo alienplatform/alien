@@ -1,10 +1,26 @@
 {
   "name": "@alienplatform/sdk",
   "version": "3.3.25",
-  "type": "module",
+  "description": "TypeScript SDK for Alien Worker apps — handler APIs and re-exported binding factories",
+  "keywords": [
+    "alien",
+    "bindings",
+    "sdk",
+    "worker"
+  ],
+  "homepage": "https://alien.dev",
+  "license": "FSL-1.1-Apache-2.0",
+  "author": "Alien Software, Inc. <hi@alien.dev>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alienplatform/alien.git",
+    "directory": "packages/sdk"
+  },
   "files": [
     "dist"
   ],
+  "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -23,6 +39,9 @@
       "import": "./dist/native-bindings.js"
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsdown && tsc --emitDeclarationOnly",
     "test": "vitest run --passWithNoTests",
@@ -30,33 +49,6 @@
     "generate": "./scripts/generate-proto.sh",
     "format-and-lint": "oxfmt --check \"**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}\" && oxlint .",
     "format-and-lint:fix": "oxfmt --write \"**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}\" && oxlint --fix ."
-  },
-  "sideEffects": false,
-  "keywords": [
-    "alien",
-    "bindings",
-    "sdk",
-    "worker"
-  ],
-  "author": "Alien Software, Inc. <hi@alien.dev>",
-  "license": "FSL-1.1-Apache-2.0",
-  "homepage": "https://alien.dev",
-  "description": "TypeScript SDK for Alien Worker apps — handler APIs and re-exported binding factories",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/alienplatform/alien.git",
-    "directory": "packages/sdk"
-  },
-  "publishConfig": {
-    "access": "public"
-  },
-  "devDependencies": {
-    "@alienplatform/typescript-config": "workspace:^",
-    "@types/node": "^24.0.15",
-    "ts-proto": "^2.7.0",
-    "tsdown": "^0.13.0",
-    "typescript": "~5.9.0",
-    "vitest": "^4.0.0"
   },
   "dependencies": {
     "@alienplatform/ai-gateway": "workspace:^",
@@ -67,5 +59,13 @@
     "nice-grpc": "^2.1.11",
     "nice-grpc-common": "^2.0.2",
     "zod": "4.5.2"
+  },
+  "devDependencies": {
+    "@alienplatform/typescript-config": "workspace:^",
+    "@types/node": "^24.0.15",
+    "ts-proto": "^2.7.0",
+    "tsdown": "^0.13.0",
+    "typescript": "~5.9.0",
+    "vitest": "^4.0.0"
   }
 }

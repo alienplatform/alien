@@ -1,22 +1,22 @@
-"use client"
+"use client";
 
-import { IconCloud, IconPlus, IconServer } from "@tabler/icons-react"
-import Image from "next/image"
-import { useSearchParams } from "next/navigation"
-import { useEffect, useState } from "react"
-import { match } from "ts-pattern"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Skeleton } from "@/components/ui/skeleton"
-import { useAgents, useDeploymentGroup } from "@/lib/queries"
-import { DeployAgentDialog } from "./_components/deploy-agent-dialog"
+import { IconCloud, IconPlus, IconServer } from "@tabler/icons-react";
+import Image from "next/image";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
+import { match } from "ts-pattern";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useAgents, useDeploymentGroup } from "@/lib/queries";
+import { DeployAgentDialog } from "./_components/deploy-agent-dialog";
 
 interface Agent {
-  id: string
-  name: string
-  status: string
-  platform: string
+  id: string;
+  name: string;
+  status: string;
+  platform: string;
 }
 
 const platformIcons: Record<string, string> = {
@@ -25,25 +25,25 @@ const platformIcons: Record<string, string> = {
   azure: "/azure.svg",
   kubernetes: "/kubernetes.svg",
   local: "/local.svg",
-}
+};
 
 export default function AgentsPage() {
-  const searchParams = useSearchParams()
-  const [deployDialogOpen, setDeployDialogOpen] = useState(false)
+  const searchParams = useSearchParams();
+  const [deployDialogOpen, setDeployDialogOpen] = useState(false);
 
-  const { data: agents = [], isLoading: agentsLoading } = useAgents()
+  const { data: agents = [], isLoading: agentsLoading } = useAgents();
   const {
     data: deploymentGroupData,
     isLoading: tokenLoading,
     error: tokenError,
-  } = useDeploymentGroup()
+  } = useDeploymentGroup();
 
   // Support opening deploy dialog via URL parameter (?deploy=true)
   useEffect(() => {
     if (searchParams.get("deploy") === "true") {
-      setDeployDialogOpen(true)
+      setDeployDialogOpen(true);
     }
-  }, [searchParams])
+  }, [searchParams]);
 
   const getStatusColor = (status: string) => {
     return match(status.toLowerCase())
@@ -51,13 +51,13 @@ export default function AgentsPage() {
       .with("starting", "deploying", () => "bg-yellow-500" as const)
       .with("stopped", "offline", () => "bg-gray-500" as const)
       .with("error", () => "bg-red-500" as const)
-      .otherwise(() => "bg-gray-500" as const)
-  }
+      .otherwise(() => "bg-gray-500" as const);
+  };
 
   const renderPlatformIcon = (platform: string) => {
-    const iconSrc = platformIcons[platform]
+    const iconSrc = platformIcons[platform];
     if (iconSrc) {
-      const needsDarkFilter = platform === "local"
+      const needsDarkFilter = platform === "local";
       return (
         <Image
           src={iconSrc}
@@ -66,11 +66,11 @@ export default function AgentsPage() {
           height={20}
           className={`object-contain ${needsDarkFilter ? "dark:brightness-100 brightness-0" : ""}`}
         />
-      )
+      );
     }
 
-    return <IconCloud className="h-5 w-5 text-muted-foreground" />
-  }
+    return <IconCloud className="h-5 w-5 text-muted-foreground" />;
+  };
 
   return (
     <div className="@container/main flex flex-1 flex-col gap-4 p-4 md:gap-6 md:p-6">
@@ -181,5 +181,5 @@ export default function AgentsPage() {
         currentAgentCount={agents.length}
       />
     </div>
-  )
+  );
 }

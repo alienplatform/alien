@@ -13,23 +13,23 @@
             "iam:CreatePolicyVersion",
             "iam:DeletePolicy",
             "iam:DeletePolicyVersion",
-            "iam:ListPolicyVersions"
-          ]
+            "iam:ListPolicyVersions",
+          ],
         },
         "binding": {
           "stack": {
             "resources": [
               "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-management",
-              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-*"
-            ]
+              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-*",
+            ],
           },
           "resource": {
             "resources": [
               "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}",
-              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-*"
-            ]
-          }
-        }
+              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-*",
+            ],
+          },
+        },
       },
       {
         "grant": {
@@ -38,18 +38,18 @@
             "iam:DetachRolePolicy",
             "iam:DeleteRolePolicy",
             "iam:ListAttachedRolePolicies",
-            "iam:ListRolePolicies"
-          ]
+            "iam:ListRolePolicies",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-management"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-management"],
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"]
-          }
-        }
-      }
-    ]
-  }
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"],
+          },
+        },
+      },
+    ],
+  },
 }

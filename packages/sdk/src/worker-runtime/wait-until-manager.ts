@@ -11,12 +11,12 @@
  * is not yet wired here.
  */
 
-import { type Channel, createClient } from "nice-grpc"
-import type { WaitUntilServiceClient as GeneratedClient } from "./generated/wait_until.js"
-import { wrapGrpcCall } from "./grpc-utils.js"
-import { setOnTaskRegistered } from "./registry.js"
-import type { getWaitUntilServiceDefinition } from "./service-definitions.js"
-import { logSystemError } from "./system-log.js"
+import { type Channel, createClient } from "nice-grpc";
+import type { WaitUntilServiceClient as GeneratedClient } from "./generated/wait_until.js";
+import { wrapGrpcCall } from "./grpc-utils.js";
+import { setOnTaskRegistered } from "./registry.js";
+import type { getWaitUntilServiceDefinition } from "./service-definitions.js";
+import { logSystemError } from "./system-log.js";
 
 /**
  * WaitUntil manager for coordinating background tasks with the runtime.
@@ -24,16 +24,16 @@ import { logSystemError } from "./system-log.js"
  * @internal
  */
 export class WaitUntilManager {
-  private readonly client: GeneratedClient
-  private readonly applicationId: string
+  private readonly client: GeneratedClient;
+  private readonly applicationId: string;
 
   constructor(
     channel: Channel,
     applicationId: string,
     service: ReturnType<typeof getWaitUntilServiceDefinition>,
   ) {
-    this.client = createClient(service, channel)
-    this.applicationId = applicationId
+    this.client = createClient(service, channel);
+    this.applicationId = applicationId;
   }
 
   /**
@@ -42,10 +42,10 @@ export class WaitUntilManager {
    */
   install(): void {
     setOnTaskRegistered(() => {
-      this.notifyTaskRegistered().catch(error => {
-        logSystemError("[alien:wait-until] notifyTaskRegistered failed:", error)
-      })
-    })
+      this.notifyTaskRegistered().catch((error) => {
+        logSystemError("[alien:wait-until] notifyTaskRegistered failed:", error);
+      });
+    });
   }
 
   /**
@@ -56,7 +56,7 @@ export class WaitUntilManager {
       await this.client.notifyTaskRegistered({
         applicationId: this.applicationId,
         taskDescription: description,
-      })
-    })
+      });
+    });
   }
 }

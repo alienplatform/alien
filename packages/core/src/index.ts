@@ -1,41 +1,41 @@
 // ResourceBuilder is internal glue shared by the builders, not an extension
 // point. Exporting it would commit us to its shape at the next publish.
-export * from "./ai.js"
-export * from "./artifact-registry.js"
-export * from "./build.js"
-export * from "./common-errors.js"
-export * from "./compute-cluster.js"
-export * from "./container.js"
-export * from "./daemon.js"
-export * from "./email.js"
-export * from "./error.js"
-export * from "./get-resource-outputs.js"
-export * from "./input.js"
-export * from "./key.js"
-export * from "./kv.js"
-export * from "./postgres.js"
-export * from "./queue.js"
-export type { ResourceType } from "./resource.js"
-export { Resource, ResourceTypeSchema } from "./resource.js"
-export * from "./sandbox.js"
-export * from "./service-account.js"
-export * from "./stack.js"
-export * from "./storage.js"
-export * from "./vault.js"
-export * from "./worker.js"
+export * from "./ai.js";
+export * from "./artifact-registry.js";
+export * from "./build.js";
+export * from "./common-errors.js";
+export * from "./compute-cluster.js";
+export * from "./container.js";
+export * from "./daemon.js";
+export * from "./email.js";
+export * from "./error.js";
+export * from "./get-resource-outputs.js";
+export * from "./input.js";
+export * from "./key.js";
+export * from "./kv.js";
+export * from "./postgres.js";
+export * from "./queue.js";
+export type { ResourceType } from "./resource.js";
+export { Resource, ResourceTypeSchema } from "./resource.js";
+export * from "./sandbox.js";
+export * from "./service-account.js";
+export * from "./stack.js";
+export * from "./storage.js";
+export * from "./vault.js";
+export * from "./worker.js";
 
 // A plain value object (not `export * as`) so the bundled .d.ts stays parseable by
 // downstream dts tooling; usage is identical: `new alien.experimental.AwsOpenSearch(...)`.
-import { AwsOpenSearch as ExperimentalAwsOpenSearch } from "./experimental/index.js"
+import { AwsOpenSearch as ExperimentalAwsOpenSearch } from "./experimental/index.js";
 
 export const experimental = {
   AwsOpenSearch: ExperimentalAwsOpenSearch,
-} as const
+} as const;
 export type {
   AwsOpenSearchCollectionType,
   AwsOpenSearchConfig,
   AwsOpenSearchOutputs,
-} from "./experimental/index.js"
+} from "./experimental/index.js";
 export type {
   AgentStatus,
   AlienError as AlienErrorOptions,
@@ -255,7 +255,7 @@ export type {
   WorkerHeartbeatData,
   WorkloadHeartbeatStatus,
   WorkloadReplicaStatus,
-} from "./generated/index.js"
+} from "./generated/index.js";
 export {
   AgentStatusSchema,
   AlienErrorSchema as AlienErrorOptionsSchema,
@@ -481,4 +481,4 @@ export {
   WorkerHeartbeatDataSchema,
   WorkloadHeartbeatStatusSchema,
   WorkloadReplicaStatusSchema,
-} from "./generated/index.js"
+} from "./generated/index.js";

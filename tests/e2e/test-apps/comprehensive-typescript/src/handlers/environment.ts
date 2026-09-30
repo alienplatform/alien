@@ -1,10 +1,10 @@
-import { Hono } from "hono"
+import { Hono } from "hono";
 
-const app = new Hono()
+const app = new Hono();
 
-app.get("/env-var/:varName", c => {
-  const varName = c.req.param("varName")
-  const value = process.env[varName]
+app.get("/env-var/:varName", (c) => {
+  const varName = c.req.param("varName");
+  const value = process.env[varName];
   if (!value) {
     return c.json(
       {
@@ -14,9 +14,9 @@ app.get("/env-var/:varName", c => {
         error: `Environment variable ${varName} not found`,
       },
       404,
-    )
+    );
   }
-  return c.json({ success: true, name: varName, value })
-})
+  return c.json({ success: true, name: varName, value });
+});
 
-export default app
+export default app;

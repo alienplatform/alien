@@ -18,17 +18,17 @@
             "ses:PutEmailIdentityDkimAttributes",
             "ses:PutEmailIdentityConfigurationSetAttributes",
             "ses:TagResource",
-            "ses:UntagResource"
-          ]
+            "ses:UntagResource",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*"]
+            "resources": ["arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*"],
           },
           "resource": {
-            "resources": ["arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*"]
-          }
-        }
+            "resources": ["arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*"],
+          },
+        },
       },
       {
         "grant": {
@@ -41,21 +41,21 @@
             "ses:DeleteConfigurationSetEventDestination",
             "ses:GetConfigurationSetEventDestinations",
             "ses:TagResource",
-            "ses:UntagResource"
-          ]
+            "ses:UntagResource",
+          ],
         },
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${stackPrefix}-*"
-            ]
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${stackPrefix}-*",
+            ],
           },
           "resource": {
             "resources": [
-              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${resourceName}"
-            ]
-          }
-        }
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${resourceName}",
+            ],
+          },
+        },
       },
       {
         // Receipt rule set management uses the SES v1 API, which does not
@@ -69,17 +69,17 @@
             "ses:UpdateReceiptRule",
             "ses:DeleteReceiptRule",
             "ses:DescribeReceiptRule",
-            "ses:SetActiveReceiptRuleSet"
-          ]
+            "ses:SetActiveReceiptRuleSet",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["*"]
+            "resources": ["*"],
           },
           "resource": {
-            "resources": ["*"]
-          }
-        }
+            "resources": ["*"],
+          },
+        },
       },
       {
         "grant": {
@@ -91,46 +91,46 @@
             "sns:Subscribe",
             "sns:Unsubscribe",
             "sns:TagResource",
-            "sns:UntagResource"
-          ]
+            "sns:UntagResource",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:sns:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
+            "resources": ["arn:aws:sns:${awsRegion}:${awsAccountId}:${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:sns:${awsRegion}:${awsAccountId}:${resourceName}-*"]
-          }
-        }
+            "resources": ["arn:aws:sns:${awsRegion}:${awsAccountId}:${resourceName}-*"],
+          },
+        },
       },
       {
         // Event wiring attaches a queue policy to the linked queue, and inbound
         // delivery attaches a bucket policy to the linked bucket.
         "grant": {
-          "actions": ["sqs:GetQueueAttributes", "sqs:SetQueueAttributes"]
+          "actions": ["sqs:GetQueueAttributes", "sqs:SetQueueAttributes"],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
-          }
-        }
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"],
+          },
+        },
       },
       {
         "grant": {
-          "actions": ["s3:GetBucketPolicy", "s3:PutBucketPolicy", "s3:DeleteBucketPolicy"]
+          "actions": ["s3:GetBucketPolicy", "s3:PutBucketPolicy", "s3:DeleteBucketPolicy"],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:s3:::${stackPrefix}-*"]
+            "resources": ["arn:aws:s3:::${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:s3:::${stackPrefix}-*"]
-          }
-        }
-      }
-    ]
-  }
+            "resources": ["arn:aws:s3:::${stackPrefix}-*"],
+          },
+        },
+      },
+    ],
+  },
 }

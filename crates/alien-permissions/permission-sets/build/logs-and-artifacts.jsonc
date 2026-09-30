@@ -5,20 +5,20 @@
     "aws": [
       {
         "grant": {
-          "actions": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+          "actions": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
         },
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${stackPrefix}-*:*"
-            ]
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${stackPrefix}-*:*",
+            ],
           },
           "resource": {
             "resources": [
-              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${resourceName}:*"
-            ]
-          }
-        }
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/codebuild/${resourceName}:*",
+            ],
+          },
+        },
       },
       {
         "grant": {
@@ -27,22 +27,22 @@
             "codebuild:CreateReport",
             "codebuild:UpdateReport",
             "codebuild:BatchPutTestCases",
-            "codebuild:BatchPutCodeCoverages"
-          ]
+            "codebuild:BatchPutCodeCoverages",
+          ],
         },
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:codebuild:${awsRegion}:${awsAccountId}:report-group/${stackPrefix}-*"
-            ]
+              "arn:aws:codebuild:${awsRegion}:${awsAccountId}:report-group/${stackPrefix}-*",
+            ],
           },
           "resource": {
             "resources": [
-              "arn:aws:codebuild:${awsRegion}:${awsAccountId}:report-group/${resourceName}-*"
-            ]
-          }
-        }
-      }
+              "arn:aws:codebuild:${awsRegion}:${awsAccountId}:report-group/${resourceName}-*",
+            ],
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -51,40 +51,40 @@
             "roles/logging.logWriter",
             "roles/storage.objectCreator",
             "roles/storage.objectViewer",
-            "roles/storage.bucketViewer"
-          ]
+            "roles/storage.bucketViewer",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
           },
           "resource": {
-            "scope": "projects/${projectName}"
-          }
-        }
-      }
+            "scope": "projects/${projectName}",
+          },
+        },
+      },
     ],
     "azure": [
       {
         "grant": {
           "actions": [
             "Microsoft.Storage/storageAccounts/blobServices/containers/read",
-            "Microsoft.Storage/storageAccounts/blobServices/containers/write"
+            "Microsoft.Storage/storageAccounts/blobServices/containers/write",
           ],
           "dataActions": [
             "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
-            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"
-          ]
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
+          ],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
+          },
+        },
+      },
+    ],
+  },
 }

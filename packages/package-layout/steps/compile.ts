@@ -13,17 +13,17 @@
 // embeds the addons but crashes on load with `ReferenceError: __require is not
 // defined` — the verified repro this compile-smoke step guards.
 
-import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs"
-import { dirname, join } from "node:path"
-import { type CheckResult, type Ctx, lastLine, run } from "./shared.ts"
+import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { type CheckResult, type Ctx, lastLine, run } from "./shared.ts";
 
 export function compileNativeEmbed(ctx: Ctx): CheckResult[] {
-  const { fixtureDir, bunAvailable, addonPath, aiBinaryPath } = ctx
-  if (!bunAvailable) return []
+  const { fixtureDir, bunAvailable, addonPath, aiBinaryPath } = ctx;
+  if (!bunAvailable) return [];
 
-  const compiledDir = join(fixtureDir, ".compiled")
-  mkdirSync(compiledDir, { recursive: true })
-  const outFile = join(compiledDir, "compile-entry-bin")
+  const compiledDir = join(fixtureDir, ".compiled");
+  mkdirSync(compiledDir, { recursive: true });
+  const outFile = join(compiledDir, "compile-entry-bin");
 
   // Each package's `./native` entry imports its addon through a literal specifier
   // next to its own dist/native.js; stage the host addon there for both.
@@ -52,7 +52,7 @@ export function compileNativeEmbed(ctx: Ctx): CheckResult[] {
       ),
       addonPath: aiBinaryPath,
     },
-  ] as const
+  ] as const;
 
   for (const stage of stages) {
     if (!existsSync(dirname(stage.staged))) {
@@ -64,7 +64,7 @@ export function compileNativeEmbed(ctx: Ctx): CheckResult[] {
           reason: `installed ${stage.pkg} package is unavailable (see the install failure above)`,
           evidence: `expected package dist at ${dirname(stage.staged)}`,
         },
-      ]
+      ];
     }
     if (!stage.addonPath) {
       return [
@@ -75,10 +75,10 @@ export function compileNativeEmbed(ctx: Ctx): CheckResult[] {
           reason: `no ${stage.pkg} addon available to stage (see the addon-build failure above)`,
           evidence: `expected addon at ${stage.staged}`,
         },
-      ]
+      ];
     }
     try {
-      copyFileSync(stage.addonPath, stage.staged)
+      copyFileSync(stage.addonPath, stage.staged);
     } catch (error) {
       return [
         {
@@ -88,7 +88,7 @@ export function compileNativeEmbed(ctx: Ctx): CheckResult[] {
           reason: `failed to stage the host ${stage.pkg} addon for bun build --compile`,
           evidence: error instanceof Error ? error.message : String(error),
         },
-      ]
+      ];
     }
   }
 
@@ -96,7 +96,7 @@ export function compileNativeEmbed(ctx: Ctx): CheckResult[] {
     "bun",
     ["build", "--compile", "--format=cjs", join("src", "compile-entry.ts"), "--outfile", outFile],
     fixtureDir,
-  )
+  );
   if (built.status !== 0) {
     return [
       {
@@ -106,13 +106,13 @@ export function compileNativeEmbed(ctx: Ctx): CheckResult[] {
         reason: "bun build --compile of the SDK native entry fails with the addons staged",
         evidence: lastLine(built.stderr) || lastLine(built.stdout) || `exit ${built.status}`,
       },
-    ]
+    ];
   }
 
   // Remove BOTH staged native files: if the binary didn't truly embed them,
   // running with the source files gone proves that.
-  for (const stage of stages) rmSync(stage.staged, { force: true })
-  const ran = run(outFile, [], fixtureDir)
+  for (const stage of stages) rmSync(stage.staged, { force: true });
+  const ran = run(outFile, [], fixtureDir);
   return [
     {
       check: "compile",
@@ -121,5 +121,5 @@ export function compileNativeEmbed(ctx: Ctx): CheckResult[] {
       reason: ran.status === 0 ? "ok" : "compiled binary exited non-zero",
       evidence: ran.status === 0 ? lastLine(ran.stdout) : lastLine(ran.stderr),
     },
-  ]
+  ];
 }

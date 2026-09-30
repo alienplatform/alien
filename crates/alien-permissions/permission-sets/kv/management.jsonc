@@ -12,18 +12,18 @@
             "dynamodb:UpdateTimeToLive",
             "dynamodb:ListTagsOfResource",
             "dynamodb:DescribeContinuousBackups",
-            "dynamodb:UpdateContinuousBackups"
-          ]
+            "dynamodb:UpdateContinuousBackups",
+          ],
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"]
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"],
           },
           "resource": {
-            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"]
-          }
-        }
-      }
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"],
+          },
+        },
+      },
     ],
     "gcp": [
       {
@@ -33,8 +33,8 @@
             "datastore.databases.getMetadata",
             "datastore.databases.list",
             "datastore.indexes.get",
-            "datastore.indexes.list"
-          ]
+            "datastore.indexes.list",
+          ],
         },
         // Firestore uses the (default) database shared across stacks.
         // Isolation is enforced at the collection level by the application (collection names
@@ -42,24 +42,24 @@
         // so we use scope-only bindings.
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}" }
-        }
-      }
+          "resource": { "scope": "projects/${projectName}" },
+        },
+      },
     ],
     "azure": [
       {
         "grant": {
-          "predefinedRoles": ["Reader"]
+          "predefinedRoles": ["Reader"],
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}",
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}"
-          }
-        }
-      }
-    ]
-  }
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}",
+          },
+        },
+      },
+    ],
+  },
 }
