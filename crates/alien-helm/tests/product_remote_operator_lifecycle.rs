@@ -2608,10 +2608,13 @@ fn verify_collector_selector_upgrade(temp: &Path, current_chart: &Path, namespac
                     "set $labels \"app.kubernetes.io/name\" (include \"deployment.name\" .)",
                 );
         } else if path == "templates/remote-operator.yaml" {
-            *contents = contents.replace(
-                "app.kubernetes.io/name: 'log-collector'",
-                "app.kubernetes.io/name: 'operator'",
+            let collector_name_label = "'app.kubernetes.io/name': 'log-collector'";
+            assert!(
+                contents.contains(collector_name_label),
+                "legacy collector label must be replaced"
             );
+            *contents =
+                contents.replace(collector_name_label, "'app.kubernetes.io/name': 'operator'");
         } else if path == "templates/whitelabeled-log-collector-daemonset.yaml" {
             *contents = contents.replace(
                 "app.kubernetes.io/name: {{ include \"deployment.logCollectorNameLabel\" . }}",
