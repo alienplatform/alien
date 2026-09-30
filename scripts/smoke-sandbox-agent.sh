@@ -22,7 +22,7 @@ while [ $# -gt 0 ]; do
     *) break ;;
   esac
 done
-[ $# -eq 1 ] || { echo "$usage" >&2; exit 2; }
+[ $# -eq 1 ] && [ -n "$1" ] || { echo "$usage" >&2; exit 2; }
 image="$1"
 
 tools=()
@@ -110,23 +110,26 @@ for platform in "${platform_list[@]}"; do
     exit 1
   fi
   if [ "${#tools[@]}" -gt 0 ]; then
-    # timeout kills the docker client, not the container, so a hung probe is removed by name.
+    # timeout kills the docker client, not the container, so a probe is removed by name.
     probe="smoke-tools-$$-${platform//\//-}"
+    tools_budget=120
     status=0
-    started=$SECONDS
-    tools_out=$(timeout -k 5 120 docker run --rm --name "$probe" --platform "$platform" \
+    tools_out=$(timeout -k 5 "$tools_budget" docker run --rm --name "$probe" --platform "$platform" \
       --entrypoint /bin/sh "$image" -c "$tools_probe" sh "${tools[@]}" 2>&1) || status=$?
-    # The probe itself exits only 0 or 1, but a container killed from outside also exits 137,
-    # so 137 means our deadline only once that deadline has passed.
-    if [ "$status" = 137 ] && [ $((SECONDS - started)) -lt 120 ]; then
-      status=1
+    if [ "$status" -ne 0 ]; then
+      # The probe exits only 0 or 1. A 137 is our deadline when the container outlived its
+      # killed client; a container killed from outside is already gone.
+      if [ "$status" = 137 ]; then
+        running=$(timeout -k 5 30 docker inspect -f '{{.State.Running}}' "$probe" 2>&1) || true
+        [ "$running" = true ] || status=1
+      fi
+      timeout -k 5 30 docker rm -f "$probe" >/dev/null 2>&1 || true
     fi
     case "$status" in
       0) ;;
       124|137)
         # The last "probing" line names the tool that hung.
         echo "$tools_out"
-        timeout -k 5 30 docker rm -f "$probe" >/dev/null 2>&1 || true
         # rm races the --rm removal the kill triggers, so whether the container is gone is read
         # back rather than taken from rm's own status.
         running=$(timeout -k 5 30 docker inspect -f '{{.State.Running}}' "$probe" 2>&1) || true
@@ -134,7 +137,7 @@ for platform in "${platform_list[@]}"; do
           false|*[Nn]"o such"*) ;;
           *) echo "::warning::${platform}: container ${probe} could not be removed and may still be running" ;;
         esac
-        echo "::error::${platform}: the tools probe did not finish within 120s"
+        echo "::error::${platform}: the tools probe did not finish within ${tools_budget}s"
         exit 1 ;;
       *)
         echo "$tools_out"

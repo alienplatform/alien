@@ -132,7 +132,7 @@ tools_list="$here/../docker/sandbox-default-tools.txt"
 flags=(--tools "$tools_list")
 # A timed-out probe's client is killed but its container is not, so each timeout path
 # must remove the container by name.
-for mode in tools-124 tools-hang tools-hang-rm-fails; do
+for mode in tools-124 tools-137-deadline tools-hang tools-hang-rm-fails; do
   body=""
   case "$mode" in
     tools-hang) body="probing sleep 10" ;;
@@ -147,8 +147,15 @@ for mode in tools-124 tools-hang tools-hang-rm-fails; do
     echo "FAIL ${mode}: the timed-out probe container was never removed"
   fi
 done
-# A 137 well inside the budget is a container killed from outside, not our timeout.
+# A 137 whose container is already gone was killed from outside, not by our deadline.
 check tools-137 fail "linux/amd64: the tools probe did not complete"
+if grep -q "^-f smoke-tools-[0-9]*-linux-amd64$" "$state/container-removals" 2>/dev/null; then
+  passed=$((passed + 1))
+  echo "ok   tools-137: the probe container was removed"
+else
+  failed=$((failed + 1))
+  echo "FAIL tools-137: the probe container was never removed"
+fi
 check tools-error fail "linux/amd64: stub: the tools probe failed"
 check tools-silent fail "linux/amd64: the tools probe did not complete"
 check tools-missing fail "linux/amd64: tool probe: rg --version failed"
@@ -214,8 +221,14 @@ fi
 flags=()
 
 usage="usage: scripts/smoke-sandbox-agent.sh [--platforms <p1,p2>] [--tools <list-file>] <image-reference>"
-for arguments in "" "--bogus alien-sandbox-agent:stub" "--tools" "one two" \
-  "--platforms ,linux/arm64 alien-sandbox-agent:stub"; do
+usage_cases=(
+  ""
+  "--bogus alien-sandbox-agent:stub"
+  "--tools"
+  "one two"
+  "--platforms ,linux/arm64 alien-sandbox-agent:stub"
+)
+for arguments in "${usage_cases[@]}"; do
   # Word splitting is the point: each string is an argument list.
   # shellcheck disable=SC2086
   out="$("$script" $arguments 2>&1)"
@@ -227,6 +240,14 @@ for arguments in "" "--bogus alien-sandbox-agent:stub" "--tools" "one two" \
     echo "ok   usage '${arguments}'"
   fi
 done
+out="$("$script" "" 2>&1)"
+status=$?
+if [ "$status" -ne 2 ] || ! printf '%s\n' "$out" | grep -qF "$usage"; then
+  report "usage empty image" "expected a usage error, exited ${status}"
+else
+  passed=$((passed + 1))
+  echo "ok   usage: empty image reference"
+fi
 
 echo
 echo "${passed} passed, ${failed} failed"
