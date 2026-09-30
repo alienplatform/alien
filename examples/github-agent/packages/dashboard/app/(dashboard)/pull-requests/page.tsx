@@ -1,18 +1,5 @@
 "use client"
 
-import { Badge } from "@/components/ui/badge"
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
-import { Skeleton } from "@/components/ui/skeleton"
-import { useAgentInfo } from "@/lib/queries"
 import {
   IconAlertCircle,
   IconAlertTriangle,
@@ -30,7 +17,19 @@ import { formatDistanceToNow } from "date-fns"
 import type { ClassifiedPRWithReview } from "github-agent-remote-agent"
 import { useSearchParams } from "next/navigation"
 import { useState } from "react"
-import { match } from "ts-pattern"
+import { Badge } from "@/components/ui/badge"
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { Skeleton } from "@/components/ui/skeleton"
+import { useAgentInfo } from "@/lib/queries"
 import { AIReviewCard } from "./_components/ai-review-card"
 import { EncryptionIndicator } from "./_components/encryption-indicator"
 
@@ -210,7 +209,6 @@ export default function PullRequestsPage() {
   // Calculate percentages for badges
   const openPercentage = prs.length > 0 ? Math.round((openPRs / prs.length) * 100) : 0
   const highRiskPercentage = prs.length > 0 ? Math.round((highRiskPRs / prs.length) * 100) : 0
-  const lowRiskPercentage = prs.length > 0 ? Math.round((lowRiskPRs / prs.length) * 100) : 0
 
   return (
     <div className="@container/main flex flex-1 flex-col gap-4 p-4 md:gap-6 md:p-6">

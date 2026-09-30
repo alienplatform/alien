@@ -1,14 +1,14 @@
 "use client"
 
+import { IconBrandGithub, IconLoader2 } from "@tabler/icons-react"
+import { useRouter } from "next/navigation"
+import { useEffect, useState } from "react"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { authClient } from "@/lib/auth-client"
-import { IconBrandGithub, IconLoader2 } from "@tabler/icons-react"
-import { useRouter } from "next/navigation"
-import { useEffect, useState } from "react"
-import { toast } from "sonner"
 
 export default function OnboardingPage() {
   const router = useRouter()
@@ -40,17 +40,6 @@ export default function OnboardingPage() {
 
     checkSession()
   }, [router])
-
-  useEffect(() => {
-    // Auto-generate slug from organization name
-    if (organizationName) {
-      const generatedSlug = organizationName
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "")
-      setSlug(generatedSlug)
-    }
-  }, [organizationName])
 
   const handleCreateOrganization = async () => {
     if (!organizationName.trim()) {
@@ -124,9 +113,17 @@ export default function OnboardingPage() {
               id="organization-name"
               placeholder="Acme Inc"
               value={organizationName}
-              onChange={e => setOrganizationName(e.target.value)}
+              onChange={e => {
+                const name = e.target.value
+                setOrganizationName(name)
+                setSlug(
+                  name
+                    .toLowerCase()
+                    .replace(/[^a-z0-9]+/g, "-")
+                    .replace(/^-+|-+$/g, ""),
+                )
+              }}
               disabled={isCreating}
-              autoFocus
             />
           </div>
 

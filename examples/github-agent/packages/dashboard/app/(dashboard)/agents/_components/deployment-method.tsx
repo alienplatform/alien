@@ -1,12 +1,5 @@
 "use client"
 
-import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import {
   IconArrowRight,
   IconCheck,
@@ -17,6 +10,13 @@ import {
 } from "@tabler/icons-react"
 import Image from "next/image"
 import { useEffect, useMemo, useState } from "react"
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { CodeDisplay } from "./code-display"
 import type { Platform } from "./platform-selector"
 

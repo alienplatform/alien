@@ -1,10 +1,10 @@
+import { eq } from "drizzle-orm"
+import { headers } from "next/headers"
 import { listAgents } from "@/lib/alien"
 import { type IntegrationConfig, invokeCommand } from "@/lib/arc"
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { integration } from "@/lib/schema"
-import { eq } from "drizzle-orm"
-import { headers } from "next/headers"
 
 export async function GET() {
   const session = await auth.api.getSession({

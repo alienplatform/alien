@@ -1,5 +1,6 @@
 "use client"
 
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, XAxis } from "recharts"
 import {
   Card,
   CardAction,
@@ -21,7 +22,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, XAxis } from "recharts"
 
 interface MetricsHistoryChartProps {
   data: Array<{

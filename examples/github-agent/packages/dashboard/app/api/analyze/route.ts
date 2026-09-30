@@ -1,11 +1,11 @@
+import { eq } from "drizzle-orm"
+import { headers } from "next/headers"
+import { start } from "workflow/api"
 import { auth } from "@/lib/auth"
 import { alien, config } from "@/lib/config"
 import { db } from "@/lib/db"
 import { integration, organizationMetadata } from "@/lib/schema"
 import { syncIntegrationMetrics } from "@/workflows/sync-metrics"
-import { eq } from "drizzle-orm"
-import { headers } from "next/headers"
-import { start } from "workflow/api"
 
 export async function POST(request: Request) {
   const session = await auth.api.getSession({

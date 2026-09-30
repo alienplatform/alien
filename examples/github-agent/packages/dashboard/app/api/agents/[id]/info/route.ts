@@ -1,6 +1,6 @@
+import { headers } from "next/headers"
 import { auth } from "@/lib/auth"
 import { alien, config } from "@/lib/config"
-import { headers } from "next/headers"
 
 type RouteContext = {
   params: Promise<{ id: string }>

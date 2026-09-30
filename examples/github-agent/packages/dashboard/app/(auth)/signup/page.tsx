@@ -1,14 +1,14 @@
 "use client"
 
+import { IconBrandGithub, IconLoader2 } from "@tabler/icons-react"
+import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { signUp } from "@/lib/auth-client"
-import { IconBrandGithub, IconLoader2 } from "@tabler/icons-react"
-import Link from "next/link"
-import { useRouter } from "next/navigation"
-import { useState } from "react"
 
 export default function SignUpPage() {
   const router = useRouter()
@@ -37,7 +37,7 @@ export default function SignUpPage() {
       }
 
       router.push("/")
-    } catch (err) {
+    } catch {
       setError("An unexpected error occurred")
       setLoading(false)
     }
@@ -45,12 +45,12 @@ export default function SignUpPage() {
 
   return (
     <div className="flex w-full max-w-sm flex-col gap-6">
-      <a href="#" className="flex items-center gap-2 self-center font-medium">
+      <Link href="/" className="flex items-center gap-2 self-center font-medium">
         <div className="bg-primary text-primary-foreground flex size-9 items-center justify-center rounded-lg">
           <IconBrandGithub className="size-5" />
         </div>
         <span className="text-lg font-semibold">Code Intelligence</span>
-      </a>
+      </Link>
       <Card className="border-border/50 shadow-xl">
         <CardHeader className="text-center space-y-1">
           <CardTitle className="text-2xl">Create an account</CardTitle>

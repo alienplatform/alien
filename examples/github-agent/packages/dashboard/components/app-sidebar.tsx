@@ -2,10 +2,8 @@
 
 import {
   IconBrandGithub,
-  IconChartBar,
   IconDashboard,
   IconHelp,
-  IconLogout,
   IconPlug,
   IconServer,
   IconSettings,
@@ -13,7 +11,6 @@ import {
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import type * as React from "react"
-
 import { NavMain } from "@/components/nav-main"
 import { NavSecondary } from "@/components/nav-secondary"
 import { NavUser } from "@/components/nav-user"

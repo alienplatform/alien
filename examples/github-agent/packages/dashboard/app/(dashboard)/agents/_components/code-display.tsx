@@ -1,10 +1,10 @@
 "use client"
 
-import { Button } from "@/components/ui/button"
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import { IconCheck, IconCopy } from "@tabler/icons-react"
 import { useState } from "react"
 import { toast } from "sonner"
+import { Button } from "@/components/ui/button"
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 
 interface CodeDisplayProps {
   code: string

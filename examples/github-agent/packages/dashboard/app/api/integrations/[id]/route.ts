@@ -1,9 +1,9 @@
+import { eq } from "drizzle-orm"
+import { headers } from "next/headers"
 import { type IntegrationConfig, invokeCommand } from "@/lib/arc"
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { integration } from "@/lib/schema"
-import { eq } from "drizzle-orm"
-import { headers } from "next/headers"
 
 /**
  * PATCH endpoint to update an integration (e.g., reassign agent, mark as inactive)

@@ -1,5 +1,20 @@
 "use client"
 
+import {
+  IconAlertCircle,
+  IconAlertTriangle,
+  IconBrandGithub,
+  IconLoader2,
+  IconLock,
+  IconPlus,
+  IconRefresh,
+  IconServer,
+  IconSettings,
+} from "@tabler/icons-react"
+import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { useEffect, useState } from "react"
+import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -28,21 +43,6 @@ import {
   useIntegrations,
   useUpdateIntegration,
 } from "@/lib/queries"
-import {
-  IconAlertCircle,
-  IconAlertTriangle,
-  IconBrandGithub,
-  IconLoader2,
-  IconLock,
-  IconPlus,
-  IconRefresh,
-  IconServer,
-  IconSettings,
-} from "@tabler/icons-react"
-import Link from "next/link"
-import { useRouter } from "next/navigation"
-import { useEffect, useState } from "react"
-import { toast } from "sonner"
 
 interface Integration {
   id: string

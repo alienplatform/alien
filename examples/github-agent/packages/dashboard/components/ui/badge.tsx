@@ -1,7 +1,6 @@
-import { Slot as SlotPrimitive } from "radix-ui"
 import { type VariantProps, cva } from "class-variance-authority"
+import { Slot as SlotPrimitive } from "radix-ui"
 import type * as React from "react"
-
 import { cn } from "@/lib/utils"
 
 const badgeVariants = cva(

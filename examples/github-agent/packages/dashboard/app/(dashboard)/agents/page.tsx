@@ -1,15 +1,15 @@
 "use client"
 
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Skeleton } from "@/components/ui/skeleton"
-import { useAgents, useDeploymentGroup } from "@/lib/queries"
 import { IconCloud, IconPlus, IconServer } from "@tabler/icons-react"
 import Image from "next/image"
 import { useSearchParams } from "next/navigation"
 import { useEffect, useState } from "react"
 import { match } from "ts-pattern"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Skeleton } from "@/components/ui/skeleton"
+import { useAgents, useDeploymentGroup } from "@/lib/queries"
 import { DeployAgentDialog } from "./_components/deploy-agent-dialog"
 
 interface Agent {

@@ -1,8 +1,8 @@
 "use client"
 
-import { cn } from "@/lib/utils"
 import { IconCircleCheck } from "@tabler/icons-react"
 import Image from "next/image"
+import { cn } from "@/lib/utils"
 
 export type Platform = "aws" | "gcp" | "azure" | "kubernetes" | "local"
 

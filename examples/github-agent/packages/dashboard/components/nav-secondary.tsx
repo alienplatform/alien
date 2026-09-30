@@ -3,7 +3,6 @@
 import type { Icon } from "@tabler/icons-react"
 import Link from "next/link"
 import type * as React from "react"
-
 import {
   SidebarGroup,
   SidebarGroupContent,

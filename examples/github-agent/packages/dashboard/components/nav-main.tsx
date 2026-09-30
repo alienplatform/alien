@@ -2,7 +2,6 @@
 
 import type { Icon } from "@tabler/icons-react"
 import Link from "next/link"
-
 import {
   SidebarGroup,
   SidebarGroupContent,

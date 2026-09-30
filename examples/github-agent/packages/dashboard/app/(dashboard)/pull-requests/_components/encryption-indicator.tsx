@@ -1,9 +1,5 @@
 "use client"
 
-import { buttonVariants } from "@/components/ui/button"
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
-import { ShineBorder } from "@/components/ui/shine-border"
-import { cn } from "@/lib/utils"
 import {
   IconExternalLink,
   IconInfoCircle,
@@ -12,6 +8,8 @@ import {
   IconShieldCheck,
 } from "@tabler/icons-react"
 import React from "react"
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
+import { ShineBorder } from "@/components/ui/shine-border"
 
 interface EncryptionIndicatorProps {
   agentEnvironment: string

@@ -143,11 +143,7 @@ export function useUpdateIntegration() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async (data: {
-      integrationId: string
-      agentId?: string
-      isActive?: boolean
-    }) => {
+    mutationFn: async (data: { integrationId: string; agentId?: string; isActive?: boolean }) => {
       const response = await fetch(`/api/integrations/${data.integrationId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },

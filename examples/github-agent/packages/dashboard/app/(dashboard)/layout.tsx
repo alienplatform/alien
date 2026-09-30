@@ -1,3 +1,6 @@
+import { eq } from "drizzle-orm"
+import { headers } from "next/headers"
+import { redirect } from "next/navigation"
 import { AppSidebar } from "@/components/app-sidebar"
 import { DynamicBreadcrumb } from "@/components/dynamic-breadcrumb"
 import { Separator } from "@/components/ui/separator"
@@ -6,15 +9,8 @@ import { Toaster } from "@/components/ui/sonner"
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { member, organization } from "@/lib/schema"
-import { eq } from "drizzle-orm"
-import { headers } from "next/headers"
-import { redirect } from "next/navigation"
 
-export default async function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const session = await auth.api.getSession({
     headers: await headers(),
   })

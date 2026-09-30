@@ -1,14 +1,6 @@
 "use client"
 
 import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion"
-import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import {
   IconAlertCircle,
   IconAlertTriangle,
   IconCheck,
@@ -19,6 +11,14 @@ import {
 } from "@tabler/icons-react"
 import type { AICodeExample, AIReview, AIReviewIssue } from "github-agent-remote-agent"
 import { match } from "ts-pattern"
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion"
+import { Badge } from "@/components/ui/badge"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
 interface AIReviewCardProps {
   review: AIReview

@@ -1,5 +1,9 @@
 "use client"
 
+import { IconDashboard, IconGitPullRequest, IconPlug, IconServer } from "@tabler/icons-react"
+import Link from "next/link"
+import { usePathname } from "next/navigation"
+import { match } from "ts-pattern"
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -8,10 +12,6 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
-import { IconDashboard, IconGitPullRequest, IconPlug, IconServer } from "@tabler/icons-react"
-import Link from "next/link"
-import { usePathname } from "next/navigation"
-import { match } from "ts-pattern"
 
 export function DynamicBreadcrumb() {
   const pathname = usePathname()

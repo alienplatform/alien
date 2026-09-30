@@ -1,6 +1,5 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-
 import { fixNullablePatterns } from "./fix-openapi.mjs"
 
 test("wraps nullable references in an OpenAPI 3.0 schema object", () => {

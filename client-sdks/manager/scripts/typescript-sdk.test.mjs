@@ -1,6 +1,5 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-
 import { agentSyncRequestToJSON } from "../typescript/esm/models/agentsyncrequest.js"
 import { createCommandResponseFromJSON } from "../typescript/esm/models/createcommandresponse.js"
 import { healthResponseFromJSON } from "../typescript/esm/models/healthresponse.js"

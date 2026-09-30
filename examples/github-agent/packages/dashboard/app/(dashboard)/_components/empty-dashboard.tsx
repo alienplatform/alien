@@ -1,26 +1,15 @@
 "use client"
 
+import { IconBrandGithub, IconPlus, IconServer } from "@tabler/icons-react"
+import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { useAgents, useDeploymentGroup } from "@/lib/queries"
-import { IconArrowRight, IconBrandGithub, IconPlus, IconServer } from "@tabler/icons-react"
-import Link from "next/link"
-import { useState } from "react"
-import { DeployAgentDialog } from "../agents/_components/deploy-agent-dialog"
 
 interface EmptyDashboardProps {
   hasAgents: boolean
 }
 
 export function EmptyDashboard({ hasAgents }: EmptyDashboardProps) {
-  const [deployDialogOpen, setDeployDialogOpen] = useState(false)
-  const { data: agents = [] } = useAgents()
-  const {
-    data: deploymentGroupData,
-    isLoading: tokenLoading,
-    error: tokenError,
-  } = useDeploymentGroup()
-
   if (!hasAgents) {
     // No agents - prompt to deploy first
     return (

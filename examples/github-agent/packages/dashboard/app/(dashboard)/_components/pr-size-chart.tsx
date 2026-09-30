@@ -1,5 +1,8 @@
 "use client"
 
+import { IconEye } from "@tabler/icons-react"
+import Link from "next/link"
+import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -15,9 +18,6 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart"
-import { IconEye } from "@tabler/icons-react"
-import Link from "next/link"
-import { Cell, Legend, Pie, PieChart, ResponsiveContainer } from "recharts"
 
 interface PrSizeChartProps {
   data: {

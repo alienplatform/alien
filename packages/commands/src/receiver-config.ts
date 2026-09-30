@@ -200,7 +200,7 @@ function validateConfig(
 ): ReceiverConfig {
   const url = requireEnv(env, ENV_ALIEN_COMMANDS_URL)
   try {
-    // eslint-disable-next-line no-new -- validating parseability only
+    // oxlint-disable-next-line no-new -- validating parseability only
     new URL(url)
   } catch {
     throw new AlienError(

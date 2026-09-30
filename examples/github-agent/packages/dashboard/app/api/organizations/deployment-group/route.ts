@@ -1,10 +1,10 @@
+import { and, eq } from "drizzle-orm"
+import { headers } from "next/headers"
+import { NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { getOrCreateDeploymentGroup } from "@/lib/deployment-groups"
 import { member, organization } from "@/lib/schema"
-import { and, eq } from "drizzle-orm"
-import { headers } from "next/headers"
-import { NextResponse } from "next/server"
 
 /**
  * GET /api/organizations/deployment-group

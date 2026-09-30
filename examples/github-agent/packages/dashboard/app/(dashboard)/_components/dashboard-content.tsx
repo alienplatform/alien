@@ -1,16 +1,5 @@
 "use client"
 
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
 import {
   IconActivity,
   IconAlertTriangle,
@@ -23,9 +12,19 @@ import {
   IconTrendingUp,
 } from "@tabler/icons-react"
 import { formatDistanceToNow } from "date-fns"
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import { DashboardSkeleton } from "./dashboard-skeleton"
-import { MetricsHistoryChart } from "./metrics-history-chart"
 import { PrRiskChart } from "./pr-risk-chart"
 import { PrSizeChart } from "./pr-size-chart"
 
@@ -65,7 +64,7 @@ export function DashboardContent({
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
 
-  const fetchMetrics = async () => {
+  const fetchMetrics = useCallback(async () => {
     try {
       const response = await fetch(`/api/metrics?integrationId=${integrationId}`)
       if (response.ok) {
@@ -86,13 +85,13 @@ export function DashboardContent({
     } finally {
       setLoading(false)
     }
-  }
+  }, [integrationId])
 
   useEffect(() => {
     fetchMetrics()
     const interval = setInterval(fetchMetrics, 5000)
     return () => clearInterval(interval)
-  }, [integrationId])
+  }, [fetchMetrics])
 
   const handleSync = async () => {
     setSyncing(true)

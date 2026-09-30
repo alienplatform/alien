@@ -18,18 +18,20 @@
     "**/.alien",
     "**/alien-data",
     "**/dist",
-    "**/client-sdks",
+    "client-sdks/manager/typescript",
+    "client-sdks/platform/typescript",
     "**/openapi.json",
+    "**/openapi-3.0.json",
     "**/openapi",
     "**/app/.well-known",
     "**/code-samples-overlay.json",
     "**/.next",
     "**/api-v1.d.ts",
     "**/entrypoint.js",
-    "**/generated",
+    "packages/core/src/generated",
+    "packages/sdk/src/worker-runtime/generated",
     "**/shim.mjs",
-    "**/target",
-    "**/examples/**/github-agent/packages/dashboard"
+    "**/target"
   ],
   "overrides": [
     {

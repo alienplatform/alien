@@ -23,18 +23,15 @@
     "version:npm": "changeset version",
     "test:ts": "turbo test:ts --concurrency 15",
     "validate:package-layout": "node --experimental-strip-types packages/scripts/validate-package-layout.ts && pnpm --filter @alienplatform/package-layout check",
-    "format-and-lint": "oxfmt --check \"**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}\" && cross-env NODE_OPTIONS=--import=tsx oxlint .",
-    "format-and-lint:fix": "oxfmt --write \"**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}\" && cross-env NODE_OPTIONS=--import=tsx oxlint --fix ."
+    "format-and-lint": "oxfmt --check \"**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}\" && oxlint .",
+    "format-and-lint:fix": "oxfmt --write \"**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}\" && oxlint --fix ."
   },
   "devDependencies": {
     "@apiture/openapi-down-convert": "^0.14.2",
     "@changesets/changelog-github": "^0.7.0",
     "@changesets/cli": "^2.29.7",
-    "cross-env": "10.1.0",
     "oxfmt": "0.71.0",
     "oxlint": "1.86.0",
-    "oxlint-plugin-anti-slop": "github:dmmulroy/anti-slop#c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b",
-    "tsx": "4.21.0",
     "turbo": "^2.5.8"
   },
   "packageManager": "pnpm@10.34.5",

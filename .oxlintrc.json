@@ -12,11 +12,6 @@
     "react/react-in-jsx-scope": "off",
     "no-shadow": "off",
     "oxc/no-accumulating-spread": "error",
-    "anti-slop/no-array-filter-map": "error",
-    "anti-slop/no-reduce-accumulator-copy": "error",
-    "anti-slop/no-conditional-empty-object-spread": "error",
-    "anti-slop/no-reflect-get": "error",
-    "anti-slop/no-reflect-apply": "error",
     "no-unexpected-multiline": "off"
   },
   "env": {
@@ -28,23 +23,48 @@
     "**/.alien",
     "**/alien-data",
     "**/dist",
-    "**/client-sdks",
+    "client-sdks/manager/typescript",
+    "client-sdks/platform/typescript",
     "**/openapi.json",
+    "**/openapi-3.0.json",
     "**/openapi",
     "**/app/.well-known",
     "**/code-samples-overlay.json",
     "**/.next",
     "**/api-v1.d.ts",
     "**/entrypoint.js",
-    "**/generated",
+    "packages/core/src/generated",
+    "packages/sdk/src/worker-runtime/generated",
     "**/shim.mjs",
-    "**/target",
-    "**/examples/**/github-agent/packages/dashboard"
+    "**/target"
   ],
-  "jsPlugins": [
+  "overrides": [
     {
-      "name": "anti-slop",
-      "specifier": "oxlint-plugin-anti-slop"
+      "files": [
+        "examples/github-agent/packages/dashboard/components/ui/**/*.tsx",
+        "examples/github-agent/packages/dashboard/ui/**/*.tsx"
+      ],
+      "rules": {
+        "jsx-a11y/prefer-tag-over-role": "off"
+      }
+    },
+    {
+      "files": ["examples/github-agent/packages/dashboard/components/ui/calendar.tsx"],
+      "rules": {
+        "react/no-unstable-nested-components": "off"
+      }
+    },
+    {
+      "files": [
+        "examples/github-agent/packages/dashboard/components/ui/carousel.tsx",
+        "examples/github-agent/packages/dashboard/app/(dashboard)/agents/page.tsx",
+        "examples/github-agent/packages/dashboard/app/(dashboard)/_components/dashboard-content.tsx",
+        "examples/github-agent/packages/dashboard/app/(dashboard)/agents/_components/deployment-method.tsx",
+        "examples/github-agent/packages/dashboard/app/(dashboard)/integrations/page.tsx"
+      ],
+      "rules": {
+        "react/set-state-in-effect": "off"
+      }
     }
   ]
 }

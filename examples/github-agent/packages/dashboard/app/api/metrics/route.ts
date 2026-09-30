@@ -1,8 +1,8 @@
+import { desc, eq } from "drizzle-orm"
+import { headers } from "next/headers"
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { metricsHistory, syncStatus } from "@/lib/schema"
-import { desc, eq } from "drizzle-orm"
-import { headers } from "next/headers"
 
 export async function GET(request: Request) {
   const session = await auth.api.getSession({

@@ -1,5 +1,9 @@
 "use client"
 
+import { IconAlertCircle, IconCheck, IconLoader2, IconPlus, IconRocket } from "@tabler/icons-react"
+import { useRouter } from "next/navigation"
+import { useEffect, useRef, useState } from "react"
+import { match } from "ts-pattern"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Confetti, type ConfettiRef } from "@/components/ui/confetti"
@@ -11,10 +15,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Progress } from "@/components/ui/progress"
-import { IconAlertCircle, IconCheck, IconLoader2, IconPlus, IconRocket } from "@tabler/icons-react"
-import { useRouter } from "next/navigation"
-import { useEffect, useRef, useState } from "react"
-import { match } from "ts-pattern"
 import { DeploymentMethod } from "./deployment-method"
 import { type Platform, PlatformSelector } from "./platform-selector"
 
