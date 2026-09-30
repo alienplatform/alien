@@ -158,7 +158,10 @@ test("browser runtime task returns the six required inventory grants", () => {
   assert.equal(result.ok, true)
   assert.deepEqual(
     result.value.map(({ apiGroup, resource, verbs, resourceNames }) => ({
-      apiGroup, resource, verbs, resourceNames,
+      apiGroup,
+      resource,
+      verbs,
+      resourceNames,
     })),
     [
       ["apps", "deployments"],
