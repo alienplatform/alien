@@ -824,7 +824,6 @@ fn chat_request_to_messages(payload: Value) -> Result<Value> {
             "n",
             "prediction",
             "presence_penalty",
-            "reasoning_effort",
             "response_format",
             "seed",
             "service_tier",
@@ -834,6 +833,14 @@ fn chat_request_to_messages(payload: Value) -> Result<Value> {
         ],
         WireProtocol::Messages,
     )?;
+    // "none" asks for no reasoning, which is what a Messages request without `thinking` does.
+    reject_non_default(
+        &obj,
+        "reasoning_effort",
+        |value| value.is_null() || value == "none",
+        WireProtocol::Messages,
+    )?;
+    obj.remove("reasoning_effort");
     let messages = obj
         .remove("messages")
         .and_then(|value| value.as_array().cloned())
@@ -1529,6 +1536,26 @@ mod tests {
         .unwrap();
         assert!(translated.get("store").is_none());
         assert!(translated.get("truncation").is_none());
+    }
+
+    #[test]
+    fn reasoning_effort_none_needs_no_reasoning_in_messages() {
+        let translated = translate_request(
+            json!({ "model": "model", "input": "hello", "reasoning": { "effort": "none" } }),
+            WireProtocol::Responses,
+            WireProtocol::Messages,
+        )
+        .unwrap();
+        assert!(translated.get("reasoning_effort").is_none());
+        assert!(translated.get("thinking").is_none());
+
+        let error = translate_request(
+            json!({ "model": "model", "input": "hello", "reasoning": { "effort": "high" } }),
+            WireProtocol::Responses,
+            WireProtocol::Messages,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("reasoning_effort"));
     }
 
     #[test]
