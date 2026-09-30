@@ -20,7 +20,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use sandbox::{
-    CommandFrame, CommandStreamHandle, JobResult, ResolvedSandbox, SandboxHandle, SandboxInfo,
+    CommandFrame, CommandStreamHandle, JobResult, Preview, ResolvedSandbox, SandboxHandle,
+    SandboxInfo,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
@@ -591,5 +592,6 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<ResolvedSandbox>()?;
     module.add_class::<CommandFrame>()?;
     module.add_class::<JobResult>()?;
+    module.add_class::<Preview>()?;
     Ok(())
 }

@@ -204,6 +204,13 @@ export interface RawSandboxInstance {
   generation: number
 }
 
+export interface RawSandboxPreview {
+  endpoint: string
+  headers: Record<string, string>
+  allowedPorts: number[]
+  expiresInSeconds: number
+}
+
 export interface RawResolvedSandbox {
   sandbox: RawSandboxInstance
   created: boolean
@@ -246,6 +253,7 @@ export interface RawSandboxHandle {
   cancelJob(sandboxId: string, jobId: string): Promise<void>
   readFile(sandboxId: string, path: string): Promise<Buffer>
   writeFile(sandboxId: string, path: string, contents: Buffer): Promise<void>
+  preview(sandboxId: string, port: number): Promise<RawSandboxPreview>
   pause(sandboxId: string): Promise<void>
   resume(sandboxId: string): Promise<void>
   terminate(sandboxId: string): Promise<void>

@@ -390,6 +390,7 @@ const sandboxMembers: Record<keyof RawSandboxHandle, true> = {
   list: true,
   pause: true,
   pollJob: true,
+  preview: true,
   readFile: true,
   resume: true,
   runCommand: true,
