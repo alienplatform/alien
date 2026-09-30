@@ -134,8 +134,7 @@ flags=(--tools "$tools_list")
 # must remove the container by name.
 # A daemon that does not answer counts as our deadline and a container that may remain;
 # warnings the docker CLI prints on stderr do not change the answer.
-for mode in tools-124 tools-137-deadline tools-137-noisy tools-137-unknown tools-hang \
-    tools-hang-rm-fails; do
+for mode in tools-124 tools-137-deadline tools-137-unknown tools-hang tools-hang-rm-fails; do
   body=""
   case "$mode" in
     tools-hang) body="probing sleep 10" ;;
@@ -151,7 +150,16 @@ for mode in tools-124 tools-137-deadline tools-137-noisy tools-137-unknown tools
   fi
 done
 # A 137 whose container is already gone was killed from outside, not by our deadline.
-check tools-137 fail "linux/amd64: the tools probe did not complete"
+for mode in tools-137 tools-137-noisy; do
+  check "$mode" fail "linux/amd64: the tools probe did not complete"
+  if printf '%s\n' "$out" | grep -q '^::warning::'; then
+    failed=$((failed + 1))
+    echo "FAIL ${mode}: warned about a container that is gone"
+  else
+    passed=$((passed + 1))
+    echo "ok   ${mode}: no leftover warning"
+  fi
+done
 if grep -q "^-f smoke-tools-[0-9]*-linux-amd64$" "$state/container-removals" 2>/dev/null; then
   passed=$((passed + 1))
   echo "ok   tools-137: the probe container was removed"
@@ -231,6 +239,15 @@ usage_cases=(
   "one two"
   "--platforms ,linux/arm64 alien-sandbox-agent:stub"
 )
+# A space inside one --platforms value, which word splitting cannot express above.
+out="$("$script" --platforms "linux/amd64, linux/arm64" alien-sandbox-agent:stub 2>&1)"
+status=$?
+if [ "$status" -ne 2 ] || ! printf '%s\n' "$out" | grep -qF "$usage"; then
+  report "usage spaced platforms" "expected a usage error, exited ${status}"
+else
+  passed=$((passed + 1))
+  echo "ok   usage: a space inside --platforms"
+fi
 for arguments in "${usage_cases[@]}"; do
   # Word splitting is the point: each string is an argument list.
   # shellcheck disable=SC2086

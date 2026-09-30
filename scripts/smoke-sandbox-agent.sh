@@ -53,21 +53,23 @@ tools_probe='for tool do printf "probing %s\n" "$tool"; out=$(sh -c "$tool" 2>&1
 # when the daemon does not say. stderr is kept out of the value, since the docker CLI can
 # print warnings there on every call.
 probe_state() {
-  local running error
-  if running=$(timeout -k 5 30 docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null); then
-    printf '%s\n' "$running" | tail -n 1
-    return
-  fi
+  local running error status=0
+  running=$(timeout -k 5 30 docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null) || status=$?
+  case "$status" in
+    0) printf '%s\n' "$running" | tail -n 1; return ;;
+    124|137) echo unknown; return ;;
+  esac
   error=$(timeout -k 5 30 docker inspect "$1" 2>&1 >/dev/null) || true
+  # "no such file or directory" is an unreachable daemon, not a missing container.
   case "$error" in
-    *[Nn]"o such"*) echo gone ;;
+    *[Nn]"o such object"*|*[Nn]"o such container"*) echo gone ;;
     *) echo unknown ;;
   esac
 }
 
 IFS=, read -r -a platform_list <<< "$platforms"
 for platform in "${platform_list[@]}"; do
-  [ -n "$platform" ] || { echo "$usage" >&2; exit 2; }
+  case "$platform" in ''|*[[:space:]]*) echo "$usage" >&2; exit 2 ;; esac
 done
 for platform in "${platform_list[@]}"; do
   # Sandbox images are large (wolfi-base plus git's 24 packages, or all of buildpack-deps) and

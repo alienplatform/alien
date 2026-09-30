@@ -131,10 +131,11 @@ case "$command" in
           tools-137-deadline)
             [ -s "$state/container-removals" ] || { echo true; exit 0; } ;;
           tools-137-unknown)
-            echo "Cannot connect to the Docker daemon" >&2; exit 1 ;;
+            echo "failed to connect to the docker API: connect: no such file or directory" >&2
+            exit 1 ;;
+          # Killed from outside, and the CLI prints a warning on stderr with the answer.
           tools-137-noisy)
-            echo "WARNING: Error loading config file" >&2
-            [ -s "$state/container-removals" ] || { echo true; exit 0; } ;;
+            echo "WARNING: Error loading config file" >&2; echo false; exit 0 ;;
         esac
         echo "Error response from daemon: No such object: ${args[${#args[@]} - 1]}" >&2
         exit 1 ;;
