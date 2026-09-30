@@ -1697,9 +1697,9 @@ mod tests {
             .expect_create_microvm_image()
             .withf(|request| {
                 request.name == "test-agents"
-                    // Token carries the bundle digest so a new release is a new logical create.
-                    && request.client_token.starts_with("test-agents-")
-                    && request.client_token != "test-agents"
+                    // Token carries the image name and the bundle, so a new release is a new
+                    // logical create and a roll of the same image and bundle sends the same one.
+                    && request.client_token == build_client_token("test-agents", BUNDLE_URI)
                     && request.build_role_arn == BUILD_ROLE_ARN
                     && request.code_artifact.uri == BUNDLE_URI
                     && request.base_image_arn
@@ -1805,9 +1805,9 @@ mod tests {
                         == vec![MicrovmImageResources {
                             minimum_memory_in_mib: 2048,
                         }]
-                    // Keyed on this deployment's image, not the stack resource id another
-                    // deployment in the account shares.
-                    && request.client_token.starts_with("test-agents-")
+                    // Keyed on this deployment's image, as the create is, not the stack resource
+                    // id another deployment in the account shares.
+                    && request.client_token == build_client_token("test-agents", NEXT_BUNDLE)
                     // PUT semantics: a field left out is dropped, and this is the one that keeps
                     // sandbox contents out of the customer's logs.
                     && request.logging == Some(MicrovmImageLogging::Disabled {})
