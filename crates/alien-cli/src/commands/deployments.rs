@@ -1408,7 +1408,7 @@ async fn delete_deployment_task(
         return Ok(());
     }
 
-    client
+    let accepted = client
         .delete_deployment()
         .id(&deployment.id)
         .body(alien_manager_api::types::DeleteDeploymentRequest {
@@ -1420,9 +1420,12 @@ async fn delete_deployment_task(
         .context(ErrorData::ApiRequestFailed {
             message: "deleting deployment".to_string(),
             url: None,
-        })?;
+        })?
+        .into_inner();
 
-    println!("{}", success_line("Delete requested."));
+    // The server says what it accepted, e.g. that runtime cleanup is done but the setup (a
+    // CloudFormation stack) still has to be deleted, which a fixed message would hide.
+    println!("{}", success_line(&format!("{}.", accepted.message)));
     println!(
         "{} {}",
         dim_label("Next"),
