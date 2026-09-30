@@ -63,8 +63,9 @@ pub struct ManagerFetchHelmValuesOptions<'a> {
 /// Version of the operator RBAC policy enforced by this generator.
 ///
 /// Renderers expose this value so callers can reject manifests produced by a
-/// generator that predates policy-aware Kubernetes operation permissions.
-pub const OPERATOR_RBAC_POLICY_VERSION: u32 = 2;
+/// generator with a different policy. Version 3 replaced the fixed read-only
+/// baseline with the Operator runtime rules.
+pub const OPERATOR_RBAC_POLICY_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperatorPermission {
@@ -149,12 +150,9 @@ pub struct OperatorManifestOptions<'a> {
     /// namespaced one can filter within its namespace. `None` manages everything
     /// in scope.
     pub label_selector: Option<&'a str>,
-    /// Whether the installed Operator includes the Kubernetes operations
-    /// plugin. This gates operation-specific RBAC independently of the
-    /// requested permission tier.
-    pub kubernetes_operations_enabled: bool,
-    /// Declared requirements from enabled custom operations only. The
-    /// generator validates these before applying the permission ceiling.
+    /// Declared Kubernetes requirements of every enabled operation, builtin
+    /// or custom. The generator validates these before applying the
+    /// permission ceiling. The Operator's own runtime rules are always added.
     pub custom_operation_permissions: &'a [KubernetesOperationPermissions],
     pub permission: OperatorPermission,
     pub format: OperatorOutputFormat,
@@ -1927,7 +1925,6 @@ fn generate_operator_manifest_inner(
             &operator_name,
             &labels,
             &crd_names,
-            options.kubernetes_operations_enabled,
             options.permission,
             options.custom_operation_permissions,
         ));
@@ -1942,7 +1939,6 @@ fn generate_operator_manifest_inner(
             &operator_name,
             &labels,
             &crd_names,
-            options.kubernetes_operations_enabled,
             options.permission,
             options.custom_operation_permissions,
         ));
@@ -2411,7 +2407,6 @@ fn operator_role_doc(
     operator_name: &str,
     labels: &BTreeMap<String, String>,
     crd_names: &AccessRequestCrdNames,
-    kubernetes_operations_enabled: bool,
     permission: OperatorPermission,
     custom_operations: &[KubernetesOperationPermissions],
 ) -> String {
@@ -2422,12 +2417,7 @@ fn operator_role_doc(
         operator_name,
         labels,
     );
-    yaml.push_str(&operator_rules(
-        crd_names,
-        kubernetes_operations_enabled,
-        permission,
-        custom_operations,
-    ));
+    yaml.push_str(&operator_rules(crd_names, permission, custom_operations));
     yaml
 }
 
@@ -2546,14 +2536,11 @@ struct OperatorRuleGrant {
 /// Kubernetes operation rules shared by the namespaced `Role` and cluster-wide
 /// `ClusterRole`.
 ///
-/// Base access is read-only inventory (`get/list/watch`; never `secrets`). The
-/// Kubernetes operations plugin adds `pods/log` access. When that plugin is
-/// enabled and the permission ceiling is `Remediation`, it additionally grants
-/// exactly what the initial mutating operations require:
-///   - `pods` `delete` — `restart-pod` (the controller reschedules the pod)
-///   - workload `scale` `patch` — `scale` (the `scale` subresource)
-///
-/// No operation-specific rule is emitted when the plugin is disabled.
+/// The Operator's own runtime rules come from
+/// [`alien_permissions::operations::kubernetes::operator_runtime_rules`], the
+/// same list the permission review shows. Every other workload rule comes from
+/// an enabled operation's declared requirements, filtered by the permission
+/// ceiling: `Diagnostics` keeps read verbs only.
 ///
 /// Plus the access-request custom resource, which the operator creates
 /// (materializing a control-plane access request the customer must authorize)
@@ -2566,11 +2553,10 @@ struct OperatorRuleGrant {
 /// a vendor build grants access to *their* CRD, matching the CRD doc below.
 fn operator_rules(
     names: &AccessRequestCrdNames,
-    kubernetes_operations_enabled: bool,
     permission: OperatorPermission,
     custom_operations: &[KubernetesOperationPermissions],
 ) -> String {
-    // Normalize builtin and custom grants together. Names are part of the key:
+    // Normalize runtime and operation grants together. Names are part of the key:
     // sharing a grant never widens a named requirement to all resources.
     let mut rules = BTreeMap::<OperatorRuleScope, OperatorRuleGrant>::new();
     let mut add_rule = |group: &str, resource: &str, resource_names, verbs, reason| {
@@ -2585,95 +2571,35 @@ fn operator_rules(
         grant.reasons.insert(reason);
     };
     let status_resource = format!("{}/status", names.plural);
-    let baseline: &[(&str, &[&str], &[&str], &str)] = &[
+    for rule in alien_permissions::operations::kubernetes::operator_runtime_rules() {
+        add_rule(
+            &rule.api_group,
+            &rule.resource,
+            BTreeSet::new(),
+            rule.verbs.into_iter().collect(),
+            format!("the Operator runtime: {}.", rule.reason),
+        );
+    }
+    let access_requests: [(&str, &[&str], &str); 2] = [
         (
-            "",
-            &[
-                "pods",
-                "services",
-                "configmaps",
-                "persistentvolumeclaims",
-                "events",
-                "endpoints",
-            ],
-            &["get", "list", "watch"],
-            "baseline resource inventory.",
-        ),
-        (
-            "apps",
-            &["deployments", "statefulsets", "daemonsets", "replicasets"],
-            &["get", "list", "watch"],
-            "baseline workload inventory.",
-        ),
-        (
-            "batch",
-            &["jobs", "cronjobs"],
-            &["get", "list", "watch"],
-            "baseline job inventory.",
-        ),
-        (
-            "metrics.k8s.io",
-            &["pods"],
-            &["get", "list", "watch"],
-            "baseline pod metrics.",
-        ),
-        (
-            &names.group,
-            &[&names.plural],
+            &names.plural,
             &["get", "list", "watch", "create", "update", "patch"],
             "access-request materialization and approval observation.",
         ),
         (
-            &names.group,
-            &[&status_resource],
+            &status_resource,
             &["get", "update", "patch"],
             "access-request status reporting.",
         ),
     ];
-    for (group, resources, verbs, reason) in baseline {
-        for resource in *resources {
-            add_rule(
-                group,
-                resource,
-                BTreeSet::new(),
-                verbs
-                    .iter()
-                    .map(|verb| (*verb).to_owned())
-                    .collect::<BTreeSet<_>>(),
-                (*reason).to_owned(),
-            );
-        }
-    }
-    if kubernetes_operations_enabled {
+    for (resource, verbs, reason) in access_requests {
         add_rule(
-            "",
-            "pods/log",
+            &names.group,
+            resource,
             BTreeSet::new(),
-            BTreeSet::from(["get".to_owned()]),
-            "the kubernetes/logs operation.".to_owned(),
+            verbs.iter().map(|verb| (*verb).to_owned()).collect(),
+            reason.to_owned(),
         );
-    }
-    if kubernetes_operations_enabled && permission == OperatorPermission::Remediation {
-        add_rule(
-            "",
-            "pods",
-            BTreeSet::new(),
-            BTreeSet::from(["delete".to_owned()]),
-            "the kubernetes/restart-pod operation.".to_owned(),
-        );
-        for resource in [
-            "deployments/scale",
-            "statefulsets/scale",
-            "replicasets/scale",
-        ] {
-            add_rule(
-                "apps",
-                resource,
-                BTreeSet::new(),
-                BTreeSet::from(["patch".to_owned()]),
-                "the kubernetes/scale operation.".to_owned(),
-            );
-        }
     }
     for operation in custom_operations {
         for rule in &operation.permissions.rules {
@@ -2878,17 +2804,11 @@ fn operator_clusterrole_doc(
     operator_name: &str,
     labels: &BTreeMap<String, String>,
     crd_names: &AccessRequestCrdNames,
-    kubernetes_operations_enabled: bool,
     permission: OperatorPermission,
     custom_operations: &[KubernetesOperationPermissions],
 ) -> String {
     let mut yaml = operator_cluster_metadata_doc("ClusterRole", operator_name, labels);
-    yaml.push_str(&operator_rules(
-        crd_names,
-        kubernetes_operations_enabled,
-        permission,
-        custom_operations,
-    ));
+    yaml.push_str(&operator_rules(crd_names, permission, custom_operations));
     yaml
 }
 
@@ -7506,7 +7426,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -7533,7 +7452,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -7559,7 +7477,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -7724,7 +7641,7 @@ mod tests {
     }
 
     #[test]
-    fn operator_remediation_adds_only_restart_and_scale_writes() {
+    fn operator_remediation_without_operations_adds_no_workload_writes() {
         let manifest = generate_operator_manifest(OperatorManifestOptions {
             custom_operation_permissions: &[],
             manager_url: "https://manager.example.com",
@@ -7739,7 +7656,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Remediation,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -7770,10 +7686,6 @@ mod tests {
         assert_eq!(
             writes,
             BTreeSet::from([
-                ("", "pods", "delete"),
-                ("apps", "deployments/scale", "patch"),
-                ("apps", "statefulsets/scale", "patch"),
-                ("apps", "replicasets/scale", "patch"),
                 ("accessrequests.alien", "alienaccessrequests", "create"),
                 ("accessrequests.alien", "alienaccessrequests", "update"),
                 ("accessrequests.alien", "alienaccessrequests", "patch"),
@@ -7812,7 +7724,6 @@ mod tests {
             label_domain: Some("acme.dev"),
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -8059,7 +7970,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Cluster,
             label_selector: Some("app.kubernetes.io/part-of=my-saas"),
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -8124,7 +8034,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::HelmTemplate,
         })
@@ -8195,7 +8104,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         });
@@ -8218,7 +8126,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         });
@@ -8239,7 +8146,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Cluster,
             label_selector: Some("   "),
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         });
@@ -8319,7 +8225,6 @@ mod tests {
                     label_domain,
                     scope: OperatorScope::Namespace,
                     label_selector: None,
-                    kubernetes_operations_enabled: true,
                     custom_operation_permissions: &[],
                     permission: OperatorPermission::Remediation,
                     format: OperatorOutputFormat::HelmTemplate,

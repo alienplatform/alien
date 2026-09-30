@@ -230,6 +230,44 @@ pub fn collect(plugins: &[CatalogPlugin]) -> Vec<KubernetesGrant> {
     grants.into_values().collect()
 }
 
+/// Rules the Remote Operator uses for its own work, whatever operations are
+/// enabled. Each sync lists the Deployments, StatefulSets and DaemonSets in
+/// scope, then lists each workload's pods, events and pod metrics. Pod log
+/// collection in `podApi` mode lists DaemonSets and pods. Operations add their
+/// own declared rules on top of these.
+pub fn operator_runtime_rules() -> Vec<KubernetesRule> {
+    const INVENTORY: &str = "Workload inventory reported on every sync";
+    [
+        ("apps", "deployments", INVENTORY),
+        ("apps", "statefulsets", INVENTORY),
+        (
+            "apps",
+            "daemonsets",
+            "Workload inventory reported on every sync; log collector discovery in podApi mode",
+        ),
+        (
+            "",
+            "pods",
+            "Pod status of each observed workload; pod log discovery in podApi mode",
+        ),
+        ("", "events", "Recent events of each observed workload"),
+        (
+            "metrics.k8s.io",
+            "pods",
+            "CPU and memory of each observed workload",
+        ),
+    ]
+    .into_iter()
+    .map(|(api_group, resource, reason)| KubernetesRule {
+        api_group: api_group.to_owned(),
+        resource: resource.to_owned(),
+        verbs: vec!["list".to_owned()],
+        resource_names: vec![],
+        reason: reason.to_owned(),
+    })
+    .collect()
+}
+
 pub fn grants_verb(mode: KubernetesMode, verb: &str) -> bool {
     matches!(mode, KubernetesMode::Remediation) || matches!(verb, "get" | "list" | "watch")
 }

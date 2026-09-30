@@ -176,3 +176,26 @@ fn compaction_preserves_partial_action_resource_overlaps() {
             == json!(["s3:GetObject", "s3:GetObjectTagging"])
             && statement["resources"] == json!(["a", "b"]))));
 }
+
+#[test]
+fn runtime_task_returns_the_complete_serialized_read_only_contract() {
+    let result = run(json!({"task": "kubernetesOperatorRuntime"}));
+    assert_eq!(result["ok"], true);
+    let rules = result["value"].as_array().unwrap();
+    assert_eq!(rules.len(), 6);
+    for (rule, (group, resource)) in rules.iter().zip([
+        ("apps", "deployments"),
+        ("apps", "statefulsets"),
+        ("apps", "daemonsets"),
+        ("", "pods"),
+        ("", "events"),
+        ("metrics.k8s.io", "pods"),
+    ]) {
+        assert_eq!(rule["apiGroup"], group);
+        assert_eq!(rule["resource"], resource);
+        assert_eq!(rule["verbs"], json!(["list"]));
+        assert_eq!(rule["resourceNames"], json!([]));
+        assert!(!rule["reason"].as_str().unwrap().is_empty());
+        assert_eq!(rule.as_object().unwrap().len(), 5);
+    }
+}
