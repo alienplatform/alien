@@ -445,9 +445,9 @@ fn render_error(error: alien_error::AlienError<alien_core::ErrorData>) -> AlienE
 fn preflight_error(
     error: alien_error::AlienError<alien_preflights::error::ErrorData>,
 ) -> AlienError<ErrorData> {
-    error.context(ErrorData::ConfigurationError {
-        message: "Stack preflight checks failed".to_string(),
-    })
+    // The top-level message stays the preflight summary (with its counts) for JSON consumers.
+    let message = error.to_string();
+    error.context(ErrorData::ConfigurationError { message })
 }
 
 #[cfg(test)]
