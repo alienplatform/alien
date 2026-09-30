@@ -29,7 +29,7 @@ try {
     CARGO_PROFILE_RELEASE_PANIC: "abort",
     CARGO_PROFILE_RELEASE_STRIP: "symbols",
   }
-  if (process.platform === "linux") {
+  if (process.platform === "linux" && process.arch === "arm64") {
     execFileSync("cargo", build, {
       cwd: root,
       stdio: "inherit",
@@ -46,6 +46,8 @@ try {
       [
         "run",
         "--rm",
+        "--platform",
+        "linux/arm64",
         "--volume",
         `${root}:/source:ro`,
         "--volume",

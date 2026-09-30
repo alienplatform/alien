@@ -5,8 +5,9 @@ The generated WASM and JavaScript bindings contain the Rust compiler, not a seco
 
 After changing the Rust compiler, install the `wasm-bindgen-cli` version matching `Cargo.lock`,
 then run `pnpm generate` in this package. Compilation uses Rust 1.97.1 on Linux to produce the
-canonical artifact. Linux hosts need that toolchain with the `wasm32-unknown-unknown` target;
-other hosts need Docker, which runs the pinned Rust image and caches dependencies under `target`.
+canonical artifact on Linux ARM64. Those hosts need that toolchain with the
+`wasm32-unknown-unknown` target; other hosts need Docker with ARM64 support, which runs the
+pinned Rust image and caches dependencies under `target`.
 The generated files are committed so consumers need neither Rust nor Docker.
 
 `executeOperationPermissions` accepts a serialized `operations::Request` and returns a JSON
