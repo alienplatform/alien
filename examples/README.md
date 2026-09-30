@@ -21,6 +21,9 @@ Each example is a self-contained template you can initialize with `alien init`.
 Some repository directories are supporting projects or advanced source examples. `alien init`
 only lists directories with a valid `template.toml`, so every option it shows can be scaffolded.
 
+The [custom operations example](./custom-operations) demonstrates a Rust Remote Operator
+plugin with typed diagnostics, export throttling, and generated metadata.
+
 ## Getting started
 
 ```bash

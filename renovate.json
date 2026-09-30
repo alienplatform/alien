@@ -1,44 +1,4 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
-  "additionalBranchPrefix": "alien-370-",
-  "ignorePaths": [
-    "**/node_modules/**",
-    "**/bower_components/**",
-    "**/vendor/**",
-    "**/examples/**",
-    "**/__tests__/**",
-    "**/test/**",
-    "**/tests/**",
-    "**/__fixtures__/**",
-    "docker/Dockerfile.alien-sandbox-agent",
-    "docker/Dockerfile.alien-sandbox-default",
-    "docker/Dockerfile.alien-sandbox-gcp"
-  ],
-  "packageRules": [
-    {
-      "description": "Automerge stable non-major updates independently after CI passes",
-      "matchUpdateTypes": ["minor", "patch"],
-      "matchCurrentVersion": "!/^0/",
-      "automerge": true,
-      "automergeType": "pr",
-      "automergeStrategy": "squash"
-    },
-    {
-      "description": "Do not treat potentially breaking 0.x minor releases as routine updates",
-      "matchUpdateTypes": ["minor"],
-      "matchCurrentVersion": "/^0\\./",
-      "enabled": false
-    },
-    {
-      "description": "Require explicit dashboard approval for major updates",
-      "matchUpdateTypes": ["major"],
-      "dependencyDashboardApproval": true
-    },
-    {
-      "description": "ts-proto updates require regenerated Worker runtime clients",
-      "matchPackageNames": ["ts-proto"],
-      "automerge": false
-    }
-  ]
+  "enabled": false
 }
