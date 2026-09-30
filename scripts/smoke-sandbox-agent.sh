@@ -67,10 +67,9 @@ probe_state() {
   esac
 }
 
+# Checked whole, since read splits only the first line and drops a trailing empty field.
+case "$platforms" in ''|*[[:space:]]*|,*|*,|*,,*) echo "$usage" >&2; exit 2 ;; esac
 IFS=, read -r -a platform_list <<< "$platforms"
-for platform in "${platform_list[@]}"; do
-  case "$platform" in ''|*[[:space:]]*) echo "$usage" >&2; exit 2 ;; esac
-done
 for platform in "${platform_list[@]}"; do
   # Sandbox images are large (wolfi-base plus git's 24 packages, or all of buildpack-deps) and
   # the amd64 half arrives under emulation. Inside a probe's own budget, the pull expires.

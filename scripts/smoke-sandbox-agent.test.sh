@@ -134,13 +134,19 @@ flags=(--tools "$tools_list")
 # must remove the container by name.
 # A daemon that does not answer counts as our deadline and a container that may remain;
 # warnings the docker CLI prints on stderr do not change the answer.
-for mode in tools-124 tools-137-deadline tools-137-unknown tools-hang tools-hang-rm-fails; do
+for mode in tools-124 tools-137-deadline tools-137-unknown tools-137-stalled tools-hang \
+    tools-hang-rm-fails; do
   body=""
   case "$mode" in
     tools-hang) body="probing sleep 10" ;;
-    tools-hang-rm-fails|tools-137-unknown) body="::warning::linux/amd64: container smoke-tools-" ;;
+    tools-hang-rm-fails|tools-137-unknown|tools-137-stalled)
+      body="::warning::linux/amd64: container smoke-tools-" ;;
   esac
   check "$mode" fail "linux/amd64: the tools probe did not finish within 120s" "$body"
+  if [ "$mode" = tools-137-stalled ] && [ "$(grep -c . "$state/tools-inspects")" != 2 ]; then
+    failed=$((failed + 1))
+    echo "FAIL ${mode}: a stalled inspect was retried; expected one per state check"
+  fi
   if grep -q "^-f smoke-tools-[0-9]*-linux-amd64$" "$state/container-removals" 2>/dev/null; then
     passed=$((passed + 1))
     echo "ok   ${mode}: the timed-out probe container was removed"
@@ -238,16 +244,20 @@ usage_cases=(
   "--tools"
   "one two"
   "--platforms ,linux/arm64 alien-sandbox-agent:stub"
+  "--platforms linux/amd64, alien-sandbox-agent:stub"
+  "--platforms linux/amd64,,linux/arm64 alien-sandbox-agent:stub"
 )
-# A space inside one --platforms value, which word splitting cannot express above.
-out="$("$script" --platforms "linux/amd64, linux/arm64" alien-sandbox-agent:stub 2>&1)"
-status=$?
-if [ "$status" -ne 2 ] || ! printf '%s\n' "$out" | grep -qF "$usage"; then
-  report "usage spaced platforms" "expected a usage error, exited ${status}"
-else
-  passed=$((passed + 1))
-  echo "ok   usage: a space inside --platforms"
-fi
+# Whitespace inside one --platforms value, which word splitting cannot express above.
+for value in "linux/amd64, linux/arm64" $'linux/amd64\nlinux/arm64'; do
+  out="$("$script" --platforms "$value" alien-sandbox-agent:stub 2>&1)"
+  status=$?
+  if [ "$status" -ne 2 ] || ! printf '%s\n' "$out" | grep -qF "$usage"; then
+    report "usage platforms ${value}" "expected a usage error, exited ${status}"
+  else
+    passed=$((passed + 1))
+    echo "ok   usage: whitespace inside --platforms"
+  fi
+done
 for arguments in "${usage_cases[@]}"; do
   # Word splitting is the point: each string is an argument list.
   # shellcheck disable=SC2086
