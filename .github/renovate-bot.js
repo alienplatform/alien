@@ -8,6 +8,9 @@ module.exports = {
   onboarding: false,
   requireConfig: "ignored",
   gitAuthor: "Renovate Bot <29139614+renovate[bot]@users.noreply.github.com>",
+  // Mend opened the existing pull requests as renovate[bot]. This job uses the
+  // access token's user, so it has to read those pull requests too.
+  ignorePrAuthor: true,
   binarySource: "global",
   executionTimeout: 45,
   allowedCommands: ["^bash scripts/repair-renovate-lockfiles.sh$"],
