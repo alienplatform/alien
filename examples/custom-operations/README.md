@@ -30,8 +30,10 @@ application untouched. Tests also compare published metadata with the registry.
 Set `CUSTOM_OPS_BASE_URL` in the plugin's process environment to an admin API URL
 reachable from Remote Operator. The example uses network access to the application;
 it requests no cloud IAM or Kubernetes API permissions. It expects an API without
-HTTP authentication. Add your application's authentication to the HTTP client when
-adapting the example. Keep credentials in plugin configuration, outside caller params.
+HTTP authentication on a trusted network. Use HTTPS for non-local endpoints; HTTP
+is intended for loopback tests or an explicitly trusted application network. Add
+your application's authentication to the HTTP client when adapting the example.
+Keep credentials in plugin configuration, outside caller params.
 
 `GET /health` returns:
 
@@ -54,8 +56,11 @@ The service must finish applying the new limit before returning its response.
 On a Linux builder, run `alien operations package examples/custom-operations` to
 build the executable for that host architecture and produce a bundle. Publish the
 bundle with `alien operations publish`, then enable the plugin for your project.
-Build a bundle for each required Linux architecture. `alien operations check` and
-packaging verify generated metadata before proceeding.
+That bundle supports only the builder's architecture. To support both architectures,
+build on each Linux architecture and combine both executables with the generated
+`metadata.json` in one zip before publishing. Keep the executable filenames from
+the manifest. `alien operations check` and packaging verify generated metadata
+before proceeding.
 
 After installation, use the Operations CLI:
 
