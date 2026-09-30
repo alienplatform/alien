@@ -31,7 +31,7 @@ inject() {
   [ "$platform" = linux/amd64 ] || return 0
   case "$mode" in
     "$1-124") exit 124 ;;
-    "$1-137") exit 137 ;;
+    "$1-137"|"$1-137-deadline"|"$1-137-unknown"|"$1-137-noisy"|"$1-137-stalled") exit 137 ;;
     "$1-error") echo "stub: the $1 probe failed" >&2; exit 7 ;;
     "$1-silent") exit 7 ;;
   esac
@@ -67,6 +67,30 @@ case "$command" in
       *"uid=1000(sandbox)"*)
         inject identity
         ;;
+      *"tool probe:"*)
+        printf '%s\n' "$all" >> "$state/tools-probes"
+        # The probe's arguments after `-c <script> sh`, one per tool.
+        j=0
+        while [ "${args[$j]}" != -c ]; do j=$((j + 1)); done
+        echo $((${#args[@]} - j - 3)) >> "$state/tools-arguments"
+        inject tools
+        # These run the script's real probe over a stand-in list: one hangs, and one hides
+        # a failing command behind a `#` that must not swallow its check.
+        if [ "$platform" = linux/amd64 ]; then
+          case "$mode" in
+            tools-hang|tools-hang-rm-fails)
+              exec sh -c "${args[$((j + 1))]}" sh true 'sleep 10' true ;;
+            tools-hidden-failure)
+              exec sh -c "${args[$((j + 1))]}" sh true 'echo boom >&2; false # hidden' true ;;
+            tools-crash)
+              echo "probing node --version"; exit 139 ;;
+          esac
+        fi
+        if [ "$mode" = tools-missing ] && [ "$platform" = linux/amd64 ]; then
+          echo "tool probe: rg --version failed"
+          exit 1
+        fi
+        ;;
       *"/sandbox/probe"*)
         inject unlink
         ;;
@@ -99,6 +123,26 @@ case "$command" in
     ;;
 
   inspect)
+    case "$all" in
+      *smoke-tools-*)
+        case "$mode" in
+          tools-hang-rm-fails) echo true; exit 0 ;;
+          # Our deadline: the container outlives its killed client until rm removes it.
+          tools-137-deadline)
+            [ -s "$state/container-removals" ] || { echo true; exit 0; } ;;
+          tools-137-unknown)
+            echo "failed to connect to the docker API: connect: no such file or directory" >&2
+            exit 1 ;;
+          # Killed from outside, and the CLI prints a warning on stderr with the answer.
+          tools-137-noisy)
+            echo false; echo "WARNING: Error loading config file" >&2; exit 0 ;;
+          # A daemon that stalls: the first inspect times out, and no second one should run.
+          tools-137-stalled)
+            echo inspect >> "$state/tools-inspects"; exit 124 ;;
+        esac
+        echo "Error response from daemon: No such object: ${args[${#args[@]} - 1]}" >&2
+        exit 1 ;;
+    esac
     [ "$mode" = inspect-unreadable ] &&
       { echo "Error response from daemon: No such object: ${args[${#args[@]} - 1]}" >&2; exit 1; }
     if [ "$mode" = listener-then-exit ] && [ $(($(date +%s) - $(cat "$state/started"))) -ge 2 ]; then
@@ -114,7 +158,10 @@ case "$command" in
     echo image-rm >> "$state/image-removals"
     ;;
 
-  rm) ;;
+  rm)
+    printf '%s\n' "$all" >> "$state/container-removals"
+    [ "$mode" = tools-hang-rm-fails ] && { echo "Error response from daemon: stub" >&2; exit 1; }
+    ;;
 
   *)
     echo "stub docker: unrecognised command: $command $all" >&2
