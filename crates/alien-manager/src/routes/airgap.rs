@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{auth, AppState};
 use crate::{
-    auth::Subject,
+    auth::{Scope, Subject},
     error::ErrorData,
     traits::{DeploymentRecord, ReconcileData, ReleaseRecord, TelemetryCaller, TelemetrySignal},
 };
@@ -61,8 +61,19 @@ async fn airgapped_deployment(
         }
         Err(e) => return Err(e.into_response()),
     };
-    if !state.authz.can_update_deployment(&subject, &deployment) {
-        return Err(ErrorData::forbidden("Cannot sync this deployment").into_response());
+    // Only the site's own deployment token runs the exchange: it is what
+    // `alien onboard --airgapped` hands the site, and anything broader
+    // (a deployment group's token, say) could report state and logs for a
+    // connected deployment.
+    let own_token = matches!(
+        &subject.scope,
+        Scope::Deployment { deployment_id, .. } if deployment_id == &deployment.id
+    );
+    if !own_token || !state.authz.can_update_deployment(&subject, &deployment) {
+        return Err(ErrorData::forbidden(
+            "Air-gapped sync takes the deployment's own token (the one `alien onboard --airgapped` printed)",
+        )
+        .into_response());
     }
     if deployment.platform != Platform::Kubernetes {
         return Err(
@@ -309,6 +320,14 @@ async fn status_report(
                     .into_response()
             }
         };
+        // The same rule live telemetry from this deployment follows.
+        if !state.authz.can_ingest_telemetry(&subject, signal) {
+            return ErrorData::forbidden(format!(
+                "This token can't send {} for the deployment",
+                batch.signal
+            ))
+            .into_response();
+        }
         let Ok(data) = base64::engine::general_purpose::STANDARD.decode(&batch.data) else {
             return ErrorData::bad_request("Telemetry data must be base64").into_response();
         };
