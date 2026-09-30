@@ -1,69 +1,50 @@
 # Run your service in your customers' Kubernetes clusters
 
-Your product has a control plane that lives in your cloud: your API, your database, the parts that are hard to move. Some customers need one piece of it to run inside their own Kubernetes cluster, next to their data: on-prem, in their cloud account, sometimes on a network with no internet access at all.
+Keep your control plane in your cloud, and run one service inside each customer's Kubernetes cluster: on-prem, in their cloud account, or on a network with no internet at all. Customers install it once. You ship, watch and call every copy from a manager you run.
 
-Doing that by hand gets expensive quickly. Each customer needs a Helm chart and a registry they can pull from, with credentials that expire. Every release means asking their admins to upgrade. You can't see logs without asking for them. Your control plane can't reach the service without a VPN into their network. And multiply all of that by every customer.
+```
+ Your cloud                                Customer clusters
+┌────────────────────────────────┐        ┌─────────────────────────────────────────┐
+│ Control plane ──▶ Manager      │◀═══════│ customer-1  Operator ─▶ files ─▶ S3     │
+│                   releases,    │◀═══════│ customer-2  Operator ─▶ files ─▶ MinIO  │
+│                   images, logs,│        └─────────────────────────────────────────┘
+│                   requests     │ by hand┌─────────────────────────────────────────┐
+│                                │◀─ ─ ─ ▶│ customer-3  air-gapped                  │
+│                                │        └─────────────────────────────────────────┘
+└────────────────────────────────┘
+```
 
-This example runs a small files service in any number of customer clusters, managed from one place:
+## What you get
 
-- **Install once.** Each customer runs one `helm install`. After that, `alien release` rolls out to every cluster, and nobody on their side runs `helm upgrade` again.
-- **Nothing to set up for images.** Clusters pull the chart and your images from your manager, each with its own token. There's no registry to share and no cloud credentials to hand out.
-- **Outbound connections only.** The cluster connects to you; nothing connects into the cluster. Your control plane still calls the service in any cluster by customer name, through that connection, with its own authentication passing through untouched.
-- **Logs come back.** Each cluster's logs reach your OpenTelemetry backend (Datadog, Grafana, Honeycomb, Axiom, Coralogix, …) tagged with the customer.
-- **Their storage.** The service keeps its data in the customer's own S3-compatible storage: Amazon S3, MinIO, Ceph.
-- **Air-gapped sites too.** A cluster with no connection gets the same service and the same releases as signed update files, and its logs come back the same way.
-- **Open source.** The manager at the center is one container you run yourself.
+1. **Run your manager.** One open-source container in your cloud. It holds your releases, serves the chart and images, and collects logs.
+2. **Customers install once.** One `helm install`. Their cluster connects out to your manager; nothing connects in.
+3. **Every release rolls out.** Each `alien release` updates every cluster. No `helm upgrade`, no registry credentials to hand out.
+4. **Logs come back.** Each cluster's logs reach your OpenTelemetry backend (Datadog, Grafana, Honeycomb, …), tagged with the customer.
+5. **Call it by customer.** Your control plane calls the service in any cluster through the manager, with its own authentication passing through.
+6. **Air-gapped sites too.** Clusters with no connection get the same releases as signed files carried in, and send their logs back the same way.
 
-You can run the whole thing on your laptop in about half an hour, most of it the first build: a local Kubernetes cluster plays three customers, one of them air-gapped.
+You can run all of it on your laptop in about half an hour: a local cluster plays three customers, one of them air-gapped.
 
 ## How it works
 
-```
- Your cloud                                    A customer's cluster
-┌───────────────────────────────┐             ┌───────────────────────────────────┐
-│                               │             │                                   │
-│  alien CLI ─── release ──┐    │             │   Operator ── deploys ──▶ files   │
-│                          ▼    │  outbound   │      │                     service │
-│  your control  ───▶  Manager ◀┼─────────────┼──────┘                       │    │
-│  plane (calls the        │    │   HTTPS     │  (pulls releases and images,  ▼    │
-│  service by customer)    ▼    │             │   sends logs, carries your  their  │
-│               OpenTelemetry   │             │   control plane's requests) bucket │
-│               backend         │             │                                   │
-└───────────────────────────────┘             └───────────────────────────────────┘
-```
+**The manager** is your side: one container (`ghcr.io/alienplatform/alien-manager`) with its state in a volume. It keeps your releases, decides which one each customer runs, serves the chart and images each cluster pulls with its own token, forwards logs to your OpenTelemetry backend, and forwards your control plane's requests to a given cluster.
 
-**The manager** is your side. It's one container (`ghcr.io/alienplatform/alien-manager`) with its state in a volume. It:
+**The Operator** is the customer's side. The chart installs it next to your service. It keeps one outbound HTTPS connection to the manager, deploys the release it should run, sends logs, and carries your requests to the service. It updates itself when you upgrade the manager.
 
-- keeps your releases and decides which release each customer should run,
-- serves the Helm chart and container images that customer clusters pull, each cluster with its own token,
-- receives each cluster's logs and forwards them to your OpenTelemetry backend,
-- forwards your control plane's requests to the service in a given cluster.
-
-**The Operator** is the customer's side. The Helm chart installs it next to your service. It connects out to the manager over HTTPS and keeps that connection: it fetches the release it should run and deploys it, sends logs, and carries your requests to the service. It updates itself when you upgrade the manager.
-
-**The service** is your code, described in [`alien.ts`](alien.ts):
+**The service** is your code. This one is a small files service in Rust that keeps its data in the customer's own S3-compatible bucket (Amazon S3, MinIO, Ceph). [`alien.ts`](alien.ts) describes it:
 
 ```ts
-// The customer's bucket: Amazon S3, MinIO, Ceph or any S3-compatible store.
-const bucket = new alien.Storage("bucket").build()
+const bucket = new alien.Storage("bucket").build() // the customer's bucket, named at install time
 
 const api = new alien.Container("api")
   .code({ type: "source", src: ".", toolchain: { type: "rust", binaryName: "files" } })
-  .tunnel(8080) // reachable from your control plane through the manager, and from nowhere else
+  .tunnel(8080) // your control plane calls port 8080 through the manager, nobody else can
   .link(bucket)
   .permissions("api")
   .build()
 ```
 
-- `Storage` becomes whatever bucket the customer's admin points it at when they install.
-- `.tunnel(8080)` lets your control plane call port 8080 through the manager.
-- An `accessToken` input, set per customer, is checked by the service on every request. The service keeps its own authentication end to end.
-
-[`src/main.rs`](src/main.rs) is a plain Rust HTTP server: `PUT`, `GET` and `DELETE /files/{key}` and `GET /files?prefix=`, streaming bodies to and from the bucket, with `If-None-Match: *` and `If-Match` for conditional writes. It gets the bucket from Alien's bindings:
-
-```rust
-let storage = Bindings::from_env()?.storage("bucket").await?;
-```
+[`src/main.rs`](src/main.rs) serves `PUT`, `GET` and `DELETE /files/{key}` and `GET /files?prefix=`, streaming to and from the bucket it gets from Alien's bindings. It checks a per-customer `accessToken` on every request, so the service keeps its own authentication end to end.
 
 ## Try it on your machine
 
