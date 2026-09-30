@@ -14,7 +14,6 @@
 import { type ChildProcess, spawn } from "node:child_process"
 import type { Readable } from "node:stream"
 import { AlienError } from "@alienplatform/core"
-
 import { GatewayBinaryUnavailableError, GatewayStartFailedError } from "./errors.js"
 import { platformTriple, type RawAiGatewayHandle } from "./loader.js"
 

@@ -1306,6 +1306,25 @@ describe("CommandReceiver.run", () => {
 })
 
 describe("resolveEnvelopeUrls", () => {
+  it("resolves lease URLs without URL.canParse on early Node 18 releases", async () => {
+    const { resolveEnvelopeUrls } = await import("../src/receiver.js")
+    const originalCanParse = Object.getOwnPropertyDescriptor(URL, "canParse")
+    const env = envelope({ baseUrl: "https://commands.example.com" })
+    env.responseHandling.submitResponseUrl = "cmd_1/response?response_token=t"
+
+    Object.defineProperty(URL, "canParse", { configurable: true, value: undefined })
+    try {
+      resolveEnvelopeUrls(env, "https://edge.example.com/tenant/v1/commands/leases")
+    } finally {
+      if (originalCanParse) Object.defineProperty(URL, "canParse", originalCanParse)
+      else Reflect.deleteProperty(URL, "canParse")
+    }
+
+    expect(env.responseHandling.submitResponseUrl).toBe(
+      "https://edge.example.com/tenant/v1/commands/cmd_1/response?response_token=t",
+    )
+  })
+
   it("resolves manager references against the lease endpoint and keeps cloud URLs exact", async () => {
     const { resolveEnvelopeUrls } = await import("../src/receiver.js")
 

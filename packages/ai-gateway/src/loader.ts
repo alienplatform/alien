@@ -23,7 +23,6 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { AlienError } from "@alienplatform/core"
-
 import { GatewayBinaryUnavailableError, UnsupportedPlatformError } from "./errors.js"
 
 const require = createRequire(import.meta.url)

@@ -16,8 +16,8 @@
     "test": "vitest run",
     "test:ts": "tsc --noEmit",
     "generate": "rm -rf src/generated && cargo run --quiet --bin schema_exporter --features=clap,openapi -p alien-core -- --output openapi.json && kubb generate",
-    "format-and-lint": "oxfmt --check '**/*.{cjs,css,js,json,jsonc,jsx,mjs,ts,tsx}' && oxlint .",
-    "format-and-lint:fix": "oxfmt --write '**/*.{cjs,css,js,json,jsonc,jsx,mjs,ts,tsx}' && oxlint --fix ."
+    "format-and-lint": "oxfmt --check '**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}' && oxlint .",
+    "format-and-lint:fix": "oxfmt --write '**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}' && oxlint --fix ."
   },
   "keywords": [
     "alien",

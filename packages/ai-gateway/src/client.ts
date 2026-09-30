@@ -17,7 +17,6 @@ import type {
   Response as OpenAIResponse,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses"
-
 import { isExternalAiBinding, parseAiBinding } from "./binding.js"
 import {
   AiTransportError,

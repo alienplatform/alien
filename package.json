@@ -23,8 +23,9 @@
     "version:npm": "changeset version",
     "test:ts": "turbo test:ts --concurrency 15",
     "validate:package-layout": "node --experimental-strip-types packages/scripts/validate-package-layout.ts && pnpm --filter @alienplatform/package-layout check",
-    "format-and-lint": "oxfmt --check '**/*.{cjs,css,js,json,jsonc,jsx,mjs,ts,tsx}' && oxlint .",
-    "format-and-lint:fix": "oxfmt --write '**/*.{cjs,css,js,json,jsonc,jsx,mjs,ts,tsx}' && oxlint --fix ."
+    "format-and-lint": "oxfmt --check '**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}' && oxlint .",
+    "format-and-lint:fix": "oxfmt --write '**/*.{cjs,css,cts,js,json,jsonc,jsx,mjs,mts,ts,tsx}' && oxlint --fix .",
+    "test:anti-slop": "node --test tools/oxlint/anti-slop.test.mjs"
   },
   "devDependencies": {
     "@apiture/openapi-down-convert": "^0.14.2",

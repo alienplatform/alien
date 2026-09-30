@@ -5,13 +5,13 @@ stash_untracked = false
 
 local fast_steps = new Mapping<String, Step> {
     ["oxfmt"] = new Step {
-        glob = List("**/*.cjs", "**/*.css", "**/*.js", "**/*.json", "**/*.jsonc", "**/*.jsx", "**/*.mjs", "**/*.ts", "**/*.tsx")
+        glob = List("**/*.cjs", "**/*.css", "**/*.cts", "**/*.js", "**/*.json", "**/*.jsonc", "**/*.jsx", "**/*.mjs", "**/*.mts", "**/*.ts", "**/*.tsx")
         batch = true
         check = "pnpm exec oxfmt --check --no-error-on-unmatched-pattern {{files}}"
         fix = "pnpm exec oxfmt --write --no-error-on-unmatched-pattern {{files}}"
     }
     ["oxlint"] = new Step {
-        glob = List("**/*.cjs", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.ts", "**/*.tsx")
+        glob = List("**/*.cjs", "**/*.cts", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.mts", "**/*.ts", "**/*.tsx")
         batch = true
         depends = "oxfmt"
         check = "pnpm exec oxlint --no-error-on-unmatched-pattern {{files}}"

@@ -5,7 +5,6 @@ import { tmpdir } from "node:os"
 import { dirname, resolve } from "node:path"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
-
 import { packages, rewriteManifests, validateManifests } from "./npm-dev-release.mjs"
 
 const repositoryRoot = process.env.NPM_DEV_SOURCE_ROOT

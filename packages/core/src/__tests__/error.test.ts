@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest"
 import { z } from "zod/v4"
-
 import { AlienError, type AlienErrorOptions, defineError } from "../error.js"
 
 // Define test error types similar to the Rust examples

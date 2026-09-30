@@ -40,5 +40,8 @@
       }
     }
   ],
-  "sortPackageJson": false
+  "sortPackageJson": false,
+  "sortImports": {
+    "newlinesBetween": false
+  }
 }

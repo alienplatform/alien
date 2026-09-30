@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest"
-
 import { WorkerSchema } from "../generated/index.js"
 import * as alien from "../index.js"
 

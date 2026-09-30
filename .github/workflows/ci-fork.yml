@@ -83,7 +83,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: pnpm format-and-lint
+        run: pnpm format-and-lint && pnpm test:anti-slop
 
       - name: TypeScript typecheck
         env:

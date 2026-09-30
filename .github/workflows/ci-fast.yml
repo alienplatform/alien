@@ -89,7 +89,9 @@ jobs:
               # enumerate every directory that may contain linted files.
               - '**/*.js'
               - '**/*.cjs'
+              - '**/*.cts'
               - '**/*.mjs'
+              - '**/*.mts'
               - '**/*.jsx'
               - '**/*.ts'
               - '**/*.tsx'
@@ -418,7 +420,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: pnpm format-and-lint
+        run: pnpm format-and-lint && pnpm test:anti-slop
 
       - name: TypeScript typecheck
         env:

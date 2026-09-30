@@ -782,11 +782,16 @@ export function resolveEnvelopeUrls(envelope: Envelope, leaseEndpoint: string): 
   }
   const resolve = (target: string) => {
     if (target.startsWith("//")) return target
-    if (URL.canParse(target)) return target
     try {
-      return new URL(target, base).toString()
-    } catch {
+      // oxlint-disable-next-line no-new -- constructor check supports Node 18.0 through 18.16
+      new URL(target)
       return target
+    } catch {
+      try {
+        return new URL(target, base).toString()
+      } catch {
+        return target
+      }
     }
   }
 

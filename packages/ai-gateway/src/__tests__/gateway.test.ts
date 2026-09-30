@@ -1,7 +1,6 @@
 import { EventEmitter } from "node:events"
 import { AlienError } from "@alienplatform/core"
 import { afterEach, describe, expect, it, vi } from "vitest"
-
 import { createGateway } from "../gateway.js"
 
 // `vi.hoisted` so the (hoisted) `vi.mock` factory can reference the mock.

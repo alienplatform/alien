@@ -1,6 +1,5 @@
 import { AlienError } from "@alienplatform/core"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-
 import { createAiClient } from "../client.js"
 import type { Gateway } from "../gateway.js"
 import type { RawAiGatewayHandle } from "../loader.js"
