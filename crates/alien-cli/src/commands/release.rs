@@ -211,6 +211,45 @@ fn validate_release_channel(channel: &str, ctx: &ExecutionMode) -> Result<()> {
     Ok(())
 }
 
+/// Fails unless `channel` exists in the project.
+#[cfg(feature = "platform")]
+async fn ensure_release_channel_exists(
+    http: &crate::auth::AuthHttp,
+    workspace: Option<&str>,
+    project_id: &str,
+    channel: &str,
+) -> Result<()> {
+    use alien_platform_api::SdkResultExt as _;
+
+    let client = http.sdk_client();
+    let mut request = client.list_release_channels().project(project_id);
+    if let Some(workspace) = workspace {
+        request = request.workspace(workspace);
+    }
+    let channels = request
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "listing release channels".to_string(),
+            url: None,
+        })?;
+    if channels
+        .items
+        .iter()
+        .any(|existing| existing.name.as_str() == channel)
+    {
+        return Ok(());
+    }
+    Err(AlienError::new(ErrorData::ValidationError {
+        field: "channel".to_string(),
+        message: format!(
+            "Release channel '{channel}' does not exist in this project. Create it with \
+             `alien releases create-channel {channel}`."
+        ),
+    }))
+}
+
 #[cfg(feature = "platform")]
 fn parse_release_channel_name(
     channel: &str,
@@ -311,6 +350,20 @@ async fn load_release_config(
         .resolve_project(args.project.as_deref(), allow_bootstrap)
         .await?;
     let workspace_name = project_link.workspace.clone();
+
+    // A release is created only after every image is pushed, which can take many minutes, so a
+    // channel the project doesn't have is refused before any of that work.
+    #[cfg(feature = "platform")]
+    if ctx.is_platform() {
+        let workspace = ctx.resolve_workspace_query_with_bootstrap(false).await?;
+        ensure_release_channel_exists(
+            &ctx.auth_http().await?,
+            workspace.as_deref(),
+            &project_link.project_id,
+            &args.channel,
+        )
+        .await?;
+    }
 
     let is_dev = ctx.is_dev();
 
@@ -2444,5 +2497,67 @@ mod tests {
             ContainerCode::Image { image } => image,
             ContainerCode::Source { .. } => panic!("expected image container"),
         }
+    }
+
+    /// The check reads the project's actual channel list and names the command that fixes a
+    /// missing channel.
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn only_an_existing_release_channel_passes() {
+        use axum::{extract::Query, routing::get, Json, Router};
+
+        let app = Router::new().route(
+            "/v1/release-channels",
+            get(|Query(query): Query<HashMap<String, String>>| async move {
+                assert_eq!(
+                    query.get("project").map(String::as_str),
+                    Some("prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                );
+                assert_eq!(
+                    query.get("workspace").map(String::as_str),
+                    Some("sample-workspace")
+                );
+                Json(serde_json::json!({ "items": [{
+                    "workspaceId": "ws_aaaaaaaaaaaaaaaaaaaaaaaa",
+                    "projectId": "prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "name": "production",
+                    "currentReleaseId": null,
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "updatedAt": "2026-01-01T00:00:00Z",
+                }] }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let http = crate::auth::build_auth_http(
+            crate::auth::client_with_header("Bearer test-key").unwrap(),
+            base_url,
+            None,
+        );
+
+        ensure_release_channel_exists(
+            &http,
+            Some("sample-workspace"),
+            "prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "production",
+        )
+        .await
+        .expect("an existing channel passes");
+        let error = ensure_release_channel_exists(
+            &http,
+            Some("sample-workspace"),
+            "prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "canary",
+        )
+        .await
+        .expect_err("a missing channel is refused");
+        assert!(
+            error
+                .message
+                .contains("`alien releases create-channel canary`"),
+            "{}",
+            error.message
+        );
     }
 }
