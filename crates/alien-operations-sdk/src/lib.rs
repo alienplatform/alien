@@ -13,8 +13,12 @@
 //! The manifest supplies cloud permissions, access-request prompts, MCP tool
 //! schemas, and generated docs. See `alien operations init` to scaffold a plugin.
 //!
-//! The low-level [`Plugin`] trait remains available for protocol adapters.
-//! Custom plugins should use typed registration and generated metadata.
+//! [`TypedOperations`] implements the [`Plugin`] trait. Implement [`Plugin`]
+//! yourself only to wrap a registry's [`TypedOperations::execute`] with
+//! per-invocation setup, such as validating operator-supplied endpoint
+//! configuration or bounding the whole invocation with a deadline.
+//! `alien operations check`, `package`, and `publish` require metadata
+//! generated from typed definitions.
 
 pub mod docs;
 pub mod error;

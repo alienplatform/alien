@@ -59,8 +59,10 @@ bundle with `alien operations publish`, then enable the plugin for your project.
 That bundle supports only the builder's architecture. To support both architectures,
 build on each Linux architecture and combine both executables with the generated
 `metadata.json` in one zip before publishing. Keep the executable filenames from
-the manifest. `alien operations check` and packaging verify generated metadata
-before proceeding.
+the manifest. `alien operations check` and `alien operations package` require the
+`generate-metadata` binary and fail when `metadata.json` differs from its output.
+`alien operations publish` rejects metadata whose operations lack generated input
+and output schemas.
 
 After installation, use the Operations CLI:
 

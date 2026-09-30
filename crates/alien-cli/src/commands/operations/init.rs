@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use crate::error::{ErrorData, Result};
 
 /// Generate a new plugin crate at `directory` (defaults to `./<name>`) named
-/// `name`, implementing [`alien_operations_sdk::Plugin`] against a single
-/// `health` read-only operation as a starting point.
+/// `name`: a [`alien_operations_sdk::TypedOperations`] registry with one
+/// read-only `health` operation, and the `generate-metadata` binary that
+/// `alien operations check` requires.
 pub fn init_task(name: &str, directory: Option<&str>, json: bool) -> Result<()> {
     validate_plugin_name(name)?;
     let target = PathBuf::from(directory.unwrap_or(name));

@@ -112,11 +112,10 @@ pub enum OperationsAction {
         /// Destination directory. Defaults to `./<name>`.
         directory: Option<String>,
     },
-    /// Validate a plugin's manifest. When the plugin has a
-    /// `generate-metadata` binary, also build and run it (like `test` and
-    /// `package` do) and fail if `metadata.json` differs from the metadata its
-    /// typed operations generate. Needs no platform account; `cargo` may
-    /// download the plugin's dependencies.
+    /// Validate a plugin's manifest, then build and run its required
+    /// `generate-metadata` binary and fail if `metadata.json` differs from
+    /// the metadata its typed operations generate. Needs no platform account;
+    /// `cargo` may download the plugin's dependencies.
     Check {
         /// Plugin directory containing `metadata.json`. Defaults to the
         /// current directory.
