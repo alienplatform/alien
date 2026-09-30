@@ -6,6 +6,7 @@ import { basename, resolve } from "node:path"
 
 export const packages = [
   { path: "packages/core/package.json", publish: true },
+  { path: "packages/permissions/package.json", publish: true },
   { path: "packages/commands/package.json", publish: true },
   { path: "packages/bindings/package.json", publish: true },
   { path: "packages/sdk/package.json", publish: true },

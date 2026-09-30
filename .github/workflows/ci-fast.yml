@@ -135,8 +135,6 @@ jobs:
       - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10.34.5
 
       - uses: actions/setup-node@v7
         with:
@@ -352,8 +350,6 @@ jobs:
               - 'crates/alien-build/**'
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10.34.5
 
       - uses: actions/setup-node@v7
         with:
@@ -438,7 +434,7 @@ jobs:
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: |
-          pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands --filter @alienplatform/ai-gateway test
+          pnpm --filter @alienplatform/core --filter @alienplatform/permissions --filter @alienplatform/bindings --filter @alienplatform/commands --filter @alienplatform/ai-gateway test
 
       - name: Build TypeScript packages
         if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
@@ -456,13 +452,19 @@ jobs:
         # loudly if the server can't build/start (no silent skip).
         run: pnpm -C packages/commands test:integration
 
+      - name: Install operation compiler generation tools
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --target wasm32-unknown-unknown
+          VERSION=$(node -e 'const fs = require("node:fs"); console.log(fs.readFileSync("Cargo.lock", "utf8").match(/name = "wasm-bindgen"\nversion = "([^"]+)"/)[1])')
+          cargo +1.97.1 install --locked --version "$VERSION" wasm-bindgen-cli
+
       - name: Regenerate local TypeScript APIs
         run: pnpm generate
 
       - name: Check generated files are committed
         # Kubb may change insignificant whitespace between environments. Keep
         # the gate focused on generated behavior and schema content.
-        run: git diff --ignore-all-space --exit-code -- packages/core packages/sdk
+        run: git diff --ignore-all-space --exit-code -- packages/core packages/sdk packages/permissions/generated
 
   all-tests-passed:
     name: All tests passed

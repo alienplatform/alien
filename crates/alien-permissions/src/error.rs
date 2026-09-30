@@ -5,6 +5,20 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// An operation requests permissions outside its reviewed capability or installer scope.
+    #[error(
+        code = "OPERATION_PERMISSION_INVALID",
+        message = "{message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    OperationPermissionInvalid {
+        message: String,
+        action: String,
+        resource: String,
+    },
+
     /// Platform is not supported by the permission set.
     #[error(
         code = "PLATFORM_NOT_SUPPORTED",

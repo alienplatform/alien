@@ -1,0 +1,115 @@
+{
+  "aws": {
+    "operations/aws-vpc/vpcs": {
+      "actions": ["ec2:DescribeVpcs"],
+      "resources": ["*"]
+    },
+    "operations/aws-vpc/subnets": {
+      "actions": ["ec2:DescribeSubnets"],
+      "resources": ["*"]
+    },
+    "operations/aws-vpc/route-tables": {
+      "actions": ["ec2:DescribeRouteTables"],
+      "resources": ["*"]
+    },
+    "operations/aws-vpc/security-group-rules": {
+      "actions": ["ec2:DescribeSecurityGroupRules"],
+      "resources": ["*"]
+    },
+    "operations/cloudwatch/query-metrics": {
+      "actions": ["cloudwatch:GetMetricStatistics"],
+      "resources": ["*"]
+    },
+    "operations/cloudwatch/alarms": {
+      "actions": ["cloudwatch:DescribeAlarms"],
+      "resources": ["*"]
+    },
+    "operations/cloudwatch/log-groups": {
+      "actions": ["logs:DescribeLogGroups"],
+      "resources": ["*"]
+    },
+    "operations/ec2/instances": {
+      "actions": ["ec2:DescribeInstances"],
+      "resources": ["*"]
+    },
+    "operations/ec2/instance-status": {
+      "actions": ["ec2:DescribeInstanceStatus"],
+      "resources": ["*"]
+    },
+    "operations/ec2/volumes": {
+      "actions": ["ec2:DescribeVolumes"],
+      "resources": ["*"]
+    },
+    "operations/elbv2/load-balancers": {
+      "actions": ["elasticloadbalancing:DescribeLoadBalancers"],
+      "resources": ["*"]
+    },
+    "operations/elbv2/target-groups": {
+      "actions": ["elasticloadbalancing:DescribeTargetGroups"],
+      "resources": ["*"]
+    },
+    "operations/elbv2/target-health": {
+      "actions": ["elasticloadbalancing:DescribeTargetHealth"],
+      "resources": ["*"]
+    },
+    "operations/rds/instances": {
+      "actions": ["rds:DescribeDBInstances"],
+      "resources": ["*"]
+    },
+    "operations/rds/clusters": {
+      "actions": ["rds:DescribeDBClusters"],
+      "resources": ["*"]
+    },
+    "operations/rds/events": {
+      "actions": ["rds:DescribeEvents"],
+      "resources": ["*"]
+    },
+    "operations/s3/head-bucket": {
+      "actions": ["s3:ListBucket"],
+      "resources": ["arn:aws:s3:::*"]
+    },
+    "operations/s3/list-objects": {
+      "actions": ["s3:ListBucket"],
+      "resources": ["arn:aws:s3:::*"]
+    },
+    "operations/s3/head-object": {
+      "actions": ["s3:GetObject"],
+      "resources": ["arn:aws:s3:::*/*"]
+    },
+    "operations/s3/object-attributes": {
+      "actions": ["s3:GetObjectAttributes"],
+      "resources": ["arn:aws:s3:::*/*"]
+    },
+    "operations/s3/object-tagging": {
+      "actions": ["s3:GetObjectTagging"],
+      "resources": ["arn:aws:s3:::*/*"]
+    },
+    "operations/sqs/list-queues": {
+      "actions": ["sqs:ListQueues"],
+      "resources": ["*"]
+    },
+    "operations/sqs/queue-stats": {
+      "actions": ["sqs:GetQueueAttributes"],
+      "resources": ["arn:aws:sqs:*:*:*"]
+    },
+    "operations/sqs/redrive-policy": {
+      "actions": ["sqs:GetQueueAttributes"],
+      "resources": ["arn:aws:sqs:*:*:*"]
+    }
+  },
+  "gcp": {
+    "compute.instances.list": "projects/${projectName}",
+    "compute.disks.list": "projects/${projectName}",
+    "compute.instanceGroups.list": "projects/${projectName}",
+    "compute.networks.list": "projects/${projectName}",
+    "compute.subnetworks.list": "projects/${projectName}",
+    "compute.routes.list": "projects/${projectName}",
+    "compute.firewalls.list": "projects/${projectName}",
+    "storage.objects.list": "projects/${projectName}/buckets/${resourceName}",
+    "storage.buckets.get": "projects/${projectName}/buckets/${resourceName}",
+    "pubsub.topics.list": "projects/${projectName}",
+    "pubsub.subscriptions.list": "projects/${projectName}",
+    "pubsub.subscriptions.get": "projects/${projectName}",
+    "monitoring.timeSeries.list": "projects/${projectName}"
+  }
+}

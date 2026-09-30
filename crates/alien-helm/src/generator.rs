@@ -2681,8 +2681,17 @@ fn operator_rules(
                 .verbs
                 .iter()
                 .filter(|verb| {
-                    permission == OperatorPermission::Remediation
-                        || matches!(verb.as_str(), "get" | "list" | "watch")
+                    alien_permissions::operations::kubernetes::grants_verb(
+                        match permission {
+                            OperatorPermission::Diagnostics => {
+                                alien_permissions::operations::KubernetesMode::Diagnostics
+                            }
+                            OperatorPermission::Remediation => {
+                                alien_permissions::operations::KubernetesMode::Remediation
+                            }
+                        },
+                        verb,
+                    )
                 })
                 .cloned()
                 .collect();

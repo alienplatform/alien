@@ -4,6 +4,9 @@ use std::fs;
 use std::path::Path;
 
 fn main() {
+    if env::var_os("CARGO_FEATURE_INFRASTRUCTURE").is_none() {
+        return;
+    }
     let out_dir = env::var("OUT_DIR").unwrap();
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
 
@@ -61,7 +64,7 @@ static PERMISSION_SETS_REGISTRY: OnceLock<HashMap<&'static str, alien_core::perm
 fn get_permission_sets_registry() -> &'static HashMap<&'static str, alien_core::permissions::PermissionSet> {
     PERMISSION_SETS_REGISTRY.get_or_init(|| {
         let mut registry = HashMap::new();
-        
+
 "#);
 
     // Add each permission set to the registry
@@ -74,7 +77,7 @@ fn get_permission_sets_registry() -> &'static HashMap<&'static str, alien_core::
         ));
     }
 
-    code.push_str(r#"        
+    code.push_str(r#"
         registry
     })
 }
@@ -94,12 +97,12 @@ fn normalize_permission_id(id: &str) -> String {
 /// Supports both hyphenated (azure-container-apps-environment) and underscore (azure_container_apps_environment) formats
 pub fn get_permission_set(id: &str) -> Option<&'static alien_core::permissions::PermissionSet> {
     let registry = get_permission_sets_registry();
-    
+
     // Try exact match first
     if let Some(perm_set) = registry.get(id) {
         return Some(perm_set);
     }
-    
+
     // Try normalized version (convert underscores to hyphens)
     let normalized_id = normalize_permission_id(id);
     registry.get(normalized_id.as_str())
@@ -114,12 +117,12 @@ pub fn list_permission_set_ids() -> Vec<&'static str> {
 /// Supports both hyphenated (azure-container-apps-environment) and underscore (azure_container_apps_environment) formats
 pub fn has_permission_set(id: &str) -> bool {
     let registry = get_permission_sets_registry();
-    
+
     // Try exact match first
     if registry.contains_key(id) {
         return true;
     }
-    
+
     // Try normalized version (convert underscores to hyphens)
     let normalized_id = normalize_permission_id(id);
     registry.contains_key(normalized_id.as_str())
