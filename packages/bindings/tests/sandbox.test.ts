@@ -14,7 +14,7 @@
  * `ALIEN_BINDINGS_ADDON_PATH=<path to the .node> pnpm vitest run tests/sandbox.test.ts`
  */
 
-import { mkdtempSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
@@ -75,7 +75,8 @@ describe("sandbox preview", () => {
     })
     await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve))
     const { port } = server.address() as AddressInfo
-    const tokenPath = join(mkdtempSync(join(tmpdir(), "alien-sandbox-")), "token")
+    const tokenDir = mkdtempSync(join(tmpdir(), "alien-sandbox-"))
+    const tokenPath = join(tokenDir, "token")
     writeFileSync(tokenPath, "route-token\n")
     setBinding("sandbox-preview", {
       service: "sandbox-local",
@@ -99,6 +100,7 @@ describe("sandbox preview", () => {
       await expect(binding.preview("s1", 70000)).rejects.toThrow(/not a valid TCP port/)
     } finally {
       server.close()
+      rmSync(tokenDir, { recursive: true, force: true })
     }
   })
 })
