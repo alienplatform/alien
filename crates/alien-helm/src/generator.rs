@@ -3186,10 +3186,14 @@ fn operator_deployment_doc(
             };
             yaml.push_str(&format!("              value: {{{{ default (default ({default_scope}) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue | quote }}}}\n"));
             yaml.push_str("            - name: OPERATOR_POD_LOG_LEGACY_DAEMONSET\n");
-            yaml.push_str(&format!(
-                "              value: {{{{ tpl {} . | quote }}}}\n",
-                helm_string(log_collector_name)
-            ));
+            if integrated_product_chart {
+                yaml.push_str("              value: {{ include \"deployment.remoteOperatorLogCollectorLegacyDaemonSetName\" . | quote }}\n");
+            } else {
+                yaml.push_str(&format!(
+                    "              value: {{{{ tpl {} . | quote }}}}\n",
+                    helm_string(log_collector_name)
+                ));
+            }
             yaml.push_str("            - name: OPERATOR_POD_LOG_MAX_STREAMS\n");
             yaml.push_str(
                 "              value: {{ default 32 .Values.logCollector.maxStreams | quote }}\n",
@@ -5253,6 +5257,24 @@ fn helpers_tpl() -> String {
 {{- printf "%s-logs-v2" ((include "deployment.fullname" .) | trunc 55 | trimSuffix "-") -}}
 {{- end -}}
 
+{{- define "deployment.remoteOperatorLogCollectorLegacyDaemonSetName" -}}
+{{- $name := include "deployment.remoteOperatorLogCollectorDaemonSetName" . -}}
+{{- if lookup "apps/v1" "DaemonSet" .Release.Namespace $name -}}
+{{- $name -}}
+{{- else -}}
+{{- include "deployment.remoteOperatorLogCollectorName" . -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "deployment.logCollectorLegacyDaemonSetName" -}}
+{{- $name := include "deployment.logCollectorDaemonSetName" . -}}
+{{- if lookup "apps/v1" "DaemonSet" .Release.Namespace $name -}}
+{{- $name -}}
+{{- else -}}
+{{- include "deployment.logCollectorName" . -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "deployment.labels" -}}
 app.kubernetes.io/name: {{ include "deployment.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
@@ -6413,7 +6435,7 @@ spec:
             - name: OPERATOR_POD_LOG_LABEL_VALUE
               value: {{ default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue | quote }}
             - name: OPERATOR_POD_LOG_LEGACY_DAEMONSET
-              value: {{ include "deployment.logCollectorName" . | quote }}
+              value: {{ include "deployment.logCollectorLegacyDaemonSetName" . | quote }}
             - name: OPERATOR_POD_LOG_MAX_STREAMS
               value: {{ default 32 .Values.logCollector.maxStreams | quote }}
             {{- end }}

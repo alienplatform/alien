@@ -2791,6 +2791,28 @@ fn verify_collector_selector_upgrade(temp: &Path, current_chart: &Path, namespac
             addresses[0]["addresses"][0]["targetRef"]["name"],
             pods["items"][0]["metadata"]["name"]
         );
+        for arg in &mut args {
+            if arg == "--set=logCollector.mode=nodeAgent" {
+                *arg = "--set=logCollector.mode=podApi".to_string();
+            }
+        }
+        run_ok("helm", &args, None);
+        let receiver = kubernetes_resource_json(namespace, "deployment", Some(&receiver_name));
+        let env = receiver["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            env.iter()
+                .find(|entry| entry["name"] == "OPERATOR_POD_LOG_LEGACY_DAEMONSET")
+                .expect("Pod API collector migration gate")["value"],
+            new_name,
+        );
+        assert!(
+            kubernetes_resource_json(namespace, "daemonsets", None)["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
         run_ok(
             "helm",
             [
