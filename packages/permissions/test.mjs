@@ -21,6 +21,7 @@ const catalog = JSON.parse(
   readFileSync(resolve(root, "crates/alien-permissions/src/operations/catalog.json"), "utf8"),
 )
 const requests = [
+  { task: "kubernetesOperatorRuntime" },
   { task: "resolveAwsReferences", references: Object.keys(catalog.aws) },
   {
     task: "resolveAwsReferences",
@@ -138,6 +139,7 @@ test("committed browser compiler matches native Rust success and rejection behav
     [
       true,
       true,
+      true,
       false,
       true,
       false,
@@ -149,4 +151,23 @@ test("committed browser compiler matches native Rust success and rejection behav
       ...invalidGrants.map(() => false),
     ],
   )
+})
+
+test("browser runtime task returns the six required inventory grants", () => {
+  const result = JSON.parse(executeOperationPermissions('{"task":"kubernetesOperatorRuntime"}'))
+  assert.equal(result.ok, true)
+  assert.deepEqual(
+    result.value.map(({ apiGroup, resource, verbs, resourceNames }) => ({
+      apiGroup, resource, verbs, resourceNames,
+    })),
+    [
+      ["apps", "deployments"],
+      ["apps", "statefulsets"],
+      ["apps", "daemonsets"],
+      ["", "pods"],
+      ["", "events"],
+      ["metrics.k8s.io", "pods"],
+    ].map(([apiGroup, resource]) => ({ apiGroup, resource, verbs: ["list"], resourceNames: [] })),
+  )
+  assert.ok(result.value.every(rule => typeof rule.reason === "string" && rule.reason.length > 0))
 })

@@ -491,10 +491,22 @@ fn rule_allows(role: &YamlValue, resource: &str, verb: &str) -> bool {
 #[test]
 fn operator_rbac_without_operations_is_the_runtime_and_access_request_rules() {
     let mut expected = BTreeSet::new();
-    for rule in alien_permissions::operations::kubernetes::operator_runtime_rules() {
-        for verb in rule.verbs {
-            expected.insert((rule.api_group.clone(), rule.resource.clone(), verb, vec![]));
-        }
+    // These grants follow the runtime call sites, independently of the shared
+    // rule source used by the renderer.
+    for (group, resource) in [
+        ("apps", "deployments"),
+        ("apps", "statefulsets"),
+        ("apps", "daemonsets"),
+        ("", "pods"),
+        ("", "events"),
+        ("metrics.k8s.io", "pods"),
+    ] {
+        expected.insert((
+            group.to_owned(),
+            resource.to_owned(),
+            "list".to_owned(),
+            vec![],
+        ));
     }
     for (resource, verbs) in [
         (
