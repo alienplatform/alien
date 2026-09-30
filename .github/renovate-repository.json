@@ -14,7 +14,8 @@
       "skipArtifactsUpdate": true
     },
     {
-      "description": "Batch stable minor and patch updates into one pull request, same as group:allNonMajor, and automerge it after CI passes",
+      "description": "Batch stable minor and patch updates into one pull request, same as group:allNonMajor, and automerge it after CI passes. GitHub Actions stay separate because one workflow edit would make GitHub reject the whole batch.",
+      "matchManagers": ["!github-actions"],
       "matchPackageNames": ["*"],
       "matchUpdateTypes": ["minor", "patch"],
       "matchCurrentVersion": "!/^0/",
