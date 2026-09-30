@@ -4,7 +4,7 @@ use alien_core::{
     AwsManagementConfig, AzureManagementConfig, DeploymentConfig, EnvironmentVariablesSnapshot,
     ExternalBindings, GcpManagementConfig, ManagementConfig, Platform, StackSettings, StackState,
 };
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use clap::{Parser, ValueEnum};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -441,11 +441,12 @@ fn render_error(error: alien_error::AlienError<alien_core::ErrorData>) -> AlienE
     })
 }
 
+/// Keeps the preflight error as the source: its check results are what the CLI lists.
 fn preflight_error(
     error: alien_error::AlienError<alien_preflights::error::ErrorData>,
 ) -> AlienError<ErrorData> {
-    AlienError::new(ErrorData::ConfigurationError {
-        message: error.to_string(),
+    error.context(ErrorData::ConfigurationError {
+        message: "Stack preflight checks failed".to_string(),
     })
 }
 
@@ -453,9 +454,42 @@ fn preflight_error(
 mod tests {
     use super::*;
     use alien_core::{
-        AzureStorageAccount, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
-        SandboxLifecyclePolicy, Stack, Storage,
+        AzureStorageAccount, Container, ContainerCode, ResourceLifecycle, ResourceSpec, Sandbox,
+        SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack, Storage,
     };
+
+    #[tokio::test]
+    async fn failed_render_preflights_list_the_failed_checks() {
+        let container = Container::new("api".to_string())
+            .code(ContainerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("execution".to_string())
+            .build();
+        let stack = Stack::new("render-review".to_string())
+            .add(container, ResourceLifecycle::Frozen)
+            .build();
+
+        let error = prepare_stack_for_render(stack, Platform::Aws, None, &StackSettings::default())
+            .await
+            .expect_err("a Frozen container fails the template preflights");
+        let rendered = crate::ui::render_human_error(&error);
+
+        assert!(rendered.contains("Failed checks:"), "{rendered}");
+        assert!(
+            rendered.contains("  - Container 'api' has lifecycle Frozen"),
+            "{rendered}"
+        );
+    }
 
     #[tokio::test]
     async fn render_preflights_inject_azure_auxiliary_resources() {
