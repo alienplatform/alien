@@ -6,38 +6,69 @@ import { fileURLToPath } from "node:url"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
 const output = resolve(root, "packages/permissions/generated")
+const target = resolve(root, process.env.CARGO_TARGET_DIR ?? "target")
 const temporary = mkdtempSync(resolve(tmpdir(), "alien-permissions-"))
 try {
-  execFileSync(
-    "cargo",
-    [
-      "+1.97.1",
-      "build",
-      "--locked",
-      "--release",
-      "-p",
-      "alien-permissions",
-      "--no-default-features",
-      "--features",
-      "wasm",
-      "--target",
-      "wasm32-unknown-unknown",
-    ],
-    {
+  const build = [
+    "+1.97.1",
+    "build",
+    "--locked",
+    "--release",
+    "-p",
+    "alien-permissions",
+    "--no-default-features",
+    "--features",
+    "wasm",
+    "--target",
+    "wasm32-unknown-unknown",
+  ]
+  const profile = {
+    CARGO_PROFILE_RELEASE_OPT_LEVEL: "z",
+    CARGO_PROFILE_RELEASE_LTO: "true",
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1",
+    CARGO_PROFILE_RELEASE_PANIC: "abort",
+    CARGO_PROFILE_RELEASE_STRIP: "symbols",
+  }
+  if (process.platform === "linux") {
+    execFileSync("cargo", build, {
       cwd: root,
       stdio: "inherit",
       env: {
         ...process.env,
-        CARGO_PROFILE_RELEASE_OPT_LEVEL: "z",
-        CARGO_PROFILE_RELEASE_LTO: "true",
-        CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1",
-        CARGO_PROFILE_RELEASE_PANIC: "abort",
-        CARGO_PROFILE_RELEASE_STRIP: "symbols",
+        ...profile,
         RUSTFLAGS: `--remap-path-prefix=${root}=. --remap-path-prefix=${homedir()}=/build`,
       },
-    },
-  )
-  const target = resolve(root, process.env.CARGO_TARGET_DIR ?? "target")
+    })
+  } else {
+    mkdirSync(target, { recursive: true })
+    execFileSync(
+      "docker",
+      [
+        "run",
+        "--rm",
+        "--volume",
+        `${root}:/source:ro`,
+        "--volume",
+        `${target}:/target`,
+        "--volume",
+        `${target}/permissions-registry:/usr/local/cargo/registry`,
+        "--volume",
+        `${target}/permissions-git:/usr/local/cargo/git`,
+        "--workdir",
+        "/source",
+        "--env",
+        "CARGO_TARGET_DIR=/target",
+        ...Object.entries(profile).flatMap(([name, value]) => ["--env", `${name}=${value}`]),
+        "--env",
+        "RUSTFLAGS=--remap-path-prefix=/source=. --remap-path-prefix=/usr/local/cargo=/build/.cargo",
+        "rust:1.97.1-bookworm",
+        "sh",
+        "-c",
+        `rustup target add wasm32-unknown-unknown && cargo ${build.join(" ")}`,
+      ],
+      { stdio: "inherit" },
+    )
+  }
   execFileSync(
     "wasm-bindgen",
     [
