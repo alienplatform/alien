@@ -341,3 +341,60 @@ async fn other_tokens_cannot_report_for_the_site() {
         "nothing reaches the telemetry backend"
     );
 }
+
+/// Sends `ids` as log batches with the site's token.
+async fn report_batches(fixture: &Fixture, ids: &[i64]) -> serde_json::Value {
+    let body = serde_json::json!({
+        "state": {
+            "status": "running",
+            "platform": "kubernetes",
+            "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        },
+        "telemetry": ids.iter().map(|id| serde_json::json!({
+            "id": id,
+            "signal": "logs",
+            "data": base64::engine::general_purpose::STANDARD.encode(b"otlp"),
+        })).collect::<Vec<_>>(),
+    });
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "/v1/deployments/{}/status-report",
+            fixture.deployment
+        ))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", fixture.site_token),
+        )
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let response = alien_manager::routes::airgap::router()
+        .with_state(fixture.state.clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[tokio::test]
+async fn a_report_sent_again_does_not_duplicate_telemetry() {
+    let fixture = fixture().await;
+
+    let first = report_batches(&fixture, &[1, 2]).await;
+    assert_eq!(first["telemetryAccepted"], 2);
+    assert_eq!(first["telemetryThrough"], 2);
+
+    // The response was lost and the site resends, with one new batch.
+    let again = report_batches(&fixture, &[1, 2, 3]).await;
+    assert_eq!(again["telemetryAccepted"], 1, "only batch 3 is new");
+    assert_eq!(again["telemetryThrough"], 3);
+
+    assert_eq!(
+        fixture.telemetry.0.lock().unwrap().len(),
+        3,
+        "each batch reached the backend once"
+    );
+}

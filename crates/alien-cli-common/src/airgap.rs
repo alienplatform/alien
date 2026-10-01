@@ -371,31 +371,46 @@ pub async fn import_images(
     access: &RegistryAccess,
 ) -> Result<HashMap<String, String>> {
     let client = client(access);
-    let (host, path_prefix) = match registry_prefix.trim_end_matches('/').split_once('/') {
-        Some((host, path)) => (host.to_string(), format!("{path}/")),
-        None => (
-            registry_prefix.trim_end_matches('/').to_string(),
-            String::new(),
-        ),
-    };
-    let mut mapping = HashMap::new();
     for image in images {
-        let repository = format!("{path_prefix}{}", image.repository);
+        let (host, repository) = site_repository(registry_prefix, image);
         let target = Reference::with_tag(
-            host.clone(),
-            repository.clone(),
+            host,
+            repository,
             image.tag.clone().unwrap_or_else(|| "latest".to_string()),
         );
         client
             .store_auth_if_needed(target.resolve_registry(), &access.auth)
             .await;
         push_manifest_tree(&client, &target, layout, &image.digest, true).await?;
-        mapping.insert(
-            image.source.clone(),
-            format!("{host}/{repository}@{}", image.digest),
-        );
     }
-    Ok(mapping)
+    Ok(site_references(images, registry_prefix))
+}
+
+/// Registry host and repository an image is pushed to under
+/// `registry_prefix` (`host[/path]`).
+fn site_repository(registry_prefix: &str, image: &BundleImage) -> (String, String) {
+    match registry_prefix.trim_end_matches('/').split_once('/') {
+        Some((host, path)) => (host.to_string(), format!("{path}/{}", image.repository)),
+        None => (
+            registry_prefix.trim_end_matches('/').to_string(),
+            image.repository.clone(),
+        ),
+    }
+}
+
+/// Where each image lives once imported under `registry_prefix`, pinned by
+/// digest, keyed by the reference the target names it with.
+pub fn site_references(images: &[BundleImage], registry_prefix: &str) -> HashMap<String, String> {
+    images
+        .iter()
+        .map(|image| {
+            let (host, repository) = site_repository(registry_prefix, image);
+            (
+                image.source.clone(),
+                format!("{host}/{repository}@{}", image.digest),
+            )
+        })
+        .collect()
 }
 
 async fn push_manifest_tree(
@@ -707,6 +722,54 @@ pub async fn checksums(dir: &Path) -> Result<BTreeMap<String, String>> {
 /// (the manager's bundle signing key), and every file must match the
 /// manifest's checksums.
 pub async fn verify(dir: &Path, trusted_key: &str) -> Result<BundleManifest> {
+    let manifest = signed_manifest(dir, trusted_key).await?;
+    let actual = checksums(dir).await?;
+    if actual != manifest.files {
+        let changed: Vec<_> = manifest
+            .files
+            .iter()
+            .filter(|(path, sum)| actual.get(*path) != Some(sum))
+            .map(|(path, _)| path.as_str())
+            .chain(
+                actual
+                    .keys()
+                    .filter(|path| !manifest.files.contains_key(*path))
+                    .map(String::as_str),
+            )
+            .take(5)
+            .collect();
+        return Err(AlienError::new(ErrorData::BundleInvalid {
+            message: format!("files changed or missing: {}", changed.join(", ")),
+        }));
+    }
+    Ok(manifest)
+}
+
+/// Verify what an installed copy of a bundle keeps: its signed manifest,
+/// target and chart (the images are already in the site's registry). A
+/// rollback reinstalls only what this returns.
+pub async fn verify_installed(dir: &Path, trusted_key: &str) -> Result<BundleManifest> {
+    let manifest = signed_manifest(dir, trusted_key).await?;
+    for path in [TARGET_FILE, manifest.chart.as_str()] {
+        let bytes = tokio::fs::read(dir.join(path))
+            .await
+            .into_alien_error()
+            .context(ErrorData::BundleInvalid {
+                message: format!("{path} is missing"),
+            })?;
+        let actual = sha256_hex(&bytes);
+        if manifest.files.get(path) != Some(&actual) {
+            return Err(AlienError::new(ErrorData::BundleInvalid {
+                message: format!("files changed or missing: {path}"),
+            }));
+        }
+    }
+    Ok(manifest)
+}
+
+/// The manifest in `dir`, if its signature matches `trusted_key` and its
+/// format is one this tool reads.
+async fn signed_manifest(dir: &Path, trusted_key: &str) -> Result<BundleManifest> {
     let manifest_bytes = tokio::fs::read(dir.join(MANIFEST_FILE))
         .await
         .into_alien_error()
@@ -735,25 +798,6 @@ pub async fn verify(dir: &Path, trusted_key: &str) -> Result<BundleManifest> {
                 "format {} is not supported (this tool reads format {FORMAT_VERSION})",
                 manifest.format_version
             ),
-        }));
-    }
-    let actual = checksums(dir).await?;
-    if actual != manifest.files {
-        let changed: Vec<_> = manifest
-            .files
-            .iter()
-            .filter(|(path, sum)| actual.get(*path) != Some(sum))
-            .map(|(path, _)| path.as_str())
-            .chain(
-                actual
-                    .keys()
-                    .filter(|path| !manifest.files.contains_key(*path))
-                    .map(String::as_str),
-            )
-            .take(5)
-            .collect();
-        return Err(AlienError::new(ErrorData::BundleInvalid {
-            message: format!("files changed or missing: {}", changed.join(", ")),
         }));
     }
     Ok(manifest)
@@ -949,6 +993,80 @@ mod tests {
             .expect_err("tampered bundle fails");
         assert_eq!(error.code, "AIRGAP_BUNDLE_INVALID");
         assert!(error.message.contains(TARGET_FILE));
+    }
+
+    #[tokio::test]
+    async fn an_installed_copy_is_verified_without_its_images() {
+        // What `alien-deploy` keeps for a rollback: the signed manifest, the
+        // target and the chart, but not the image layers.
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::create_dir_all(dir.path().join(CHART_DIR))
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join(TARGET_FILE), b"{}")
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("chart/app-1.0.0.tgz"), b"chart")
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(dir.path().join(OCI_DIR))
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("oci/index.json"), b"{}")
+            .await
+            .unwrap();
+        let manifest = BundleManifest {
+            format_version: FORMAT_VERSION,
+            deployment_id: "dep_1".to_string(),
+            deployment_name: "customer-1".to_string(),
+            release_id: "rel_1".to_string(),
+            sequence: 1,
+            created_at: "now".to_string(),
+            stack_id: "app".to_string(),
+            images: vec![],
+            chart_images: BTreeMap::new(),
+            chart: "chart/app-1.0.0.tgz".to_string(),
+            files: checksums(dir.path()).await.unwrap(),
+            omitted_blobs: BTreeSet::new(),
+            telemetry_ack: None,
+        };
+        let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+        let key = BundleSigningKey::from_seed([5; 32]);
+        tokio::fs::write(dir.path().join(MANIFEST_FILE), &manifest_bytes)
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join(SIGNATURE_FILE), key.sign(&manifest_bytes))
+            .await
+            .unwrap();
+        tokio::fs::remove_dir_all(dir.path().join(OCI_DIR))
+            .await
+            .unwrap();
+
+        verify_installed(dir.path(), &key.public_key())
+            .await
+            .expect("the kept files verify without the image layers");
+
+        let other = BundleSigningKey::from_seed([6; 32]).public_key();
+        verify_installed(dir.path(), &other)
+            .await
+            .expect_err("another key is refused");
+
+        for (path, tampered) in [
+            (TARGET_FILE, &b"{\"injected\":true}"[..]),
+            ("chart/app-1.0.0.tgz", b"other chart"),
+        ] {
+            let original = tokio::fs::read(dir.path().join(path)).await.unwrap();
+            tokio::fs::write(dir.path().join(path), tampered)
+                .await
+                .unwrap();
+            let error = verify_installed(dir.path(), &key.public_key())
+                .await
+                .expect_err("a changed file is refused");
+            assert!(error.message.contains(path), "{}", error.message);
+            tokio::fs::write(dir.path().join(path), original)
+                .await
+                .unwrap();
+        }
     }
 
     #[tokio::test]

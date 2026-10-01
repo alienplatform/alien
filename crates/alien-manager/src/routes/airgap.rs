@@ -271,6 +271,11 @@ pub struct StatusReport {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ReportedTelemetry {
+    /// The site's sequence number for the batch. The manager keeps the
+    /// highest one it has passed on and skips any it already has, so a
+    /// report sent again doesn't duplicate telemetry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
     /// `logs`, `metrics` or `traces`.
     pub signal: String,
     /// OTLP protobuf, base64.
@@ -284,6 +289,10 @@ pub struct StatusReportResponse {
     pub status: String,
     /// Telemetry batches passed to the telemetry backend.
     pub telemetry_accepted: usize,
+    /// Highest batch the manager has passed on for this deployment, across
+    /// reports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub telemetry_through: Option<i64>,
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -331,7 +340,7 @@ async fn status_report(
         let Ok(data) = base64::engine::general_purpose::STANDARD.decode(&batch.data) else {
             return ErrorData::bad_request("Telemetry data must be base64").into_response();
         };
-        batches.push((signal, data));
+        batches.push((batch.id, signal, data));
     }
 
     let status = serde_json::to_value(&report.state.status)
@@ -368,14 +377,38 @@ async fn status_report(
         workspace_id: Some(deployment.workspace_id.clone()),
         gateway_log_source: None,
     };
-    let telemetry_accepted = batches.len();
-    for (signal, data) in batches {
+    // Batches the manager already passed on (a report sent again after a
+    // lost response, or overlapping reports) are skipped. The mark advances
+    // after each batch, so a failure part-way keeps what went through.
+    let mark_key = telemetry_mark_key(&deployment.id);
+    let mut through = match read_telemetry_mark(&state, &mark_key).await {
+        Ok(mark) => mark,
+        Err(e) => return e.into_response(),
+    };
+    let mut telemetry_accepted = 0;
+    batches.sort_by_key(|(id, _, _)| *id);
+    for (id, signal, data) in batches {
+        if id.is_some_and(|id| through.is_some_and(|through| id <= through)) {
+            continue;
+        }
         if let Err(e) = state
             .telemetry_backend
             .ingest(signal, &caller, data.into())
             .await
         {
             return e.into_response();
+        }
+        telemetry_accepted += 1;
+        if let Some(id) = id {
+            through = Some(id);
+            if let Err(e) = state
+                .kv
+                .put(&mark_key, id.to_string().into_bytes(), None)
+                .await
+            {
+                return ErrorData::internal(format!("recording received telemetry: {e}"))
+                    .into_response();
+            }
         }
     }
 
@@ -384,7 +417,36 @@ async fn status_report(
         Json(StatusReportResponse {
             status,
             telemetry_accepted,
+            telemetry_through: through,
         }),
     )
         .into_response()
+}
+
+fn telemetry_mark_key(deployment_id: &str) -> String {
+    format!("airgap-telemetry-through/{deployment_id}")
+}
+
+/// Highest telemetry batch already passed on for a deployment.
+async fn read_telemetry_mark(
+    state: &AppState,
+    key: &str,
+) -> Result<Option<i64>, alien_error::AlienError<ErrorData>> {
+    let Some(entry) = state
+        .kv
+        .get(key)
+        .await
+        .map_err(|e| ErrorData::internal(format!("reading received telemetry: {e}")))?
+    else {
+        return Ok(None);
+    };
+    String::from_utf8_lossy(&entry.value)
+        .trim()
+        .parse()
+        .map(Some)
+        .map_err(|_| {
+            ErrorData::internal(format!(
+                "the received-telemetry mark at {key} is not a number"
+            ))
+        })
 }

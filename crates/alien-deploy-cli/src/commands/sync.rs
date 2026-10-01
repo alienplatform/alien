@@ -307,13 +307,52 @@ pub async fn rollback_command(args: RollbackArgs) -> Result<()> {
                 message: "This install trusts no bundle key; install with sync first".to_string(),
             })
         })?;
+    // The folder travels: install only what the key this install trusts
+    // signed, the same rule a sync follows.
+    let manifest = airgap::verify_installed(previous, &trusted_key)
+        .await
+        .context(config_error(format!(
+            "verifying {} before reinstalling it",
+            previous.display()
+        )))?;
+    if manifest.deployment_id != site.deployment_id || manifest.stack_id != record.stack_id {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "rollback".to_string(),
+            message: format!("{} is for another deployment", previous.display()),
+        }));
+    }
+    let record = installed_record(&manifest, &settings, record.inventory)?;
+    let mut target: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(previous.join(airgap::TARGET_FILE))
+            .into_alien_error()
+            .context(config_error("reading the saved target"))?,
+    )
+    .into_alien_error()
+    .context(config_error("parsing the saved target"))?;
+    airgap::rewrite_references(
+        &mut target,
+        &airgap::site_references(&manifest.images, &settings.registry),
+    );
+    let work = tempfile::tempdir()
+        .into_alien_error()
+        .context(config_error("creating a working directory"))?;
+    let target_path = work.path().join("installed-target.json");
+    std::fs::write(
+        &target_path,
+        serde_json::to_vec(&target)
+            .into_alien_error()
+            .context(config_error("encoding the target"))?,
+    )
+    .into_alien_error()
+    .context(config_error("writing the target"))?;
+
     println!("Returning {} to {}", site.name, record.release_id);
     let sequence = chrono::Utc::now().timestamp_millis() as u64;
     let ack = current_ack(&settings, &record.stack_id, &namespace).await?;
     helm_upgrade(
         &settings,
         &record,
-        &previous.join(&record.chart),
+        &previous.join(&manifest.chart),
         &namespace,
         None,
         &trusted_key,
@@ -325,7 +364,7 @@ pub async fn rollback_command(args: RollbackArgs) -> Result<()> {
         &settings,
         &record.stack_id,
         &namespace,
-        &previous.join(airgap::TARGET_FILE),
+        &target_path,
         sequence,
         ack,
     )
@@ -689,7 +728,9 @@ async fn send_reports(
             "state": report.state,
             "telemetry": fresh
                 .iter()
-                .map(|batch| serde_json::json!({ "signal": batch.signal, "data": batch.data }))
+                .map(|batch| {
+                    serde_json::json!({ "id": batch.id, "signal": batch.signal, "data": batch.data })
+                })
                 .collect::<Vec<_>>(),
         });
         let _: serde_json::Value = manager_post(
@@ -704,6 +745,8 @@ async fn send_reports(
         }
         site.site_has = report.inventory;
         site.site_release = report.installed_release.clone();
+        // Saved before the report is removed, so progress is never lost.
+        save_site(folder, site)?;
         let dropped = if report.dropped > 0 {
             format!(
                 " ({} batches were dropped at the site: its buffer was full)",
@@ -1261,50 +1304,13 @@ async fn install_pending(
     .into_alien_error()
     .context(config_error("parsing the target"))?;
     airgap::rewrite_references(&mut target, &mapping);
-    let mut chart_images = BTreeMap::new();
-    for (key, source) in &manifest.chart_images {
-        let image = manifest
-            .images
-            .iter()
-            .find(|image| &image.source == source)
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ValidationError {
-                    field: "bundle".to_string(),
-                    message: format!("The update doesn't carry {source} ({key})"),
-                })
-            })?;
-        chart_images.insert(
-            key.clone(),
-            SiteImage {
-                repository: format!(
-                    "{}/{}",
-                    settings.registry.trim_end_matches('/'),
-                    image.repository
-                ),
-                tag: format!(
-                    "{}@{}",
-                    image.tag.as_deref().unwrap_or("latest"),
-                    image.digest
-                ),
-            },
-        );
-    }
-    if !chart_images.contains_key(airgap::CHART_IMAGE_VALUES[0]) {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "bundle".to_string(),
-            message: "The update has no Operator image".to_string(),
-        }));
-    }
-    let record = InstalledBundle {
-        release_id: manifest.release_id.clone(),
-        stack_id: manifest.stack_id.clone(),
-        chart: manifest.chart.clone(),
-        chart_images,
-        telemetry_ack: manifest.telemetry_ack,
-        inventory: airgap::blob_inventory(&work.path().join(airgap::OCI_DIR), &manifest.images)
+    let record = installed_record(
+        &manifest,
+        settings,
+        airgap::blob_inventory(&work.path().join(airgap::OCI_DIR), &manifest.images)
             .await
             .context(config_error("listing the update's layers"))?,
-    };
+    )?;
 
     let pull_secret = match settings
         .registry_credentials
@@ -1357,8 +1363,9 @@ async fn install_pending(
     )
     .await?;
 
-    // Keep what a rollback needs: the rewritten target, the chart, and how
-    // the Operator image was named.
+    // Keep what a rollback needs, as signed: the manifest and its
+    // signature, the target and the chart. A rollback verifies them again
+    // before installing anything, since the folder leaves the site.
     let keep = folder
         .join(TO_SITE)
         .join(INSTALLED)
@@ -1366,15 +1373,16 @@ async fn install_pending(
     std::fs::create_dir_all(keep.join(airgap::CHART_DIR))
         .into_alien_error()
         .context(config_error("saving the installed update"))?;
-    std::fs::copy(&target_path, keep.join(airgap::TARGET_FILE))
-        .into_alien_error()
-        .context(config_error("saving the installed target"))?;
-    std::fs::copy(
-        work.path().join(&manifest.chart),
-        keep.join(&manifest.chart),
-    )
-    .into_alien_error()
-    .context(config_error("saving the installed chart"))?;
+    for file in [
+        airgap::MANIFEST_FILE,
+        airgap::SIGNATURE_FILE,
+        airgap::TARGET_FILE,
+        manifest.chart.as_str(),
+    ] {
+        std::fs::copy(work.path().join(file), keep.join(file))
+            .into_alien_error()
+            .context(config_error(format!("saving the installed {file}")))?;
+    }
     std::fs::write(
         keep.join("install.json"),
         serde_json::to_vec_pretty(&record)
@@ -1399,6 +1407,57 @@ async fn install_pending(
         manifest.release_id
     );
     Ok(())
+}
+
+/// How an update is installed at this site, from its verified manifest:
+/// where each image the chart runs lives in the site registry.
+fn installed_record(
+    manifest: &BundleManifest,
+    settings: &SiteSide,
+    inventory: BTreeSet<String>,
+) -> Result<InstalledBundle> {
+    let mut chart_images = BTreeMap::new();
+    for (key, source) in &manifest.chart_images {
+        let image = manifest
+            .images
+            .iter()
+            .find(|image| &image.source == source)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "bundle".to_string(),
+                    message: format!("The update doesn't carry {source} ({key})"),
+                })
+            })?;
+        chart_images.insert(
+            key.clone(),
+            SiteImage {
+                repository: format!(
+                    "{}/{}",
+                    settings.registry.trim_end_matches('/'),
+                    image.repository
+                ),
+                tag: format!(
+                    "{}@{}",
+                    image.tag.as_deref().unwrap_or("latest"),
+                    image.digest
+                ),
+            },
+        );
+    }
+    if !chart_images.contains_key(airgap::CHART_IMAGE_VALUES[0]) {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "bundle".to_string(),
+            message: "The update has no Operator image".to_string(),
+        }));
+    }
+    Ok(InstalledBundle {
+        release_id: manifest.release_id.clone(),
+        stack_id: manifest.stack_id.clone(),
+        chart: manifest.chart.clone(),
+        chart_images,
+        telemetry_ack: manifest.telemetry_ack,
+        inventory,
+    })
 }
 
 fn short_key(key: &str) -> String {
