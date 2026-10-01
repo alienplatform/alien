@@ -1489,24 +1489,9 @@ fn deployment_error_message(error: &serde_json::Value) -> Option<String> {
     // For DEPLOYMENT_FAILED errors, extract per-resource root causes
     // instead of the generic "Deployment failed: N resource error(s)..." summary.
     if error.get("code").and_then(|v| v.as_str()) == Some("DEPLOYMENT_FAILED") {
-        if let Some(resource_errors) = error
-            .get("context")
-            .and_then(|c| c.get("resource_errors"))
-            .and_then(|v| v.as_array())
-        {
-            let details: Vec<String> = resource_errors
-                .iter()
-                .filter_map(|re| {
-                    let resource_id = re.get("resourceId").and_then(|v| v.as_str())?;
-                    let err = re.get("error")?;
-                    let msg = root_cause_message(err)?;
-                    Some(format!("{resource_id}: {msg}"))
-                })
-                .collect();
-
-            if !details.is_empty() {
-                return Some(details.join("; "));
-            }
+        let details = ui::failed_resources_from_context(error.get("context"));
+        if !details.is_empty() {
+            return Some(details.join("; "));
         }
     }
 
@@ -1515,36 +1500,6 @@ fn deployment_error_message(error: &serde_json::Value) -> Option<String> {
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned)
         .or_else(|| error.as_str().map(ToOwned::to_owned))
-}
-
-/// Walk the source chain of a serialized AlienError to find the root cause message.
-/// Prefers the deepest non-internal error; falls back to the deepest error overall.
-fn root_cause_message(error: &serde_json::Value) -> Option<String> {
-    let mut deepest_non_internal: Option<&str> = None;
-    let mut deepest: Option<&str> = None;
-    let mut current = error;
-
-    loop {
-        let msg = current.get("message").and_then(|v| v.as_str());
-        let is_internal = current
-            .get("internal")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-
-        if let Some(m) = msg {
-            deepest = Some(m);
-            if !is_internal {
-                deepest_non_internal = Some(m);
-            }
-        }
-
-        match current.get("source") {
-            Some(source) if source.is_object() => current = source,
-            _ => break,
-        }
-    }
-
-    deepest_non_internal.or(deepest).map(ToOwned::to_owned)
 }
 
 async fn watch_dev_deployments_until_ctrl_c(
