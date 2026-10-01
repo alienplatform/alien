@@ -129,6 +129,19 @@ impl GcpServiceActivationMutation {
                         "enable-cloud-run".to_string(),
                         "run.googleapis.com".to_string(),
                     );
+                    // Commands reach a Cloud Run worker through a Pub/Sub
+                    // topic and push subscription the worker controller
+                    // creates, so the API must be on even without a queue.
+                    let commands_enabled = entry
+                        .config
+                        .downcast_ref::<alien_core::Worker>()
+                        .is_some_and(|worker| worker.commands_enabled);
+                    if commands_enabled {
+                        services.insert(
+                            "enable-pubsub".to_string(),
+                            "pubsub.googleapis.com".to_string(),
+                        );
+                    }
                 }
                 "build" => {
                     services.insert(
@@ -255,7 +268,7 @@ impl GcpServiceActivationMutation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Ai, ResourceLifecycle, Stack};
+    use alien_core::{Ai, ResourceLifecycle, Stack, Worker, WorkerCode};
 
     #[test]
     fn ai_resource_requires_vertex_aiplatform() {
@@ -271,5 +284,37 @@ mod tests {
             Some("aiplatform.googleapis.com"),
             "a GCP AI resource must inject Vertex AI enablement for the Terraform/Frozen path"
         );
+    }
+
+    fn worker_stack(commands_enabled: bool) -> Stack {
+        Stack::new("test-stack".to_string())
+            .add(
+                Worker::new("worker".to_string())
+                    .code(WorkerCode::Image {
+                        image: "worker:latest".to_string(),
+                    })
+                    .permissions("execution".to_string())
+                    .commands_enabled(commands_enabled)
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build()
+    }
+
+    #[test]
+    fn commands_enabled_worker_requires_pubsub() {
+        let services = GcpServiceActivationMutation.get_required_services(&worker_stack(true));
+        assert_eq!(
+            services.get("enable-pubsub").map(String::as_str),
+            Some("pubsub.googleapis.com"),
+            "commands reach a Cloud Run worker through Pub/Sub, even without a queue"
+        );
+    }
+
+    #[test]
+    fn worker_without_commands_does_not_require_pubsub() {
+        let services = GcpServiceActivationMutation.get_required_services(&worker_stack(false));
+        assert!(!services.contains_key("enable-pubsub"));
+        assert!(services.contains_key("enable-cloud-run"));
     }
 }
