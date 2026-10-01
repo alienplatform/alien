@@ -5,6 +5,7 @@
 //! deliberately no CLI or dashboard action that approves a request; Alien is
 //! never the approver.
 
+use std::fmt::Display;
 use std::time::Duration;
 
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -491,6 +492,13 @@ async fn get_task(
             "debugGrant": request.debug_grant,
             "approvedUntil": request.approved_until,
             "kubectlApprove": kubectl_approve,
+            "agentSessionId": request.agent_session_id,
+            "createdAt": request.created_at,
+            "queuedBy": request.queued_by,
+            "queuedAt": request.queued_at,
+            "approvedBy": request.approved_by,
+            "deniedBy": request.denied_by,
+            "revokedBy": request.revoked_by,
         }))?;
     } else {
         println!("{} {}", dim_label("ID"), request.id);
@@ -510,6 +518,14 @@ async fn get_task(
         }
         if let Some(until) = &request.approved_until {
             println!("{} {}", dim_label("Approved until"), until);
+        }
+        if let Some(revoked_by) = request.revoked_by.as_ref() {
+            print_revoked_by(
+                &revoked_by.actor_kind,
+                &revoked_by.actor_id,
+                &revoked_by.at,
+                revoked_by.reason.as_ref(),
+            );
         }
         println!("{}", dim_label("Operations:"));
         for command in &request.commands {
@@ -558,35 +574,18 @@ async fn revoke_task(
         .into_inner();
 
     if json {
-        print_json(&serde_json::json!({
-            "id": request.id,
-            "deploymentId": request.deployment_id,
-            "title": request.title,
-            "reason": request.reason,
-            "status": request.status,
-            "operationPattern": request.operation_pattern,
-            "maxRisk": request.max_risk,
-            "commands": request.commands,
-            "debugGrant": request.debug_grant,
-            "approvedUntil": request.approved_until,
-            "kubectlApprove": Value::Null,
-            "revokedBy": request.revoked_by,
-        }))?;
+        print_json(&request)?;
     } else {
         println!("Access request revoked: {}", request.id);
         println!("{} {}", dim_label("Title"), request.title);
         println!("{} {}", dim_label("Status"), request.status);
         if let Some(revoked_by) = request.revoked_by.as_ref() {
-            println!(
-                "{} {} {} at {}",
-                dim_label("Revoked by"),
-                revoked_by.actor_kind,
-                revoked_by.actor_id,
-                revoked_by.at
+            print_revoked_by(
+                &revoked_by.actor_kind,
+                &revoked_by.actor_id,
+                &revoked_by.at,
+                revoked_by.reason.as_ref(),
             );
-            if let Some(reason) = &revoked_by.reason {
-                println!("{} {}", dim_label("Revocation reason"), reason);
-            }
         }
         if let Some(debug_grant) = request.debug_grant.as_ref() {
             let scope = debug_grant
@@ -608,6 +607,21 @@ async fn revoke_task(
         }
     }
     Ok(())
+}
+
+fn print_revoked_by(
+    actor_kind: impl Display,
+    actor_id: impl Display,
+    at: impl Display,
+    reason: Option<impl Display>,
+) {
+    println!(
+        "{} {actor_kind} {actor_id} at {at}",
+        dim_label("Revoked by")
+    );
+    if let Some(reason) = reason {
+        println!("{} {reason}", dim_label("Revocation reason"));
+    }
 }
 
 /// Fetch the customer's `kubectl patch` approve command via `GET

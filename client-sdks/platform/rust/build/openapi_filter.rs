@@ -61,7 +61,6 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "generateManagerToken",
     "getAPIKey",
     "getAccessRequest",
-    "getAccessRequestActivity",
     "getAccessRequestCoordinates",
     "getCommand",
     "getDeployment",
