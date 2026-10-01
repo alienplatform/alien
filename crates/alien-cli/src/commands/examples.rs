@@ -97,6 +97,17 @@ struct ExampleOutput {
 }
 
 pub fn examples_task(args: ExamplesArgs, ctx: ExecutionMode) -> Result<()> {
+    // The gateways are hosted next to the platform API; a standalone or dev manager has none, so
+    // deriving a gateway host from its URL would print requests to an address nothing serves.
+    if ctx.is_dev() || ctx.is_standalone() {
+        return Err(alien_error::AlienError::new(
+            ErrorData::ConfigurationError {
+                message:
+                    "`alien examples` targets the hosted gateways, which need Alien platform mode."
+                        .to_string(),
+            },
+        ));
+    }
     let output = match args.command {
         ExampleCommand::AiGateway {
             protocol,
@@ -434,6 +445,46 @@ mod tests {
             example.required_environment,
             vec!["ALIEN_SANDBOX_API_KEY", "SANDBOX_ID", "CUSTOMER_ID"]
         );
+    }
+
+    #[test]
+    fn sandbox_exec_example_runs_as_one_curl_call_with_both_headers() {
+        let example = sandbox_example(
+            "https://api.alien.dev".to_string(),
+            SandboxOperation::Exec,
+            None,
+            "echo hello",
+        )
+        .unwrap();
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "curl() {{ printf '%s\\n' \"$@\"; }}\n{}",
+                example.command
+            ))
+            .env("ALIEN_SANDBOX_API_KEY", "key_123")
+            .env("SANDBOX_ID", "sbx_123")
+            .env("CUSTOMER_ID", "org_123")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let argv = String::from_utf8(output.stdout).unwrap();
+        let argv: Vec<&str> = argv.lines().collect();
+        assert_eq!(
+            argv[..8],
+            [
+                "-X",
+                "POST",
+                "https://sandbox.alien.dev/v1/sandboxes/sbx_123/exec",
+                "-H",
+                "Authorization: Bearer key_123",
+                "-H",
+                "X-Alien-External-ID: org_123",
+                "-H",
+            ]
+        );
+        assert_eq!(argv[8], "Content-Type: application/json");
+        assert_eq!(argv[9], "-d");
     }
 
     #[test]
