@@ -9,12 +9,22 @@ use alien_core::{
     sync::{ObservedApplicationReport, OperatorCapabilityReport, OperatorImageReport},
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentInfo,
     EnvironmentVariable, ManagementConfig, ObservedInventoryBatch, Platform, ResourceHeartbeat,
-    RuntimeMetadata, StackSettings, StackState,
+    RuntimeMetadata, Stack, StackSettings, StackState,
 };
 use alien_error::AlienError;
 
 pub(crate) fn deployment_status_from_record(status: &str) -> Option<DeploymentStatus> {
     serde_json::from_value(serde_json::Value::String(status.to_string())).ok()
+}
+
+/// Release stacks an external control plane resolved for one deployment.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuppliedStacks {
+    /// Stack for `current_release_id`: what is installed.
+    pub current: Option<Stack>,
+    /// Stack for `desired_release_id`: what an update installs.
+    pub desired: Option<Stack>,
 }
 
 /// A deployment record as stored in the database.
@@ -68,6 +78,12 @@ pub struct DeploymentRecord {
     /// trusted control-plane responses but never serialize it back to clients.
     #[serde(default, skip_serializing)]
     pub deployment_config: Option<DeploymentConfig>,
+    /// Stacks an external control plane resolved for this deployment's
+    /// releases. A control plane may add deployment-specific resources to a
+    /// release's stack, so when these are set the deployment loop deploys
+    /// them instead of reading the release again.
+    #[serde(default, skip_serializing)]
+    pub supplied_stacks: Option<SuppliedStacks>,
     /// Raw deployment token for proxy pull auth.
     /// Set during deployment creation. Used by the deployment loop to
     /// configure registry credentials (Container App secrets, K8s imagePullSecrets).
@@ -119,6 +135,7 @@ impl std::fmt::Debug for DeploymentRecord {
                     .map(|_| "[REDACTED]"),
             )
             .field("management_config", &self.management_config)
+            .field("supplied_stacks", &self.supplied_stacks.is_some())
             .field(
                 "deployment_config",
                 &self.deployment_config.as_ref().map(|_| "[PRESENT]"),

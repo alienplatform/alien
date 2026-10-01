@@ -411,6 +411,7 @@ mod tests {
 
     fn deployment(id: &str, dg: &str) -> DeploymentRecord {
         DeploymentRecord {
+            supplied_stacks: None,
             deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
             id: id.to_string(),
             workspace_id: "default".to_string(),

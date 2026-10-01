@@ -1579,6 +1579,7 @@ mod setup_update_authorization_tests {
 
     fn record(prepared_stack: Stack) -> DeploymentRecord {
         DeploymentRecord {
+            supplied_stacks: None,
             id: "deployment".to_string(),
             workspace_id: "workspace".to_string(),
             project_id: "project".to_string(),

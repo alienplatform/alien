@@ -413,7 +413,7 @@ async fn request_access_then_reinvoke(
     // as `docker pull` writing progress to stderr and the final digest to
     // stdout.
     eprintln!(
-        "Access requested: {}\nWaiting for the customer to approve it in-cluster...",
+        "Access requested: {}\nWaiting for the customer to approve it...",
         created.id
     );
 
@@ -440,8 +440,8 @@ async fn request_access_then_reinvoke(
                 created.id.as_str(),
             )
             .await?;
-            if let Some(command) = &kubectl_approve {
-                eprintln!("Run this in-cluster to approve:\n  {command}\n");
+            if let Some(message) = kubectl_approve.waiting_message() {
+                eprintln!("{message}\n");
                 printed_kubectl_approve = true;
             }
         }
