@@ -76,7 +76,7 @@ export type SyncReconcileRequestLifecycle12 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle12
 >;
 
-export type SyncReconcileRequestStatus12 = {
+export type ResourceHeartbeatStatus12 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue12>;
   health: SyncReconcileRequestHealth12;
   lifecycle: SyncReconcileRequestLifecycle12;
@@ -99,7 +99,7 @@ export type DataLocal3 = {
   restartCount?: number | null | undefined;
   runtimeReachable: boolean;
   runtimeStatus?: string | null | undefined;
-  status: SyncReconcileRequestStatus12;
+  status: ResourceHeartbeatStatus12;
   backend: "local";
 };
 
@@ -307,7 +307,7 @@ export type SyncReconcileRequestLifecycle11 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle11
 >;
 
-export type SyncReconcileRequestStatus11 = {
+export type ResourceHeartbeatStatus11 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue11>;
   health: SyncReconcileRequestHealth11;
   lifecycle: SyncReconcileRequestLifecycle11;
@@ -355,7 +355,7 @@ export type DataKubernetes2 = {
   pods: Array<Pod2>;
   replicas: Replicas3;
   restarts?: number | null | undefined;
-  status: SyncReconcileRequestStatus11;
+  status: ResourceHeartbeatStatus11;
   workload?: Workload2 | any | null | undefined;
   workloadKind: WorkloadKind2;
   backend: "kubernetes";
@@ -550,7 +550,7 @@ export type SyncReconcileRequestLifecycle10 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle10
 >;
 
-export type SyncReconcileRequestStatus10 = {
+export type ResourceHeartbeatStatus10 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue10>;
   health: SyncReconcileRequestHealth10;
   lifecycle: SyncReconcileRequestLifecycle10;
@@ -571,7 +571,7 @@ export type DataHorizonPlatform = {
   replicaUnits: Array<ReplicaUnit>;
   replicas: Replicas2;
   schedulingMode: SchedulingMode;
-  status: SyncReconcileRequestStatus10;
+  status: ResourceHeartbeatStatus10;
   backend: "horizonPlatform";
 };
 
@@ -751,7 +751,7 @@ export type SyncReconcileRequestLifecycle9 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle9
 >;
 
-export type SyncReconcileRequestStatus9 = {
+export type ResourceHeartbeatStatus9 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue9>;
   health: SyncReconcileRequestHealth9;
   lifecycle: SyncReconcileRequestLifecycle9;
@@ -769,7 +769,7 @@ export type DataLocal2 = {
   pid?: number | null | undefined;
   process?: Process | any | null | undefined;
   readinessProbeOk?: boolean | null | undefined;
-  status: SyncReconcileRequestStatus9;
+  status: ResourceHeartbeatStatus9;
   triggerCount: number;
   backend: "local";
 };
@@ -978,7 +978,7 @@ export type SyncReconcileRequestLifecycle8 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle8
 >;
 
-export type SyncReconcileRequestStatus8 = {
+export type ResourceHeartbeatStatus8 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue8>;
   health: SyncReconcileRequestHealth8;
   lifecycle: SyncReconcileRequestLifecycle8;
@@ -1026,7 +1026,7 @@ export type DataKubernetes1 = {
   pods: Array<Pod1>;
   replicas: Replicas1;
   restarts?: number | null | undefined;
-  status: SyncReconcileRequestStatus8;
+  status: ResourceHeartbeatStatus8;
   triggerCount: number;
   workload?: Workload1 | any | null | undefined;
   workloadKind: WorkloadKind1;
@@ -1084,7 +1084,7 @@ export type SyncReconcileRequestLifecycle7 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle7
 >;
 
-export type SyncReconcileRequestStatus7 = {
+export type ResourceHeartbeatStatus7 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue7>;
   health: SyncReconcileRequestHealth7;
   lifecycle: SyncReconcileRequestLifecycle7;
@@ -1104,7 +1104,7 @@ export type DataAzureContainerApps1 = {
   provisioningState?: string | null | undefined;
   revision?: string | null | undefined;
   runningStatus?: string | null | undefined;
-  status: SyncReconcileRequestStatus7;
+  status: ResourceHeartbeatStatus7;
   backend: "azureContainerApps";
 };
 
@@ -1159,7 +1159,7 @@ export type SyncReconcileRequestLifecycle6 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle6
 >;
 
-export type SyncReconcileRequestStatus6 = {
+export type ResourceHeartbeatStatus6 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue6>;
   health: SyncReconcileRequestHealth6;
   lifecycle: SyncReconcileRequestLifecycle6;
@@ -1180,7 +1180,7 @@ export type DataGcpCloudRun = {
   observedGeneration?: number | null | undefined;
   region?: string | null | undefined;
   service: string;
-  status: SyncReconcileRequestStatus6;
+  status: ResourceHeartbeatStatus6;
   trafficCount: number;
   uri?: string | null | undefined;
   urls: Array<string>;
@@ -1238,7 +1238,7 @@ export type SyncReconcileRequestLifecycle5 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle5
 >;
 
-export type SyncReconcileRequestStatus5 = {
+export type ResourceHeartbeatStatus5 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue5>;
   health: SyncReconcileRequestHealth5;
   lifecycle: SyncReconcileRequestLifecycle5;
@@ -1264,7 +1264,7 @@ export type DataAwsLambda = {
   state?: string | null | undefined;
   stateReason?: string | null | undefined;
   stateReasonCode?: string | null | undefined;
-  status: SyncReconcileRequestStatus5;
+  status: ResourceHeartbeatStatus5;
   timeoutSeconds?: number | null | undefined;
   triggerCount: number;
   version?: string | null | undefined;
@@ -1369,7 +1369,7 @@ export const SyncReconcileRequestLifecycle12$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle12);
 
 /** @internal */
-export type SyncReconcileRequestStatus12$Outbound = {
+export type ResourceHeartbeatStatus12$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue12$Outbound>;
   health: string;
   lifecycle: string;
@@ -1379,9 +1379,9 @@ export type SyncReconcileRequestStatus12$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus12$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus12$Outbound,
-  SyncReconcileRequestStatus12
+export const ResourceHeartbeatStatus12$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus12$Outbound,
+  ResourceHeartbeatStatus12
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue12$outboundSchema),
@@ -1393,13 +1393,11 @@ export const SyncReconcileRequestStatus12$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus12ToJSON(
-  syncReconcileRequestStatus12: SyncReconcileRequestStatus12,
+export function resourceHeartbeatStatus12ToJSON(
+  resourceHeartbeatStatus12: ResourceHeartbeatStatus12,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus12$outboundSchema.parse(
-      syncReconcileRequestStatus12,
-    ),
+    ResourceHeartbeatStatus12$outboundSchema.parse(resourceHeartbeatStatus12),
   );
 }
 
@@ -1418,7 +1416,7 @@ export type DataLocal3$Outbound = {
   restartCount?: number | null | undefined;
   runtimeReachable: boolean;
   runtimeStatus?: string | null | undefined;
-  status: SyncReconcileRequestStatus12$Outbound;
+  status: ResourceHeartbeatStatus12$Outbound;
   backend: "local";
 };
 
@@ -1445,7 +1443,7 @@ export const DataLocal3$outboundSchema: z.ZodType<
   restartCount: z.nullable(z.int()).optional(),
   runtimeReachable: z.boolean(),
   runtimeStatus: z.nullable(z.string()).optional(),
-  status: z.lazy(() => SyncReconcileRequestStatus12$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus12$outboundSchema),
   backend: z.literal("local"),
 });
 
@@ -1906,7 +1904,7 @@ export const SyncReconcileRequestLifecycle11$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle11);
 
 /** @internal */
-export type SyncReconcileRequestStatus11$Outbound = {
+export type ResourceHeartbeatStatus11$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue11$Outbound>;
   health: string;
   lifecycle: string;
@@ -1916,9 +1914,9 @@ export type SyncReconcileRequestStatus11$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus11$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus11$Outbound,
-  SyncReconcileRequestStatus11
+export const ResourceHeartbeatStatus11$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus11$Outbound,
+  ResourceHeartbeatStatus11
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue11$outboundSchema),
@@ -1930,13 +1928,11 @@ export const SyncReconcileRequestStatus11$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus11ToJSON(
-  syncReconcileRequestStatus11: SyncReconcileRequestStatus11,
+export function resourceHeartbeatStatus11ToJSON(
+  resourceHeartbeatStatus11: ResourceHeartbeatStatus11,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus11$outboundSchema.parse(
-      syncReconcileRequestStatus11,
-    ),
+    ResourceHeartbeatStatus11$outboundSchema.parse(resourceHeartbeatStatus11),
   );
 }
 
@@ -2028,7 +2024,7 @@ export type DataKubernetes2$Outbound = {
   pods: Array<Pod2$Outbound>;
   replicas: Replicas3$Outbound;
   restarts?: number | null | undefined;
-  status: SyncReconcileRequestStatus11$Outbound;
+  status: ResourceHeartbeatStatus11$Outbound;
   workload?: Workload2$Outbound | any | null | undefined;
   workloadKind: string;
   backend: "kubernetes";
@@ -2054,7 +2050,7 @@ export const DataKubernetes2$outboundSchema: z.ZodType<
   pods: z.array(z.lazy(() => Pod2$outboundSchema)),
   replicas: z.lazy(() => Replicas3$outboundSchema),
   restarts: z.nullable(z.int()).optional(),
-  status: z.lazy(() => SyncReconcileRequestStatus11$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus11$outboundSchema),
   workload: z.nullable(
     z.union([z.lazy(() => Workload2$outboundSchema), z.any()]),
   ).optional(),
@@ -2508,7 +2504,7 @@ export const SyncReconcileRequestLifecycle10$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle10);
 
 /** @internal */
-export type SyncReconcileRequestStatus10$Outbound = {
+export type ResourceHeartbeatStatus10$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue10$Outbound>;
   health: string;
   lifecycle: string;
@@ -2518,9 +2514,9 @@ export type SyncReconcileRequestStatus10$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus10$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus10$Outbound,
-  SyncReconcileRequestStatus10
+export const ResourceHeartbeatStatus10$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus10$Outbound,
+  ResourceHeartbeatStatus10
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue10$outboundSchema),
@@ -2532,13 +2528,11 @@ export const SyncReconcileRequestStatus10$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus10ToJSON(
-  syncReconcileRequestStatus10: SyncReconcileRequestStatus10,
+export function resourceHeartbeatStatus10ToJSON(
+  resourceHeartbeatStatus10: ResourceHeartbeatStatus10,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus10$outboundSchema.parse(
-      syncReconcileRequestStatus10,
-    ),
+    ResourceHeartbeatStatus10$outboundSchema.parse(resourceHeartbeatStatus10),
   );
 }
 
@@ -2555,7 +2549,7 @@ export type DataHorizonPlatform$Outbound = {
   replicaUnits: Array<ReplicaUnit$Outbound>;
   replicas: Replicas2$Outbound;
   schedulingMode: string;
-  status: SyncReconcileRequestStatus10$Outbound;
+  status: ResourceHeartbeatStatus10$Outbound;
   backend: "horizonPlatform";
 };
 
@@ -2582,7 +2576,7 @@ export const DataHorizonPlatform$outboundSchema: z.ZodType<
   replicaUnits: z.array(z.lazy(() => ReplicaUnit$outboundSchema)),
   replicas: z.lazy(() => Replicas2$outboundSchema),
   schedulingMode: SchedulingMode$outboundSchema,
-  status: z.lazy(() => SyncReconcileRequestStatus10$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus10$outboundSchema),
   backend: z.literal("horizonPlatform"),
 });
 
@@ -3004,7 +2998,7 @@ export const SyncReconcileRequestLifecycle9$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle9);
 
 /** @internal */
-export type SyncReconcileRequestStatus9$Outbound = {
+export type ResourceHeartbeatStatus9$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue9$Outbound>;
   health: string;
   lifecycle: string;
@@ -3014,9 +3008,9 @@ export type SyncReconcileRequestStatus9$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus9$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus9$Outbound,
-  SyncReconcileRequestStatus9
+export const ResourceHeartbeatStatus9$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus9$Outbound,
+  ResourceHeartbeatStatus9
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue9$outboundSchema),
@@ -3028,13 +3022,11 @@ export const SyncReconcileRequestStatus9$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus9ToJSON(
-  syncReconcileRequestStatus9: SyncReconcileRequestStatus9,
+export function resourceHeartbeatStatus9ToJSON(
+  resourceHeartbeatStatus9: ResourceHeartbeatStatus9,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus9$outboundSchema.parse(
-      syncReconcileRequestStatus9,
-    ),
+    ResourceHeartbeatStatus9$outboundSchema.parse(resourceHeartbeatStatus9),
   );
 }
 
@@ -3048,7 +3040,7 @@ export type DataLocal2$Outbound = {
   pid?: number | null | undefined;
   process?: Process$Outbound | any | null | undefined;
   readinessProbeOk?: boolean | null | undefined;
-  status: SyncReconcileRequestStatus9$Outbound;
+  status: ResourceHeartbeatStatus9$Outbound;
   triggerCount: number;
   backend: "local";
 };
@@ -3074,7 +3066,7 @@ export const DataLocal2$outboundSchema: z.ZodType<
   process: z.nullable(z.union([z.lazy(() => Process$outboundSchema), z.any()]))
     .optional(),
   readinessProbeOk: z.nullable(z.boolean()).optional(),
-  status: z.lazy(() => SyncReconcileRequestStatus9$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus9$outboundSchema),
   triggerCount: z.int(),
   backend: z.literal("local"),
 });
@@ -3535,7 +3527,7 @@ export const SyncReconcileRequestLifecycle8$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle8);
 
 /** @internal */
-export type SyncReconcileRequestStatus8$Outbound = {
+export type ResourceHeartbeatStatus8$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue8$Outbound>;
   health: string;
   lifecycle: string;
@@ -3545,9 +3537,9 @@ export type SyncReconcileRequestStatus8$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus8$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus8$Outbound,
-  SyncReconcileRequestStatus8
+export const ResourceHeartbeatStatus8$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus8$Outbound,
+  ResourceHeartbeatStatus8
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue8$outboundSchema),
@@ -3559,13 +3551,11 @@ export const SyncReconcileRequestStatus8$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus8ToJSON(
-  syncReconcileRequestStatus8: SyncReconcileRequestStatus8,
+export function resourceHeartbeatStatus8ToJSON(
+  resourceHeartbeatStatus8: ResourceHeartbeatStatus8,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus8$outboundSchema.parse(
-      syncReconcileRequestStatus8,
-    ),
+    ResourceHeartbeatStatus8$outboundSchema.parse(resourceHeartbeatStatus8),
   );
 }
 
@@ -3657,7 +3647,7 @@ export type DataKubernetes1$Outbound = {
   pods: Array<Pod1$Outbound>;
   replicas: Replicas1$Outbound;
   restarts?: number | null | undefined;
-  status: SyncReconcileRequestStatus8$Outbound;
+  status: ResourceHeartbeatStatus8$Outbound;
   triggerCount: number;
   workload?: Workload1$Outbound | any | null | undefined;
   workloadKind: string;
@@ -3684,7 +3674,7 @@ export const DataKubernetes1$outboundSchema: z.ZodType<
   pods: z.array(z.lazy(() => Pod1$outboundSchema)),
   replicas: z.lazy(() => Replicas1$outboundSchema),
   restarts: z.nullable(z.int()).optional(),
-  status: z.lazy(() => SyncReconcileRequestStatus8$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus8$outboundSchema),
   triggerCount: z.int(),
   workload: z.nullable(
     z.union([z.lazy(() => Workload1$outboundSchema), z.any()]),
@@ -3748,7 +3738,7 @@ export const SyncReconcileRequestLifecycle7$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle7);
 
 /** @internal */
-export type SyncReconcileRequestStatus7$Outbound = {
+export type ResourceHeartbeatStatus7$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue7$Outbound>;
   health: string;
   lifecycle: string;
@@ -3758,9 +3748,9 @@ export type SyncReconcileRequestStatus7$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus7$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus7$Outbound,
-  SyncReconcileRequestStatus7
+export const ResourceHeartbeatStatus7$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus7$Outbound,
+  ResourceHeartbeatStatus7
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue7$outboundSchema),
@@ -3772,13 +3762,11 @@ export const SyncReconcileRequestStatus7$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus7ToJSON(
-  syncReconcileRequestStatus7: SyncReconcileRequestStatus7,
+export function resourceHeartbeatStatus7ToJSON(
+  resourceHeartbeatStatus7: ResourceHeartbeatStatus7,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus7$outboundSchema.parse(
-      syncReconcileRequestStatus7,
-    ),
+    ResourceHeartbeatStatus7$outboundSchema.parse(resourceHeartbeatStatus7),
   );
 }
 
@@ -3794,7 +3782,7 @@ export type DataAzureContainerApps1$Outbound = {
   provisioningState?: string | null | undefined;
   revision?: string | null | undefined;
   runningStatus?: string | null | undefined;
-  status: SyncReconcileRequestStatus7$Outbound;
+  status: ResourceHeartbeatStatus7$Outbound;
   backend: "azureContainerApps";
 };
 
@@ -3813,7 +3801,7 @@ export const DataAzureContainerApps1$outboundSchema: z.ZodType<
   provisioningState: z.nullable(z.string()).optional(),
   revision: z.nullable(z.string()).optional(),
   runningStatus: z.nullable(z.string()).optional(),
-  status: z.lazy(() => SyncReconcileRequestStatus7$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus7$outboundSchema),
   backend: z.literal("azureContainerApps"),
 });
 
@@ -3874,7 +3862,7 @@ export const SyncReconcileRequestLifecycle6$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle6);
 
 /** @internal */
-export type SyncReconcileRequestStatus6$Outbound = {
+export type ResourceHeartbeatStatus6$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue6$Outbound>;
   health: string;
   lifecycle: string;
@@ -3884,9 +3872,9 @@ export type SyncReconcileRequestStatus6$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus6$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus6$Outbound,
-  SyncReconcileRequestStatus6
+export const ResourceHeartbeatStatus6$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus6$Outbound,
+  ResourceHeartbeatStatus6
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue6$outboundSchema),
@@ -3898,13 +3886,11 @@ export const SyncReconcileRequestStatus6$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus6ToJSON(
-  syncReconcileRequestStatus6: SyncReconcileRequestStatus6,
+export function resourceHeartbeatStatus6ToJSON(
+  resourceHeartbeatStatus6: ResourceHeartbeatStatus6,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus6$outboundSchema.parse(
-      syncReconcileRequestStatus6,
-    ),
+    ResourceHeartbeatStatus6$outboundSchema.parse(resourceHeartbeatStatus6),
   );
 }
 
@@ -3921,7 +3907,7 @@ export type DataGcpCloudRun$Outbound = {
   observedGeneration?: number | null | undefined;
   region?: string | null | undefined;
   service: string;
-  status: SyncReconcileRequestStatus6$Outbound;
+  status: ResourceHeartbeatStatus6$Outbound;
   trafficCount: number;
   uri?: string | null | undefined;
   urls: Array<string>;
@@ -3944,7 +3930,7 @@ export const DataGcpCloudRun$outboundSchema: z.ZodType<
   observedGeneration: z.nullable(z.int()).optional(),
   region: z.nullable(z.string()).optional(),
   service: z.string(),
-  status: z.lazy(() => SyncReconcileRequestStatus6$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus6$outboundSchema),
   trafficCount: z.int(),
   uri: z.nullable(z.string()).optional(),
   urls: z.array(z.string()),
@@ -4006,7 +3992,7 @@ export const SyncReconcileRequestLifecycle5$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle5);
 
 /** @internal */
-export type SyncReconcileRequestStatus5$Outbound = {
+export type ResourceHeartbeatStatus5$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue5$Outbound>;
   health: string;
   lifecycle: string;
@@ -4016,9 +4002,9 @@ export type SyncReconcileRequestStatus5$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus5$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus5$Outbound,
-  SyncReconcileRequestStatus5
+export const ResourceHeartbeatStatus5$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus5$Outbound,
+  ResourceHeartbeatStatus5
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue5$outboundSchema),
@@ -4030,13 +4016,11 @@ export const SyncReconcileRequestStatus5$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus5ToJSON(
-  syncReconcileRequestStatus5: SyncReconcileRequestStatus5,
+export function resourceHeartbeatStatus5ToJSON(
+  resourceHeartbeatStatus5: ResourceHeartbeatStatus5,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus5$outboundSchema.parse(
-      syncReconcileRequestStatus5,
-    ),
+    ResourceHeartbeatStatus5$outboundSchema.parse(resourceHeartbeatStatus5),
   );
 }
 
@@ -4058,7 +4042,7 @@ export type DataAwsLambda$Outbound = {
   state?: string | null | undefined;
   stateReason?: string | null | undefined;
   stateReasonCode?: string | null | undefined;
-  status: SyncReconcileRequestStatus5$Outbound;
+  status: ResourceHeartbeatStatus5$Outbound;
   timeoutSeconds?: number | null | undefined;
   triggerCount: number;
   version?: string | null | undefined;
@@ -4086,7 +4070,7 @@ export const DataAwsLambda$outboundSchema: z.ZodType<
   state: z.nullable(z.string()).optional(),
   stateReason: z.nullable(z.string()).optional(),
   stateReasonCode: z.nullable(z.string()).optional(),
-  status: z.lazy(() => SyncReconcileRequestStatus5$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus5$outboundSchema),
   timeoutSeconds: z.nullable(z.int()).optional(),
   triggerCount: z.int(),
   version: z.nullable(z.string()).optional(),

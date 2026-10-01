@@ -26,7 +26,7 @@
 * [configureKeys](#configurekeys) - Enable customer-owned application encryption without requiring an application Release.
 * [configureBuckets](#configurebuckets) - Enable buckets without requiring a project Release.
 * [configureRegistry](#configureregistry) - Enable customer-owned container registries without requiring an application Release.
-* [configureRemoteSandbox](#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. The clouds it publishes to follow the sources configured: an AWS bundle, an Azure catalog image, or both.
+* [configureRemoteSandbox](#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. Without a custom image it publishes to every cloud on Alien's default image, which the project then follows. A custom image publishes to AWS; a public one with a linux/amd64 variant also publishes to Azure, and to GCP once Alien has built its GCP image.
 * [ensureSandboxBaseImageRepository](#ensuresandboxbaseimagerepository) - Ensure the project's private image repository exists and return where to push a private sandbox base image. Name the pushed image as the remote sandbox base image afterwards.
 * [getCapabilityOverview](#getcapabilityoverview) - Get safe, server-derived capability status for a Project.
 * [getRemoteOperatorSummary](#getremoteoperatorsummary) - Get the authoritative Remote Operator project summary
@@ -369,7 +369,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-    
+
   } else {
     console.log("projectsDelete failed:", res.error);
   }
@@ -571,7 +571,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404, 409                 | application/json         |
+| errors.APIError          | 403, 404, 409, 422       | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -1458,7 +1458,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404                      | application/json         |
+| errors.APIError          | 400, 404                 | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -1841,7 +1841,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 403, 404                 | application/json         |
+| errors.APIError          | 403, 404, 409            | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -1969,7 +1969,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 403, 404                 | application/json         |
+| errors.APIError          | 403, 404, 409            | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -2353,7 +2353,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 403, 404                 | application/json         |
+| errors.APIError          | 403, 404, 409            | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -2481,7 +2481,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 403, 404                 | application/json         |
+| errors.APIError          | 403, 404, 409            | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -2609,7 +2609,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 403, 404                 | application/json         |
+| errors.APIError          | 403, 404, 409            | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -2737,13 +2737,13 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 403, 404                 | application/json         |
+| errors.APIError          | 403, 404, 409            | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## configureRemoteSandbox
 
-Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. The clouds it publishes to follow the sources configured: an AWS bundle, an Azure catalog image, or both.
+Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. Without a custom image it publishes to every cloud on Alien's default image, which the project then follows. A custom image publishes to AWS; a public one with a linux/amd64 variant also publishes to Azure, and to GCP once Alien has built its GCP image.
 
 ### Example Usage: projectId
 
@@ -2865,8 +2865,8 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 400, 403, 404            | application/json         |
-| errors.APIError          | 500                      | application/json         |
+| errors.APIError          | 400, 403, 404, 409, 422  | application/json         |
+| errors.APIError          | 500, 503                 | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## ensureSandboxBaseImageRepository

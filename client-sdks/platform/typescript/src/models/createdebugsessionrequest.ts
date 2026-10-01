@@ -20,6 +20,10 @@ export type CreateDebugSessionRequest = {
   owner?: string | null | undefined;
   expiresAt: Date;
   state?: DebugSessionState | undefined;
+  /**
+   * The access request whose debug grant authorized this session. Must belong to the same workspace and deployment.
+   */
+  accessRequestId?: string | undefined;
 };
 
 /** @internal */
@@ -29,6 +33,7 @@ export type CreateDebugSessionRequest$Outbound = {
   owner?: string | null | undefined;
   expiresAt: string;
   state?: string | undefined;
+  accessRequestId?: string | undefined;
 };
 
 /** @internal */
@@ -41,6 +46,7 @@ export const CreateDebugSessionRequest$outboundSchema: z.ZodType<
   owner: z.nullable(z.string()).optional(),
   expiresAt: z.date().transform(v => v.toISOString()),
   state: DebugSessionState$outboundSchema.optional(),
+  accessRequestId: z.string().optional(),
 });
 
 export function createDebugSessionRequestToJSON(

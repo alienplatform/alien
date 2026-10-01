@@ -32,17 +32,17 @@ const value: models.DataAws1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
+        reason: "collection-failed",
         severity: "info",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "unknown",
+    health: "unhealthy",
+    lifecycle: "deleted",
     partial: false,
     stale: false,
   },
-  unavailableInstances: 702316,
+  unavailableInstances: 873077,
   backend: "aws",
 };
 ```
@@ -70,7 +70,7 @@ const value: models.DataGcp1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
+        reason: "api-unavailable",
         severity: "info",
         source: "<value>",
       },
@@ -109,7 +109,7 @@ const value: models.DataAzure1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
+        reason: "api-unavailable",
         severity: "warning",
         source: "<value>",
       },

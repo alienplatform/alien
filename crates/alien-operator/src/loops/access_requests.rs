@@ -15,6 +15,13 @@
 //! request's commands one by one through the **normal commands queue**. So the
 //! access-request loop grants access; the commands loop executes.
 //!
+//! A request also ends without a usable grant when its window runs out
+//! (expired), the customer denies it (rejected), or the control plane revokes
+//! it (revoked). Revocation withdraws the grant: commands still waiting to be
+//! dispatched fail and open debug sessions stop. The control plane reports
+//! revoked request ids alongside the pending ones so a backend can mark the
+//! materialized artifact `REVOKED`; this loop never revokes on its own.
+//!
 //! The operator exposes the loop trait + a no-op stub. The real loop and its
 //! backends are injected by the binary via
 //! [`crate::run_operator_with_cancel_and_loops`], so the proprietary backend

@@ -8,7 +8,10 @@
 use std::time::Duration;
 
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_platform_api::types::{CreateAccessRequest, CreateAccessRequestMaxRisk, DebugGrantTool};
+use alien_platform_api::types::{
+    AccessRequestStatus, CreateAccessRequest, CreateAccessRequestMaxRisk, DebugGrantTool,
+    RevokeAccessRequest,
+};
 use alien_platform_api::SdkResultExt as _;
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
@@ -35,6 +38,10 @@ the request applies to both at once.
 Approval always happens on the customer's side (in-cluster, via kubectl or the
 operator's own reporting loop) — there is no command here that approves a request.
 
+Revoking a request withdraws the grant immediately: operations still waiting to be
+dispatched fail, open debug sessions stop, and the request can no longer be approved.
+Operations already running finish. Expired and rejected requests cannot be revoked.
+
 EXAMPLES:
     # Request access to one operation
     alien access-requests create --deployment mycustomer/prod \\
@@ -58,6 +65,9 @@ EXAMPLES:
     # Review a request, then wait for the customer to approve it
     alien access-requests get ar_123
     alien access-requests wait ar_123
+
+    # Withdraw a grant that is no longer needed
+    alien access-requests revoke ar_123 --reason 'incident resolved'
 "
 )]
 pub struct AccessRequestsArgs {
@@ -132,6 +142,14 @@ pub enum AccessRequestsAction {
         #[arg(long, default_value = "3600")]
         timeout: u64,
     },
+    /// Revoke an access request: pending operations fail and open debug sessions stop.
+    Revoke {
+        id: String,
+
+        /// Why the grant is withdrawn (kept in the audit trail).
+        #[arg(long)]
+        reason: Option<String>,
+    },
 }
 
 pub async fn access_requests_task(args: AccessRequestsArgs, ctx: ExecutionMode) -> Result<()> {
@@ -179,6 +197,9 @@ pub async fn access_requests_task(args: AccessRequestsArgs, ctx: ExecutionMode) 
         AccessRequestsAction::Get { id } => get_task(&sdk_client, &workspace, &id, args.json).await,
         AccessRequestsAction::Wait { id, timeout } => {
             wait_task(&sdk_client, &workspace, &id, timeout, args.json).await
+        }
+        AccessRequestsAction::Revoke { id, reason } => {
+            revoke_task(&sdk_client, &workspace, &id, reason.as_deref(), args.json).await
         }
     }
 }
@@ -504,6 +525,91 @@ async fn get_task(
     Ok(())
 }
 
+async fn revoke_task(
+    sdk_client: &alien_platform_api::Client,
+    workspace: &str,
+    id: &str,
+    reason: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let reason = reason
+        .map(|value| {
+            value.try_into().map_err(|error| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "reason".to_string(),
+                    message: format!("Invalid reason: {error}"),
+                })
+            })
+        })
+        .transpose()?;
+
+    let request = sdk_client
+        .revoke_access_request()
+        .id(id)
+        .workspace(workspace)
+        .body(RevokeAccessRequest { reason })
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("revoking access request '{id}'"),
+            url: None,
+        })?
+        .into_inner();
+
+    if json {
+        print_json(&serde_json::json!({
+            "id": request.id,
+            "deploymentId": request.deployment_id,
+            "title": request.title,
+            "reason": request.reason,
+            "status": request.status,
+            "operationPattern": request.operation_pattern,
+            "maxRisk": request.max_risk,
+            "commands": request.commands,
+            "debugGrant": request.debug_grant,
+            "approvedUntil": request.approved_until,
+            "kubectlApprove": Value::Null,
+            "revokedBy": request.revoked_by,
+        }))?;
+    } else {
+        println!("Access request revoked: {}", request.id);
+        println!("{} {}", dim_label("Title"), request.title);
+        println!("{} {}", dim_label("Status"), request.status);
+        if let Some(revoked_by) = request.revoked_by.as_ref() {
+            println!(
+                "{} {} {} at {}",
+                dim_label("Revoked by"),
+                revoked_by.actor_kind,
+                revoked_by.actor_id,
+                revoked_by.at
+            );
+            if let Some(reason) = &revoked_by.reason {
+                println!("{} {}", dim_label("Revocation reason"), reason);
+            }
+        }
+        if let Some(debug_grant) = request.debug_grant.as_ref() {
+            let scope = debug_grant
+                .namespace
+                .as_deref()
+                .or(debug_grant.cloud_scope.as_deref())
+                .map(|s| format!(" ({s})"))
+                .unwrap_or_default();
+            println!("{} {}{scope}", dim_label("Debug access:"), debug_grant.tool);
+        }
+        println!("{}", dim_label("Operations:"));
+        for command in &request.commands {
+            let tier = command
+                .tier
+                .as_ref()
+                .map(|t| format!(" [{t}]"))
+                .unwrap_or_default();
+            println!("  - {}{tier} — {}", command.command, command.summary);
+        }
+    }
+    Ok(())
+}
+
 /// Fetch the customer's `kubectl patch` approve command via `GET
 /// /access-requests/{id}/coordinates` — `None` until the operator has
 /// materialized the grant CR in-cluster and reported its namespace/CRD
@@ -529,11 +635,7 @@ pub(crate) async fn fetch_kubectl_approve(
     Ok(coordinates.kubectl_approve)
 }
 
-fn print_kubectl_approve(
-    kubectl_approve: &Option<String>,
-    status: alien_platform_api::types::AccessRequestStatus,
-) {
-    use alien_platform_api::types::AccessRequestStatus;
+fn print_kubectl_approve(kubectl_approve: &Option<String>, status: AccessRequestStatus) {
     match (kubectl_approve, status) {
         (Some(command), _) => {
             println!();
@@ -597,8 +699,8 @@ async fn wait_task(
             }
         }
 
-        match request.status {
-            alien_platform_api::types::AccessRequestStatus::CustomerApproved => {
+        match approval_outcome(request.status) {
+            ApprovalOutcome::Approved => {
                 if json {
                     print_json(&request)?;
                 } else {
@@ -609,17 +711,8 @@ async fn wait_task(
                 }
                 return Ok(());
             }
-            alien_platform_api::types::AccessRequestStatus::Rejected
-            | alien_platform_api::types::AccessRequestStatus::Expired => {
-                return Err(AlienError::new(ErrorData::ApiRequestFailed {
-                    message: format!(
-                        "access request '{id}' is '{}', not approved",
-                        request.status
-                    ),
-                    url: None,
-                }));
-            }
-            _ => {}
+            ApprovalOutcome::Closed => return Err(not_approved_error(id, request.status)),
+            ApprovalOutcome::Pending => {}
         }
 
         if std::time::Instant::now() >= deadline {
@@ -632,6 +725,37 @@ async fn wait_task(
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
+}
+
+/// What a poll of an access request's status means for a caller waiting on
+/// approval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApprovalOutcome {
+    /// The customer approved it; the grant is usable.
+    Approved,
+    /// It will never be approved: rejected, expired, or revoked.
+    Closed,
+    /// Still waiting on the customer.
+    Pending,
+}
+
+pub(crate) fn approval_outcome(status: AccessRequestStatus) -> ApprovalOutcome {
+    match status {
+        AccessRequestStatus::CustomerApproved => ApprovalOutcome::Approved,
+        AccessRequestStatus::Rejected
+        | AccessRequestStatus::Expired
+        | AccessRequestStatus::Revoked => ApprovalOutcome::Closed,
+        AccessRequestStatus::PendingApproval | AccessRequestStatus::Queued => {
+            ApprovalOutcome::Pending
+        }
+    }
+}
+
+pub(crate) fn not_approved_error(id: &str, status: AccessRequestStatus) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::ApiRequestFailed {
+        message: format!("access request '{id}' is '{status}', not approved"),
+        url: None,
+    })
 }
 
 /// Poll a queued access request until the customer approves it in-cluster,
@@ -670,21 +794,10 @@ pub(crate) async fn wait_for_approval(
             }
         }
 
-        match request.status {
-            alien_platform_api::types::AccessRequestStatus::CustomerApproved => {
-                return Ok(request.id);
-            }
-            alien_platform_api::types::AccessRequestStatus::Rejected
-            | alien_platform_api::types::AccessRequestStatus::Expired => {
-                return Err(AlienError::new(ErrorData::ApiRequestFailed {
-                    message: format!(
-                        "access request '{id}' is '{}', not approved",
-                        request.status
-                    ),
-                    url: None,
-                }));
-            }
-            _ => {}
+        match approval_outcome(request.status) {
+            ApprovalOutcome::Approved => return Ok(request.id),
+            ApprovalOutcome::Closed => return Err(not_approved_error(id, request.status)),
+            ApprovalOutcome::Pending => {}
         }
 
         if std::time::Instant::now() >= deadline {
@@ -759,6 +872,16 @@ pub(crate) fn requested_expiration(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use axum::{
+        extract::{RawQuery, State},
+        http::StatusCode,
+        response::IntoResponse,
+        routing::post,
+        Json, Router,
+    };
+
     use super::*;
 
     #[test]
@@ -795,5 +918,211 @@ mod tests {
             CreateAccessRequestMaxRisk::Destructive
         ));
         assert!(parse_max_risk("write").is_err());
+    }
+
+    #[test]
+    fn revoke_parses_with_and_without_a_reason() {
+        let args = AccessRequestsArgs::try_parse_from([
+            "access-requests",
+            "revoke",
+            "ar_123",
+            "--reason",
+            "incident resolved",
+            "--json",
+        ])
+        .expect("revoke with a reason should parse");
+        assert!(args.json);
+        assert!(matches!(
+            args.action,
+            AccessRequestsAction::Revoke { ref id, reason: Some(ref reason) }
+                if id == "ar_123" && reason == "incident resolved"
+        ));
+
+        let args = AccessRequestsArgs::try_parse_from(["access-requests", "revoke", "ar_123"])
+            .expect("revoke without a reason should parse");
+        assert!(matches!(
+            args.action,
+            AccessRequestsAction::Revoke { ref id, reason: None } if id == "ar_123"
+        ));
+
+        AccessRequestsArgs::try_parse_from(["access-requests", "revoke"])
+            .expect_err("revoke needs a request id");
+    }
+
+    #[test]
+    fn only_a_customer_approval_ends_the_wait_successfully() {
+        assert_eq!(
+            approval_outcome(AccessRequestStatus::CustomerApproved),
+            ApprovalOutcome::Approved
+        );
+        for closed in [
+            AccessRequestStatus::Rejected,
+            AccessRequestStatus::Expired,
+            AccessRequestStatus::Revoked,
+        ] {
+            assert_eq!(
+                approval_outcome(closed),
+                ApprovalOutcome::Closed,
+                "{closed}"
+            );
+            let error = not_approved_error("ar_123", closed);
+            assert_eq!(
+                error.message,
+                format!("API request failed: access request 'ar_123' is '{closed}', not approved")
+            );
+        }
+        for pending in [
+            AccessRequestStatus::PendingApproval,
+            AccessRequestStatus::Queued,
+        ] {
+            assert_eq!(
+                approval_outcome(pending),
+                ApprovalOutcome::Pending,
+                "{pending}"
+            );
+        }
+    }
+
+    /// A loopback platform API that answers `POST /v1/access-requests/ar_123/revoke`
+    /// with a canned status and body, recording the query string and request body
+    /// it received.
+    async fn fake_platform(
+        status: u16,
+        body: Value,
+    ) -> (
+        alien_platform_api::Client,
+        Arc<Mutex<Option<(Option<String>, Value)>>>,
+    ) {
+        type Received = Arc<Mutex<Option<(Option<String>, Value)>>>;
+
+        async fn revoke(
+            State((status, body, received)): State<(u16, Value, Received)>,
+            RawQuery(query): RawQuery,
+            Json(request_body): Json<Value>,
+        ) -> impl IntoResponse {
+            *received.lock().expect("record the request") = Some((query, request_body));
+            (
+                StatusCode::from_u16(status).expect("valid status"),
+                Json(body),
+            )
+        }
+
+        let received: Received = Arc::new(Mutex::new(None));
+        let app = Router::new()
+            .route("/v1/access-requests/ar_123/revoke", post(revoke))
+            .with_state((status, body, received.clone()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let addr = listener.local_addr().expect("local addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        (
+            alien_platform_api::Client::new(&format!("http://{addr}")),
+            received,
+        )
+    }
+
+    #[tokio::test]
+    async fn revoke_sends_the_reason_and_accepts_a_revoked_request() {
+        let (client, received) = fake_platform(
+            200,
+            serde_json::json!({
+                "id": "ar_123",
+                "deploymentId": "dep_1",
+                "title": "Restart api",
+                "reason": "api is wedged",
+                "status": "revoked",
+                "operationPattern": null,
+                "maxRisk": null,
+                "commands": [],
+                "debugGrant": null,
+                "approvedUntil": null,
+                "agentSessionId": null,
+                "createdAt": "2026-10-01T00:00:00Z",
+                "queuedBy": null,
+                "queuedAt": null,
+                "approvedBy": null,
+                "deniedBy": null,
+                "revokedBy": {
+                    "actorKind": "user",
+                    "actorId": "usr_1",
+                    "at": "2026-10-01T01:00:00Z",
+                    "reason": "incident resolved"
+                },
+                "remediationPlanId": null,
+                "requestedExpiresAt": null,
+                "requesterId": "usr_1",
+                "requesterKind": null
+            }),
+        )
+        .await;
+
+        revoke_task(&client, "acme", "ar_123", Some("incident resolved"), true)
+            .await
+            .expect("a revoked response should succeed");
+
+        let (query, body) = received
+            .lock()
+            .expect("read the recorded request")
+            .clone()
+            .expect("the revoke endpoint should have been called");
+        assert_eq!(query.as_deref(), Some("workspace=acme"));
+        assert_eq!(body, serde_json::json!({ "reason": "incident resolved" }));
+    }
+
+    #[tokio::test]
+    async fn revoke_without_a_reason_sends_an_empty_body() {
+        let (client, received) = fake_platform(
+            404,
+            serde_json::json!({
+                "code": "ACCESS_REQUEST_NOT_FOUND",
+                "message": "Access request not found",
+                "retryable": false,
+                "internal": false
+            }),
+        )
+        .await;
+
+        revoke_task(&client, "acme", "ar_123", None, true)
+            .await
+            .expect_err("a 404 must fail the command");
+
+        let (_, body) = received
+            .lock()
+            .expect("read the recorded request")
+            .clone()
+            .expect("the revoke endpoint should have been called");
+        assert_eq!(body, serde_json::json!({}));
+    }
+
+    #[tokio::test]
+    async fn revoking_a_closed_request_surfaces_the_api_message() {
+        let (client, _) = fake_platform(
+            409,
+            serde_json::json!({
+                "code": "ACCESS_REQUEST_NOT_REVOCABLE",
+                "message": "Access request ar_123 is expired and cannot be revoked",
+                "retryable": false,
+                "internal": false
+            }),
+        )
+        .await;
+
+        let error = revoke_task(&client, "acme", "ar_123", None, false)
+            .await
+            .expect_err("a 409 must fail the command");
+
+        assert_eq!(error.http_status_code, Some(409));
+        let rendered = crate::ui::render_human_error(&error);
+        assert!(
+            rendered.contains("Access request ar_123 is expired and cannot be revoked"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("revoking access request 'ar_123'"),
+            "{rendered}"
+        );
     }
 }

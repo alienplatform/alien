@@ -7,6 +7,7 @@ import { operationsCreateAccessRequest } from "../funcs/operationsCreateAccessRe
 import { operationsCreateBundleUploadUrl } from "../funcs/operationsCreateBundleUploadUrl.js";
 import { operationsDenyAccessRequest } from "../funcs/operationsDenyAccessRequest.js";
 import { operationsGetAccessRequest } from "../funcs/operationsGetAccessRequest.js";
+import { operationsGetAccessRequestActivity } from "../funcs/operationsGetAccessRequestActivity.js";
 import { operationsGetAccessRequestCoordinates } from "../funcs/operationsGetAccessRequestCoordinates.js";
 import { operationsGetLiveDebugGrant } from "../funcs/operationsGetLiveDebugGrant.js";
 import { operationsGetPolicy } from "../funcs/operationsGetPolicy.js";
@@ -15,6 +16,7 @@ import { operationsListAccessRequests } from "../funcs/operationsListAccessReque
 import { operationsListPlugins } from "../funcs/operationsListPlugins.js";
 import { operationsPublishPlugin } from "../funcs/operationsPublishPlugin.js";
 import { operationsQueueAccessRequest } from "../funcs/operationsQueueAccessRequest.js";
+import { operationsRevokeAccessRequest } from "../funcs/operationsRevokeAccessRequest.js";
 import { operationsSetBuiltinPlugins } from "../funcs/operationsSetBuiltinPlugins.js";
 import { operationsSetPluginEnabled } from "../funcs/operationsSetPluginEnabled.js";
 import { operationsUpdatePolicy } from "../funcs/operationsUpdatePolicy.js";
@@ -236,13 +238,41 @@ export class Operations extends ClientSDK {
   }
 
   /**
-   * Find an approved, unexpired access request whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request.
+   * Find an approved, unexpired access request the caller created whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request. Only the requester's own grants match: a debug session must present a grant its caller requested, so another principal's grant is never returned here.
    */
   async getLiveDebugGrant(
     request: operations.GetLiveDebugGrantRequest,
     options?: RequestOptions,
   ): Promise<operations.GetLiveDebugGrantResponse> {
     return unwrapAsync(operationsGetLiveDebugGrant(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * The operation commands and debug sessions an access request authorized, with each command's verification outcome. Authorized like getAccessRequest.
+   */
+  async getAccessRequestActivity(
+    request: operations.GetAccessRequestActivityRequest,
+    options?: RequestOptions,
+  ): Promise<models.AccessRequestActivity> {
+    return unwrapAsync(operationsGetAccessRequestActivity(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Revoke a pending, queued or customer-approved access request. The principal that created the request, or any workspace member or administrator who can read its project, may revoke it. Commands the grant authorized that have not been dispatched are failed; dispatched commands finish. Linked debug sessions are stopped and refuse their next request. Revoking an already revoked request returns it unchanged.
+   */
+  async revokeAccessRequest(
+    request: operations.RevokeAccessRequestRequest,
+    options?: RequestOptions,
+  ): Promise<operations.RevokeAccessRequestResponse> {
+    return unwrapAsync(operationsRevokeAccessRequest(
       this,
       request,
       options,

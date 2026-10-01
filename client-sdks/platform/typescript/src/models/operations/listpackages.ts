@@ -22,6 +22,7 @@ export type ListPackagesGlobals = {
 export const ListPackagesType = {
   Cli: "cli",
   Cloudformation: "cloudformation",
+  GcpSandboxImage: "gcp-sandbox-image",
   Helm: "helm",
   OperatorImage: "operator-image",
   SandboxBundle: "sandbox-bundle",

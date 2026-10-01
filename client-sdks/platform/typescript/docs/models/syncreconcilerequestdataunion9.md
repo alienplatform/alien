@@ -82,13 +82,13 @@ const value: models.DataKubernetesSecret = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "error",
+        reason: "collection-failed",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "stopped",
+    health: "unknown",
+    lifecycle: "deleting",
     partial: false,
     stale: false,
   },

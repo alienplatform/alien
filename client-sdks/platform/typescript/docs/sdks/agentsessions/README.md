@@ -4,18 +4,18 @@
 
 ### Available Operations
 
-* [list](#list) - List ai-agent monitor sessions for this workspace. Newest first, capped at 50.
+* [list](#list) - List ai-agent monitor sessions for this workspace, or for one project. Newest first, capped at 50.
 * [get](#get) - Retrieve one ai-agent monitor session by id.
 * [events](#events) - Incrementally read a session's event log (steps, tool calls, report deltas, approvals, status transitions). Pass the previous response's `latestSeq` as `after` to fetch only new events.
 * [stop](#stop) - Stop (cancel) a running or queued ai-agent monitor session. Proxies to the ai-agent service, minting a fresh CLI session for the caller so the ai-agent's own auth applies. Idempotent — stopping an already-terminal session is a 200 no-op.
 
 ## list
 
-List ai-agent monitor sessions for this workspace. Newest first, capped at 50.
+List ai-agent monitor sessions for this workspace, or for one project. Newest first, capped at 50.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="listAgentSessions" method="get" path="/v1/agent-sessions" -->
+<!-- UsageSnippet language="typescript" operationID="listAgentSessions" method="get" path="/v1/agent-sessions" example="projectId" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -25,7 +25,9 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.agentSessions.list();
+  const result = await alien.agentSessions.list({
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
 
   console.log(result);
 }
@@ -49,7 +51,60 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await agentSessionsList(alien);
+  const res = await agentSessionsList(alien, {
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("agentSessionsList failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="listAgentSessions" method="get" path="/v1/agent-sessions" example="projectName" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.agentSessions.list({
+    project: "my-project",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { agentSessionsList } from "@alienplatform/platform-api/funcs/agentSessionsList.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await agentSessionsList(alien, {
+    project: "my-project",
+  });
   if (res.ok) {
     const { value: result } = res;
     console.log(result);

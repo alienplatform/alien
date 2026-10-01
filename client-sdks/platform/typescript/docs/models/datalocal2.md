@@ -13,17 +13,17 @@ let value: DataLocal2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "info",
+        reason: "not-installed",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "deleting",
-    partial: false,
+    health: "degraded",
+    lifecycle: "updating",
+    partial: true,
     stale: false,
   },
-  triggerCount: 852008,
+  triggerCount: 963366,
   backend: "local",
 };
 ```
@@ -40,6 +40,6 @@ let value: DataLocal2 = {
 | `pid`                                                                          | *number*                                                                       | :heavy_minus_sign:                                                             | N/A                                                                            |
 | `process`                                                                      | *models.ProcessUnion*                                                          | :heavy_minus_sign:                                                             | N/A                                                                            |
 | `readinessProbeOk`                                                             | *boolean*                                                                      | :heavy_minus_sign:                                                             | N/A                                                                            |
-| `status`                                                                       | [models.SyncReconcileRequestStatus9](../models/syncreconcilerequeststatus9.md) | :heavy_check_mark:                                                             | N/A                                                                            |
+| `status`                                                                       | [models.ResourceHeartbeatStatus9](../models/resourceheartbeatstatus9.md)       | :heavy_check_mark:                                                             | N/A                                                                            |
 | `triggerCount`                                                                 | *number*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
 | `backend`                                                                      | *"local"*                                                                      | :heavy_check_mark:                                                             | N/A                                                                            |

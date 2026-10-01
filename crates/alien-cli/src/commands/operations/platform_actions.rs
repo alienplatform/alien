@@ -446,19 +446,15 @@ async fn request_access_then_reinvoke(
             }
         }
 
-        match request.status {
-            alien_platform_api::types::AccessRequestStatus::CustomerApproved => break,
-            alien_platform_api::types::AccessRequestStatus::Rejected
-            | alien_platform_api::types::AccessRequestStatus::Expired => {
-                return Err(AlienError::new(ErrorData::ApiRequestFailed {
-                    message: format!(
-                        "access request '{}' is '{}', not approved",
-                        created.id, request.status
-                    ),
-                    url: None,
-                }));
+        match crate::commands::access_requests::approval_outcome(request.status) {
+            crate::commands::access_requests::ApprovalOutcome::Approved => break,
+            crate::commands::access_requests::ApprovalOutcome::Closed => {
+                return Err(crate::commands::access_requests::not_approved_error(
+                    &created.id,
+                    request.status,
+                ));
             }
-            _ => {}
+            crate::commands::access_requests::ApprovalOutcome::Pending => {}
         }
         if std::time::Instant::now() >= deadline {
             return Err(AlienError::new(ErrorData::ApiRequestFailed {
