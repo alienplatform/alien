@@ -16,6 +16,7 @@ use crate::output::print_json;
     alien examples ai-gateway --protocol openai-responses --json
     alien examples ai-gateway --protocol anthropic-messages
     alien examples encryption-gateway --operation encrypt
+    alien examples sandbox-gateway --operation create
     alien examples sandbox-gateway --operation exec --command 'python3 --version'"
 )]
 pub struct ExamplesArgs {
@@ -50,7 +51,7 @@ pub enum ExampleCommand {
         #[arg(long, default_value = "customer-data")]
         key_id: String,
     },
-    /// Generate a Sandbox Gateway request
+    /// Generate a Sandbox Gateway request. Create returns the `sandboxId` exec and delete take.
     SandboxGateway {
         #[arg(long, value_enum, default_value_t = SandboxOperation::Create)]
         operation: SandboxOperation,
@@ -372,27 +373,67 @@ mod tests {
         assert!(!example.command.contains("\n+"));
     }
 
+    /// The JSON a POSIX shell hands to curl for the `-d` argument.
+    fn sandbox_request_body(command: &str) -> serde_json::Value {
+        let quoted = command.split_once(" -d ").map(|(_, body)| body).unwrap();
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("printf %s {quoted}"))
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        serde_json::from_slice(&output.stdout).unwrap()
+    }
+
+    #[test]
+    fn sandbox_create_example_posts_an_empty_body() {
+        let example = sandbox_example(
+            "https://api.alien.dev".to_string(),
+            SandboxOperation::Create,
+            None,
+            "echo hello",
+        )
+        .unwrap();
+        assert!(example
+            .command
+            .starts_with("curl -X POST \"https://sandbox.alien.dev/v1/sandboxes\""));
+        assert_eq!(
+            sandbox_request_body(&example.command),
+            serde_json::json!({})
+        );
+        assert_eq!(
+            example.required_environment,
+            vec!["ALIEN_SANDBOX_API_KEY", "CUSTOMER_ID"]
+        );
+    }
+
     #[test]
     fn sandbox_exec_example_keeps_the_command_inside_one_json_string() {
         let example = sandbox_example(
             "https://api.alien.dev".to_string(),
             SandboxOperation::Exec,
             None,
-            "echo 'it''s' && python3 -V",
+            "echo \"it's\" && python3 -V",
         )
         .unwrap();
         assert!(example.command.starts_with(
             "curl -X POST \"https://sandbox.alien.dev/v1/sandboxes/$SANDBOX_ID/exec\""
         ));
-        assert!(example.command.contains("$ALIEN_SANDBOX_API_KEY"));
         assert!(example
             .command
             .contains("X-Alien-External-ID: $CUSTOMER_ID"));
         assert_eq!(
+            sandbox_request_body(&example.command),
+            serde_json::json!({
+                "command": "sh",
+                "args": ["-c", "echo \"it's\" && python3 -V"],
+                "timeoutMs": 30_000
+            })
+        );
+        assert_eq!(
             example.required_environment,
             vec!["ALIEN_SANDBOX_API_KEY", "SANDBOX_ID", "CUSTOMER_ID"]
         );
-        assert!(!example.command.contains("\n+"));
     }
 
     #[test]
@@ -408,6 +449,8 @@ mod tests {
             "curl -X DELETE \"https://sandbox.staging.alien.dev/v1/sandboxes/$SANDBOX_ID\""
         ));
         assert!(!example.command.contains("-d "));
+        assert!(!example.command.contains("Content-Type"));
+        assert!(example.command.contains("X-Alien-External-ID: org_123"));
         assert_eq!(
             example.required_environment,
             vec!["ALIEN_SANDBOX_API_KEY", "SANDBOX_ID"]
