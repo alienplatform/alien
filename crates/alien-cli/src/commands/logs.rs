@@ -32,7 +32,8 @@ const DEFAULT_LOG_SEARCH_FIELDS: &[&str] = &["body.message"];
     alien logs --deployment acme/production --follow
     alien logs --source ai-gateway --status provider-error --provider anthropic
     alien logs --source ai-gateway --model byo/claude-opus-5 --since 24h --json
-    alien logs --source encryption-gateway --status failed --operation decrypt"
+    alien logs --source encryption-gateway --status failed --operation decrypt
+    alien logs --source remote-sandbox --since 1h"
 )]
 pub struct LogsArgs {
     /// Deployment ID, or <deployment-group-name>/<deployment-name>.
@@ -130,6 +131,7 @@ pub enum LogSource {
     Application,
     AiGateway,
     EncryptionGateway,
+    RemoteSandbox,
 }
 
 impl LogSource {
@@ -138,6 +140,7 @@ impl LogSource {
             Self::Application => "application",
             Self::AiGateway => "ai-gateway",
             Self::EncryptionGateway => "encryption-gateway",
+            Self::RemoteSandbox => "sandbox-gateway",
         }
     }
 }
@@ -1205,6 +1208,13 @@ mod tests {
         let query = test_query("*", &[], None, true, Some(LogSource::AiGateway)).unwrap();
 
         assert_eq!(query, "attributes.alien\\.log\\.source:\"ai-gateway\"");
+    }
+
+    #[test]
+    fn remote_sandbox_source_reads_the_records_its_gateway_writes() {
+        let query = test_query("*", &[], None, true, Some(LogSource::RemoteSandbox)).unwrap();
+
+        assert_eq!(query, "attributes.alien\\.log\\.source:\"sandbox-gateway\"");
     }
 
     #[test]
