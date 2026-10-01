@@ -185,6 +185,10 @@ struct InstalledBundle {
     chart_images: BTreeMap<String, SiteImage>,
     telemetry_ack: Option<i64>,
     inventory: BTreeSet<String>,
+    /// The site registry the images were pushed to. Images are pinned by
+    /// digest, so this only says where to find them.
+    #[serde(default)]
+    registry: Option<String>,
 }
 
 /// An image in the site registry, as Helm values name it.
@@ -321,7 +325,13 @@ pub async fn rollback_command(args: RollbackArgs) -> Result<()> {
             message: format!("{} is for another deployment", previous.display()),
         }));
     }
-    let record = installed_record(&manifest, &settings, record.inventory)?;
+    // Images stay where this release was installed from, even if the
+    // site's registry setting changed since.
+    let registry = record
+        .registry
+        .clone()
+        .unwrap_or_else(|| settings.registry.clone());
+    let record = installed_record(&manifest, &registry, record.inventory)?;
     let mut target: serde_json::Value = serde_json::from_slice(
         &std::fs::read(previous.join(airgap::TARGET_FILE))
             .into_alien_error()
@@ -331,7 +341,7 @@ pub async fn rollback_command(args: RollbackArgs) -> Result<()> {
     .context(config_error("parsing the saved target"))?;
     airgap::rewrite_references(
         &mut target,
-        &airgap::site_references(&manifest.images, &settings.registry),
+        &airgap::site_references(&manifest.images, &registry),
     );
     let work = tempfile::tempdir()
         .into_alien_error()
@@ -1306,7 +1316,7 @@ async fn install_pending(
     airgap::rewrite_references(&mut target, &mapping);
     let record = installed_record(
         &manifest,
-        settings,
+        &settings.registry,
         airgap::blob_inventory(&work.path().join(airgap::OCI_DIR), &manifest.images)
             .await
             .context(config_error("listing the update's layers"))?,
@@ -1413,7 +1423,7 @@ async fn install_pending(
 /// where each image the chart runs lives in the site registry.
 fn installed_record(
     manifest: &BundleManifest,
-    settings: &SiteSide,
+    registry: &str,
     inventory: BTreeSet<String>,
 ) -> Result<InstalledBundle> {
     let mut chart_images = BTreeMap::new();
@@ -1431,11 +1441,7 @@ fn installed_record(
         chart_images.insert(
             key.clone(),
             SiteImage {
-                repository: format!(
-                    "{}/{}",
-                    settings.registry.trim_end_matches('/'),
-                    image.repository
-                ),
+                repository: format!("{}/{}", registry.trim_end_matches('/'), image.repository),
                 tag: format!(
                     "{}@{}",
                     image.tag.as_deref().unwrap_or("latest"),
@@ -1457,6 +1463,7 @@ fn installed_record(
         chart_images,
         telemetry_ack: manifest.telemetry_ack,
         inventory,
+        registry: Some(registry.to_string()),
     })
 }
 
