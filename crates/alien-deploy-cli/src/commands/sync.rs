@@ -1967,9 +1967,11 @@ async fn write_pull_secret(
     let secret_name = pull_secret_name(stack_id);
     let registry_host = registry_host(&settings.registry);
     let auth = base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
-    let config = serde_json::json!({
-        "auths": { registry_host: { "username": username, "password": password, "auth": auth } }
-    });
+    // Credentials for other registries stay: a rollback may return to a
+    // release whose images are in a registry the site used before.
+    let mut config = stored_registry_config(settings, stack_id, namespace).await?;
+    config["auths"][registry_host] =
+        serde_json::json!({ "username": username, "password": password, "auth": auth });
     let dir = tempfile::tempdir()
         .into_alien_error()
         .context(config_error("creating a working directory"))?;
@@ -2019,6 +2021,24 @@ async fn stored_pull_credentials(
     stack_id: &str,
     namespace: &str,
 ) -> Result<Option<(String, String)>> {
+    let config = stored_registry_config(settings, stack_id, namespace).await?;
+    let auth = &config["auths"][registry_host(&settings.registry)];
+    Ok(
+        match (auth["username"].as_str(), auth["password"].as_str()) {
+            (Some(username), Some(password)) => Some((username.to_string(), password.to_string())),
+            _ => None,
+        },
+    )
+}
+
+/// The Docker config in the install's pull Secret, with credentials for each
+/// registry the site has used. Empty before the first install with
+/// credentials.
+async fn stored_registry_config(
+    settings: &SiteSide,
+    stack_id: &str,
+    namespace: &str,
+) -> Result<serde_json::Value> {
     let mut cmd = kubectl(settings.kube_context.as_deref());
     cmd.args([
         "get",
@@ -2034,23 +2054,16 @@ async fn stored_pull_credentials(
         .trim()
         .to_string();
     if encoded.is_empty() {
-        return Ok(None);
+        return Ok(serde_json::json!({ "auths": {} }));
     }
-    let config: serde_json::Value = serde_json::from_slice(
+    serde_json::from_slice(
         &base64::engine::general_purpose::STANDARD
             .decode(&encoded)
             .into_alien_error()
             .context(config_error("decoding the stored registry credentials"))?,
     )
     .into_alien_error()
-    .context(config_error("parsing the stored registry credentials"))?;
-    let auth = &config["auths"][registry_host(&settings.registry)];
-    Ok(
-        match (auth["username"].as_str(), auth["password"].as_str()) {
-            (Some(username), Some(password)) => Some((username.to_string(), password.to_string())),
-            _ => None,
-        },
-    )
+    .context(config_error("parsing the stored registry credentials"))
 }
 
 fn pull_secret_name(stack_id: &str) -> String {

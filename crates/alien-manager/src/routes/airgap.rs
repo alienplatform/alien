@@ -380,6 +380,12 @@ async fn status_report(
     // Batches the manager already passed on (a report sent again after a
     // lost response, or overlapping reports) are skipped. The mark advances
     // after each batch, so a failure part-way keeps what went through.
+    //
+    // A single mark is enough because a site exports everything its
+    // Operator holds after the last acknowledgement, and the Operator frees
+    // only what an acknowledgement covers (at most this mark). Any later
+    // report therefore contains every batch an earlier one had that the
+    // manager hasn't confirmed, so a batch below the mark has been received.
     let mark_key = telemetry_mark_key(&deployment.id);
     let mut through = match read_telemetry_mark(&state, &mark_key).await {
         Ok(mark) => mark,
