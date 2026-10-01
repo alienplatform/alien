@@ -117,9 +117,12 @@ pub struct DeploymentRoutingResponse {
 }
 
 /// The release a deployment should run: its pin, else its channel's release.
-/// Without channels, the release the manager already chose for it. Else the
-/// latest release. `deployment` is `None` for one being created, which
-/// follows the default channel.
+/// A channel with no release yet sends nothing, so a deployment never runs a
+/// release published to another channel; only the default channel falls back
+/// to the latest release (a manager that had releases before it had
+/// channels). Without channels, the release the manager already chose for
+/// it, else the latest release. `deployment` is `None` for one being
+/// created, which follows the default channel.
 pub(crate) async fn release_for_deployment(
     state: &AppState,
     subject: &Subject,
@@ -142,6 +145,9 @@ pub(crate) async fn release_for_deployment(
         };
         if let Some(release_id) = release_id {
             return state.release_store.get_release(subject, &release_id).await;
+        }
+        if routing.channel != DEFAULT_CHANNEL {
+            return Ok(None);
         }
     } else if let Some(release_id) = deployment.and_then(|d| d.desired_release_id.as_deref()) {
         return state.release_store.get_release(subject, release_id).await;
