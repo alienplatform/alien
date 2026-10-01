@@ -238,6 +238,37 @@ fn representative_public_url(
         })
 }
 
+/// A group id as given, or the id of the one group with that name. A value that is neither is
+/// returned unchanged, so the filter matches nothing, as before.
+async fn resolve_deployment_group_id(
+    state: &AppState,
+    subject: &crate::auth::Subject,
+    id_or_name: String,
+) -> Result<String, alien_error::AlienError> {
+    if state
+        .deployment_store
+        .get_deployment_group(subject, &id_or_name)
+        .await?
+        .is_some()
+    {
+        return Ok(id_or_name);
+    }
+    let mut named = state
+        .deployment_store
+        .list_deployment_groups(subject)
+        .await?
+        .into_iter()
+        .filter(|group| group.name == id_or_name);
+    match (named.next(), named.next()) {
+        (Some(group), None) => Ok(group.id),
+        (Some(_), Some(_)) => Err(ErrorData::bad_request(format!(
+            "More than one deployment group is named '{id_or_name}'; filter by its ID"
+        ))
+        .into_generic()),
+        (None, _) => Ok(id_or_name),
+    }
+}
+
 // --- Router ---
 
 pub fn router() -> Router<AppState> {
@@ -600,6 +631,17 @@ async fn list_deployments(
             return ErrorData::forbidden("Telemetry credentials cannot list deployments")
                 .into_response();
         }
+    };
+
+    // The filter takes a group id or, as the platform's does, a group name: `<group>/<name>`
+    // deployment specs pass whatever the user typed, and `alien dev` names its group
+    // `local-dev` under a generated id.
+    let deployment_group_id = match deployment_group_id {
+        Some(id_or_name) => match resolve_deployment_group_id(&state, &subject, id_or_name).await {
+            Ok(id) => Some(id),
+            Err(e) => return e.into_response(),
+        },
+        None => None,
     };
 
     if query.name.is_some() && deployment_group_id.is_none() {
@@ -1097,6 +1139,21 @@ mod tests {
             .in_sequence(&mut sequence)
             .return_once(move |_, _| Ok(deployment_remains.then_some(deployment)));
 
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/deployments/deployment-1/delete")
+            .header(http::header::AUTHORIZATION, "Bearer test-token")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"action":"cleanup"}"#))
+            .expect("request should build");
+        send(deployment_store, request).await
+    }
+
+    /// Serve `request` through the deployments router over `deployment_store`.
+    async fn send(
+        deployment_store: MockDeploymentStore,
+        request: Request<Body>,
+    ) -> (StatusCode, serde_json::Value) {
         let temp = tempfile::tempdir().expect("test directory should be created");
         let kv: Arc<dyn alien_bindings::traits::Kv> = Arc::new(
             LocalKv::new(temp.path().join("kv"))
@@ -1143,13 +1200,6 @@ mod tests {
             ),
             import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
         };
-        let request = Request::builder()
-            .method("POST")
-            .uri("/v1/deployments/deployment-1/delete")
-            .header(http::header::AUTHORIZATION, "Bearer test-token")
-            .header(http::header::CONTENT_TYPE, "application/json")
-            .body(Body::from(r#"{"action":"cleanup"}"#))
-            .expect("request should build");
         let response = router()
             .with_state(state)
             .oneshot(request)
@@ -1164,6 +1214,54 @@ mod tests {
             status,
             serde_json::from_slice(&body).expect("response should contain JSON"),
         )
+    }
+
+    /// `<group>/<name>` specs send the group's name: `alien dev` names its group `local-dev`
+    /// under a generated id, and the list must find deployments in it.
+    #[tokio::test]
+    async fn list_resolves_a_deployment_group_by_name() {
+        let mut deployment_store = MockDeploymentStore::new();
+        deployment_store
+            .expect_get_deployment_group()
+            .returning(|_, _| Ok(None));
+        deployment_store
+            .expect_list_deployment_groups()
+            .returning(|_| {
+                Ok(vec![crate::traits::DeploymentGroupRecord {
+                    id: "dg_generated".to_string(),
+                    workspace_id: "default".to_string(),
+                    project_id: "default".to_string(),
+                    name: "local-dev".to_string(),
+                    max_deployments: 100,
+                    deployment_count: 1,
+                    created_at: Utc::now(),
+                }])
+            });
+        deployment_store
+            .expect_list_deployments()
+            .withf(|_, filter| {
+                filter.deployment_group_id.as_deref() == Some("dg_generated")
+                    && filter.name.as_deref() == Some("deployment-1")
+            })
+            .times(1)
+            .returning(|_, _| {
+                Ok(vec![DeploymentRecord {
+                    deployment_group_id: "dg_generated".to_string(),
+                    ..deployment_record()
+                }])
+            });
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/v1/deployments?deploymentGroupId=local-dev&name=deployment-1")
+            .header(http::header::AUTHORIZATION, "Bearer test-token")
+            .body(Body::empty())
+            .expect("request should build");
+        let (status, json) = send(deployment_store, request).await;
+
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["items"][0]["id"], "deployment-1");
+        assert_eq!(json["items"][0]["deploymentGroupId"], "dg_generated");
     }
 
     #[tokio::test]
