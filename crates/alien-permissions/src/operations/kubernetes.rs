@@ -239,8 +239,8 @@ pub fn collect(plugins: &[CatalogPlugin]) -> Vec<KubernetesGrant> {
 #[serde(rename_all = "camelCase")]
 pub enum OperatorFeature {
     /// Release-independent workloads the deployment owner requests through the
-    /// API. Only product charts whose stack approves dynamic container images
-    /// enable this.
+    /// API. Product charts retain this access to suspend or delete existing
+    /// workloads after an installed release withdraws image approvals.
     DynamicContainers,
     /// Pod log collection through the Kubernetes API (`podApi` mode).
     PodLogs,
@@ -268,7 +268,7 @@ pub struct OperatorRuntimeRule {
 /// the Helm generator and the permission review read the same list.
 pub fn operator_runtime_rules() -> Vec<OperatorRuntimeRule> {
     const INVENTORY: &str = "Workload inventory reported on every sync";
-    const DYNAMIC: &str = "Dynamic containers requested through the API after installation";
+    const DYNAMIC: &str = "Dynamic containers requested through the API, including suspension and cleanup after image approvals change";
     let list = ["list"];
     let manage = ["get", "list", "create", "update", "delete"];
     [

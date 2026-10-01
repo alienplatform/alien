@@ -66,8 +66,8 @@ pub struct ManagerFetchHelmValuesOptions<'a> {
 /// Renderers expose this value so callers can reject manifests produced by a
 /// generator with a different policy. Version 3 replaced the fixed read-only
 /// baseline with the Operator runtime rules. Version 4 binds the dynamic
-/// container Role only to product charts whose stack approves dynamic
-/// container images.
+/// container Role only to product charts, retaining access for cleanup when
+/// an installed release withdraws image approvals.
 pub const OPERATOR_RBAC_POLICY_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -233,13 +233,6 @@ pub fn generate_product_helm_chart_with_image_identity(
     )
 }
 
-/// Whether containers requested after installation can ever be admitted: the
-/// API accepts an image only from a repository the installed release approves.
-fn stack_approves_dynamic_containers(stack: &Stack) -> bool {
-    !stack.dynamic_container_repositories.is_empty()
-        || !stack.dynamic_container_image_resources.is_empty()
-}
-
 fn generate_helm_chart_internal(
     stack: &Stack,
     options: HelmOptions<'_>,
@@ -332,7 +325,7 @@ fn generate_helm_chart_internal(
     let has_remote_operator = remote_operator.is_some();
 
     if let Some((remote_operator, image_identity)) = remote_operator {
-        add_remote_operator_files(&mut files, stack, remote_operator, image_identity)?;
+        add_remote_operator_files(&mut files, remote_operator, image_identity)?;
     }
 
     // Per-resource extra templates contributed by emitters.
@@ -384,7 +377,6 @@ fn generate_helm_chart_internal(
 
 fn add_remote_operator_files(
     files: &mut IndexMap<String, String>,
-    stack: &Stack,
     mut options: ProductOperatorManifestOptions<'_>,
     image_identity: Option<OperatorImageIdentityOptions<'_>>,
 ) -> Result<()> {
@@ -488,7 +480,7 @@ fn add_remote_operator_files(
         Some("{{ include \"deployment.remoteOperatorIdentityInitializedName\" . }}"),
         Some("{{ include \"deployment.remoteOperatorLogCollectorName\" . }}"),
         image_identity,
-        stack_approves_dynamic_containers(stack),
+        true,
     )?;
     let mut crd = None;
     let mut templates = Vec::new();
@@ -1835,9 +1827,9 @@ pub fn generate_product_operator_manifest_with_image_identity(
 }
 
 /// `dynamic_containers` binds the dynamic container Role. Only a product chart
-/// whose stack approves dynamic container images passes `true`: a standalone
-/// Remote Operator has no installed release that could approve an image, so
-/// the API never schedules containers on it.
+/// passes `true`: it must still reconcile saved workloads after a release
+/// withdraws image approvals. A standalone Remote Operator has no installed
+/// release that could approve an image, so it never receives this access.
 fn generate_product_operator_manifest_with_identity_marker(
     options: ProductOperatorManifestOptions<'_>,
     identity_initialized_config_map: Option<&str>,
@@ -9604,15 +9596,18 @@ remoteOperator:
             );
             unnamed
         };
-        // Default values: no log collection, no approved dynamic container images.
+        // Product installs retain cleanup access even without approved images.
         let docs = rendered_product_release(sample_product_chart(), &product_release_values(None));
-        assert_eq!(bound_grants(&docs), reviewed_grants(&[]));
+        assert_eq!(
+            bound_grants(&docs),
+            reviewed_grants(&[OperatorFeature::DynamicContainers])
+        );
         assert_eq!(
             operator_env_value(
                 &remote_operator_deployment(&docs),
                 "OPERATOR_DYNAMIC_CONTAINERS"
             ),
-            None
+            Some("true")
         );
 
         // Pod API log collection binds the pod-log Role; the node collector does not.
@@ -9622,16 +9617,18 @@ remoteOperator:
         );
         assert_eq!(
             bound_grants(&docs),
-            reviewed_grants(&[OperatorFeature::PodLogs])
+            reviewed_grants(&[OperatorFeature::DynamicContainers, OperatorFeature::PodLogs])
         );
         let docs = rendered_product_release(
             sample_product_chart_with_collector(true),
             &product_release_values(Some("nodeAgent")),
         );
-        assert_eq!(bound_grants(&docs), reviewed_grants(&[]));
+        assert_eq!(
+            bound_grants(&docs),
+            reviewed_grants(&[OperatorFeature::DynamicContainers])
+        );
 
-        // A stack that approves dynamic container images binds the dynamic
-        // container Role and tells the Operator to report the capability.
+        // Approved images can run with the same retained access used for cleanup.
         let docs = rendered_product_release(
             product_chart_for_stack(&dynamic_container_stack(), true, None),
             &product_release_values(Some("podApi")),
@@ -9656,6 +9653,21 @@ remoteOperator:
             })
             .expect("dynamic container Role");
         assert_eq!(dynamic_role["metadata"]["namespace"], "default");
+
+        // Updating the same product release to an empty approval list must keep
+        // every grant and the capability needed to suspend/delete old workloads.
+        let withdrawn = rendered_product_release(
+            sample_product_chart_with_collector(true),
+            &product_release_values(Some("podApi")),
+        );
+        assert_eq!(bound_grants(&withdrawn), bound_grants(&docs));
+        assert_eq!(
+            operator_env_value(
+                &remote_operator_deployment(&withdrawn),
+                "OPERATOR_DYNAMIC_CONTAINERS"
+            ),
+            Some("true")
+        );
     }
 
     #[test]
