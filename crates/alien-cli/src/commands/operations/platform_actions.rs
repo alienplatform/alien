@@ -16,6 +16,7 @@ use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::commands::access_requests::{approval_outcome, not_approved_error, ApprovalOutcome};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::print_json;
@@ -446,19 +447,12 @@ async fn request_access_then_reinvoke(
             }
         }
 
-        match request.status {
-            alien_platform_api::types::AccessRequestStatus::CustomerApproved => break,
-            alien_platform_api::types::AccessRequestStatus::Rejected
-            | alien_platform_api::types::AccessRequestStatus::Expired => {
-                return Err(AlienError::new(ErrorData::ApiRequestFailed {
-                    message: format!(
-                        "access request '{}' is '{}', not approved",
-                        created.id, request.status
-                    ),
-                    url: None,
-                }));
+        match approval_outcome(request.status) {
+            ApprovalOutcome::Approved => break,
+            ApprovalOutcome::Closed => {
+                return Err(not_approved_error(&created.id, request.status));
             }
-            _ => {}
+            ApprovalOutcome::Pending => {}
         }
         if std::time::Instant::now() >= deadline {
             return Err(AlienError::new(ErrorData::ApiRequestFailed {

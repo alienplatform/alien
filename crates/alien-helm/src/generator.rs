@@ -2796,7 +2796,7 @@ spec:
               properties:
                 state:
                   type: string
-                  description: PENDING_APPROVAL | APPROVED | EXPIRED
+                  description: PENDING_APPROVAL | APPROVED | EXPIRED | REVOKED
                 commandCount:
                   type: integer
                   description: Number of commands this grant covers.
