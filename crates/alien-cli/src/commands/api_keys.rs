@@ -73,7 +73,7 @@ pub enum ApiKeyPurpose {
     EncryptionGateway,
     Deployments,
     RemoteBindings,
-    SandboxGateway,
+    RemoteSandbox,
     ReadOnly,
 }
 
@@ -250,7 +250,7 @@ impl ApiKeyPurpose {
             Self::EncryptionGateway => ProjectRole::ProjectEncryption,
             Self::Deployments => ProjectRole::ProjectDeveloper,
             Self::RemoteBindings => ProjectRole::ProjectRemoteBindings,
-            Self::SandboxGateway => ProjectRole::ProjectSandboxGateway,
+            Self::RemoteSandbox => ProjectRole::ProjectSandboxGateway,
             Self::ReadOnly => ProjectRole::ProjectViewer,
         }
     }

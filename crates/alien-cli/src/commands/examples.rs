@@ -16,8 +16,8 @@ use crate::output::print_json;
     alien examples ai-gateway --protocol openai-responses --json
     alien examples ai-gateway --protocol anthropic-messages
     alien examples encryption-gateway --operation encrypt
-    alien examples sandbox-gateway --operation create
-    alien examples sandbox-gateway --operation exec --command 'python3 --version'"
+    alien examples remote-sandbox --operation create
+    alien examples remote-sandbox --operation exec --command 'python3 --version'"
 )]
 pub struct ExamplesArgs {
     /// Emit the example and metadata as JSON
@@ -51,14 +51,14 @@ pub enum ExampleCommand {
         #[arg(long, default_value = "customer-data")]
         key_id: String,
     },
-    /// Generate a Sandbox Gateway request. Create returns the `sandboxId` exec and delete take.
-    SandboxGateway {
+    /// Generate a Remote Sandbox request
+    RemoteSandbox {
         #[arg(long, value_enum, default_value_t = SandboxOperation::Create)]
         operation: SandboxOperation,
         /// Literal external ID. Omit to use the $CUSTOMER_ID environment variable.
         #[arg(long)]
         external_id: Option<String>,
-        /// Shell command the exec example runs inside the sandbox
+        /// Shell command the exec example runs inside the sandbox (exec and delete take the `sandboxId` create returns)
         #[arg(long, default_value = "echo hello")]
         command: String,
     },
@@ -108,7 +108,7 @@ pub fn examples_task(args: ExamplesArgs, ctx: ExecutionMode) -> Result<()> {
             external_id,
             key_id,
         } => encryption_example(ctx.base_url(), operation, external_id.as_deref(), &key_id)?,
-        ExampleCommand::SandboxGateway {
+        ExampleCommand::RemoteSandbox {
             operation,
             external_id,
             command,
@@ -268,7 +268,7 @@ fn sandbox_example(
             serde_json::to_string_pretty(&body)
                 .into_alien_error()
                 .context(ErrorData::ConfigurationError {
-                    message: "Failed to render Sandbox Gateway example".to_string(),
+                    message: "Failed to render Remote Sandbox example".to_string(),
                 })
         })
         .transpose()?;
@@ -284,7 +284,7 @@ fn sandbox_example(
         "curl -X {method} \"{endpoint}{path}\" \\\n  -H \"Authorization: Bearer $ALIEN_SANDBOX_API_KEY\" \\\n  -H \"X-Alien-External-ID: {customer_header}\"{body_lines}"
     );
     Ok(ExampleOutput {
-        service: "sandbox-gateway",
+        service: "remote-sandbox",
         endpoint,
         command,
         required_environment,
