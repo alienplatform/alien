@@ -23,8 +23,6 @@ export type RemoteOperatorPermissionPluginAw = {
 
 export const RemoteOperatorPermissionPluginScope = {
   ProjectsDollarProjectName: "projects/${projectName}",
-  ProjectsDollarProjectNameBucketsDollarResourceName:
-    "projects/${projectName}/buckets/${resourceName}",
 } as const;
 export type RemoteOperatorPermissionPluginScope = ClosedEnum<
   typeof RemoteOperatorPermissionPluginScope

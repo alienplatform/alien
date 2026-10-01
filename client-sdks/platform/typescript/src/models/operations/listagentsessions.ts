@@ -11,25 +11,16 @@ export type ListAgentSessionsGlobals = {
   workspace?: string | undefined;
 };
 
-export type ListAgentSessionsRequest = {
-  /**
-   * Only sessions bound to this project. Omit to list the whole workspace.
-   */
-  project?: string | undefined;
-};
+export type ListAgentSessionsRequest = {};
 
 /** @internal */
-export type ListAgentSessionsRequest$Outbound = {
-  project?: string | undefined;
-};
+export type ListAgentSessionsRequest$Outbound = {};
 
 /** @internal */
 export const ListAgentSessionsRequest$outboundSchema: z.ZodType<
   ListAgentSessionsRequest$Outbound,
   ListAgentSessionsRequest
-> = z.object({
-  project: z.string().optional(),
-});
+> = z.object({});
 
 export function listAgentSessionsRequestToJSON(
   listAgentSessionsRequest: ListAgentSessionsRequest,

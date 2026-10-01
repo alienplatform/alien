@@ -687,21 +687,14 @@ export type CreateProjectRegistry = {
 };
 
 export type CreateProjectAzure = {
-  registryImage?: string | undefined;
+  catalogImage: string;
   idleSuspendSeconds: number;
-};
-
-export type CreateProjectGcp = {
-  image?: string | undefined;
-  maxLifetimeSeconds: number;
 };
 
 export type CreateProjectRemoteSandbox = {
   enabled: true;
-  customImage?: string | undefined;
   baseImage?: string | undefined;
   azure?: CreateProjectAzure | undefined;
-  gcp?: CreateProjectGcp | undefined;
   maxLifetimeSeconds?: number | undefined;
 };
 
@@ -1732,7 +1725,7 @@ export const CreateProjectAzure$inboundSchema: z.ZodType<
   CreateProjectAzure,
   unknown
 > = z.object({
-  registryImage: z.string().optional(),
+  catalogImage: z.string(),
   idleSuspendSeconds: z.int(),
 });
 
@@ -1747,34 +1740,13 @@ export function createProjectAzureFromJSON(
 }
 
 /** @internal */
-export const CreateProjectGcp$inboundSchema: z.ZodType<
-  CreateProjectGcp,
-  unknown
-> = z.object({
-  image: z.string().optional(),
-  maxLifetimeSeconds: z.int(),
-});
-
-export function createProjectGcpFromJSON(
-  jsonString: string,
-): SafeParseResult<CreateProjectGcp, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CreateProjectGcp$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CreateProjectGcp' from JSON`,
-  );
-}
-
-/** @internal */
 export const CreateProjectRemoteSandbox$inboundSchema: z.ZodType<
   CreateProjectRemoteSandbox,
   unknown
 > = z.object({
   enabled: z.literal(true),
-  customImage: z.string().optional(),
   baseImage: z.string().optional(),
   azure: z.lazy(() => CreateProjectAzure$inboundSchema).optional(),
-  gcp: z.lazy(() => CreateProjectGcp$inboundSchema).optional(),
   maxLifetimeSeconds: z.int().optional(),
 });
 

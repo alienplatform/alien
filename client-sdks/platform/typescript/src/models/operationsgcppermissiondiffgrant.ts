@@ -14,26 +14,15 @@ import {
   OperationsPermissionDiffSource$outboundSchema,
 } from "./operationspermissiondiffsource.js";
 
-/**
- * Where setup grants the permission: the configured project, or each Cloud Storage bucket the installer lists.
- */
 export const OperationsGcpPermissionDiffGrantScope = {
   ProjectsDollarProjectName: "projects/${projectName}",
-  ProjectsDollarProjectNameBucketsDollarResourceName:
-    "projects/${projectName}/buckets/${resourceName}",
 } as const;
-/**
- * Where setup grants the permission: the configured project, or each Cloud Storage bucket the installer lists.
- */
 export type OperationsGcpPermissionDiffGrantScope = ClosedEnum<
   typeof OperationsGcpPermissionDiffGrantScope
 >;
 
 export type OperationsGcpPermissionDiffGrant = {
   permission: string;
-  /**
-   * Where setup grants the permission: the configured project, or each Cloud Storage bucket the installer lists.
-   */
   scope: OperationsGcpPermissionDiffGrantScope;
   sources: Array<OperationsPermissionDiffSource>;
 };

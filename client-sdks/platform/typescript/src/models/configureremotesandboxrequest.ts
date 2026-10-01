@@ -4,17 +4,47 @@
 
 import * as z from "zod/v4";
 
+export type ConfigureRemoteSandboxRequestAzure = {
+  catalogImage: string;
+  idleSuspendSeconds: number;
+};
+
 export type ConfigureRemoteSandboxRequest = {
-  customImage?: string | undefined;
+  baseImage?: string | undefined;
+  azure?: ConfigureRemoteSandboxRequestAzure | undefined;
   maxLifetimeSeconds?: number | undefined;
-  azureIdleSuspendSeconds?: number | undefined;
 };
 
 /** @internal */
+export type ConfigureRemoteSandboxRequestAzure$Outbound = {
+  catalogImage: string;
+  idleSuspendSeconds: number;
+};
+
+/** @internal */
+export const ConfigureRemoteSandboxRequestAzure$outboundSchema: z.ZodType<
+  ConfigureRemoteSandboxRequestAzure$Outbound,
+  ConfigureRemoteSandboxRequestAzure
+> = z.object({
+  catalogImage: z.string(),
+  idleSuspendSeconds: z.int(),
+});
+
+export function configureRemoteSandboxRequestAzureToJSON(
+  configureRemoteSandboxRequestAzure: ConfigureRemoteSandboxRequestAzure,
+): string {
+  return JSON.stringify(
+    ConfigureRemoteSandboxRequestAzure$outboundSchema.parse(
+      configureRemoteSandboxRequestAzure,
+    ),
+  );
+}
+
+/** @internal */
 export type ConfigureRemoteSandboxRequest$Outbound = {
-  customImage?: string | undefined;
+  baseImage?: string | undefined;
+  azure?: ConfigureRemoteSandboxRequestAzure$Outbound | undefined;
   maxLifetimeSeconds?: number | undefined;
-  azureIdleSuspendSeconds?: number | undefined;
 };
 
 /** @internal */
@@ -22,9 +52,10 @@ export const ConfigureRemoteSandboxRequest$outboundSchema: z.ZodType<
   ConfigureRemoteSandboxRequest$Outbound,
   ConfigureRemoteSandboxRequest
 > = z.object({
-  customImage: z.string().optional(),
+  baseImage: z.string().optional(),
+  azure: z.lazy(() => ConfigureRemoteSandboxRequestAzure$outboundSchema)
+    .optional(),
   maxLifetimeSeconds: z.int().optional(),
-  azureIdleSuspendSeconds: z.int().optional(),
 });
 
 export function configureRemoteSandboxRequestToJSON(

@@ -23,37 +23,26 @@ let value: ApproveAccessRequestResponse = {
     },
   },
   remediationPlanId: "<id>",
-  agentSessionId: "<id>",
   title: "<value>",
   reason: "<value>",
-  commands: [],
+  commands: [
+    {
+      command: "kubernetes/get-pods",
+      summary: "List pods in the ingestion namespace",
+      params: {
+        "pod": "ingester-p4kwm",
+      },
+    },
+  ],
   operationPattern: "<value>",
-  maxRisk: null,
+  maxRisk: "read-only",
   debugGrant: {
-    tool: "gcloud",
+    tool: "kubectl",
     namespace: "braintrust",
     cloudScope: "123456789012/prod-readonly",
   },
   status: "pending-approval",
   approvedUntil: "<value>",
-  createdAt: "1707614278049",
-  queuedBy: "<value>",
-  queuedAt: "<value>",
-  approvedBy: {
-    method: "<value>",
-    actorId: "<id>",
-    at: "<value>",
-  },
-  deniedBy: {
-    actorId: "<id>",
-    at: "<value>",
-  },
-  revokedBy: {
-    actorKind: "serviceAccount",
-    actorId: "<id>",
-    at: "<value>",
-    reason: "<value>",
-  },
   approvalMethod: "slack",
 };
 ```
@@ -69,7 +58,6 @@ let value: ApproveAccessRequestResponse = {
 | `deploymentId`                                                                                               | *string*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
 | `deployment`                                                                                                 | [operations.ApproveAccessRequestDeployment](../../models/operations/approveaccessrequestdeployment.md)       | :heavy_minus_sign:                                                                                           | N/A                                                                                                          |                                                                                                              |
 | `remediationPlanId`                                                                                          | *string*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
-| `agentSessionId`                                                                                             | *string*                                                                                                     | :heavy_check_mark:                                                                                           | The investigation whose remediation plan proposed this request, if a plan did.                               |                                                                                                              |
 | `title`                                                                                                      | *string*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
 | `reason`                                                                                                     | *string*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
 | `commands`                                                                                                   | [operations.ApproveAccessRequestCommand](../../models/operations/approveaccessrequestcommand.md)[]           | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
@@ -78,10 +66,4 @@ let value: ApproveAccessRequestResponse = {
 | `debugGrant`                                                                                                 | [models.AccessRequestDebugGrant](../../models/accessrequestdebuggrant.md)                                    | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
 | `status`                                                                                                     | [models.AccessRequestStatus](../../models/accessrequeststatus.md)                                            | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
 | `approvedUntil`                                                                                              | *string*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
-| `createdAt`                                                                                                  | *string*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
-| `queuedBy`                                                                                                   | *string*                                                                                                     | :heavy_check_mark:                                                                                           | Who passed the engineer gate; the requester for a plan-less request.                                         |                                                                                                              |
-| `queuedAt`                                                                                                   | *string*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
-| `approvedBy`                                                                                                 | [operations.ApproveAccessRequestApprovedBy](../../models/operations/approveaccessrequestapprovedby.md)       | :heavy_check_mark:                                                                                           | How and when the customer gate was passed. Null until approved.                                              |                                                                                                              |
-| `deniedBy`                                                                                                   | [operations.ApproveAccessRequestDeniedBy](../../models/operations/approveaccessrequestdeniedby.md)           | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
-| `revokedBy`                                                                                                  | [operations.ApproveAccessRequestRevokedBy](../../models/operations/approveaccessrequestrevokedby.md)         | :heavy_check_mark:                                                                                           | N/A                                                                                                          |                                                                                                              |
 | `approvalMethod`                                                                                             | *string*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          | slack                                                                                                        |

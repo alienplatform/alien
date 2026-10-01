@@ -5,12 +5,11 @@
 ```typescript
 import { OperationsPluginOperationScope } from "@alienplatform/platform-api/models";
 
-let value: OperationsPluginOperationScope =
-  "projects/${projectName}/buckets/${resourceName}";
+let value: OperationsPluginOperationScope = "projects/${projectName}";
 ```
 
 ## Values
 
 ```typescript
-"projects/${projectName}" | "projects/${projectName}/buckets/${resourceName}"
+"projects/${projectName}"
 ```

@@ -14,7 +14,7 @@ let value: DataStorage = {
         {
           message: "<value>",
           reason: "collection-failed",
-          severity: "warning",
+          severity: "error",
           source: "<value>",
         },
       ],

@@ -42,10 +42,6 @@ import {
   DeploymentGroupInfo$inboundSchema,
 } from "./deploymentgroupinfo.js";
 import {
-  DeploymentOperatorSyncPlugin,
-  DeploymentOperatorSyncPlugin$inboundSchema,
-} from "./deploymentoperatorsyncplugin.js";
-import {
   DeploymentOperatorSyncStatus,
   DeploymentOperatorSyncStatus$inboundSchema,
 } from "./deploymentoperatorsyncstatus.js";
@@ -729,7 +725,7 @@ export type DeploymentDetailResponseSetupScaffolding = {
  */
 export type DeploymentDetailResponseSetupUpdateAuthorization = {
   /**
-   * Setup-owned digest (`Stack::setup_owned_digest`) of the last successful deployment.
+   * Frozen resource projection from the last successful deployment.
    */
   baselineFrozenDigest: string;
   /**
@@ -753,7 +749,7 @@ export type DeploymentDetailResponseSetupUpdateAuthorization = {
    */
   setupTarget: string;
   /**
-   * Setup-owned digest (`Stack::setup_owned_digest`) of the stack the setup re-import prepared.
+   * Frozen resource projection prepared by the setup re-import.
    */
   targetFrozenDigest: string;
 };
@@ -989,10 +985,6 @@ export type OperatorSync = {
    * Expected `plugin/operation` names not reported by the Operator (catalog-mismatch only)
    */
   missingOperations?: Array<string> | null | undefined;
-  /**
-   * Enabled plugins compared with what the Operator last reported loading. Null when the sync fingerprints cannot be read.
-   */
-  plugins?: Array<DeploymentOperatorSyncPlugin> | null | undefined;
   targetSetAt: Date;
   observedAt?: Date | null | undefined;
 };
@@ -2321,8 +2313,6 @@ export const OperatorSync$inboundSchema: z.ZodType<OperatorSync, unknown> = z
     targetBundleHash: z.string(),
     observedBundleHash: z.nullable(z.string()).optional(),
     missingOperations: z.nullable(z.array(z.string())).optional(),
-    plugins: z.nullable(z.array(DeploymentOperatorSyncPlugin$inboundSchema))
-      .optional(),
     targetSetAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
     observedAt: z.nullable(
       z.iso.datetime({ offset: true }).transform(v => new Date(v)),

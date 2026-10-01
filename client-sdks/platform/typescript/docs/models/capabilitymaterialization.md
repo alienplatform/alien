@@ -17,7 +17,7 @@ let value: CapabilityMaterialization = {
   },
   packages: [
     {
-      type: "terraform",
+      type: "cloudformation",
       status: "failed",
     },
   ],

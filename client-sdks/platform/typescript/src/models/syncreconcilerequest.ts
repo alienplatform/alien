@@ -168,7 +168,7 @@ export type SyncReconcileRequestLifecycle4 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle4
 >;
 
-export type ResourceHeartbeatStatus4 = {
+export type SyncReconcileRequestStatus4 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue4>;
   health: SyncReconcileRequestHealth4;
   lifecycle: SyncReconcileRequestLifecycle4;
@@ -183,7 +183,7 @@ export type DataLocal1 = {
   path: string;
   pathExists: boolean;
   readonly?: boolean | null | undefined;
-  status: ResourceHeartbeatStatus4;
+  status: SyncReconcileRequestStatus4;
   backend: "local";
 };
 
@@ -238,7 +238,7 @@ export type SyncReconcileRequestLifecycle3 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle3
 >;
 
-export type ResourceHeartbeatStatus3 = {
+export type SyncReconcileRequestStatus3 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue3>;
   health: SyncReconcileRequestHealth3;
   lifecycle: SyncReconcileRequestLifecycle3;
@@ -272,7 +272,7 @@ export type DataAzureBlob = {
   secondaryLocation?: string | null | undefined;
   skuName?: string | null | undefined;
   skuTier?: string | null | undefined;
-  status: ResourceHeartbeatStatus3;
+  status: SyncReconcileRequestStatus3;
   statusOfPrimary?: string | null | undefined;
   statusOfSecondary?: string | null | undefined;
   storageAccountName?: string | null | undefined;
@@ -331,7 +331,7 @@ export type SyncReconcileRequestLifecycle2 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle2
 >;
 
-export type ResourceHeartbeatStatus2 = {
+export type SyncReconcileRequestStatus2 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue2>;
   health: SyncReconcileRequestHealth2;
   lifecycle: SyncReconcileRequestLifecycle2;
@@ -355,7 +355,7 @@ export type DataGcpCloudStorage = {
   retentionPolicyIsLocked?: boolean | null | undefined;
   softDeleteEffectiveTime?: string | null | undefined;
   softDeleteRetentionDurationSeconds?: string | null | undefined;
-  status: ResourceHeartbeatStatus2;
+  status: SyncReconcileRequestStatus2;
   storageClass?: string | null | undefined;
   uniformBucketLevelAccessEnabled?: boolean | null | undefined;
   uniformBucketLevelAccessLockedTime?: string | null | undefined;
@@ -414,7 +414,7 @@ export type SyncReconcileRequestLifecycle1 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle1
 >;
 
-export type ResourceHeartbeatStatus1 = {
+export type SyncReconcileRequestStatus1 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue1>;
   health: SyncReconcileRequestHealth1;
   lifecycle: SyncReconcileRequestLifecycle1;
@@ -438,7 +438,7 @@ export type DataAwsS3 = {
   publicAccessBlockPresent: boolean;
   region?: string | null | undefined;
   restrictPublicBuckets?: boolean | null | undefined;
-  status: ResourceHeartbeatStatus1;
+  status: SyncReconcileRequestStatus1;
   versioningEnabled?: boolean | null | undefined;
   versioningStatus?: string | null | undefined;
   backend: "awsS3";
@@ -543,21 +543,6 @@ export type ResourceHeartbeat = {
   resourceType: string;
 };
 
-export const DynamicContainerStatus = {
-  Pending: "pending",
-  Running: "running",
-  Failing: "failing",
-  Stopped: "stopped",
-} as const;
-export type DynamicContainerStatus = ClosedEnum<typeof DynamicContainerStatus>;
-
-export type DynamicContainer = {
-  name: string;
-  generation: number;
-  status: DynamicContainerStatus;
-  message?: string | undefined;
-};
-
 /**
  * Request to reconcile deployment state
  */
@@ -611,10 +596,6 @@ export type SyncReconcileRequest = {
    * Operations bundle set the Operator currently has loaded, for plugin-sync status tracking.
    */
   operationsReport?: OperationsReport | undefined;
-  /**
-   * Observed dynamic container generations from a Kubernetes Operator.
-   */
-  dynamicContainers?: Array<DynamicContainer> | undefined;
 };
 
 /** @internal */
@@ -685,7 +666,7 @@ export const SyncReconcileRequestLifecycle4$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle4);
 
 /** @internal */
-export type ResourceHeartbeatStatus4$Outbound = {
+export type SyncReconcileRequestStatus4$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue4$Outbound>;
   health: string;
   lifecycle: string;
@@ -695,9 +676,9 @@ export type ResourceHeartbeatStatus4$Outbound = {
 };
 
 /** @internal */
-export const ResourceHeartbeatStatus4$outboundSchema: z.ZodType<
-  ResourceHeartbeatStatus4$Outbound,
-  ResourceHeartbeatStatus4
+export const SyncReconcileRequestStatus4$outboundSchema: z.ZodType<
+  SyncReconcileRequestStatus4$Outbound,
+  SyncReconcileRequestStatus4
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue4$outboundSchema),
@@ -709,11 +690,13 @@ export const ResourceHeartbeatStatus4$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function resourceHeartbeatStatus4ToJSON(
-  resourceHeartbeatStatus4: ResourceHeartbeatStatus4,
+export function syncReconcileRequestStatus4ToJSON(
+  syncReconcileRequestStatus4: SyncReconcileRequestStatus4,
 ): string {
   return JSON.stringify(
-    ResourceHeartbeatStatus4$outboundSchema.parse(resourceHeartbeatStatus4),
+    SyncReconcileRequestStatus4$outboundSchema.parse(
+      syncReconcileRequestStatus4,
+    ),
   );
 }
 
@@ -724,7 +707,7 @@ export type DataLocal1$Outbound = {
   path: string;
   pathExists: boolean;
   readonly?: boolean | null | undefined;
-  status: ResourceHeartbeatStatus4$Outbound;
+  status: SyncReconcileRequestStatus4$Outbound;
   backend: "local";
 };
 
@@ -738,7 +721,7 @@ export const DataLocal1$outboundSchema: z.ZodType<
   path: z.string(),
   pathExists: z.boolean(),
   readonly: z.nullable(z.boolean()).optional(),
-  status: z.lazy(() => ResourceHeartbeatStatus4$outboundSchema),
+  status: z.lazy(() => SyncReconcileRequestStatus4$outboundSchema),
   backend: z.literal("local"),
 });
 
@@ -795,7 +778,7 @@ export const SyncReconcileRequestLifecycle3$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle3);
 
 /** @internal */
-export type ResourceHeartbeatStatus3$Outbound = {
+export type SyncReconcileRequestStatus3$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue3$Outbound>;
   health: string;
   lifecycle: string;
@@ -805,9 +788,9 @@ export type ResourceHeartbeatStatus3$Outbound = {
 };
 
 /** @internal */
-export const ResourceHeartbeatStatus3$outboundSchema: z.ZodType<
-  ResourceHeartbeatStatus3$Outbound,
-  ResourceHeartbeatStatus3
+export const SyncReconcileRequestStatus3$outboundSchema: z.ZodType<
+  SyncReconcileRequestStatus3$Outbound,
+  SyncReconcileRequestStatus3
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue3$outboundSchema),
@@ -819,11 +802,13 @@ export const ResourceHeartbeatStatus3$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function resourceHeartbeatStatus3ToJSON(
-  resourceHeartbeatStatus3: ResourceHeartbeatStatus3,
+export function syncReconcileRequestStatus3ToJSON(
+  syncReconcileRequestStatus3: SyncReconcileRequestStatus3,
 ): string {
   return JSON.stringify(
-    ResourceHeartbeatStatus3$outboundSchema.parse(resourceHeartbeatStatus3),
+    SyncReconcileRequestStatus3$outboundSchema.parse(
+      syncReconcileRequestStatus3,
+    ),
   );
 }
 
@@ -853,7 +838,7 @@ export type DataAzureBlob$Outbound = {
   secondaryLocation?: string | null | undefined;
   skuName?: string | null | undefined;
   skuTier?: string | null | undefined;
-  status: ResourceHeartbeatStatus3$Outbound;
+  status: SyncReconcileRequestStatus3$Outbound;
   statusOfPrimary?: string | null | undefined;
   statusOfSecondary?: string | null | undefined;
   storageAccountName?: string | null | undefined;
@@ -890,7 +875,7 @@ export const DataAzureBlob$outboundSchema: z.ZodType<
   secondaryLocation: z.nullable(z.string()).optional(),
   skuName: z.nullable(z.string()).optional(),
   skuTier: z.nullable(z.string()).optional(),
-  status: z.lazy(() => ResourceHeartbeatStatus3$outboundSchema),
+  status: z.lazy(() => SyncReconcileRequestStatus3$outboundSchema),
   statusOfPrimary: z.nullable(z.string()).optional(),
   statusOfSecondary: z.nullable(z.string()).optional(),
   storageAccountName: z.nullable(z.string()).optional(),
@@ -951,7 +936,7 @@ export const SyncReconcileRequestLifecycle2$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle2);
 
 /** @internal */
-export type ResourceHeartbeatStatus2$Outbound = {
+export type SyncReconcileRequestStatus2$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue2$Outbound>;
   health: string;
   lifecycle: string;
@@ -961,9 +946,9 @@ export type ResourceHeartbeatStatus2$Outbound = {
 };
 
 /** @internal */
-export const ResourceHeartbeatStatus2$outboundSchema: z.ZodType<
-  ResourceHeartbeatStatus2$Outbound,
-  ResourceHeartbeatStatus2
+export const SyncReconcileRequestStatus2$outboundSchema: z.ZodType<
+  SyncReconcileRequestStatus2$Outbound,
+  SyncReconcileRequestStatus2
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue2$outboundSchema),
@@ -975,11 +960,13 @@ export const ResourceHeartbeatStatus2$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function resourceHeartbeatStatus2ToJSON(
-  resourceHeartbeatStatus2: ResourceHeartbeatStatus2,
+export function syncReconcileRequestStatus2ToJSON(
+  syncReconcileRequestStatus2: SyncReconcileRequestStatus2,
 ): string {
   return JSON.stringify(
-    ResourceHeartbeatStatus2$outboundSchema.parse(resourceHeartbeatStatus2),
+    SyncReconcileRequestStatus2$outboundSchema.parse(
+      syncReconcileRequestStatus2,
+    ),
   );
 }
 
@@ -999,7 +986,7 @@ export type DataGcpCloudStorage$Outbound = {
   retentionPolicyIsLocked?: boolean | null | undefined;
   softDeleteEffectiveTime?: string | null | undefined;
   softDeleteRetentionDurationSeconds?: string | null | undefined;
-  status: ResourceHeartbeatStatus2$Outbound;
+  status: SyncReconcileRequestStatus2$Outbound;
   storageClass?: string | null | undefined;
   uniformBucketLevelAccessEnabled?: boolean | null | undefined;
   uniformBucketLevelAccessLockedTime?: string | null | undefined;
@@ -1026,7 +1013,7 @@ export const DataGcpCloudStorage$outboundSchema: z.ZodType<
   retentionPolicyIsLocked: z.nullable(z.boolean()).optional(),
   softDeleteEffectiveTime: z.nullable(z.string()).optional(),
   softDeleteRetentionDurationSeconds: z.nullable(z.string()).optional(),
-  status: z.lazy(() => ResourceHeartbeatStatus2$outboundSchema),
+  status: z.lazy(() => SyncReconcileRequestStatus2$outboundSchema),
   storageClass: z.nullable(z.string()).optional(),
   uniformBucketLevelAccessEnabled: z.nullable(z.boolean()).optional(),
   uniformBucketLevelAccessLockedTime: z.nullable(z.string()).optional(),
@@ -1091,7 +1078,7 @@ export const SyncReconcileRequestLifecycle1$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle1);
 
 /** @internal */
-export type ResourceHeartbeatStatus1$Outbound = {
+export type SyncReconcileRequestStatus1$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue1$Outbound>;
   health: string;
   lifecycle: string;
@@ -1101,9 +1088,9 @@ export type ResourceHeartbeatStatus1$Outbound = {
 };
 
 /** @internal */
-export const ResourceHeartbeatStatus1$outboundSchema: z.ZodType<
-  ResourceHeartbeatStatus1$Outbound,
-  ResourceHeartbeatStatus1
+export const SyncReconcileRequestStatus1$outboundSchema: z.ZodType<
+  SyncReconcileRequestStatus1$Outbound,
+  SyncReconcileRequestStatus1
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue1$outboundSchema),
@@ -1115,11 +1102,13 @@ export const ResourceHeartbeatStatus1$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function resourceHeartbeatStatus1ToJSON(
-  resourceHeartbeatStatus1: ResourceHeartbeatStatus1,
+export function syncReconcileRequestStatus1ToJSON(
+  syncReconcileRequestStatus1: SyncReconcileRequestStatus1,
 ): string {
   return JSON.stringify(
-    ResourceHeartbeatStatus1$outboundSchema.parse(resourceHeartbeatStatus1),
+    SyncReconcileRequestStatus1$outboundSchema.parse(
+      syncReconcileRequestStatus1,
+    ),
   );
 }
 
@@ -1139,7 +1128,7 @@ export type DataAwsS3$Outbound = {
   publicAccessBlockPresent: boolean;
   region?: string | null | undefined;
   restrictPublicBuckets?: boolean | null | undefined;
-  status: ResourceHeartbeatStatus1$Outbound;
+  status: SyncReconcileRequestStatus1$Outbound;
   versioningEnabled?: boolean | null | undefined;
   versioningStatus?: string | null | undefined;
   backend: "awsS3";
@@ -1164,7 +1153,7 @@ export const DataAwsS3$outboundSchema: z.ZodType<
   publicAccessBlockPresent: z.boolean(),
   region: z.nullable(z.string()).optional(),
   restrictPublicBuckets: z.nullable(z.boolean()).optional(),
-  status: z.lazy(() => ResourceHeartbeatStatus1$outboundSchema),
+  status: z.lazy(() => SyncReconcileRequestStatus1$outboundSchema),
   versioningEnabled: z.nullable(z.boolean()).optional(),
   versioningStatus: z.nullable(z.string()).optional(),
   backend: z.literal("awsS3"),
@@ -1413,38 +1402,6 @@ export function resourceHeartbeatToJSON(
 }
 
 /** @internal */
-export const DynamicContainerStatus$outboundSchema: z.ZodEnum<
-  typeof DynamicContainerStatus
-> = z.enum(DynamicContainerStatus);
-
-/** @internal */
-export type DynamicContainer$Outbound = {
-  name: string;
-  generation: number;
-  status: string;
-  message?: string | undefined;
-};
-
-/** @internal */
-export const DynamicContainer$outboundSchema: z.ZodType<
-  DynamicContainer$Outbound,
-  DynamicContainer
-> = z.object({
-  name: z.string(),
-  generation: z.int(),
-  status: DynamicContainerStatus$outboundSchema,
-  message: z.string().optional(),
-});
-
-export function dynamicContainerToJSON(
-  dynamicContainer: DynamicContainer,
-): string {
-  return JSON.stringify(
-    DynamicContainer$outboundSchema.parse(dynamicContainer),
-  );
-}
-
-/** @internal */
 export type SyncReconcileRequest$Outbound = {
   deploymentId: string;
   session?: string | undefined;
@@ -1459,7 +1416,6 @@ export type SyncReconcileRequest$Outbound = {
   operatorVersion?: string | undefined;
   operatorImage?: RemoteOperatorImageIdentity$Outbound | undefined;
   operationsReport?: OperationsReport$Outbound | undefined;
-  dynamicContainers?: Array<DynamicContainer$Outbound> | undefined;
 };
 
 /** @internal */
@@ -1482,8 +1438,6 @@ export const SyncReconcileRequest$outboundSchema: z.ZodType<
   operatorVersion: z.string().optional(),
   operatorImage: RemoteOperatorImageIdentity$outboundSchema.optional(),
   operationsReport: OperationsReport$outboundSchema.optional(),
-  dynamicContainers: z.array(z.lazy(() => DynamicContainer$outboundSchema))
-    .optional(),
 });
 
 export function syncReconcileRequestToJSON(

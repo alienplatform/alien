@@ -87,41 +87,6 @@ export type GetLiveDebugGrantMaxRisk = ClosedEnum<
 >;
 
 /**
- * How and when the customer gate was passed. Null until approved.
- */
-export type GetLiveDebugGrantApprovedBy = {
-  /**
-   * `kubectl` for the in-cluster path, else the direct caller's method such as `slack`.
-   */
-  method: string | null;
-  /**
-   * The approving user. Null for the kubectl path: the approver is only in the customer's cluster audit log.
-   */
-  actorId: string | null;
-  at: string;
-};
-
-export type GetLiveDebugGrantDeniedBy = {
-  actorId: string | null;
-  at: string;
-};
-
-export const GetLiveDebugGrantActorKind = {
-  User: "user",
-  ServiceAccount: "serviceAccount",
-} as const;
-export type GetLiveDebugGrantActorKind = ClosedEnum<
-  typeof GetLiveDebugGrantActorKind
->;
-
-export type GetLiveDebugGrantRevokedBy = {
-  actorKind: GetLiveDebugGrantActorKind;
-  actorId: string;
-  at: string;
-  reason: string | null;
-};
-
-/**
  * A live access request with a matching debug grant.
  */
 export type GetLiveDebugGrantResponse = {
@@ -132,10 +97,6 @@ export type GetLiveDebugGrantResponse = {
   deploymentId: string;
   deployment?: GetLiveDebugGrantDeployment | undefined;
   remediationPlanId: string | null;
-  /**
-   * The investigation whose remediation plan proposed this request, if a plan did.
-   */
-  agentSessionId: string | null;
   title: string;
   reason: string | null;
   commands: Array<GetLiveDebugGrantCommand>;
@@ -147,18 +108,6 @@ export type GetLiveDebugGrantResponse = {
   debugGrant: models.AccessRequestDebugGrant | null;
   status: models.AccessRequestStatus;
   approvedUntil: string | null;
-  createdAt: string;
-  /**
-   * Who passed the engineer gate; the requester for a plan-less request.
-   */
-  queuedBy: string | null;
-  queuedAt: string | null;
-  /**
-   * How and when the customer gate was passed. Null until approved.
-   */
-  approvedBy: GetLiveDebugGrantApprovedBy | null;
-  deniedBy: GetLiveDebugGrantDeniedBy | null;
-  revokedBy: GetLiveDebugGrantRevokedBy | null;
 };
 
 /** @internal */
@@ -247,71 +196,6 @@ export const GetLiveDebugGrantMaxRisk$inboundSchema: z.ZodEnum<
 > = z.enum(GetLiveDebugGrantMaxRisk);
 
 /** @internal */
-export const GetLiveDebugGrantApprovedBy$inboundSchema: z.ZodType<
-  GetLiveDebugGrantApprovedBy,
-  unknown
-> = z.object({
-  method: z.nullable(z.string()),
-  actorId: z.nullable(z.string()),
-  at: z.string(),
-});
-
-export function getLiveDebugGrantApprovedByFromJSON(
-  jsonString: string,
-): SafeParseResult<GetLiveDebugGrantApprovedBy, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetLiveDebugGrantApprovedBy$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetLiveDebugGrantApprovedBy' from JSON`,
-  );
-}
-
-/** @internal */
-export const GetLiveDebugGrantDeniedBy$inboundSchema: z.ZodType<
-  GetLiveDebugGrantDeniedBy,
-  unknown
-> = z.object({
-  actorId: z.nullable(z.string()),
-  at: z.string(),
-});
-
-export function getLiveDebugGrantDeniedByFromJSON(
-  jsonString: string,
-): SafeParseResult<GetLiveDebugGrantDeniedBy, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetLiveDebugGrantDeniedBy$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetLiveDebugGrantDeniedBy' from JSON`,
-  );
-}
-
-/** @internal */
-export const GetLiveDebugGrantActorKind$inboundSchema: z.ZodEnum<
-  typeof GetLiveDebugGrantActorKind
-> = z.enum(GetLiveDebugGrantActorKind);
-
-/** @internal */
-export const GetLiveDebugGrantRevokedBy$inboundSchema: z.ZodType<
-  GetLiveDebugGrantRevokedBy,
-  unknown
-> = z.object({
-  actorKind: GetLiveDebugGrantActorKind$inboundSchema,
-  actorId: z.string(),
-  at: z.string(),
-  reason: z.nullable(z.string()),
-});
-
-export function getLiveDebugGrantRevokedByFromJSON(
-  jsonString: string,
-): SafeParseResult<GetLiveDebugGrantRevokedBy, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetLiveDebugGrantRevokedBy$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetLiveDebugGrantRevokedBy' from JSON`,
-  );
-}
-
-/** @internal */
 export const GetLiveDebugGrantResponse$inboundSchema: z.ZodType<
   GetLiveDebugGrantResponse,
   unknown
@@ -324,7 +208,6 @@ export const GetLiveDebugGrantResponse$inboundSchema: z.ZodType<
   deployment: z.lazy(() => GetLiveDebugGrantDeployment$inboundSchema)
     .optional(),
   remediationPlanId: z.nullable(z.string()),
-  agentSessionId: z.nullable(z.string()),
   title: z.string(),
   reason: z.nullable(z.string()),
   commands: z.array(z.lazy(() => GetLiveDebugGrantCommand$inboundSchema)),
@@ -333,14 +216,6 @@ export const GetLiveDebugGrantResponse$inboundSchema: z.ZodType<
   debugGrant: z.nullable(models.AccessRequestDebugGrant$inboundSchema),
   status: models.AccessRequestStatus$inboundSchema,
   approvedUntil: z.nullable(z.string()),
-  createdAt: z.string(),
-  queuedBy: z.nullable(z.string()),
-  queuedAt: z.nullable(z.string()),
-  approvedBy: z.nullable(
-    z.lazy(() => GetLiveDebugGrantApprovedBy$inboundSchema),
-  ),
-  deniedBy: z.nullable(z.lazy(() => GetLiveDebugGrantDeniedBy$inboundSchema)),
-  revokedBy: z.nullable(z.lazy(() => GetLiveDebugGrantRevokedBy$inboundSchema)),
 });
 
 export function getLiveDebugGrantResponseFromJSON(

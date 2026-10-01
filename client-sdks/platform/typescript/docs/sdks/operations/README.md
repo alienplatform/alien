@@ -19,9 +19,7 @@
 * [approveAccessRequest](#approveaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
 * [denyAccessRequest](#denyaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
 * [getAccessRequestCoordinates](#getaccessrequestcoordinates) - The customer's kubectl approve command for a queued access request, or null until the operator has materialized the grant CR and reported its coordinates. Polled by the Slack handler to update the access-plan card.
-* [getLiveDebugGrant](#getlivedebuggrant) - Find an approved, unexpired access request the caller created whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request. Only the requester's own grants match: a debug session must present a grant its caller requested, so another principal's grant is never returned here.
-* [getAccessRequestActivity](#getaccessrequestactivity) - The operation commands and debug sessions an access request authorized, with each command's verification outcome. Authorized like getAccessRequest.
-* [revokeAccessRequest](#revokeaccessrequest) - Revoke a pending, queued or customer-approved access request. The principal that created the request, or any workspace member or administrator who can read its project, may revoke it. Commands the grant authorized that have not been dispatched are failed; dispatched commands finish. Linked debug sessions are stopped and refuse their next request. Revoking an already revoked request returns it unchanged.
+* [getLiveDebugGrant](#getlivedebuggrant) - Find an approved, unexpired access request whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request.
 * [getAccessRequest](#getaccessrequest) - Get an access request by id.
 
 ## listPlugins
@@ -1047,7 +1045,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 400, 402, 403, 404, 409  | application/json         |
+| errors.APIError          | 402, 403, 404, 409       | application/json         |
 | errors.APIError          | 500, 502                 | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -1734,7 +1732,7 @@ run();
 
 ## getLiveDebugGrant
 
-Find an approved, unexpired access request the caller created whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request. Only the requester's own grants match: a debug session must present a grant its caller requested, so another principal's grant is never returned here.
+Find an approved, unexpired access request whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request.
 
 ### Example Usage
 
@@ -1808,160 +1806,6 @@ run();
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 404                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
-## getAccessRequestActivity
-
-The operation commands and debug sessions an access request authorized, with each command's verification outcome. Authorized like getAccessRequest.
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="getAccessRequestActivity" method="get" path="/v1/access-requests/{id}/activity" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.operations.getAccessRequestActivity({
-    id: "<id>",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { operationsGetAccessRequestActivity } from "@alienplatform/platform-api/funcs/operationsGetAccessRequestActivity.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await operationsGetAccessRequestActivity(alien, {
-    id: "<id>",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("operationsGetAccessRequestActivity failed:", res.error);
-  }
-}
-
-run();
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.GetAccessRequestActivityRequest](../../models/operations/getaccessrequestactivityrequest.md)                                                                       | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[models.AccessRequestActivity](../../models/accessrequestactivity.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404                      | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
-## revokeAccessRequest
-
-Revoke a pending, queued or customer-approved access request. The principal that created the request, or any workspace member or administrator who can read its project, may revoke it. Commands the grant authorized that have not been dispatched are failed; dispatched commands finish. Linked debug sessions are stopped and refuse their next request. Revoking an already revoked request returns it unchanged.
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="revokeAccessRequest" method="post" path="/v1/access-requests/{id}/revoke" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.operations.revokeAccessRequest({
-    id: "<id>",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { operationsRevokeAccessRequest } from "@alienplatform/platform-api/funcs/operationsRevokeAccessRequest.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await operationsRevokeAccessRequest(alien, {
-    id: "<id>",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("operationsRevokeAccessRequest failed:", res.error);
-  }
-}
-
-run();
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.RevokeAccessRequestRequest](../../models/operations/revokeaccessrequestrequest.md)                                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[operations.RevokeAccessRequestResponse](../../models/operations/revokeaccessrequestresponse.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 403, 404, 409            | application/json         |
-| errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## getAccessRequest

@@ -33,7 +33,7 @@ const value: models.DataGcpCloudStorage = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
+        reason: "forbidden",
         severity: "warning",
         source: "<value>",
       },
@@ -61,10 +61,10 @@ const value: models.DataAzureBlob = {
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "scaling",
+    health: "healthy",
+    lifecycle: "unknown",
     partial: false,
-    stale: false,
+    stale: true,
   },
   backend: "azureBlob",
 };
@@ -81,7 +81,7 @@ const value: models.DataLocal1 = {
       {
         message: "<value>",
         reason: "collection-failed",
-        severity: "warning",
+        severity: "error",
         source: "<value>",
       },
     ],

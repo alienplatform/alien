@@ -28,7 +28,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. Without a custom image it publishes to every cloud on Alien's default image, which the project then follows. A custom image publishes to AWS; a public one with a linux/amd64 variant also publishes to Azure, and to GCP once Alien has built its GCP image.
+ * Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. The clouds it publishes to follow the sources configured: an AWS bundle, an Azure catalog image, or both.
  */
 export function projectsConfigureRemoteSandbox(
   client: AlienCore,
@@ -175,8 +175,8 @@ async function $do(
     | SDKValidationError
   >(
     M.json(200, models.CapabilityMaterialization$inboundSchema),
-    M.jsonErr([400, 403, 404, 409, 422], errors.APIError$inboundSchema),
-    M.jsonErr([500, 503], errors.APIError$inboundSchema),
+    M.jsonErr([400, 403, 404], errors.APIError$inboundSchema),
+    M.jsonErr(500, errors.APIError$inboundSchema),
     M.fail("4XX"),
     M.fail("5XX"),
   )(response, req, { extraFields: responseFields });

@@ -490,21 +490,14 @@ export type ConfigureProjectSourceRegistry = {
 };
 
 export type ConfigureProjectSourceAzure = {
-  registryImage?: string | undefined;
+  catalogImage: string;
   idleSuspendSeconds: number;
-};
-
-export type ConfigureProjectSourceGcp = {
-  image?: string | undefined;
-  maxLifetimeSeconds: number;
 };
 
 export type ConfigureProjectSourceRemoteSandbox = {
   enabled: true;
-  customImage?: string | undefined;
   baseImage?: string | undefined;
   azure?: ConfigureProjectSourceAzure | undefined;
-  gcp?: ConfigureProjectSourceGcp | undefined;
   maxLifetimeSeconds?: number | undefined;
 };
 
@@ -1311,7 +1304,7 @@ export const ConfigureProjectSourceAzure$inboundSchema: z.ZodType<
   ConfigureProjectSourceAzure,
   unknown
 > = z.object({
-  registryImage: z.string().optional(),
+  catalogImage: z.string(),
   idleSuspendSeconds: z.int(),
 });
 
@@ -1326,34 +1319,13 @@ export function configureProjectSourceAzureFromJSON(
 }
 
 /** @internal */
-export const ConfigureProjectSourceGcp$inboundSchema: z.ZodType<
-  ConfigureProjectSourceGcp,
-  unknown
-> = z.object({
-  image: z.string().optional(),
-  maxLifetimeSeconds: z.int(),
-});
-
-export function configureProjectSourceGcpFromJSON(
-  jsonString: string,
-): SafeParseResult<ConfigureProjectSourceGcp, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ConfigureProjectSourceGcp$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ConfigureProjectSourceGcp' from JSON`,
-  );
-}
-
-/** @internal */
 export const ConfigureProjectSourceRemoteSandbox$inboundSchema: z.ZodType<
   ConfigureProjectSourceRemoteSandbox,
   unknown
 > = z.object({
   enabled: z.literal(true),
-  customImage: z.string().optional(),
   baseImage: z.string().optional(),
   azure: z.lazy(() => ConfigureProjectSourceAzure$inboundSchema).optional(),
-  gcp: z.lazy(() => ConfigureProjectSourceGcp$inboundSchema).optional(),
   maxLifetimeSeconds: z.int().optional(),
 });
 

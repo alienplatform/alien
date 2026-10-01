@@ -6,10 +6,6 @@ import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
-import {
-  CommandVerification,
-  CommandVerification$inboundSchema,
-} from "./commandverification.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 /**
@@ -147,14 +143,6 @@ export type Command = {
    */
   error: { [k: string]: any | null } | null;
   /**
-   * The approved access request that authorized this operation command, if one did
-   */
-  accessRequestId: string | null;
-  /**
-   * Verification outcome of an operation command; null for commands that are not operations
-   */
-  verification: CommandVerification | null;
-  /**
    * Decoded command result when available
    */
   result?: any | null | undefined;
@@ -224,8 +212,6 @@ export const Command$inboundSchema: z.ZodType<Command, unknown> = z.object({
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ),
   error: z.nullable(z.record(z.string(), z.nullable(z.any()))),
-  accessRequestId: z.nullable(z.string()),
-  verification: z.nullable(CommandVerification$inboundSchema),
   result: z.nullable(z.any()).optional(),
   resultAvailability: CommandResultAvailability$inboundSchema.optional(),
 });

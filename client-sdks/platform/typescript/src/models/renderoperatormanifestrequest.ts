@@ -55,16 +55,8 @@ export type RenderOperatorManifestRequestPermission = ClosedEnum<
 /**
  * Enable the node log collector DaemonSet for raw pod logs.
  */
-export type RenderOperatorManifestRequestLogCollector = {
+export type LogCollector = {
   enabled?: boolean | undefined;
-  /**
-   * Existing Pod label key to collect logs from. Set with podLabelValue.
-   */
-  podLabelKey?: string | undefined;
-  /**
-   * Existing Pod label value to collect logs from. Set with podLabelKey.
-   */
-  podLabelValue?: string | undefined;
 };
 
 export type RenderOperatorManifestRequest = {
@@ -107,7 +99,7 @@ export type RenderOperatorManifestRequest = {
   /**
    * Enable the node log collector DaemonSet for raw pod logs.
    */
-  logCollector?: RenderOperatorManifestRequestLogCollector | undefined;
+  logCollector?: LogCollector | undefined;
   /**
    * User-customizable deployment settings specified at deploy time.
    *
@@ -139,32 +131,20 @@ export const RenderOperatorManifestRequestPermission$outboundSchema: z.ZodEnum<
 > = z.enum(RenderOperatorManifestRequestPermission);
 
 /** @internal */
-export type RenderOperatorManifestRequestLogCollector$Outbound = {
+export type LogCollector$Outbound = {
   enabled: boolean;
-  podLabelKey?: string | undefined;
-  podLabelValue?: string | undefined;
 };
 
 /** @internal */
-export const RenderOperatorManifestRequestLogCollector$outboundSchema:
-  z.ZodType<
-    RenderOperatorManifestRequestLogCollector$Outbound,
-    RenderOperatorManifestRequestLogCollector
-  > = z.object({
-    enabled: z.boolean().default(false),
-    podLabelKey: z.string().optional(),
-    podLabelValue: z.string().optional(),
-  });
+export const LogCollector$outboundSchema: z.ZodType<
+  LogCollector$Outbound,
+  LogCollector
+> = z.object({
+  enabled: z.boolean().default(false),
+});
 
-export function renderOperatorManifestRequestLogCollectorToJSON(
-  renderOperatorManifestRequestLogCollector:
-    RenderOperatorManifestRequestLogCollector,
-): string {
-  return JSON.stringify(
-    RenderOperatorManifestRequestLogCollector$outboundSchema.parse(
-      renderOperatorManifestRequestLogCollector,
-    ),
-  );
+export function logCollectorToJSON(logCollector: LogCollector): string {
+  return JSON.stringify(LogCollector$outboundSchema.parse(logCollector));
 }
 
 /** @internal */
@@ -178,7 +158,7 @@ export type RenderOperatorManifestRequest$Outbound = {
   permission: string;
   operatorImagePackageId?: string | undefined;
   deploymentGroupToken: string;
-  logCollector?: RenderOperatorManifestRequestLogCollector$Outbound | undefined;
+  logCollector?: LogCollector$Outbound | undefined;
   stackSettings?: StackSettings$Outbound | undefined;
 };
 
@@ -198,9 +178,7 @@ export const RenderOperatorManifestRequest$outboundSchema: z.ZodType<
   ),
   operatorImagePackageId: z.string().optional(),
   deploymentGroupToken: z.string(),
-  logCollector: z.lazy(() =>
-    RenderOperatorManifestRequestLogCollector$outboundSchema
-  ).optional(),
+  logCollector: z.lazy(() => LogCollector$outboundSchema).optional(),
   stackSettings: StackSettings$outboundSchema.optional(),
 });
 

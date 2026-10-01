@@ -23,37 +23,18 @@ let value: CreateAccessRequestResponse = {
     },
   },
   remediationPlanId: "<id>",
-  agentSessionId: "<id>",
   title: "<value>",
   reason: "<value>",
   commands: [],
   operationPattern: "<value>",
-  maxRisk: "mutating",
+  maxRisk: "destructive",
   debugGrant: {
-    tool: "gcloud",
+    tool: "kubectl",
     namespace: "braintrust",
     cloudScope: "123456789012/prod-readonly",
   },
   status: "expired",
   approvedUntil: "<value>",
-  createdAt: "1716409325860",
-  queuedBy: "<value>",
-  queuedAt: "<value>",
-  approvedBy: {
-    method: "<value>",
-    actorId: null,
-    at: "<value>",
-  },
-  deniedBy: {
-    actorId: "<id>",
-    at: "<value>",
-  },
-  revokedBy: {
-    actorKind: "user",
-    actorId: "<id>",
-    at: "<value>",
-    reason: "<value>",
-  },
 };
 ```
 
@@ -68,7 +49,6 @@ let value: CreateAccessRequestResponse = {
 | `deploymentId`                                                                                             | *string*                                                                                                   | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
 | `deployment`                                                                                               | [operations.CreateAccessRequestDeployment](../../models/operations/createaccessrequestdeployment.md)       | :heavy_minus_sign:                                                                                         | N/A                                                                                                        |
 | `remediationPlanId`                                                                                        | *string*                                                                                                   | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
-| `agentSessionId`                                                                                           | *string*                                                                                                   | :heavy_check_mark:                                                                                         | The investigation whose remediation plan proposed this request, if a plan did.                             |
 | `title`                                                                                                    | *string*                                                                                                   | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
 | `reason`                                                                                                   | *string*                                                                                                   | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
 | `commands`                                                                                                 | [operations.CreateAccessRequestCommand](../../models/operations/createaccessrequestcommand.md)[]           | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
@@ -77,9 +57,3 @@ let value: CreateAccessRequestResponse = {
 | `debugGrant`                                                                                               | [models.AccessRequestDebugGrant](../../models/accessrequestdebuggrant.md)                                  | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
 | `status`                                                                                                   | [models.AccessRequestStatus](../../models/accessrequeststatus.md)                                          | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
 | `approvedUntil`                                                                                            | *string*                                                                                                   | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
-| `createdAt`                                                                                                | *string*                                                                                                   | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
-| `queuedBy`                                                                                                 | *string*                                                                                                   | :heavy_check_mark:                                                                                         | Who passed the engineer gate; the requester for a plan-less request.                                       |
-| `queuedAt`                                                                                                 | *string*                                                                                                   | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
-| `approvedBy`                                                                                               | [operations.CreateAccessRequestApprovedBy](../../models/operations/createaccessrequestapprovedby.md)       | :heavy_check_mark:                                                                                         | How and when the customer gate was passed. Null until approved.                                            |
-| `deniedBy`                                                                                                 | [operations.CreateAccessRequestDeniedBy](../../models/operations/createaccessrequestdeniedby.md)           | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
-| `revokedBy`                                                                                                | [operations.CreateAccessRequestRevokedBy](../../models/operations/createaccessrequestrevokedby.md)         | :heavy_check_mark:                                                                                         | N/A                                                                                                        |

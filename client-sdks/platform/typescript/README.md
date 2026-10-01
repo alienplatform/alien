@@ -176,7 +176,7 @@ run();
 
 ### [AgentSessions](docs/sdks/agentsessions/README.md)
 
-* [list](docs/sdks/agentsessions/README.md#list) - List ai-agent monitor sessions for this workspace, or for one project. Newest first, capped at 50.
+* [list](docs/sdks/agentsessions/README.md#list) - List ai-agent monitor sessions for this workspace. Newest first, capped at 50.
 * [get](docs/sdks/agentsessions/README.md#get) - Retrieve one ai-agent monitor session by id.
 * [events](docs/sdks/agentsessions/README.md#events) - Incrementally read a session's event log (steps, tool calls, report deltas, approvals, status transitions). Pass the previous response's `latestSeq` as `after` to fetch only new events.
 * [stop](docs/sdks/agentsessions/README.md#stop) - Stop (cancel) a running or queued ai-agent monitor session. Proxies to the ai-agent service, minting a fresh CLI session for the caller so the ai-agent's own auth applies. Idempotent — stopping an already-terminal session is a 200 no-op.
@@ -366,16 +366,13 @@ run();
 * [approveAccessRequest](docs/sdks/operations/README.md#approveaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
 * [denyAccessRequest](docs/sdks/operations/README.md#denyaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
 * [getAccessRequestCoordinates](docs/sdks/operations/README.md#getaccessrequestcoordinates) - The customer's kubectl approve command for a queued access request, or null until the operator has materialized the grant CR and reported its coordinates. Polled by the Slack handler to update the access-plan card.
-* [getLiveDebugGrant](docs/sdks/operations/README.md#getlivedebuggrant) - Find an approved, unexpired access request the caller created whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request. Only the requester's own grants match: a debug session must present a grant its caller requested, so another principal's grant is never returned here.
-* [getAccessRequestActivity](docs/sdks/operations/README.md#getaccessrequestactivity) - The operation commands and debug sessions an access request authorized, with each command's verification outcome. Authorized like getAccessRequest.
-* [revokeAccessRequest](docs/sdks/operations/README.md#revokeaccessrequest) - Revoke a pending, queued or customer-approved access request. The principal that created the request, or any workspace member or administrator who can read its project, may revoke it. Commands the grant authorized that have not been dispatched are failed; dispatched commands finish. Linked debug sessions are stopped and refuse their next request. Revoking an already revoked request returns it unchanged.
+* [getLiveDebugGrant](docs/sdks/operations/README.md#getlivedebuggrant) - Find an approved, unexpired access request whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request.
 * [getAccessRequest](docs/sdks/operations/README.md#getaccessrequest) - Get an access request by id.
 
 ### [OperatorManifests](docs/sdks/operatormanifests/README.md)
 
 * [prepareOperatorManifestPackage](docs/sdks/operatormanifests/README.md#prepareoperatormanifestpackage) - Prepare the white-labeled Operator image for an Operate install
 * [renderOperatorManifest](docs/sdks/operatormanifests/README.md#renderoperatormanifest) - Render a Kubernetes Operator manifest
-* [checkEcsBootstrapWrite](docs/sdks/operatormanifests/README.md#checkecsbootstrapwrite) - Checks a Remote Operator setup token and its exact AWS target before the local bootstrap command writes a registration secret. A registered stack cannot use this path.
 * [renderOperatorEcsCloudFormation](docs/sdks/operatormanifests/README.md#renderoperatorecscloudformation) - Render a Remote Operator ECS Fargate CloudFormation installer
 
 ### [Packages](docs/sdks/packages/README.md)
@@ -409,7 +406,7 @@ run();
 * [configureKeys](docs/sdks/projects/README.md#configurekeys) - Enable customer-owned application encryption without requiring an application Release.
 * [configureBuckets](docs/sdks/projects/README.md#configurebuckets) - Enable buckets without requiring a project Release.
 * [configureRegistry](docs/sdks/projects/README.md#configureregistry) - Enable customer-owned container registries without requiring an application Release.
-* [configureRemoteSandbox](docs/sdks/projects/README.md#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. Without a custom image it publishes to every cloud on Alien's default image, which the project then follows. A custom image publishes to AWS; a public one with a linux/amd64 variant also publishes to Azure, and to GCP once Alien has built its GCP image.
+* [configureRemoteSandbox](docs/sdks/projects/README.md#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. The clouds it publishes to follow the sources configured: an AWS bundle, an Azure catalog image, or both.
 * [ensureSandboxBaseImageRepository](docs/sdks/projects/README.md#ensuresandboxbaseimagerepository) - Ensure the project's private image repository exists and return where to push a private sandbox base image. Name the pushed image as the remote sandbox base image afterwards.
 * [getCapabilityOverview](docs/sdks/projects/README.md#getcapabilityoverview) - Get safe, server-derived capability status for a Project.
 * [getRemoteOperatorSummary](docs/sdks/projects/README.md#getremoteoperatorsummary) - Get the authoritative Remote Operator project summary
@@ -516,7 +513,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`acceptWorkspaceInvitation`](docs/sdks/alien/README.md#acceptworkspaceinvitation)
 - [`agentSessionsEvents`](docs/sdks/agentsessions/README.md#events) - Incrementally read a session's event log (steps, tool calls, report deltas, approvals, status transitions). Pass the previous response's `latestSeq` as `after` to fetch only new events.
 - [`agentSessionsGet`](docs/sdks/agentsessions/README.md#get) - Retrieve one ai-agent monitor session by id.
-- [`agentSessionsList`](docs/sdks/agentsessions/README.md#list) - List ai-agent monitor sessions for this workspace, or for one project. Newest first, capped at 50.
+- [`agentSessionsList`](docs/sdks/agentsessions/README.md#list) - List ai-agent monitor sessions for this workspace. Newest first, capped at 50.
 - [`agentSessionsStop`](docs/sdks/agentsessions/README.md#stop) - Stop (cancel) a running or queued ai-agent monitor session. Proxies to the ai-agent service, minting a fresh CLI session for the caller so the ai-agent's own auth applies. Idempotent — stopping an already-terminal session is a 200 no-op.
 - [`apiKeysCreate`](docs/sdks/apikeys/README.md#create) - Create a new API key.
 - [`apiKeysDeleteMultiple`](docs/sdks/apikeys/README.md#deletemultiple) - Permanently delete multiple API keys.
@@ -655,21 +652,18 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`operationsCreateBundleUploadUrl`](docs/sdks/operations/README.md#createbundleuploadurl) - Get a presigned S3 URL to upload a custom operations plugin bundle ZIP. Upload the ZIP with a PUT to the returned url (sending the given Content-Type), then call POST /plugins to register it.
 - [`operationsDenyAccessRequest`](docs/sdks/operations/README.md#denyaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
 - [`operationsGetAccessRequest`](docs/sdks/operations/README.md#getaccessrequest) - Get an access request by id.
-- [`operationsGetAccessRequestActivity`](docs/sdks/operations/README.md#getaccessrequestactivity) - The operation commands and debug sessions an access request authorized, with each command's verification outcome. Authorized like getAccessRequest.
 - [`operationsGetAccessRequestCoordinates`](docs/sdks/operations/README.md#getaccessrequestcoordinates) - The customer's kubectl approve command for a queued access request, or null until the operator has materialized the grant CR and reported its coordinates. Polled by the Slack handler to update the access-plan card.
-- [`operationsGetLiveDebugGrant`](docs/sdks/operations/README.md#getlivedebuggrant) - Find an approved, unexpired access request the caller created whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request. Only the requester's own grants match: a debug session must present a grant its caller requested, so another principal's grant is never returned here.
+- [`operationsGetLiveDebugGrant`](docs/sdks/operations/README.md#getlivedebuggrant) - Find an approved, unexpired access request whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request.
 - [`operationsGetPolicy`](docs/sdks/operations/README.md#getpolicy) - Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual.
 - [`operationsInvoke`](docs/sdks/operations/README.md#invoke) - Invoke a plugin operation against a deployment. Honors the project's per-command approval policy.
 - [`operationsListAccessRequests`](docs/sdks/operations/README.md#listaccessrequests) - List a project's access requests, newest first.
 - [`operationsListPlugins`](docs/sdks/operations/README.md#listplugins) - List available operations plugins (builtin + custom) for a project, with their operations and risk tiers.
 - [`operationsPublishPlugin`](docs/sdks/operations/README.md#publishplugin) - Register a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Replaces any existing plugin of the same name in that project. New custom plugins are enabled by default. Returns the cloud permission delta versus the previously enabled set.
 - [`operationsQueueAccessRequest`](docs/sdks/operations/README.md#queueaccessrequest) - Engineer gate — approve a pending access request, queuing it for the operator to materialize. Records who queued it.
-- [`operationsRevokeAccessRequest`](docs/sdks/operations/README.md#revokeaccessrequest) - Revoke a pending, queued or customer-approved access request. The principal that created the request, or any workspace member or administrator who can read its project, may revoke it. Commands the grant authorized that have not been dispatched are failed; dispatched commands finish. Linked debug sessions are stopped and refuse their next request. Revoking an already revoked request returns it unchanged.
 - [`operationsSetBuiltinPlugins`](docs/sdks/operations/README.md#setbuiltinplugins) - Replace the complete set of enabled built-in operations plugins for a project. Returns the cloud permission delta versus the previously enabled set.
 - [`operationsSetPluginEnabled`](docs/sdks/operations/README.md#setpluginenabled) - Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are distributed to Operators and can be invoked. Returns the cloud permission delta versus the previously enabled set. With `dryRun`, validates the change and returns the delta without saving it.
 - [`operationsUpdatePolicy`](docs/sdks/operations/README.md#updatepolicy) - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
 - [`operationsVerifyCheck`](docs/sdks/operations/README.md#verifycheck) - One verification poll cycle for an original operation command. Loads that command's authoritative stored result and dispatch-time verification contract, dispatches the frozen read-only poll operation once, and evaluates its frozen success condition. Callers poll this repeatedly per the returned policy.
-- [`operatorManifestsCheckEcsBootstrapWrite`](docs/sdks/operatormanifests/README.md#checkecsbootstrapwrite) - Checks a Remote Operator setup token and its exact AWS target before the local bootstrap command writes a registration secret. A registered stack cannot use this path.
 - [`operatorManifestsPrepareOperatorManifestPackage`](docs/sdks/operatormanifests/README.md#prepareoperatormanifestpackage) - Prepare the white-labeled Operator image for an Operate install
 - [`operatorManifestsRenderOperatorEcsCloudFormation`](docs/sdks/operatormanifests/README.md#renderoperatorecscloudformation) - Render a Remote Operator ECS Fargate CloudFormation installer
 - [`operatorManifestsRenderOperatorManifest`](docs/sdks/operatormanifests/README.md#renderoperatormanifest) - Render a Kubernetes Operator manifest
@@ -686,7 +680,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsConfigureKeys`](docs/sdks/projects/README.md#configurekeys) - Enable customer-owned application encryption without requiring an application Release.
 - [`projectsConfigureModels`](docs/sdks/projects/README.md#configuremodels) - Configure customer-owned model providers without requiring an application Release.
 - [`projectsConfigureRegistry`](docs/sdks/projects/README.md#configureregistry) - Enable customer-owned container registries without requiring an application Release.
-- [`projectsConfigureRemoteSandbox`](docs/sdks/projects/README.md#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. Without a custom image it publishes to every cloud on Alien's default image, which the project then follows. A custom image publishes to AWS; a public one with a linux/amd64 variant also publishes to Azure, and to GCP once Alien has built its GCP image.
+- [`projectsConfigureRemoteSandbox`](docs/sdks/projects/README.md#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. The clouds it publishes to follow the sources configured: an AWS bundle, an Azure catalog image, or both.
 - [`projectsConfigureSource`](docs/sdks/projects/README.md#configuresource) - Connect a GitHub repository or Alien template to an existing project.
 - [`projectsCreate`](docs/sdks/projects/README.md#create) - Create a new project.
 - [`projectsCreateFromTemplate`](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace.

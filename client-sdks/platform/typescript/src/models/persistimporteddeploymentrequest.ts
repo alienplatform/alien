@@ -452,7 +452,7 @@ export type PersistImportedDeploymentRequestSetupScaffolding = {
  */
 export type PersistImportedDeploymentRequestSetupUpdateAuthorization = {
   /**
-   * Setup-owned digest (`Stack::setup_owned_digest`) of the last successful deployment.
+   * Frozen resource projection from the last successful deployment.
    */
   baselineFrozenDigest: string;
   /**
@@ -476,7 +476,7 @@ export type PersistImportedDeploymentRequestSetupUpdateAuthorization = {
    */
   setupTarget: string;
   /**
-   * Setup-owned digest (`Stack::setup_owned_digest`) of the stack the setup re-import prepared.
+   * Frozen resource projection prepared by the setup re-import.
    */
   targetFrozenDigest: string;
 };

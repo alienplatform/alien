@@ -75,41 +75,6 @@ export type QueueAccessRequestMaxRisk = ClosedEnum<
 >;
 
 /**
- * How and when the customer gate was passed. Null until approved.
- */
-export type QueueAccessRequestApprovedBy = {
-  /**
-   * `kubectl` for the in-cluster path, else the direct caller's method such as `slack`.
-   */
-  method: string | null;
-  /**
-   * The approving user. Null for the kubectl path: the approver is only in the customer's cluster audit log.
-   */
-  actorId: string | null;
-  at: string;
-};
-
-export type QueueAccessRequestDeniedBy = {
-  actorId: string | null;
-  at: string;
-};
-
-export const QueueAccessRequestActorKind = {
-  User: "user",
-  ServiceAccount: "serviceAccount",
-} as const;
-export type QueueAccessRequestActorKind = ClosedEnum<
-  typeof QueueAccessRequestActorKind
->;
-
-export type QueueAccessRequestRevokedBy = {
-  actorKind: QueueAccessRequestActorKind;
-  actorId: string;
-  at: string;
-  reason: string | null;
-};
-
-/**
  * The queued access request, with the customer approve command.
  */
 export type QueueAccessRequestResponse = {
@@ -120,10 +85,6 @@ export type QueueAccessRequestResponse = {
   deploymentId: string;
   deployment?: QueueAccessRequestDeployment | undefined;
   remediationPlanId: string | null;
-  /**
-   * The investigation whose remediation plan proposed this request, if a plan did.
-   */
-  agentSessionId: string | null;
   title: string;
   reason: string | null;
   commands: Array<QueueAccessRequestCommand>;
@@ -135,18 +96,6 @@ export type QueueAccessRequestResponse = {
   debugGrant: models.AccessRequestDebugGrant | null;
   status: models.AccessRequestStatus;
   approvedUntil: string | null;
-  createdAt: string;
-  /**
-   * Who passed the engineer gate; the requester for a plan-less request.
-   */
-  queuedBy: string | null;
-  queuedAt: string | null;
-  /**
-   * How and when the customer gate was passed. Null until approved.
-   */
-  approvedBy: QueueAccessRequestApprovedBy | null;
-  deniedBy: QueueAccessRequestDeniedBy | null;
-  revokedBy: QueueAccessRequestRevokedBy | null;
   kubectlApprove: string | null;
 };
 
@@ -230,71 +179,6 @@ export const QueueAccessRequestMaxRisk$inboundSchema: z.ZodEnum<
 > = z.enum(QueueAccessRequestMaxRisk);
 
 /** @internal */
-export const QueueAccessRequestApprovedBy$inboundSchema: z.ZodType<
-  QueueAccessRequestApprovedBy,
-  unknown
-> = z.object({
-  method: z.nullable(z.string()),
-  actorId: z.nullable(z.string()),
-  at: z.string(),
-});
-
-export function queueAccessRequestApprovedByFromJSON(
-  jsonString: string,
-): SafeParseResult<QueueAccessRequestApprovedBy, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => QueueAccessRequestApprovedBy$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'QueueAccessRequestApprovedBy' from JSON`,
-  );
-}
-
-/** @internal */
-export const QueueAccessRequestDeniedBy$inboundSchema: z.ZodType<
-  QueueAccessRequestDeniedBy,
-  unknown
-> = z.object({
-  actorId: z.nullable(z.string()),
-  at: z.string(),
-});
-
-export function queueAccessRequestDeniedByFromJSON(
-  jsonString: string,
-): SafeParseResult<QueueAccessRequestDeniedBy, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => QueueAccessRequestDeniedBy$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'QueueAccessRequestDeniedBy' from JSON`,
-  );
-}
-
-/** @internal */
-export const QueueAccessRequestActorKind$inboundSchema: z.ZodEnum<
-  typeof QueueAccessRequestActorKind
-> = z.enum(QueueAccessRequestActorKind);
-
-/** @internal */
-export const QueueAccessRequestRevokedBy$inboundSchema: z.ZodType<
-  QueueAccessRequestRevokedBy,
-  unknown
-> = z.object({
-  actorKind: QueueAccessRequestActorKind$inboundSchema,
-  actorId: z.string(),
-  at: z.string(),
-  reason: z.nullable(z.string()),
-});
-
-export function queueAccessRequestRevokedByFromJSON(
-  jsonString: string,
-): SafeParseResult<QueueAccessRequestRevokedBy, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => QueueAccessRequestRevokedBy$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'QueueAccessRequestRevokedBy' from JSON`,
-  );
-}
-
-/** @internal */
 export const QueueAccessRequestResponse$inboundSchema: z.ZodType<
   QueueAccessRequestResponse,
   unknown
@@ -307,7 +191,6 @@ export const QueueAccessRequestResponse$inboundSchema: z.ZodType<
   deployment: z.lazy(() => QueueAccessRequestDeployment$inboundSchema)
     .optional(),
   remediationPlanId: z.nullable(z.string()),
-  agentSessionId: z.nullable(z.string()),
   title: z.string(),
   reason: z.nullable(z.string()),
   commands: z.array(z.lazy(() => QueueAccessRequestCommand$inboundSchema)),
@@ -316,16 +199,6 @@ export const QueueAccessRequestResponse$inboundSchema: z.ZodType<
   debugGrant: z.nullable(models.AccessRequestDebugGrant$inboundSchema),
   status: models.AccessRequestStatus$inboundSchema,
   approvedUntil: z.nullable(z.string()),
-  createdAt: z.string(),
-  queuedBy: z.nullable(z.string()),
-  queuedAt: z.nullable(z.string()),
-  approvedBy: z.nullable(
-    z.lazy(() => QueueAccessRequestApprovedBy$inboundSchema),
-  ),
-  deniedBy: z.nullable(z.lazy(() => QueueAccessRequestDeniedBy$inboundSchema)),
-  revokedBy: z.nullable(
-    z.lazy(() => QueueAccessRequestRevokedBy$inboundSchema),
-  ),
   kubectlApprove: z.nullable(z.string()),
 });
 

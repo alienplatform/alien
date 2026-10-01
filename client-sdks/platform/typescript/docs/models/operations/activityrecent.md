@@ -13,11 +13,10 @@ let value: ActivityRecent = {
   pluginVersion: "<value>",
   operation: "<value>",
   tier: "destructive",
-  accessRequestId: "<id>",
   commandState: "<value>",
-  verificationState: "skipped",
-  createdAt: new Date("2024-04-29T15:28:43.378Z"),
-  updatedAt: new Date("2025-12-13T07:10:13.268Z"),
+  verificationState: "failed",
+  createdAt: new Date("2026-08-28T13:55:38.307Z"),
+  updatedAt: new Date("2024-04-29T15:28:43.378Z"),
 };
 ```
 
@@ -32,7 +31,6 @@ let value: ActivityRecent = {
 | `pluginVersion`                                                                               | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `operation`                                                                                   | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `tier`                                                                                        | [operations.RecentTier](../../models/operations/recenttier.md)                                | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `accessRequestId`                                                                             | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `commandState`                                                                                | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `verificationState`                                                                           | [operations.RecentVerificationState](../../models/operations/recentverificationstate.md)      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `createdAt`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |

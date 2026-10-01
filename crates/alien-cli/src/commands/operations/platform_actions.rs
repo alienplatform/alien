@@ -16,6 +16,7 @@ use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::commands::access_requests::{approval_outcome, not_approved_error, ApprovalOutcome};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::print_json;
@@ -446,15 +447,12 @@ async fn request_access_then_reinvoke(
             }
         }
 
-        match crate::commands::access_requests::approval_outcome(request.status) {
-            crate::commands::access_requests::ApprovalOutcome::Approved => break,
-            crate::commands::access_requests::ApprovalOutcome::Closed => {
-                return Err(crate::commands::access_requests::not_approved_error(
-                    &created.id,
-                    request.status,
-                ));
+        match approval_outcome(request.status) {
+            ApprovalOutcome::Approved => break,
+            ApprovalOutcome::Closed => {
+                return Err(not_approved_error(&created.id, request.status));
             }
-            crate::commands::access_requests::ApprovalOutcome::Pending => {}
+            ApprovalOutcome::Pending => {}
         }
         if std::time::Instant::now() >= deadline {
             return Err(AlienError::new(ErrorData::ApiRequestFailed {

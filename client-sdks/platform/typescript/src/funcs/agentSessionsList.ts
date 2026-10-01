@@ -7,7 +7,6 @@ import { encodeFormQuery } from "../lib/encodings.js";
 import { matchStatusCode } from "../lib/http.js";
 import * as M from "../lib/matchers.js";
 import { compactMap } from "../lib/primitives.js";
-import { safeParse } from "../lib/schemas.js";
 import { RequestOptions } from "../lib/sdks.js";
 import { extractSecurity, resolveGlobalSecurity } from "../lib/security.js";
 import { pathToFunc } from "../lib/url.js";
@@ -27,11 +26,11 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * List ai-agent monitor sessions for this workspace, or for one project. Newest first, capped at 50.
+ * List ai-agent monitor sessions for this workspace. Newest first, capped at 50.
  */
 export function agentSessionsList(
   client: AlienCore,
-  request?: operations.ListAgentSessionsRequest | undefined,
+  _request?: operations.ListAgentSessionsRequest | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -48,14 +47,14 @@ export function agentSessionsList(
 > {
   return new APIPromise($do(
     client,
-    request,
+    _request,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request?: operations.ListAgentSessionsRequest | undefined,
+  _request?: operations.ListAgentSessionsRequest | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -73,24 +72,9 @@ async function $do(
     APICall,
   ]
 > {
-  const parsed = safeParse(
-    request,
-    (value) =>
-      operations.ListAgentSessionsRequest$outboundSchema.optional().parse(
-        value,
-      ),
-    "Input validation failed",
-  );
-  if (!parsed.ok) {
-    return [parsed, { status: "invalid" }];
-  }
-  const payload = parsed.value;
-  const body = null;
-
   const path = pathToFunc("/v1/agent-sessions")();
 
   const query = encodeFormQuery({
-    "project": payload?.project,
     "workspace": client._options.workspace,
   });
 
@@ -124,7 +108,6 @@ async function $do(
     path: path,
     headers: headers,
     query: query,
-    body: body,
     userAgent: client._options.userAgent,
     timeoutMs: options?.timeoutMs || client._options.timeoutMs || -1,
   }, options);

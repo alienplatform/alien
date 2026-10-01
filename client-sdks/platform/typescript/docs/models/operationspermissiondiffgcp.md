@@ -9,8 +9,14 @@ let value: OperationsPermissionDiffGcp = {
   added: [
     {
       permission: "<value>",
-      scope: "projects/${projectName}/buckets/${resourceName}",
-      sources: [],
+      scope: "projects/${projectName}",
+      sources: [
+        {
+          plugin: "<value>",
+          operation: "<value>",
+          reason: "<value>",
+        },
+      ],
     },
   ],
   removed: [],

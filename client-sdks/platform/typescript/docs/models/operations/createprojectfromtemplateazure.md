@@ -6,6 +6,7 @@
 import { CreateProjectFromTemplateAzure } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateProjectFromTemplateAzure = {
+  catalogImage: "<value>",
   idleSuspendSeconds: 825743,
 };
 ```
@@ -14,5 +15,5 @@ let value: CreateProjectFromTemplateAzure = {
 
 | Field                | Type                 | Required             | Description          |
 | -------------------- | -------------------- | -------------------- | -------------------- |
-| `registryImage`      | *string*             | :heavy_minus_sign:   | N/A                  |
+| `catalogImage`       | *string*             | :heavy_check_mark:   | N/A                  |
 | `idleSuspendSeconds` | *number*             | :heavy_check_mark:   | N/A                  |

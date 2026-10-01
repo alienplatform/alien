@@ -18,7 +18,6 @@ import {
 export const PackageTypeEnum = {
   Cli: "cli",
   Cloudformation: "cloudformation",
-  GcpSandboxImage: "gcp-sandbox-image",
   Helm: "helm",
   OperatorImage: "operator-image",
   SandboxBundle: "sandbox-bundle",
@@ -359,34 +358,6 @@ export type ConfigHelm = {
 };
 
 /**
- * Configuration for a GCP sandbox image package.
- *
- * @remarks
- *
- * The image is the developer's base with the sandbox agent and its contract layered on, pushed
- * into the project's path of the GCP manager's registry.
- */
-export type ConfigGcpSandboxImage = {
-  /**
-   * Full reference of the published sandbox agent image the agent binary is read from.
-   */
-  agentImage: string;
-  /**
-   * `custom_image` resolved to its linux/amd64 manifest, `registry/repository@sha256:...`.
-   */
-  baseImage: string;
-  /**
-   * The developer's image as typed, which ties the package to the capability that asked.
-   */
-  customImage: string;
-  /**
-   * URL of the GCP manager whose registry proxy receives the push.
-   */
-  managerUrl: string;
-  type: "gcp-sandbox-image";
-};
-
-/**
  * Configuration for CloudFormation packages
  */
 export type ConfigCloudformation = {
@@ -464,7 +435,6 @@ export type ConfigCli = {
 export type Config =
   | ConfigCli
   | ConfigCloudformation
-  | ConfigGcpSandboxImage
   | ConfigHelm
   | ConfigOperatorImage
   | ConfigSandboxBundle
@@ -621,40 +591,6 @@ export type OutputsSandboxBundle = {
    */
   size: number;
   type: OutputsTypeSandboxBundle;
-};
-
-export const OutputsTypeGcpSandboxImage = {
-  GcpSandboxImage: "gcp-sandbox-image",
-} as const;
-export type OutputsTypeGcpSandboxImage = ClosedEnum<
-  typeof OutputsTypeGcpSandboxImage
->;
-
-/**
- * Outputs from a GCP sandbox image package build.
- */
-export type OutputsGcpSandboxImage = {
-  /**
-   * Manifest digest of the linux/amd64 agent image the agent binary came from.
-   */
-  agentDigest: string;
-  /**
-   * Manifest digest of the linux/amd64 base the image was built from.
-   */
-  baseDigest: string;
-  /**
-   * Manifest digest of the pushed image.
-   */
-  digest: string;
-  /**
-   * Native registry reference pinned by digest, the value a GCP sandbox stack names.
-   */
-  image: string;
-  /**
-   * Hash of the base digest, the agent image reference and the image contract; equal keys reuse.
-   */
-  reuseKey: string;
-  type: OutputsTypeGcpSandboxImage;
 };
 
 /**
@@ -827,7 +763,6 @@ export type OutputsCli = {
  * Package outputs (only when status is 'ready')
  */
 export type PackageOutputsUnion =
-  | OutputsGcpSandboxImage
   | OutputsSandboxBundle
   | OutputsCli
   | OutputsOperatorImage
@@ -895,7 +830,6 @@ export type Package = {
   config:
     | ConfigCli
     | ConfigCloudformation
-    | ConfigGcpSandboxImage
     | ConfigHelm
     | ConfigOperatorImage
     | ConfigSandboxBundle
@@ -904,7 +838,6 @@ export type Package = {
    * Package outputs (only when status is 'ready')
    */
   outputs?:
-    | OutputsGcpSandboxImage
     | OutputsSandboxBundle
     | OutputsCli
     | OutputsOperatorImage
@@ -1237,28 +1170,6 @@ export function configHelmFromJSON(
 }
 
 /** @internal */
-export const ConfigGcpSandboxImage$inboundSchema: z.ZodType<
-  ConfigGcpSandboxImage,
-  unknown
-> = z.object({
-  agentImage: z.string(),
-  baseImage: z.string(),
-  customImage: z.string(),
-  managerUrl: z.string(),
-  type: z.literal("gcp-sandbox-image"),
-});
-
-export function configGcpSandboxImageFromJSON(
-  jsonString: string,
-): SafeParseResult<ConfigGcpSandboxImage, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ConfigGcpSandboxImage$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ConfigGcpSandboxImage' from JSON`,
-  );
-}
-
-/** @internal */
 export const ConfigCloudformation$inboundSchema: z.ZodType<
   ConfigCloudformation,
   unknown
@@ -1306,7 +1217,6 @@ export function configCliFromJSON(
 export const Config$inboundSchema: z.ZodType<Config, unknown> = z.union([
   z.lazy(() => ConfigCli$inboundSchema),
   z.lazy(() => ConfigCloudformation$inboundSchema),
-  z.lazy(() => ConfigGcpSandboxImage$inboundSchema),
   z.lazy(() => ConfigHelm$inboundSchema),
   z.lazy(() => ConfigOperatorImage$inboundSchema),
   z.lazy(() => ConfigSandboxBundle$inboundSchema),
@@ -1457,34 +1367,6 @@ export function outputsSandboxBundleFromJSON(
     jsonString,
     (x) => OutputsSandboxBundle$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'OutputsSandboxBundle' from JSON`,
-  );
-}
-
-/** @internal */
-export const OutputsTypeGcpSandboxImage$inboundSchema: z.ZodEnum<
-  typeof OutputsTypeGcpSandboxImage
-> = z.enum(OutputsTypeGcpSandboxImage);
-
-/** @internal */
-export const OutputsGcpSandboxImage$inboundSchema: z.ZodType<
-  OutputsGcpSandboxImage,
-  unknown
-> = z.object({
-  agentDigest: z.string(),
-  baseDigest: z.string(),
-  digest: z.string(),
-  image: z.string(),
-  reuseKey: z.string(),
-  type: OutputsTypeGcpSandboxImage$inboundSchema,
-});
-
-export function outputsGcpSandboxImageFromJSON(
-  jsonString: string,
-): SafeParseResult<OutputsGcpSandboxImage, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => OutputsGcpSandboxImage$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'OutputsGcpSandboxImage' from JSON`,
   );
 }
 
@@ -1652,7 +1534,6 @@ export const PackageOutputsUnion$inboundSchema: z.ZodType<
   PackageOutputsUnion,
   unknown
 > = z.union([
-  z.lazy(() => OutputsGcpSandboxImage$inboundSchema),
   z.lazy(() => OutputsSandboxBundle$inboundSchema),
   z.lazy(() => OutputsCli$inboundSchema),
   z.lazy(() => OutputsOperatorImage$inboundSchema),
@@ -1692,7 +1573,6 @@ export const Package$inboundSchema: z.ZodType<Package, unknown> = z.object({
   config: z.union([
     z.lazy(() => ConfigCli$inboundSchema),
     z.lazy(() => ConfigCloudformation$inboundSchema),
-    z.lazy(() => ConfigGcpSandboxImage$inboundSchema),
     z.lazy(() => ConfigHelm$inboundSchema),
     z.lazy(() => ConfigOperatorImage$inboundSchema),
     z.lazy(() => ConfigSandboxBundle$inboundSchema),
@@ -1700,7 +1580,6 @@ export const Package$inboundSchema: z.ZodType<Package, unknown> = z.object({
   ]),
   outputs: z.nullable(
     z.union([
-      z.lazy(() => OutputsGcpSandboxImage$inboundSchema),
       z.lazy(() => OutputsSandboxBundle$inboundSchema),
       z.lazy(() => OutputsCli$inboundSchema),
       z.lazy(() => OutputsOperatorImage$inboundSchema),

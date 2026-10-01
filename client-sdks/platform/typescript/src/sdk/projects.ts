@@ -348,7 +348,7 @@ export class Projects extends ClientSDK {
   }
 
   /**
-   * Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. Without a custom image it publishes to every cloud on Alien's default image, which the project then follows. A custom image publishes to AWS; a public one with a linux/amd64 variant also publishes to Azure, and to GCP once Alien has built its GCP image.
+   * Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. The clouds it publishes to follow the sources configured: an AWS bundle, an Azure catalog image, or both.
    */
   async configureRemoteSandbox(
     request: operations.ConfigureProjectRemoteSandboxRequest,

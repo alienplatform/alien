@@ -76,12 +76,14 @@ export type InstallationsError = {
   message: string;
 };
 
-export const ItemPlatform = {
+export const GetRemoteOperatorProjectSummaryPlatform = {
   Kubernetes: "kubernetes",
   Ecs: "ecs",
   Unknown: "unknown",
 } as const;
-export type ItemPlatform = ClosedEnum<typeof ItemPlatform>;
+export type GetRemoteOperatorProjectSummaryPlatform = ClosedEnum<
+  typeof GetRemoteOperatorProjectSummaryPlatform
+>;
 
 export const ItemState = {
   Unhealthy: "unhealthy",
@@ -99,17 +101,6 @@ export const ImageStatus = {
   Unconfigured: "unconfigured",
 } as const;
 export type ImageStatus = ClosedEnum<typeof ImageStatus>;
-
-/**
- * The ready Operator image selected by the project's current configuration when it differs from the image this installation was set up with. Re-applying setup installs it. Null when the installation already uses it, its install identity is unknown, or the selected package is not ready.
- */
-export type OperatorUpdate = {
-  packageId: string;
-  packageVersion: string;
-  image: string;
-  digest: string;
-  builtAt: Date;
-};
 
 export const OperationSyncStatus = {
   Preparing: "preparing",
@@ -246,7 +237,7 @@ export type GetRemoteOperatorProjectSummaryItem = {
   id: string;
   name: string;
   deploymentGroupId: string;
-  platform: ItemPlatform;
+  platform: GetRemoteOperatorProjectSummaryPlatform;
   region: string | null;
   state: ItemState;
   stateReason: string;
@@ -260,10 +251,6 @@ export type GetRemoteOperatorProjectSummaryItem = {
   previousExpectedImage: models.RemoteOperatorInstallReceipt | null;
   runningImage: models.ObservedRemoteOperatorImageIdentity | null;
   imageStatus: ImageStatus;
-  /**
-   * The ready Operator image selected by the project's current configuration when it differs from the image this installation was set up with. Re-applying setup installs it. Null when the installation already uses it, its install identity is unknown, or the selected package is not ready.
-   */
-  operatorUpdate: OperatorUpdate | null;
   operationSync: OperationSync | null;
   application: Application;
   /**
@@ -272,31 +259,8 @@ export type GetRemoteOperatorProjectSummaryItem = {
   permissions: Permissions;
 };
 
-export const UnregisteredSetupPlatform = {
-  Kubernetes: "kubernetes",
-  Ecs: "ecs",
-} as const;
-export type UnregisteredSetupPlatform = ClosedEnum<
-  typeof UnregisteredSetupPlatform
->;
-
-export type UnregisteredSetup = {
-  deploymentGroupId: string;
-  name: string;
-  platform: UnregisteredSetupPlatform;
-  createdAt: Date;
-  /**
-   * When the newest installation values stop working. Resuming setup can replace them.
-   */
-  valuesExpireAt: Date | null;
-};
-
 export type InstallationsData = {
   items: Array<GetRemoteOperatorProjectSummaryItem>;
-  /**
-   * Setups whose installation values were created but whose Operator never registered, newest first.
-   */
-  unregisteredSetups: Array<UnregisteredSetup>;
 };
 
 export type Installations = {
@@ -397,7 +361,6 @@ export const RecentStatus = {
   CustomerApproved: "customer-approved",
   Expired: "expired",
   Rejected: "rejected",
-  Revoked: "revoked",
 } as const;
 export type RecentStatus = ClosedEnum<typeof RecentStatus>;
 
@@ -501,8 +464,6 @@ export type Aw = {
 
 export const GetRemoteOperatorProjectSummaryScope = {
   ProjectsDollarProjectName: "projects/${projectName}",
-  ProjectsDollarProjectNameBucketsDollarResourceName:
-    "projects/${projectName}/buckets/${resourceName}",
 } as const;
 export type GetRemoteOperatorProjectSummaryScope = ClosedEnum<
   typeof GetRemoteOperatorProjectSummaryScope
@@ -601,7 +562,6 @@ export type ActivityRecent = {
   pluginVersion: string;
   operation: string;
   tier: RecentTier | null;
-  accessRequestId: string | null;
   commandState: string | null;
   verificationState: RecentVerificationState;
   createdAt: Date;
@@ -689,7 +649,6 @@ export type LastVerifiedOperation = {
   pluginVersion: string;
   operation: string;
   tier: TierSucceeded | null;
-  accessRequestId: string | null;
   commandState: CommandState;
   verificationState: VerificationStateSucceeded;
   createdAt: Date;
@@ -836,8 +795,9 @@ export function installationsErrorFromJSON(
 }
 
 /** @internal */
-export const ItemPlatform$inboundSchema: z.ZodEnum<typeof ItemPlatform> = z
-  .enum(ItemPlatform);
+export const GetRemoteOperatorProjectSummaryPlatform$inboundSchema: z.ZodEnum<
+  typeof GetRemoteOperatorProjectSummaryPlatform
+> = z.enum(GetRemoteOperatorProjectSummaryPlatform);
 
 /** @internal */
 export const ItemState$inboundSchema: z.ZodEnum<typeof ItemState> = z.enum(
@@ -848,26 +808,6 @@ export const ItemState$inboundSchema: z.ZodEnum<typeof ItemState> = z.enum(
 export const ImageStatus$inboundSchema: z.ZodEnum<typeof ImageStatus> = z.enum(
   ImageStatus,
 );
-
-/** @internal */
-export const OperatorUpdate$inboundSchema: z.ZodType<OperatorUpdate, unknown> =
-  z.object({
-    packageId: z.string(),
-    packageVersion: z.string(),
-    image: z.string(),
-    digest: z.string(),
-    builtAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  });
-
-export function operatorUpdateFromJSON(
-  jsonString: string,
-): SafeParseResult<OperatorUpdate, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => OperatorUpdate$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'OperatorUpdate' from JSON`,
-  );
-}
 
 /** @internal */
 export const OperationSyncStatus$inboundSchema: z.ZodEnum<
@@ -1030,7 +970,7 @@ export const GetRemoteOperatorProjectSummaryItem$inboundSchema: z.ZodType<
   id: z.string(),
   name: z.string(),
   deploymentGroupId: z.string(),
-  platform: ItemPlatform$inboundSchema,
+  platform: GetRemoteOperatorProjectSummaryPlatform$inboundSchema,
   region: z.nullable(z.string()),
   state: ItemState$inboundSchema,
   stateReason: z.string(),
@@ -1052,7 +992,6 @@ export const GetRemoteOperatorProjectSummaryItem$inboundSchema: z.ZodType<
     models.ObservedRemoteOperatorImageIdentity$inboundSchema,
   ),
   imageStatus: ImageStatus$inboundSchema,
-  operatorUpdate: z.nullable(z.lazy(() => OperatorUpdate$inboundSchema)),
   operationSync: z.nullable(z.lazy(() => OperationSync$inboundSchema)),
   application: z.lazy(() => Application$inboundSchema),
   permissions: z.lazy(() => Permissions$inboundSchema),
@@ -1070,35 +1009,6 @@ export function getRemoteOperatorProjectSummaryItemFromJSON(
 }
 
 /** @internal */
-export const UnregisteredSetupPlatform$inboundSchema: z.ZodEnum<
-  typeof UnregisteredSetupPlatform
-> = z.enum(UnregisteredSetupPlatform);
-
-/** @internal */
-export const UnregisteredSetup$inboundSchema: z.ZodType<
-  UnregisteredSetup,
-  unknown
-> = z.object({
-  deploymentGroupId: z.string(),
-  name: z.string(),
-  platform: UnregisteredSetupPlatform$inboundSchema,
-  createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  valuesExpireAt: z.nullable(
-    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  ),
-});
-
-export function unregisteredSetupFromJSON(
-  jsonString: string,
-): SafeParseResult<UnregisteredSetup, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => UnregisteredSetup$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'UnregisteredSetup' from JSON`,
-  );
-}
-
-/** @internal */
 export const InstallationsData$inboundSchema: z.ZodType<
   InstallationsData,
   unknown
@@ -1106,7 +1016,6 @@ export const InstallationsData$inboundSchema: z.ZodType<
   items: z.array(
     z.lazy(() => GetRemoteOperatorProjectSummaryItem$inboundSchema),
   ),
-  unregisteredSetups: z.array(z.lazy(() => UnregisteredSetup$inboundSchema)),
 });
 
 export function installationsDataFromJSON(
@@ -1631,7 +1540,6 @@ export const ActivityRecent$inboundSchema: z.ZodType<ActivityRecent, unknown> =
     pluginVersion: z.string(),
     operation: z.string(),
     tier: z.nullable(RecentTier$inboundSchema),
-    accessRequestId: z.nullable(z.string()),
     commandState: z.nullable(z.string()),
     verificationState: RecentVerificationState$inboundSchema,
     createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
@@ -1823,7 +1731,6 @@ export const LastVerifiedOperation$inboundSchema: z.ZodType<
   pluginVersion: z.string(),
   operation: z.string(),
   tier: z.nullable(TierSucceeded$inboundSchema),
-  accessRequestId: z.nullable(z.string()),
   commandState: CommandState$inboundSchema,
   verificationState: VerificationStateSucceeded$inboundSchema,
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),

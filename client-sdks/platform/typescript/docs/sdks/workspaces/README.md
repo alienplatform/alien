@@ -212,7 +212,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
+    
   } else {
     console.log("workspacesDelete failed:", res.error);
   }
@@ -530,7 +530,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
+    
   } else {
     console.log("workspacesRemoveMember failed:", res.error);
   }

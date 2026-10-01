@@ -591,7 +591,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
+    
   } else {
     console.log("deploymentGroupsDeleteDeploymentGroup failed:", res.error);
   }
@@ -878,7 +878,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 400, 404, 409            | application/json         |
+| errors.APIError          | 400, 404                 | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -1170,7 +1170,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
+    
   } else {
     console.log("deploymentGroupsDeleteExternalAIBinding failed:", res.error);
   }

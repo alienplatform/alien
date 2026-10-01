@@ -24,15 +24,11 @@ let value: PrepareOperatorManifestPackageResponse = {
     },
     packageBuildInputHash: "<value>",
     config: {
-      agentImage: "<value>",
-      baseImage: "<value>",
-      customImage: "<value>",
-      managerUrl: "https://french-roadway.org/",
-      type: "gcp-sandbox-image",
+      type: "cloudformation",
     },
-    retries: 386232,
-    createdAt: new Date("2025-05-20T06:05:48.607Z"),
-    updatedAt: new Date("2026-02-26T09:32:51.356Z"),
+    retries: 147469,
+    createdAt: new Date("2024-11-19T20:57:14.511Z"),
+    updatedAt: new Date("2026-04-15T04:09:13.284Z"),
   },
 };
 ```

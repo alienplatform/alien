@@ -206,7 +206,7 @@ export type SyncReconcileRequestLifecycle24 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle24
 >;
 
-export type ResourceHeartbeatStatus24 = {
+export type SyncReconcileRequestStatus24 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue24>;
   health: SyncReconcileRequestHealth24;
   lifecycle: SyncReconcileRequestLifecycle24;
@@ -225,7 +225,7 @@ export type SyncReconcileRequestData1 = {
   nodeStatuses?: Array<NodeStatus> | undefined;
   podCounts: PodCounts;
   region?: string | null | undefined;
-  status: ResourceHeartbeatStatus24;
+  status: SyncReconcileRequestStatus24;
   version?: string | null | undefined;
 };
 
@@ -291,7 +291,7 @@ export type SyncReconcileRequestLifecycle23 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle23
 >;
 
-export type ResourceHeartbeatStatus23 = {
+export type SyncReconcileRequestStatus23 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue23>;
   health: SyncReconcileRequestHealth23;
   lifecycle: SyncReconcileRequestLifecycle23;
@@ -312,7 +312,7 @@ export type DataLocal5 = {
   networkName?: string | null | undefined;
   nodes: Nodes5;
   runningContainers?: number | null | undefined;
-  status: ResourceHeartbeatStatus23;
+  status: SyncReconcileRequestStatus23;
   trackedContainers?: number | null | undefined;
   backend: "local";
 };
@@ -520,7 +520,7 @@ export type SyncReconcileRequestLifecycle22 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle22
 >;
 
-export type ResourceHeartbeatStatus22 = {
+export type SyncReconcileRequestStatus22 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue22>;
   health: SyncReconcileRequestHealth22;
   lifecycle: SyncReconcileRequestLifecycle22;
@@ -537,7 +537,7 @@ export type DataMachines2 = {
   memory?: SyncReconcileRequestMemory10 | any | null | undefined;
   name: string;
   nodes: Nodes4;
-  status: ResourceHeartbeatStatus22;
+  status: SyncReconcileRequestStatus22;
   backend: "machines";
 };
 
@@ -725,7 +725,7 @@ export type SyncReconcileRequestLifecycle21 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle21
 >;
 
-export type ResourceHeartbeatStatus21 = {
+export type SyncReconcileRequestStatus21 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue21>;
   health: SyncReconcileRequestHealth21;
   lifecycle: SyncReconcileRequestLifecycle21;
@@ -743,7 +743,7 @@ export type DataAzure2 = {
   nodes: Nodes3;
   providerFleets: Array<ProviderFleet3>;
   region?: string | null | undefined;
-  status: ResourceHeartbeatStatus21;
+  status: SyncReconcileRequestStatus21;
   backend: "azure";
 };
 
@@ -931,7 +931,7 @@ export type SyncReconcileRequestLifecycle20 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle20
 >;
 
-export type ResourceHeartbeatStatus20 = {
+export type SyncReconcileRequestStatus20 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue20>;
   health: SyncReconcileRequestHealth20;
   lifecycle: SyncReconcileRequestLifecycle20;
@@ -949,7 +949,7 @@ export type DataGcp2 = {
   nodes: Nodes2;
   providerFleets: Array<ProviderFleet2>;
   region?: string | null | undefined;
-  status: ResourceHeartbeatStatus20;
+  status: SyncReconcileRequestStatus20;
   backend: "gcp";
 };
 
@@ -1577,7 +1577,7 @@ export const SyncReconcileRequestLifecycle24$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle24);
 
 /** @internal */
-export type ResourceHeartbeatStatus24$Outbound = {
+export type SyncReconcileRequestStatus24$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue24$Outbound>;
   health: string;
   lifecycle: string;
@@ -1587,9 +1587,9 @@ export type ResourceHeartbeatStatus24$Outbound = {
 };
 
 /** @internal */
-export const ResourceHeartbeatStatus24$outboundSchema: z.ZodType<
-  ResourceHeartbeatStatus24$Outbound,
-  ResourceHeartbeatStatus24
+export const SyncReconcileRequestStatus24$outboundSchema: z.ZodType<
+  SyncReconcileRequestStatus24$Outbound,
+  SyncReconcileRequestStatus24
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue24$outboundSchema),
@@ -1601,11 +1601,13 @@ export const ResourceHeartbeatStatus24$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function resourceHeartbeatStatus24ToJSON(
-  resourceHeartbeatStatus24: ResourceHeartbeatStatus24,
+export function syncReconcileRequestStatus24ToJSON(
+  syncReconcileRequestStatus24: SyncReconcileRequestStatus24,
 ): string {
   return JSON.stringify(
-    ResourceHeartbeatStatus24$outboundSchema.parse(resourceHeartbeatStatus24),
+    SyncReconcileRequestStatus24$outboundSchema.parse(
+      syncReconcileRequestStatus24,
+    ),
   );
 }
 
@@ -1620,7 +1622,7 @@ export type SyncReconcileRequestData1$Outbound = {
   nodeStatuses?: Array<NodeStatus$Outbound> | undefined;
   podCounts: PodCounts$Outbound;
   region?: string | null | undefined;
-  status: ResourceHeartbeatStatus24$Outbound;
+  status: SyncReconcileRequestStatus24$Outbound;
   version?: string | null | undefined;
 };
 
@@ -1638,7 +1640,7 @@ export const SyncReconcileRequestData1$outboundSchema: z.ZodType<
   nodeStatuses: z.array(z.lazy(() => NodeStatus$outboundSchema)).optional(),
   podCounts: z.lazy(() => PodCounts$outboundSchema),
   region: z.nullable(z.string()).optional(),
-  status: z.lazy(() => ResourceHeartbeatStatus24$outboundSchema),
+  status: z.lazy(() => SyncReconcileRequestStatus24$outboundSchema),
   version: z.nullable(z.string()).optional(),
 });
 
@@ -1742,7 +1744,7 @@ export const SyncReconcileRequestLifecycle23$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle23);
 
 /** @internal */
-export type ResourceHeartbeatStatus23$Outbound = {
+export type SyncReconcileRequestStatus23$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue23$Outbound>;
   health: string;
   lifecycle: string;
@@ -1752,9 +1754,9 @@ export type ResourceHeartbeatStatus23$Outbound = {
 };
 
 /** @internal */
-export const ResourceHeartbeatStatus23$outboundSchema: z.ZodType<
-  ResourceHeartbeatStatus23$Outbound,
-  ResourceHeartbeatStatus23
+export const SyncReconcileRequestStatus23$outboundSchema: z.ZodType<
+  SyncReconcileRequestStatus23$Outbound,
+  SyncReconcileRequestStatus23
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue23$outboundSchema),
@@ -1766,11 +1768,13 @@ export const ResourceHeartbeatStatus23$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function resourceHeartbeatStatus23ToJSON(
-  resourceHeartbeatStatus23: ResourceHeartbeatStatus23,
+export function syncReconcileRequestStatus23ToJSON(
+  syncReconcileRequestStatus23: SyncReconcileRequestStatus23,
 ): string {
   return JSON.stringify(
-    ResourceHeartbeatStatus23$outboundSchema.parse(resourceHeartbeatStatus23),
+    SyncReconcileRequestStatus23$outboundSchema.parse(
+      syncReconcileRequestStatus23,
+    ),
   );
 }
 
@@ -1787,7 +1791,7 @@ export type DataLocal5$Outbound = {
   networkName?: string | null | undefined;
   nodes: Nodes5$Outbound;
   runningContainers?: number | null | undefined;
-  status: ResourceHeartbeatStatus23$Outbound;
+  status: SyncReconcileRequestStatus23$Outbound;
   trackedContainers?: number | null | undefined;
   backend: "local";
 };
@@ -1808,7 +1812,7 @@ export const DataLocal5$outboundSchema: z.ZodType<
   networkName: z.nullable(z.string()).optional(),
   nodes: z.lazy(() => Nodes5$outboundSchema),
   runningContainers: z.nullable(z.int()).optional(),
-  status: z.lazy(() => ResourceHeartbeatStatus23$outboundSchema),
+  status: z.lazy(() => SyncReconcileRequestStatus23$outboundSchema),
   trackedContainers: z.nullable(z.int()).optional(),
   backend: z.literal("local"),
 });
@@ -2320,7 +2324,7 @@ export const SyncReconcileRequestLifecycle22$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle22);
 
 /** @internal */
-export type ResourceHeartbeatStatus22$Outbound = {
+export type SyncReconcileRequestStatus22$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue22$Outbound>;
   health: string;
   lifecycle: string;
@@ -2330,9 +2334,9 @@ export type ResourceHeartbeatStatus22$Outbound = {
 };
 
 /** @internal */
-export const ResourceHeartbeatStatus22$outboundSchema: z.ZodType<
-  ResourceHeartbeatStatus22$Outbound,
-  ResourceHeartbeatStatus22
+export const SyncReconcileRequestStatus22$outboundSchema: z.ZodType<
+  SyncReconcileRequestStatus22$Outbound,
+  SyncReconcileRequestStatus22
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue22$outboundSchema),
@@ -2344,11 +2348,13 @@ export const ResourceHeartbeatStatus22$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function resourceHeartbeatStatus22ToJSON(
-  resourceHeartbeatStatus22: ResourceHeartbeatStatus22,
+export function syncReconcileRequestStatus22ToJSON(
+  syncReconcileRequestStatus22: SyncReconcileRequestStatus22,
 ): string {
   return JSON.stringify(
-    ResourceHeartbeatStatus22$outboundSchema.parse(resourceHeartbeatStatus22),
+    SyncReconcileRequestStatus22$outboundSchema.parse(
+      syncReconcileRequestStatus22,
+    ),
   );
 }
 
@@ -2361,7 +2367,7 @@ export type DataMachines2$Outbound = {
   memory?: SyncReconcileRequestMemory10$Outbound | any | null | undefined;
   name: string;
   nodes: Nodes4$Outbound;
-  status: ResourceHeartbeatStatus22$Outbound;
+  status: SyncReconcileRequestStatus22$Outbound;
   backend: "machines";
 };
 
@@ -2384,7 +2390,7 @@ export const DataMachines2$outboundSchema: z.ZodType<
   ).optional(),
   name: z.string(),
   nodes: z.lazy(() => Nodes4$outboundSchema),
-  status: z.lazy(() => ResourceHeartbeatStatus22$outboundSchema),
+  status: z.lazy(() => SyncReconcileRequestStatus22$outboundSchema),
   backend: z.literal("machines"),
 });
 
@@ -2833,7 +2839,7 @@ export const SyncReconcileRequestLifecycle21$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle21);
 
 /** @internal */
-export type ResourceHeartbeatStatus21$Outbound = {
+export type SyncReconcileRequestStatus21$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue21$Outbound>;
   health: string;
   lifecycle: string;
@@ -2843,9 +2849,9 @@ export type ResourceHeartbeatStatus21$Outbound = {
 };
 
 /** @internal */
-export const ResourceHeartbeatStatus21$outboundSchema: z.ZodType<
-  ResourceHeartbeatStatus21$Outbound,
-  ResourceHeartbeatStatus21
+export const SyncReconcileRequestStatus21$outboundSchema: z.ZodType<
+  SyncReconcileRequestStatus21$Outbound,
+  SyncReconcileRequestStatus21
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue21$outboundSchema),
@@ -2857,11 +2863,13 @@ export const ResourceHeartbeatStatus21$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function resourceHeartbeatStatus21ToJSON(
-  resourceHeartbeatStatus21: ResourceHeartbeatStatus21,
+export function syncReconcileRequestStatus21ToJSON(
+  syncReconcileRequestStatus21: SyncReconcileRequestStatus21,
 ): string {
   return JSON.stringify(
-    ResourceHeartbeatStatus21$outboundSchema.parse(resourceHeartbeatStatus21),
+    SyncReconcileRequestStatus21$outboundSchema.parse(
+      syncReconcileRequestStatus21,
+    ),
   );
 }
 
@@ -2875,7 +2883,7 @@ export type DataAzure2$Outbound = {
   nodes: Nodes3$Outbound;
   providerFleets: Array<ProviderFleet3$Outbound>;
   region?: string | null | undefined;
-  status: ResourceHeartbeatStatus21$Outbound;
+  status: SyncReconcileRequestStatus21$Outbound;
   backend: "azure";
 };
 
@@ -2899,7 +2907,7 @@ export const DataAzure2$outboundSchema: z.ZodType<
   nodes: z.lazy(() => Nodes3$outboundSchema),
   providerFleets: z.array(z.lazy(() => ProviderFleet3$outboundSchema)),
   region: z.nullable(z.string()).optional(),
-  status: z.lazy(() => ResourceHeartbeatStatus21$outboundSchema),
+  status: z.lazy(() => SyncReconcileRequestStatus21$outboundSchema),
   backend: z.literal("azure"),
 });
 
@@ -3348,7 +3356,7 @@ export const SyncReconcileRequestLifecycle20$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle20);
 
 /** @internal */
-export type ResourceHeartbeatStatus20$Outbound = {
+export type SyncReconcileRequestStatus20$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue20$Outbound>;
   health: string;
   lifecycle: string;
@@ -3358,9 +3366,9 @@ export type ResourceHeartbeatStatus20$Outbound = {
 };
 
 /** @internal */
-export const ResourceHeartbeatStatus20$outboundSchema: z.ZodType<
-  ResourceHeartbeatStatus20$Outbound,
-  ResourceHeartbeatStatus20
+export const SyncReconcileRequestStatus20$outboundSchema: z.ZodType<
+  SyncReconcileRequestStatus20$Outbound,
+  SyncReconcileRequestStatus20
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue20$outboundSchema),
@@ -3372,11 +3380,13 @@ export const ResourceHeartbeatStatus20$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function resourceHeartbeatStatus20ToJSON(
-  resourceHeartbeatStatus20: ResourceHeartbeatStatus20,
+export function syncReconcileRequestStatus20ToJSON(
+  syncReconcileRequestStatus20: SyncReconcileRequestStatus20,
 ): string {
   return JSON.stringify(
-    ResourceHeartbeatStatus20$outboundSchema.parse(resourceHeartbeatStatus20),
+    SyncReconcileRequestStatus20$outboundSchema.parse(
+      syncReconcileRequestStatus20,
+    ),
   );
 }
 
@@ -3390,7 +3400,7 @@ export type DataGcp2$Outbound = {
   nodes: Nodes2$Outbound;
   providerFleets: Array<ProviderFleet2$Outbound>;
   region?: string | null | undefined;
-  status: ResourceHeartbeatStatus20$Outbound;
+  status: SyncReconcileRequestStatus20$Outbound;
   backend: "gcp";
 };
 
@@ -3412,7 +3422,7 @@ export const DataGcp2$outboundSchema: z.ZodType<DataGcp2$Outbound, DataGcp2> = z
     nodes: z.lazy(() => Nodes2$outboundSchema),
     providerFleets: z.array(z.lazy(() => ProviderFleet2$outboundSchema)),
     region: z.nullable(z.string()).optional(),
-    status: z.lazy(() => ResourceHeartbeatStatus20$outboundSchema),
+    status: z.lazy(() => SyncReconcileRequestStatus20$outboundSchema),
     backend: z.literal("gcp"),
   });
 

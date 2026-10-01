@@ -75,41 +75,6 @@ export type GetAccessRequestMaxRisk = ClosedEnum<
 >;
 
 /**
- * How and when the customer gate was passed. Null until approved.
- */
-export type GetAccessRequestApprovedBy = {
-  /**
-   * `kubectl` for the in-cluster path, else the direct caller's method such as `slack`.
-   */
-  method: string | null;
-  /**
-   * The approving user. Null for the kubectl path: the approver is only in the customer's cluster audit log.
-   */
-  actorId: string | null;
-  at: string;
-};
-
-export type GetAccessRequestDeniedBy = {
-  actorId: string | null;
-  at: string;
-};
-
-export const GetAccessRequestActorKind = {
-  User: "user",
-  ServiceAccount: "serviceAccount",
-} as const;
-export type GetAccessRequestActorKind = ClosedEnum<
-  typeof GetAccessRequestActorKind
->;
-
-export type GetAccessRequestRevokedBy = {
-  actorKind: GetAccessRequestActorKind;
-  actorId: string;
-  at: string;
-  reason: string | null;
-};
-
-/**
  * The access request.
  */
 export type GetAccessRequestResponse = {
@@ -120,10 +85,6 @@ export type GetAccessRequestResponse = {
   deploymentId: string;
   deployment?: GetAccessRequestDeployment | undefined;
   remediationPlanId: string | null;
-  /**
-   * The investigation whose remediation plan proposed this request, if a plan did.
-   */
-  agentSessionId: string | null;
   title: string;
   reason: string | null;
   commands: Array<GetAccessRequestCommand>;
@@ -135,18 +96,6 @@ export type GetAccessRequestResponse = {
   debugGrant: models.AccessRequestDebugGrant | null;
   status: models.AccessRequestStatus;
   approvedUntil: string | null;
-  createdAt: string;
-  /**
-   * Who passed the engineer gate; the requester for a plan-less request.
-   */
-  queuedBy: string | null;
-  queuedAt: string | null;
-  /**
-   * How and when the customer gate was passed. Null until approved.
-   */
-  approvedBy: GetAccessRequestApprovedBy | null;
-  deniedBy: GetAccessRequestDeniedBy | null;
-  revokedBy: GetAccessRequestRevokedBy | null;
 };
 
 /** @internal */
@@ -229,71 +178,6 @@ export const GetAccessRequestMaxRisk$inboundSchema: z.ZodEnum<
 > = z.enum(GetAccessRequestMaxRisk);
 
 /** @internal */
-export const GetAccessRequestApprovedBy$inboundSchema: z.ZodType<
-  GetAccessRequestApprovedBy,
-  unknown
-> = z.object({
-  method: z.nullable(z.string()),
-  actorId: z.nullable(z.string()),
-  at: z.string(),
-});
-
-export function getAccessRequestApprovedByFromJSON(
-  jsonString: string,
-): SafeParseResult<GetAccessRequestApprovedBy, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetAccessRequestApprovedBy$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetAccessRequestApprovedBy' from JSON`,
-  );
-}
-
-/** @internal */
-export const GetAccessRequestDeniedBy$inboundSchema: z.ZodType<
-  GetAccessRequestDeniedBy,
-  unknown
-> = z.object({
-  actorId: z.nullable(z.string()),
-  at: z.string(),
-});
-
-export function getAccessRequestDeniedByFromJSON(
-  jsonString: string,
-): SafeParseResult<GetAccessRequestDeniedBy, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetAccessRequestDeniedBy$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetAccessRequestDeniedBy' from JSON`,
-  );
-}
-
-/** @internal */
-export const GetAccessRequestActorKind$inboundSchema: z.ZodEnum<
-  typeof GetAccessRequestActorKind
-> = z.enum(GetAccessRequestActorKind);
-
-/** @internal */
-export const GetAccessRequestRevokedBy$inboundSchema: z.ZodType<
-  GetAccessRequestRevokedBy,
-  unknown
-> = z.object({
-  actorKind: GetAccessRequestActorKind$inboundSchema,
-  actorId: z.string(),
-  at: z.string(),
-  reason: z.nullable(z.string()),
-});
-
-export function getAccessRequestRevokedByFromJSON(
-  jsonString: string,
-): SafeParseResult<GetAccessRequestRevokedBy, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetAccessRequestRevokedBy$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetAccessRequestRevokedBy' from JSON`,
-  );
-}
-
-/** @internal */
 export const GetAccessRequestResponse$inboundSchema: z.ZodType<
   GetAccessRequestResponse,
   unknown
@@ -305,7 +189,6 @@ export const GetAccessRequestResponse$inboundSchema: z.ZodType<
   deploymentId: z.string(),
   deployment: z.lazy(() => GetAccessRequestDeployment$inboundSchema).optional(),
   remediationPlanId: z.nullable(z.string()),
-  agentSessionId: z.nullable(z.string()),
   title: z.string(),
   reason: z.nullable(z.string()),
   commands: z.array(z.lazy(() => GetAccessRequestCommand$inboundSchema)),
@@ -314,14 +197,6 @@ export const GetAccessRequestResponse$inboundSchema: z.ZodType<
   debugGrant: z.nullable(models.AccessRequestDebugGrant$inboundSchema),
   status: models.AccessRequestStatus$inboundSchema,
   approvedUntil: z.nullable(z.string()),
-  createdAt: z.string(),
-  queuedBy: z.nullable(z.string()),
-  queuedAt: z.nullable(z.string()),
-  approvedBy: z.nullable(
-    z.lazy(() => GetAccessRequestApprovedBy$inboundSchema),
-  ),
-  deniedBy: z.nullable(z.lazy(() => GetAccessRequestDeniedBy$inboundSchema)),
-  revokedBy: z.nullable(z.lazy(() => GetAccessRequestRevokedBy$inboundSchema)),
 });
 
 export function getAccessRequestResponseFromJSON(

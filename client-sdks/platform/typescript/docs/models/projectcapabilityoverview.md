@@ -8,9 +8,8 @@ import { ProjectCapabilityOverview } from "@alienplatform/platform-api/models";
 let value: ProjectCapabilityOverview = {
   generatedAt: new Date("2024-09-06T15:21:08.715Z"),
   configurationStatus: "valid",
-  hasAppRemoteSandbox: true,
   summary: {
-    groups: 549686,
+    groups: 180460,
     capabilities: {
       models: {
         enabled: false,
@@ -59,7 +58,7 @@ let value: ProjectCapabilityOverview = {
       deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
       name: "<value>",
       externalId: "<id>",
-      createdAt: new Date("2024-07-21T22:43:29.070Z"),
+      createdAt: new Date("2026-02-20T18:56:11.695Z"),
       capabilities: {
         models: {
           capability: "remoteSandbox",
@@ -168,6 +167,5 @@ let value: ProjectCapabilityOverview = {
 | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `generatedAt`                                                                                 | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `configurationStatus`                                                                         | [models.ConfigurationStatus](../models/configurationstatus.md)                                | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `hasAppRemoteSandbox`                                                                         | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `summary`                                                                                     | [models.ProjectCapabilityOverviewSummary](../models/projectcapabilityoverviewsummary.md)      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `groups`                                                                                      | [models.Group](../models/group.md)[]                                                          | :heavy_check_mark:                                                                            | N/A                                                                                           |

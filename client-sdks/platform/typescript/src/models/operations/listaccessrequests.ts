@@ -30,10 +30,6 @@ export type ListAccessRequestsRequest = {
    */
   deploymentId?: string | undefined;
   /**
-   * Only requests proposed by this investigation's remediation plan.
-   */
-  agentSessionId?: string | undefined;
-  /**
    * Maximum number of items to return per page
    */
   limit?: number | undefined;
@@ -97,41 +93,6 @@ export type ListAccessRequestsMaxRisk = ClosedEnum<
   typeof ListAccessRequestsMaxRisk
 >;
 
-/**
- * How and when the customer gate was passed. Null until approved.
- */
-export type ListAccessRequestsApprovedBy = {
-  /**
-   * `kubectl` for the in-cluster path, else the direct caller's method such as `slack`.
-   */
-  method: string | null;
-  /**
-   * The approving user. Null for the kubectl path: the approver is only in the customer's cluster audit log.
-   */
-  actorId: string | null;
-  at: string;
-};
-
-export type ListAccessRequestsDeniedBy = {
-  actorId: string | null;
-  at: string;
-};
-
-export const ListAccessRequestsActorKind = {
-  User: "user",
-  ServiceAccount: "serviceAccount",
-} as const;
-export type ListAccessRequestsActorKind = ClosedEnum<
-  typeof ListAccessRequestsActorKind
->;
-
-export type ListAccessRequestsRevokedBy = {
-  actorKind: ListAccessRequestsActorKind;
-  actorId: string;
-  at: string;
-  reason: string | null;
-};
-
 export type ListAccessRequestsItem = {
   id: string;
   requesterKind: ListAccessRequestsRequesterKind | null;
@@ -140,10 +101,6 @@ export type ListAccessRequestsItem = {
   deploymentId: string;
   deployment?: ListAccessRequestsDeployment | undefined;
   remediationPlanId: string | null;
-  /**
-   * The investigation whose remediation plan proposed this request, if a plan did.
-   */
-  agentSessionId: string | null;
   title: string;
   reason: string | null;
   commands: Array<ListAccessRequestsCommand>;
@@ -155,18 +112,6 @@ export type ListAccessRequestsItem = {
   debugGrant: models.AccessRequestDebugGrant | null;
   status: models.AccessRequestStatus;
   approvedUntil: string | null;
-  createdAt: string;
-  /**
-   * Who passed the engineer gate; the requester for a plan-less request.
-   */
-  queuedBy: string | null;
-  queuedAt: string | null;
-  /**
-   * How and when the customer gate was passed. Null until approved.
-   */
-  approvedBy: ListAccessRequestsApprovedBy | null;
-  deniedBy: ListAccessRequestsDeniedBy | null;
-  revokedBy: ListAccessRequestsRevokedBy | null;
 };
 
 /**
@@ -188,7 +133,6 @@ export type ListAccessRequestsRequest$Outbound = {
   project: string;
   status?: Array<string> | undefined;
   deploymentId?: string | undefined;
-  agentSessionId?: string | undefined;
   limit: number;
   cursor?: string | undefined;
 };
@@ -201,7 +145,6 @@ export const ListAccessRequestsRequest$outboundSchema: z.ZodType<
   project: z.string(),
   status: z.array(models.AccessRequestStatus$outboundSchema).optional(),
   deploymentId: z.string().optional(),
-  agentSessionId: z.string().optional(),
   limit: z.int().default(20),
   cursor: z.string().optional(),
 });
@@ -273,71 +216,6 @@ export const ListAccessRequestsMaxRisk$inboundSchema: z.ZodEnum<
 > = z.enum(ListAccessRequestsMaxRisk);
 
 /** @internal */
-export const ListAccessRequestsApprovedBy$inboundSchema: z.ZodType<
-  ListAccessRequestsApprovedBy,
-  unknown
-> = z.object({
-  method: z.nullable(z.string()),
-  actorId: z.nullable(z.string()),
-  at: z.string(),
-});
-
-export function listAccessRequestsApprovedByFromJSON(
-  jsonString: string,
-): SafeParseResult<ListAccessRequestsApprovedBy, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ListAccessRequestsApprovedBy$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ListAccessRequestsApprovedBy' from JSON`,
-  );
-}
-
-/** @internal */
-export const ListAccessRequestsDeniedBy$inboundSchema: z.ZodType<
-  ListAccessRequestsDeniedBy,
-  unknown
-> = z.object({
-  actorId: z.nullable(z.string()),
-  at: z.string(),
-});
-
-export function listAccessRequestsDeniedByFromJSON(
-  jsonString: string,
-): SafeParseResult<ListAccessRequestsDeniedBy, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ListAccessRequestsDeniedBy$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ListAccessRequestsDeniedBy' from JSON`,
-  );
-}
-
-/** @internal */
-export const ListAccessRequestsActorKind$inboundSchema: z.ZodEnum<
-  typeof ListAccessRequestsActorKind
-> = z.enum(ListAccessRequestsActorKind);
-
-/** @internal */
-export const ListAccessRequestsRevokedBy$inboundSchema: z.ZodType<
-  ListAccessRequestsRevokedBy,
-  unknown
-> = z.object({
-  actorKind: ListAccessRequestsActorKind$inboundSchema,
-  actorId: z.string(),
-  at: z.string(),
-  reason: z.nullable(z.string()),
-});
-
-export function listAccessRequestsRevokedByFromJSON(
-  jsonString: string,
-): SafeParseResult<ListAccessRequestsRevokedBy, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ListAccessRequestsRevokedBy$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ListAccessRequestsRevokedBy' from JSON`,
-  );
-}
-
-/** @internal */
 export const ListAccessRequestsItem$inboundSchema: z.ZodType<
   ListAccessRequestsItem,
   unknown
@@ -350,7 +228,6 @@ export const ListAccessRequestsItem$inboundSchema: z.ZodType<
   deployment: z.lazy(() => ListAccessRequestsDeployment$inboundSchema)
     .optional(),
   remediationPlanId: z.nullable(z.string()),
-  agentSessionId: z.nullable(z.string()),
   title: z.string(),
   reason: z.nullable(z.string()),
   commands: z.array(z.lazy(() => ListAccessRequestsCommand$inboundSchema)),
@@ -359,16 +236,6 @@ export const ListAccessRequestsItem$inboundSchema: z.ZodType<
   debugGrant: z.nullable(models.AccessRequestDebugGrant$inboundSchema),
   status: models.AccessRequestStatus$inboundSchema,
   approvedUntil: z.nullable(z.string()),
-  createdAt: z.string(),
-  queuedBy: z.nullable(z.string()),
-  queuedAt: z.nullable(z.string()),
-  approvedBy: z.nullable(
-    z.lazy(() => ListAccessRequestsApprovedBy$inboundSchema),
-  ),
-  deniedBy: z.nullable(z.lazy(() => ListAccessRequestsDeniedBy$inboundSchema)),
-  revokedBy: z.nullable(
-    z.lazy(() => ListAccessRequestsRevokedBy$inboundSchema),
-  ),
 });
 
 export function listAccessRequestsItemFromJSON(

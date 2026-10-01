@@ -5,12 +5,11 @@
 ```typescript
 import { RemoteOperatorPermissionPluginScope } from "@alienplatform/platform-api/models";
 
-let value: RemoteOperatorPermissionPluginScope =
-  "projects/${projectName}/buckets/${resourceName}";
+let value: RemoteOperatorPermissionPluginScope = "projects/${projectName}";
 ```
 
 ## Values
 
 ```typescript
-"projects/${projectName}" | "projects/${projectName}/buckets/${resourceName}"
+"projects/${projectName}"
 ```

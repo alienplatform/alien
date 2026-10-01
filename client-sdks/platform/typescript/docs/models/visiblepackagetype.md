@@ -13,5 +13,5 @@ let value: VisiblePackageType = "cli";
 ## Values
 
 ```typescript
-"cli" | "cloudformation" | "gcp-sandbox-image" | "helm" | "operator-image" | "sandbox-bundle" | "terraform"
+"cli" | "cloudformation" | "helm" | "operator-image" | "sandbox-bundle" | "terraform"
 ```

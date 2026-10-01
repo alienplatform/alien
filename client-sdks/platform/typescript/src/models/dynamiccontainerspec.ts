@@ -12,7 +12,7 @@ export type DynamicContainerSpecResources = {
   memory: string;
 };
 
-export type DynamicContainerSpecHealthCheck = {
+export type HealthCheck = {
   path: string;
   port: number;
 };
@@ -23,7 +23,7 @@ export type DynamicContainerSpec = {
   replicas: number;
   ports: Array<number>;
   env?: { [k: string]: string } | undefined;
-  healthCheck?: DynamicContainerSpecHealthCheck | undefined;
+  healthCheck?: HealthCheck | undefined;
 };
 
 /** @internal */
@@ -69,44 +69,36 @@ export function dynamicContainerSpecResourcesFromJSON(
 }
 
 /** @internal */
-export const DynamicContainerSpecHealthCheck$inboundSchema: z.ZodType<
-  DynamicContainerSpecHealthCheck,
-  unknown
-> = z.object({
-  path: z.string(),
-  port: z.int(),
-});
+export const HealthCheck$inboundSchema: z.ZodType<HealthCheck, unknown> = z
+  .object({
+    path: z.string(),
+    port: z.int(),
+  });
 /** @internal */
-export type DynamicContainerSpecHealthCheck$Outbound = {
+export type HealthCheck$Outbound = {
   path: string;
   port: number;
 };
 
 /** @internal */
-export const DynamicContainerSpecHealthCheck$outboundSchema: z.ZodType<
-  DynamicContainerSpecHealthCheck$Outbound,
-  DynamicContainerSpecHealthCheck
+export const HealthCheck$outboundSchema: z.ZodType<
+  HealthCheck$Outbound,
+  HealthCheck
 > = z.object({
   path: z.string(),
   port: z.int(),
 });
 
-export function dynamicContainerSpecHealthCheckToJSON(
-  dynamicContainerSpecHealthCheck: DynamicContainerSpecHealthCheck,
-): string {
-  return JSON.stringify(
-    DynamicContainerSpecHealthCheck$outboundSchema.parse(
-      dynamicContainerSpecHealthCheck,
-    ),
-  );
+export function healthCheckToJSON(healthCheck: HealthCheck): string {
+  return JSON.stringify(HealthCheck$outboundSchema.parse(healthCheck));
 }
-export function dynamicContainerSpecHealthCheckFromJSON(
+export function healthCheckFromJSON(
   jsonString: string,
-): SafeParseResult<DynamicContainerSpecHealthCheck, SDKValidationError> {
+): SafeParseResult<HealthCheck, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DynamicContainerSpecHealthCheck$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DynamicContainerSpecHealthCheck' from JSON`,
+    (x) => HealthCheck$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'HealthCheck' from JSON`,
   );
 }
 
@@ -120,8 +112,7 @@ export const DynamicContainerSpec$inboundSchema: z.ZodType<
   replicas: z.int(),
   ports: z.array(z.int()),
   env: z.record(z.string(), z.string()).optional(),
-  healthCheck: z.lazy(() => DynamicContainerSpecHealthCheck$inboundSchema)
-    .optional(),
+  healthCheck: z.lazy(() => HealthCheck$inboundSchema).optional(),
 });
 /** @internal */
 export type DynamicContainerSpec$Outbound = {
@@ -130,7 +121,7 @@ export type DynamicContainerSpec$Outbound = {
   replicas: number;
   ports: Array<number>;
   env?: { [k: string]: string } | undefined;
-  healthCheck?: DynamicContainerSpecHealthCheck$Outbound | undefined;
+  healthCheck?: HealthCheck$Outbound | undefined;
 };
 
 /** @internal */
@@ -143,8 +134,7 @@ export const DynamicContainerSpec$outboundSchema: z.ZodType<
   replicas: z.int(),
   ports: z.array(z.int()),
   env: z.record(z.string(), z.string()).optional(),
-  healthCheck: z.lazy(() => DynamicContainerSpecHealthCheck$outboundSchema)
-    .optional(),
+  healthCheck: z.lazy(() => HealthCheck$outboundSchema).optional(),
 });
 
 export function dynamicContainerSpecToJSON(

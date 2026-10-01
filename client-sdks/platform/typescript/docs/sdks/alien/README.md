@@ -526,7 +526,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
+    
   } else {
     console.log("revokeWorkspaceInvitation failed:", res.error);
   }
@@ -757,7 +757,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
+    
   } else {
     console.log("revokeWorkspaceInviteLink failed:", res.error);
   }

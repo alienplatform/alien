@@ -5,11 +5,11 @@
 ```typescript
 import { RecentStatus } from "@alienplatform/platform-api/models/operations";
 
-let value: RecentStatus = "revoked";
+let value: RecentStatus = "rejected";
 ```
 
 ## Values
 
 ```typescript
-"pending-approval" | "queued" | "customer-approved" | "expired" | "rejected" | "revoked"
+"pending-approval" | "queued" | "customer-approved" | "expired" | "rejected"
 ```

@@ -40,15 +40,15 @@ const value: models.DataGcp2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "info",
+        reason: "forbidden",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "failed",
-    partial: true,
-    stale: false,
+    health: "healthy",
+    lifecycle: "deleted",
+    partial: false,
+    stale: true,
   },
   backend: "gcp",
 };
@@ -72,15 +72,15 @@ const value: models.DataAzure2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
+        reason: "forbidden",
         severity: "warning",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "deleting",
+    health: "degraded",
+    lifecycle: "running",
     partial: true,
-    stale: true,
+    stale: false,
   },
   backend: "azure",
 };
@@ -104,15 +104,15 @@ const value: models.DataMachines2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "warning",
+        reason: "timed-out",
+        severity: "error",
         source: "<value>",
       },
     ],
     health: "unhealthy",
-    lifecycle: "failed",
-    partial: false,
-    stale: false,
+    lifecycle: "stopping",
+    partial: true,
+    stale: true,
   },
   backend: "machines",
 };

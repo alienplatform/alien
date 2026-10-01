@@ -6,6 +6,7 @@
 import { ProjectAzure } from "@alienplatform/platform-api/models";
 
 let value: ProjectAzure = {
+  catalogImage: "<value>",
   idleSuspendSeconds: 557851,
 };
 ```
@@ -14,5 +15,5 @@ let value: ProjectAzure = {
 
 | Field                | Type                 | Required             | Description          |
 | -------------------- | -------------------- | -------------------- | -------------------- |
-| `registryImage`      | *string*             | :heavy_minus_sign:   | N/A                  |
+| `catalogImage`       | *string*             | :heavy_check_mark:   | N/A                  |
 | `idleSuspendSeconds` | *number*             | :heavy_check_mark:   | N/A                  |

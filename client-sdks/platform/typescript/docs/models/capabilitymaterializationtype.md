@@ -11,5 +11,5 @@ let value: CapabilityMaterializationType = "cloudformation";
 ## Values
 
 ```typescript
-"cloudformation" | "terraform" | "sandbox-bundle" | "gcp-sandbox-image"
+"cloudformation" | "terraform" | "sandbox-bundle"
 ```

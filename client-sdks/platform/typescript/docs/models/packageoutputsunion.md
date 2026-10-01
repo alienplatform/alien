@@ -49,19 +49,6 @@ const value: models.OutputsCloudformation = {
 };
 ```
 
-### `models.OutputsGcpSandboxImage`
-
-```typescript
-const value: models.OutputsGcpSandboxImage = {
-  agentDigest: "<value>",
-  baseDigest: "<value>",
-  digest: "<value>",
-  image: "https://picsum.photos/seed/IYDQUAdZ5e/827/188",
-  reuseKey: "<value>",
-  type: "gcp-sandbox-image",
-};
-```
-
 ### `models.OutputsSandboxBundle`
 
 ```typescript

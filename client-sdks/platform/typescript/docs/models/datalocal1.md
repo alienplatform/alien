@@ -13,7 +13,7 @@ let value: DataLocal1 = {
       {
         message: "<value>",
         reason: "collection-failed",
-        severity: "warning",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -35,5 +35,5 @@ let value: DataLocal1 = {
 | `path`                                                                                        | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `pathExists`                                                                                  | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `readonly`                                                                                    | *boolean*                                                                                     | :heavy_minus_sign:                                                                            | N/A                                                                                           |
-| `status`                                                                                      | [models.ResourceHeartbeatStatus4](../models/resourceheartbeatstatus4.md)                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `status`                                                                                      | [models.SyncReconcileRequestStatus4](../models/syncreconcilerequeststatus4.md)                | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `backend`                                                                                     | *"local"*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |

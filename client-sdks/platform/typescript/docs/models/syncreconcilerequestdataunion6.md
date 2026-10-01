@@ -59,8 +59,8 @@ const value: models.DataAzureServiceBus = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
-        severity: "info",
+        reason: "collection-failed",
+        severity: "warning",
         source: "<value>",
       },
     ],

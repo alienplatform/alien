@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Find an approved, unexpired access request the caller created whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request. Only the requester's own grants match: a debug session must present a grant its caller requested, so another principal's grant is never returned here.
+ * Find an approved, unexpired access request whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request.
  */
 export function operationsGetLiveDebugGrant(
   client: AlienCore,

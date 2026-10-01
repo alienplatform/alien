@@ -18,15 +18,15 @@ let value: DataAwsVpc = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
-        severity: "warning",
+        reason: "not-installed",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "unknown",
+    health: "unhealthy",
+    lifecycle: "scaling",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "awsVpc",
 };
@@ -34,18 +34,18 @@ let value: DataAwsVpc = {
 
 ## Fields
 
-| Field                                                                      | Type                                                                       | Required                                                                   | Description                                                                |
-| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `availabilityZones`                                                        | *string*[]                                                                 | :heavy_check_mark:                                                         | N/A                                                                        |
-| `cidrBlock`                                                                | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `internetGatewayId`                                                        | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `isByoVpc`                                                                 | *boolean*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |
-| `natGatewayId`                                                             | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `privateSubnetIds`                                                         | *string*[]                                                                 | :heavy_check_mark:                                                         | N/A                                                                        |
-| `publicSubnetIds`                                                          | *string*[]                                                                 | :heavy_check_mark:                                                         | N/A                                                                        |
-| `routeTableCount`                                                          | *number*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
-| `securityGroupId`                                                          | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus46](../models/resourceheartbeatstatus46.md) | :heavy_check_mark:                                                         | N/A                                                                        |
-| `vpcId`                                                                    | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `vpcState`                                                                 | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `backend`                                                                  | *"awsVpc"*                                                                 | :heavy_check_mark:                                                         | N/A                                                                        |
+| Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `availabilityZones`                                                              | *string*[]                                                                       | :heavy_check_mark:                                                               | N/A                                                                              |
+| `cidrBlock`                                                                      | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `internetGatewayId`                                                              | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `isByoVpc`                                                                       | *boolean*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |
+| `natGatewayId`                                                                   | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `privateSubnetIds`                                                               | *string*[]                                                                       | :heavy_check_mark:                                                               | N/A                                                                              |
+| `publicSubnetIds`                                                                | *string*[]                                                                       | :heavy_check_mark:                                                               | N/A                                                                              |
+| `routeTableCount`                                                                | *number*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
+| `securityGroupId`                                                                | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `status`                                                                         | [models.SyncReconcileRequestStatus46](../models/syncreconcilerequeststatus46.md) | :heavy_check_mark:                                                               | N/A                                                                              |
+| `vpcId`                                                                          | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `vpcState`                                                                       | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `backend`                                                                        | *"awsVpc"*                                                                       | :heavy_check_mark:                                                               | N/A                                                                              |
