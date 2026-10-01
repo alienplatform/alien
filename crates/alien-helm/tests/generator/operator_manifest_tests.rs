@@ -341,43 +341,27 @@ fn parse_manifest(manifest: &str) -> Vec<YamlValue> {
 }
 
 #[test]
-fn dynamic_workload_permissions_stay_in_the_install_namespace() {
+fn standalone_manifests_bind_no_dynamic_workload_access() {
+    // A standalone Remote Operator has no installed release that could approve
+    // a dynamic container image, so neither scope binds the dynamic Role.
     for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
-        let docs = parse_manifest(&rendered_manifest(scope, OperatorPermission::Diagnostics));
-        let role = docs
+        let manifest = rendered_manifest(scope, OperatorPermission::Remediation);
+        let docs = parse_manifest(&manifest);
+        assert!(!docs.iter().any(|doc| {
+            doc["metadata"]["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("alien-dc-"))
+        }));
+        let grants = permission_grants(&manifest);
+        assert!(!grants
             .iter()
-            .find(|doc| {
-                doc["kind"] == "Role"
-                    && doc["metadata"]["name"]
-                        .as_str()
-                        .is_some_and(|name| name.starts_with("alien-dc-"))
-            })
-            .expect("dynamic workload Role");
-        let name = role["metadata"]["name"].as_str().unwrap();
-        assert_eq!(role["metadata"]["namespace"], "demo");
-        for (resource, verbs) in [
-            (
-                "deployments",
-                &["get", "list", "create", "update", "delete"][..],
-            ),
-            ("services", &["get", "list", "create", "update", "delete"]),
-            ("secrets", &["get", "list", "create", "update", "delete"]),
-            ("pods", &["list"]),
-        ] {
-            for verb in verbs {
-                assert!(
-                    rule_allows(role, resource, verb),
-                    "missing {verb} {resource}"
-                );
-            }
-        }
-        let binding = docs
+            .any(|(_, resource, _, _)| resource == "secrets"));
+        // Without enabled operations, everything outside the access-request CRD is a listing.
+        assert!(grants
             .iter()
-            .find(|doc| doc["kind"] == "RoleBinding" && doc["metadata"]["name"] == name)
-            .expect("dynamic workload RoleBinding");
-        assert_eq!(binding["metadata"]["namespace"], "demo");
-        assert_eq!(binding["roleRef"]["name"], name);
-        assert_eq!(binding["subjects"][0]["name"], "my-saas-operator");
+            .filter(|(group, ..)| group != "accessrequests.alien")
+            .all(|(_, _, verb, _)| verb == "list"));
+        assert!(!manifest.contains("OPERATOR_DYNAMIC_CONTAINERS"));
     }
 }
 

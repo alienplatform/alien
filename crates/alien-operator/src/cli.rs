@@ -114,6 +114,11 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_OBSERVE_ALL_NAMESPACES")]
     pub operator_observe_all_namespaces: bool,
 
+    /// Run containers requested through the API. The rendered manifest sets
+    /// this together with the Role that allows it.
+    #[arg(long, env = "OPERATOR_DYNAMIC_CONTAINERS")]
+    pub operator_dynamic_containers: bool,
+
     /// Vendor-provided app/release version this environment runs (observe). Reported
     /// as a version-only current_release so the platform resolves a stackless release.
     #[arg(long, env = "OPERATOR_RELEASE_VERSION")]
@@ -662,6 +667,7 @@ async fn run_operator_cli(
         .maybe_namespace(args.namespace)
         .maybe_label_selector(args.operator_label_selector)
         .observe_all_namespaces(args.operator_observe_all_namespaces)
+        .dynamic_containers(args.operator_dynamic_containers)
         .maybe_app_version(args.operator_release_version)
         .maybe_label_domain(
             args.operator_label_domain
