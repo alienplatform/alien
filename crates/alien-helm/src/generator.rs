@@ -22,6 +22,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_operations_sdk::KubernetesOperationPermissions;
+use alien_permissions::operations::kubernetes::OperatorFeature;
 use indexmap::IndexMap;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -64,8 +65,10 @@ pub struct ManagerFetchHelmValuesOptions<'a> {
 ///
 /// Renderers expose this value so callers can reject manifests produced by a
 /// generator with a different policy. Version 3 replaced the fixed read-only
-/// baseline with the Operator runtime rules.
-pub const OPERATOR_RBAC_POLICY_VERSION: u32 = 3;
+/// baseline with the Operator runtime rules. Version 4 binds the dynamic
+/// container Role only to product charts, retaining access for cleanup when
+/// an installed release withdraws image approvals.
+pub const OPERATOR_RBAC_POLICY_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperatorPermission {
@@ -477,6 +480,7 @@ fn add_remote_operator_files(
         Some("{{ include \"deployment.remoteOperatorIdentityInitializedName\" . }}"),
         Some("{{ include \"deployment.remoteOperatorLogCollectorName\" . }}"),
         image_identity,
+        true,
     )?;
     let mut crd = None;
     let mut templates = Vec::new();
@@ -1781,7 +1785,7 @@ fn remote_operator_checks_tpl() -> String {
 }
 
 pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Result<String> {
-    generate_operator_manifest_inner(options, None, None, None, None, None, None)
+    generate_operator_manifest_inner(options, None, None, None, None, None, None, false)
 }
 
 /// Generate a standalone Operator manifest carrying an exact image receipt.
@@ -1789,14 +1793,23 @@ pub fn generate_operator_manifest_with_image_identity(
     options: OperatorManifestOptions<'_>,
     image_identity: OperatorImageIdentityOptions<'_>,
 ) -> Result<String> {
-    generate_operator_manifest_inner(options, None, None, None, None, None, Some(image_identity))
+    generate_operator_manifest_inner(
+        options,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(image_identity),
+        false,
+    )
 }
 
 /// Render a Remote Operator for inclusion in a product Helm chart.
 pub fn generate_product_operator_manifest(
     options: ProductOperatorManifestOptions<'_>,
 ) -> Result<String> {
-    generate_product_operator_manifest_with_identity_marker(options, None, None, None)
+    generate_product_operator_manifest_with_identity_marker(options, None, None, None, false)
 }
 
 /// Render a product Remote Operator manifest carrying an exact image receipt.
@@ -1809,14 +1822,20 @@ pub fn generate_product_operator_manifest_with_image_identity(
         None,
         None,
         Some(image_identity),
+        false,
     )
 }
 
+/// `dynamic_containers` binds the dynamic container Role. Only a product chart
+/// passes `true`: it must still reconcile saved workloads after a release
+/// withdraws image approvals. A standalone Remote Operator has no installed
+/// release that could approve an image, so it never receives this access.
 fn generate_product_operator_manifest_with_identity_marker(
     options: ProductOperatorManifestOptions<'_>,
     identity_initialized_config_map: Option<&str>,
     log_collector_name: Option<&str>,
     image_identity: Option<OperatorImageIdentityOptions<'_>>,
+    dynamic_containers: bool,
 ) -> Result<String> {
     generate_operator_manifest_inner(
         options.manifest,
@@ -1826,6 +1845,7 @@ fn generate_product_operator_manifest_with_identity_marker(
         identity_initialized_config_map,
         log_collector_name,
         image_identity,
+        dynamic_containers,
     )
 }
 
@@ -1837,6 +1857,7 @@ fn generate_operator_manifest_inner(
     identity_initialized_config_map: Option<&str>,
     log_collector_name: Option<&str>,
     image_identity: Option<OperatorImageIdentityOptions<'_>>,
+    dynamic_containers: bool,
 ) -> Result<String> {
     if options.format == OperatorOutputFormat::RawManifest && credentials_secret_name.is_none() {
         validate_runtime_encryption_key(options.encryption_key)?;
@@ -1946,16 +1967,18 @@ fn generate_operator_manifest_inner(
     }
     // Dynamic workloads need write access in this deployment namespace only.
     // Keep it in a Role even when inventory observation uses a ClusterRole.
-    docs.push(dynamic_container_role_doc(
-        namespace,
-        &operator_name,
-        &labels,
-    ));
-    docs.push(dynamic_container_rolebinding_doc(
-        namespace,
-        &operator_name,
-        &labels,
-    ));
+    if dynamic_containers {
+        docs.push(dynamic_container_role_doc(
+            namespace,
+            &operator_name,
+            &labels,
+        ));
+        docs.push(dynamic_container_rolebinding_doc(
+            namespace,
+            &operator_name,
+            &labels,
+        ));
+    }
     if creates_credentials_secret {
         docs.push(operator_secret_doc(
             namespace,
@@ -1991,6 +2014,7 @@ fn generate_operator_manifest_inner(
         operator_image_report.as_ref(),
         &log_collector_name,
         integrated_product_chart,
+        dynamic_containers,
     ));
     if let Some(log_collector) = options
         .log_collector
@@ -2463,19 +2487,29 @@ fn dynamic_container_role_doc(
         &role_name,
         labels,
     );
-    yaml.push_str(
-        r#"rules:
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "create", "update", "delete"]
-  - apiGroups: [""]
-    resources: ["services", "secrets"]
-    verbs: ["get", "list", "create", "update", "delete"]
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["list"]
-"#,
-    );
+    yaml.push_str(&operator_feature_rules(OperatorFeature::DynamicContainers));
+    yaml
+}
+
+/// The `rules:` block of the Role a runtime feature needs, from the same list
+/// the permission review shows.
+fn operator_feature_rules(feature: OperatorFeature) -> String {
+    let mut yaml = String::from("rules:\n");
+    for rule in alien_permissions::operations::kubernetes::operator_runtime_rules()
+        .into_iter()
+        .filter(|rule| rule.feature == Some(feature))
+    {
+        yaml.push_str(&format!(
+            "  - apiGroups: [{}]\n    resources: [{}]\n    verbs: [{}]\n",
+            yaml_string(&rule.api_group),
+            yaml_string(&rule.resource),
+            rule.verbs
+                .iter()
+                .map(|verb| yaml_string(verb))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     yaml
 }
 
@@ -2571,7 +2605,10 @@ fn operator_rules(
         grant.reasons.insert(reason);
     };
     let status_resource = format!("{}/status", names.plural);
-    for rule in alien_permissions::operations::kubernetes::operator_runtime_rules() {
+    for rule in alien_permissions::operations::kubernetes::operator_runtime_rules()
+        .into_iter()
+        .filter(|rule| rule.feature.is_none())
+    {
         add_rule(
             &rule.api_group,
             &rule.resource,
@@ -2903,9 +2940,7 @@ fn operator_pod_log_role_doc(
         &name,
         labels,
     ));
-    yaml.push_str(
-        "rules:\n  - apiGroups: [\"\"]\n    resources: [\"pods/log\"]\n    verbs: [\"get\"]\n",
-    );
+    yaml.push_str(&operator_feature_rules(OperatorFeature::PodLogs));
     if format == OperatorOutputFormat::HelmTemplate {
         yaml.push_str("{{- end }}\n");
     }
@@ -2976,6 +3011,7 @@ fn operator_deployment_doc(
     operator_image_report: Option<&OperatorImageReport>,
     log_collector_name: &str,
     integrated_product_chart: bool,
+    dynamic_containers: bool,
 ) -> String {
     let mut yaml = operator_metadata_doc("apps/v1", "Deployment", namespace, operator_name, labels);
     yaml.push_str("spec:\n");
@@ -3057,6 +3093,11 @@ fn operator_deployment_doc(
     }
     if let Some(label_selector) = label_selector {
         append_env_value(&mut yaml, "OPERATOR_LABEL_SELECTOR", label_selector);
+    }
+    // The Operator reports the dynamic-container capability only when its
+    // chart bound the Role for it.
+    if dynamic_containers {
+        append_env_value(&mut yaml, "OPERATOR_DYNAMIC_CONTAINERS", "true");
     }
     // Use the host chart's standard appVersion so the pasted template does not
     // require a vendor-specific values key. Raw manifests omit it.
@@ -7537,8 +7578,6 @@ mod tests {
                 "ServiceAccount",
                 "Role",
                 "RoleBinding",
-                "Role",
-                "RoleBinding",
                 "Secret",
                 "PersistentVolumeClaim",
                 "Deployment"
@@ -7950,12 +7989,12 @@ mod tests {
             None
         );
 
-        // Namespace scope grants inventory and dynamic-workload Roles.
-        assert_eq!(docs_by_kind(&docs, "Role").len(), 2);
+        // Namespace scope grants one inventory Role.
+        assert_eq!(docs_by_kind(&docs, "Role").len(), 1);
         assert!(docs_by_kind(&docs, "ClusterRole").is_empty());
 
         // Label scope is cluster-wide: emits the selector env and ClusterRole/
-        // ClusterRoleBinding. Dynamic workload writes remain namespace-scoped.
+        // ClusterRoleBinding.
         let manifest = generate_operator_manifest(OperatorManifestOptions {
             custom_operation_permissions: &[],
             manager_url: "https://manager.example.com",
@@ -7984,15 +8023,10 @@ mod tests {
             Some("app.kubernetes.io/part-of=my-saas")
         );
 
-        let roles = docs_by_kind(&docs, "Role");
-        assert_eq!(
-            roles.len(),
-            1,
-            "only the dynamic workload Role is namespaced"
+        assert!(
+            docs_by_kind(&docs, "Role").is_empty(),
+            "a standalone cluster-scoped Operator binds no namespaced Role"
         );
-        assert!(yaml_path(&roles[0], &["metadata", "name"])
-            .and_then(YamlValue::as_str)
-            .is_some_and(|name| name.starts_with("alien-dc-")));
         let cluster_role = docs_by_kind(&docs, "ClusterRole")
             .into_iter()
             .next()
@@ -8198,9 +8232,25 @@ mod tests {
         include_collector: bool,
         label_domain: Option<&str>,
     ) -> HelmChart {
+        product_chart_for_stack(&sample_stack(), include_collector, label_domain)
+    }
+
+    /// `sample_stack` plus an approved dynamic container repository, which is
+    /// what lets the API schedule containers on the installed release.
+    fn dynamic_container_stack() -> Stack {
+        let mut stack = sample_stack();
+        stack.dynamic_container_repositories = vec!["registry.example.com/dynamic".to_string()];
+        stack
+    }
+
+    fn product_chart_for_stack(
+        stack: &Stack,
+        include_collector: bool,
+        label_domain: Option<&str>,
+    ) -> HelmChart {
         let registry = HelmRegistry::built_in();
         generate_product_helm_chart(
-            &sample_stack(),
+            stack,
             HelmOptions {
                 registry: &registry,
                 stack_settings: StackSettings::default(),
@@ -9367,9 +9417,262 @@ remoteOperator:
         assert_ne!(cleanup_name, operator_name);
     }
 
+    type Grant = (String, String, String, Vec<String>);
+
+    /// Every grant of every Role or ClusterRole bound to `service_account`, as
+    /// `(apiGroup, resource, verb, resourceNames)`.
+    fn grants_bound_to(docs: &[YamlValue], service_account: &str) -> BTreeSet<Grant> {
+        let bound: Vec<(&str, &str)> = docs
+            .iter()
+            .filter(|doc| {
+                matches!(
+                    yaml_str(doc, "kind"),
+                    Some("RoleBinding" | "ClusterRoleBinding")
+                )
+            })
+            .filter(|doc| {
+                doc["subjects"].as_sequence().is_some_and(|subjects| {
+                    subjects
+                        .iter()
+                        .any(|subject| subject["name"].as_str() == Some(service_account))
+                })
+            })
+            .map(|doc| {
+                (
+                    doc["roleRef"]["kind"].as_str().unwrap(),
+                    doc["roleRef"]["name"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        let mut grants = BTreeSet::new();
+        for (kind, name) in bound {
+            let role = docs
+                .iter()
+                .find(|doc| yaml_str(doc, "kind") == Some(kind) && doc["metadata"]["name"] == name)
+                .unwrap_or_else(|| panic!("{kind} {name} is bound but not rendered"));
+            for rule in role["rules"].as_sequence().unwrap() {
+                let names: Vec<String> = rule["resourceNames"]
+                    .as_sequence()
+                    .into_iter()
+                    .flatten()
+                    .map(|name| name.as_str().unwrap().to_owned())
+                    .collect();
+                for group in rule["apiGroups"].as_sequence().unwrap() {
+                    for resource in rule["resources"].as_sequence().unwrap() {
+                        for verb in rule["verbs"].as_sequence().unwrap() {
+                            grants.insert((
+                                group.as_str().unwrap().to_owned(),
+                                resource.as_str().unwrap().to_owned(),
+                                verb.as_str().unwrap().to_owned(),
+                                names.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        grants
+    }
+
+    /// What the permission review shows for an install with `features`: the
+    /// runtime rules those features select plus the access-request rules.
+    fn reviewed_grants(features: &[OperatorFeature]) -> BTreeSet<Grant> {
+        let mut grants: BTreeSet<_> =
+            alien_permissions::operations::kubernetes::operator_runtime_rules()
+                .into_iter()
+                .filter(|rule| {
+                    rule.feature
+                        .is_none_or(|feature| features.contains(&feature))
+                })
+                .flat_map(|rule| {
+                    rule.verbs.into_iter().map(move |verb| {
+                        (rule.api_group.clone(), rule.resource.clone(), verb, vec![])
+                    })
+                })
+                .collect();
+        for (resource, verbs) in [
+            (
+                "alienaccessrequests",
+                &["get", "list", "watch", "create", "update", "patch"][..],
+            ),
+            (
+                "alienaccessrequests/status",
+                &["get", "update", "patch"][..],
+            ),
+        ] {
+            for verb in verbs {
+                grants.insert((
+                    "accessrequests.alien".to_owned(),
+                    resource.to_owned(),
+                    (*verb).to_owned(),
+                    vec![],
+                ));
+            }
+        }
+        grants
+    }
+
+    fn product_release_values(log_mode: Option<&str>) -> String {
+        let log_collector = log_mode
+            .map(|mode| format!("logCollector:\n  enabled: true\n  mode: {mode}\n"))
+            .unwrap_or_default();
+        format!(
+            "management:\n  url: https://manager.example.com\n{log_collector}remoteOperator:\n  enabled: true\n  existingSecret:\n    name: setup-owned\n    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+        )
+    }
+
+    fn rendered_product_release(chart: HelmChart, values: &str) -> Vec<YamlValue> {
+        let mut files = chart.files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let rendered =
+            crate::test_utils::helm_template_for_release(&files, Some(values), "customer-one");
+        rendered.assert_ok("product release");
+        parse_manifest_docs(&rendered.stdout)
+    }
+
+    /// The Remote Operator Deployment; a product release also renders the
+    /// stack's own workloads.
+    fn remote_operator_deployment(docs: &[YamlValue]) -> YamlValue {
+        docs_by_kind(docs, "Deployment")
+            .into_iter()
+            .find(|deployment| {
+                deployment["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.contains("-operator"))
+            })
+            .expect("Remote Operator Deployment")
+    }
+
+    #[test]
+    fn standalone_operators_bind_exactly_the_reviewed_grants() {
+        // No log collection: the Operator runtime rules and the access-request CRD.
+        let docs = parse_manifest_docs(&operator_test_manifest());
+        assert_eq!(
+            grants_bound_to(&docs, "my-saas-operator"),
+            reviewed_grants(&[])
+        );
+        let deployment = remote_operator_deployment(&docs);
+        assert_eq!(
+            operator_env_value(&deployment, "OPERATOR_DYNAMIC_CONTAINERS"),
+            None
+        );
+
+        // Pod log collection adds `pods/log get` and nothing else.
+        let docs = parse_manifest_docs(&operator_test_manifest_with_log_collector());
+        assert_eq!(
+            grants_bound_to(&docs, "my-saas-operator"),
+            reviewed_grants(&[OperatorFeature::PodLogs])
+        );
+    }
+
+    #[test]
+    fn product_releases_bind_exactly_the_reviewed_grants() {
+        // The Operator ServiceAccount shares the Remote Operator Deployment's name.
+        // A product release also lets the Operator mark its own identity
+        // ConfigMap initialized; that grant names the one ConfigMap.
+        let bound_grants = |docs: &[YamlValue]| {
+            let deployment = remote_operator_deployment(docs);
+            let operator = deployment["metadata"]["name"].as_str().unwrap();
+            assert!(
+                operator.starts_with("customer-one-remote-operator-"),
+                "{operator}"
+            );
+            let (named, unnamed): (BTreeSet<Grant>, BTreeSet<Grant>) =
+                grants_bound_to(docs, operator)
+                    .into_iter()
+                    .partition(|(_, _, _, names)| !names.is_empty());
+            let identity_marker = format!("{operator}-initialized");
+            assert_eq!(
+                named,
+                ["get", "patch", "update"]
+                    .map(|verb| (
+                        String::new(),
+                        "configmaps".to_owned(),
+                        verb.to_owned(),
+                        vec![identity_marker.clone()]
+                    ))
+                    .into_iter()
+                    .collect()
+            );
+            unnamed
+        };
+        // Product installs retain cleanup access even without approved images.
+        let docs = rendered_product_release(sample_product_chart(), &product_release_values(None));
+        assert_eq!(
+            bound_grants(&docs),
+            reviewed_grants(&[OperatorFeature::DynamicContainers])
+        );
+        assert_eq!(
+            operator_env_value(
+                &remote_operator_deployment(&docs),
+                "OPERATOR_DYNAMIC_CONTAINERS"
+            ),
+            Some("true")
+        );
+
+        // Pod API log collection binds the pod-log Role; the node collector does not.
+        let docs = rendered_product_release(
+            sample_product_chart_with_collector(true),
+            &product_release_values(Some("podApi")),
+        );
+        assert_eq!(
+            bound_grants(&docs),
+            reviewed_grants(&[OperatorFeature::DynamicContainers, OperatorFeature::PodLogs])
+        );
+        let docs = rendered_product_release(
+            sample_product_chart_with_collector(true),
+            &product_release_values(Some("nodeAgent")),
+        );
+        assert_eq!(
+            bound_grants(&docs),
+            reviewed_grants(&[OperatorFeature::DynamicContainers])
+        );
+
+        // Approved images can run with the same retained access used for cleanup.
+        let docs = rendered_product_release(
+            product_chart_for_stack(&dynamic_container_stack(), true, None),
+            &product_release_values(Some("podApi")),
+        );
+        assert_eq!(
+            bound_grants(&docs),
+            reviewed_grants(&[OperatorFeature::DynamicContainers, OperatorFeature::PodLogs])
+        );
+        assert_eq!(
+            operator_env_value(
+                &remote_operator_deployment(&docs),
+                "OPERATOR_DYNAMIC_CONTAINERS"
+            ),
+            Some("true")
+        );
+        let dynamic_role = docs_by_kind(&docs, "Role")
+            .into_iter()
+            .find(|role| {
+                yaml_path(role, &["metadata", "name"])
+                    .and_then(YamlValue::as_str)
+                    .is_some_and(|name| name.starts_with("alien-dc-"))
+            })
+            .expect("dynamic container Role");
+        assert_eq!(dynamic_role["metadata"]["namespace"], "default");
+
+        // Updating the same product release to an empty approval list must keep
+        // every grant and the capability needed to suspend/delete old workloads.
+        let withdrawn = rendered_product_release(
+            sample_product_chart_with_collector(true),
+            &product_release_values(Some("podApi")),
+        );
+        assert_eq!(bound_grants(&withdrawn), bound_grants(&docs));
+        assert_eq!(
+            operator_env_value(
+                &remote_operator_deployment(&withdrawn),
+                "OPERATOR_DYNAMIC_CONTAINERS"
+            ),
+            Some("true")
+        );
+    }
+
     #[test]
     fn product_dynamic_role_name_follows_the_helm_release() {
-        let mut files = sample_product_chart().files;
+        let mut files = product_chart_for_stack(&dynamic_container_stack(), false, None).files;
         files.shift_remove("templates/remote-operator-checks.yaml");
         let values = r#"
 management:

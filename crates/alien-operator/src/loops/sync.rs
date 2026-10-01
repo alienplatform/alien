@@ -9,7 +9,7 @@
 
 use super::observed_release::{observed_application, single_observed_version};
 use crate::db::{Approval, ApprovalStatus};
-use crate::OperatorState;
+use crate::{OperatorConfig, OperatorState};
 use alien_core::{
     sync::{
         OperatorCapabilityReport, OperatorCapabilityState, OperatorImageReport, SyncInput,
@@ -225,17 +225,18 @@ async fn sync_with_manager(
         ),
         None => None,
     };
-    let dynamic_reports = if state.config.platform == Platform::Kubernetes {
-        match super::dynamic_containers::reconcile_saved(state, &deployment_id).await {
-            Ok(reports) => reports,
-            Err(error) => {
-                error!(error = %error, "Dynamic container reconciliation failed");
-                None
+    let dynamic_reports =
+        if dynamic_containers_capability(&state.config).state == OperatorCapabilityState::Granted {
+            match super::dynamic_containers::reconcile_saved(state, &deployment_id).await {
+                Ok(reports) => reports,
+                Err(error) => {
+                    error!(error = %error, "Dynamic container reconciliation failed");
+                    None
+                }
             }
-        }
-    } else {
-        None
-    };
+        } else {
+            None
+        };
 
     let sync_request = SyncRequest {
         deployment_id: deployment_id.clone(),
@@ -526,16 +527,7 @@ fn report_operator_capabilities(
             .map(|namespace| format!("namespace {namespace}")),
     });
 
-    capabilities.push(OperatorCapabilityReport {
-        key: "dynamic-containers-v1".to_string(),
-        state: if state.config.platform == Platform::Kubernetes && state.config.namespace.is_some()
-        {
-            OperatorCapabilityState::Granted
-        } else {
-            OperatorCapabilityState::Unavailable
-        },
-        detail: None,
-    });
+    capabilities.push(dynamic_containers_capability(&state.config));
 
     capabilities.push(OperatorCapabilityReport {
         key: "cloud-observe".to_string(),
@@ -561,6 +553,24 @@ fn report_operator_capabilities(
     });
 
     capabilities
+}
+
+/// Granted only when the chart bound the dynamic container Role: the manager
+/// sends container targets to Operators that report this, so a namespace-only
+/// install without that access must not claim it.
+fn dynamic_containers_capability(config: &OperatorConfig) -> OperatorCapabilityReport {
+    let granted = config.platform == Platform::Kubernetes
+        && config.namespace.is_some()
+        && config.dynamic_containers;
+    OperatorCapabilityReport {
+        key: "dynamic-containers-v1".to_string(),
+        state: if granted {
+            OperatorCapabilityState::Granted
+        } else {
+            OperatorCapabilityState::Unavailable
+        },
+        detail: None,
+    }
 }
 
 fn operation_command_address_capability(
@@ -669,7 +679,8 @@ mod tests {
 
     use super::{
         accept_target_release, apply_manager_control_state, create_authenticated_client,
-        is_uninitialized_deployment_state, operation_command_address_capability, sync_with_manager,
+        dynamic_containers_capability, is_uninitialized_deployment_state,
+        operation_command_address_capability, sync_with_manager,
     };
     use crate::{db::OperatorDb, OperatorConfig, OperatorState, SyncConfig};
 
@@ -1058,6 +1069,42 @@ mod tests {
         let capability = operation_command_address_capability(false);
         assert_eq!(capability.key, "operations.command-address-v1");
         assert_eq!(capability.state, OperatorCapabilityState::Unavailable);
+    }
+
+    #[test]
+    fn claims_dynamic_containers_only_when_the_chart_bound_their_role() {
+        let config = |platform: Platform, namespace: Option<&str>, dynamic_containers: bool| {
+            OperatorConfig::builder()
+                .platform(platform)
+                .maybe_namespace(namespace.map(str::to_string))
+                .dynamic_containers(dynamic_containers)
+                .data_dir("unused")
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build()
+        };
+        let state = |config: OperatorConfig| {
+            let capability = dynamic_containers_capability(&config);
+            assert_eq!(capability.key, "dynamic-containers-v1");
+            capability.state
+        };
+
+        assert_eq!(
+            state(config(Platform::Kubernetes, Some("customer"), true)),
+            OperatorCapabilityState::Granted
+        );
+        // A namespace install without the Role must not receive container targets.
+        assert_eq!(
+            state(config(Platform::Kubernetes, Some("customer"), false)),
+            OperatorCapabilityState::Unavailable
+        );
+        assert_eq!(
+            state(config(Platform::Kubernetes, None, true)),
+            OperatorCapabilityState::Unavailable
+        );
+        assert_eq!(
+            state(config(Platform::Aws, Some("customer"), true)),
+            OperatorCapabilityState::Unavailable
+        );
     }
 
     #[test]
