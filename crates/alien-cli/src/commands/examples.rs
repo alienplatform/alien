@@ -15,7 +15,8 @@ use crate::output::print_json;
     alien examples ai-gateway --protocol openai-chat --model byo/claude-opus-5
     alien examples ai-gateway --protocol openai-responses --json
     alien examples ai-gateway --protocol anthropic-messages
-    alien examples encryption-gateway --operation encrypt"
+    alien examples encryption-gateway --operation encrypt
+    alien examples sandbox-gateway --operation exec --command 'python3 --version'"
 )]
 pub struct ExamplesArgs {
     /// Emit the example and metadata as JSON
@@ -49,6 +50,17 @@ pub enum ExampleCommand {
         #[arg(long, default_value = "customer-data")]
         key_id: String,
     },
+    /// Generate a Sandbox Gateway request
+    SandboxGateway {
+        #[arg(long, value_enum, default_value_t = SandboxOperation::Create)]
+        operation: SandboxOperation,
+        /// Literal external ID. Omit to use the $CUSTOMER_ID environment variable.
+        #[arg(long)]
+        external_id: Option<String>,
+        /// Shell command the exec example runs inside the sandbox
+        #[arg(long, default_value = "echo hello")]
+        command: String,
+    },
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, Serialize)]
@@ -64,6 +76,14 @@ pub enum AiProtocol {
 pub enum EncryptionOperation {
     Encrypt,
     Decrypt,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SandboxOperation {
+    Create,
+    Exec,
+    Delete,
 }
 
 #[derive(Serialize)]
@@ -87,6 +107,11 @@ pub fn examples_task(args: ExamplesArgs, ctx: ExecutionMode) -> Result<()> {
             external_id,
             key_id,
         } => encryption_example(ctx.base_url(), operation, external_id.as_deref(), &key_id)?,
+        ExampleCommand::SandboxGateway {
+            operation,
+            external_id,
+            command,
+        } => sandbox_example(ctx.base_url(), operation, external_id.as_deref(), &command)?,
     };
 
     if args.json {
@@ -200,6 +225,71 @@ fn encryption_example(
     })
 }
 
+fn sandbox_example(
+    api_base_url: String,
+    operation: SandboxOperation,
+    external_id: Option<&str>,
+    shell_command: &str,
+) -> Result<ExampleOutput> {
+    let endpoint = gateway_base_url(&api_base_url, "sandbox")?;
+    let customer_header = external_id
+        .map(shell_double_quote_fragment)
+        .unwrap_or_else(|| "$CUSTOMER_ID".to_string());
+    let (method, path, body, mut required_environment) = match operation {
+        SandboxOperation::Create => (
+            "POST",
+            "/v1/sandboxes".to_string(),
+            Some(serde_json::json!({})),
+            vec!["ALIEN_SANDBOX_API_KEY"],
+        ),
+        SandboxOperation::Exec => (
+            "POST",
+            "/v1/sandboxes/$SANDBOX_ID/exec".to_string(),
+            Some(serde_json::json!({
+                "command": "sh",
+                "args": ["-c", shell_command],
+                "timeoutMs": 30_000
+            })),
+            vec!["ALIEN_SANDBOX_API_KEY", "SANDBOX_ID"],
+        ),
+        SandboxOperation::Delete => (
+            "DELETE",
+            "/v1/sandboxes/$SANDBOX_ID".to_string(),
+            None,
+            vec!["ALIEN_SANDBOX_API_KEY", "SANDBOX_ID"],
+        ),
+    };
+    if external_id.is_none() {
+        required_environment.push("CUSTOMER_ID");
+    }
+    let body = body
+        .map(|body| {
+            serde_json::to_string_pretty(&body)
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: "Failed to render Sandbox Gateway example".to_string(),
+                })
+        })
+        .transpose()?;
+    let body_lines = body
+        .map(|body| {
+            format!(
+                " \\\n  -H \"Content-Type: application/json\" \\\n  -d {}",
+                shell_single_quote(&body)
+            )
+        })
+        .unwrap_or_default();
+    let command = format!(
+        "curl -X {method} \"{endpoint}{path}\" \\\n  -H \"Authorization: Bearer $ALIEN_SANDBOX_API_KEY\" \\\n  -H \"X-Alien-External-ID: {customer_header}\"{body_lines}"
+    );
+    Ok(ExampleOutput {
+        service: "sandbox-gateway",
+        endpoint,
+        command,
+        required_environment,
+    })
+}
+
 fn gateway_base_url(api_base_url: &str, service: &str) -> Result<String> {
     let url =
         Url::parse(api_base_url)
@@ -280,6 +370,48 @@ mod tests {
         .unwrap();
         assert!(example.command.contains("'\"$CIPHERTEXT\"'"));
         assert!(!example.command.contains("\n+"));
+    }
+
+    #[test]
+    fn sandbox_exec_example_keeps_the_command_inside_one_json_string() {
+        let example = sandbox_example(
+            "https://api.alien.dev".to_string(),
+            SandboxOperation::Exec,
+            None,
+            "echo 'it''s' && python3 -V",
+        )
+        .unwrap();
+        assert!(example.command.starts_with(
+            "curl -X POST \"https://sandbox.alien.dev/v1/sandboxes/$SANDBOX_ID/exec\""
+        ));
+        assert!(example.command.contains("$ALIEN_SANDBOX_API_KEY"));
+        assert!(example
+            .command
+            .contains("X-Alien-External-ID: $CUSTOMER_ID"));
+        assert_eq!(
+            example.required_environment,
+            vec!["ALIEN_SANDBOX_API_KEY", "SANDBOX_ID", "CUSTOMER_ID"]
+        );
+        assert!(!example.command.contains("\n+"));
+    }
+
+    #[test]
+    fn sandbox_delete_example_sends_no_body() {
+        let example = sandbox_example(
+            "https://api.staging.alien.dev".to_string(),
+            SandboxOperation::Delete,
+            Some("org_123"),
+            "echo hello",
+        )
+        .unwrap();
+        assert!(example.command.starts_with(
+            "curl -X DELETE \"https://sandbox.staging.alien.dev/v1/sandboxes/$SANDBOX_ID\""
+        ));
+        assert!(!example.command.contains("-d "));
+        assert_eq!(
+            example.required_environment,
+            vec!["ALIEN_SANDBOX_API_KEY", "SANDBOX_ID"]
+        );
     }
 
     #[test]
