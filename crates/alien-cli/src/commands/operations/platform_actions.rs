@@ -435,7 +435,7 @@ async fn request_access_then_reinvoke(
             .into_inner();
 
         if !printed_kubectl_approve {
-            let kubectl_approve = crate::commands::access_requests::fetch_kubectl_approve(
+            let kubectl_approve = crate::commands::access_requests::fetch_approval_instructions(
                 sdk_client,
                 workspace,
                 created.id.as_str(),

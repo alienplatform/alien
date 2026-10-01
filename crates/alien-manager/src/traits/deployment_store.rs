@@ -18,6 +18,11 @@ pub(crate) fn deployment_status_from_record(status: &str) -> Option<DeploymentSt
 }
 
 /// Release stacks an external control plane resolved for one deployment.
+///
+/// A control plane that changes only these stacks, keeping the release id,
+/// must deliver the deployment as `UpdatePending`: a `Running` deployment
+/// starts an update only when its desired release id differs from the
+/// current one, so a same-release difference is otherwise never applied.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SuppliedStacks {

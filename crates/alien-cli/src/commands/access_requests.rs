@@ -414,7 +414,7 @@ async fn poll_for_kubectl_approve(
 ) -> Result<ApprovalInstructions> {
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
     loop {
-        let instructions = fetch_kubectl_approve(sdk_client, workspace, id).await?;
+        let instructions = fetch_approval_instructions(sdk_client, workspace, id).await?;
         if instructions.is_final() || std::time::Instant::now() >= deadline {
             return Ok(instructions);
         }
@@ -477,7 +477,7 @@ async fn get_task(
         if request.status == alien_platform_api::types::AccessRequestStatus::Queued {
             poll_for_kubectl_approve(sdk_client, workspace, id).await?
         } else {
-            fetch_kubectl_approve(sdk_client, workspace, id).await?
+            fetch_approval_instructions(sdk_client, workspace, id).await?
         };
 
     if json {
@@ -625,11 +625,6 @@ fn print_revoked_by(
     }
 }
 
-/// Fetch the customer's `kubectl patch` approve command via `GET
-/// /access-requests/{id}/coordinates` — `None` until the operator has
-/// materialized the grant CR in-cluster and reported its namespace/CRD
-/// coordinates back (i.e. before `queued`, or briefly after, before the
-/// operator's next ~5s pull).
 /// How the customer approves a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ApprovalInstructions {
@@ -668,7 +663,12 @@ impl ApprovalInstructions {
 const ELSEWHERE_APPROVAL: &str = "A workspace member other than the requester approves this \
      request in the Alien dashboard (Access requests) or in Slack.";
 
-pub(crate) async fn fetch_kubectl_approve(
+/// Fetch how the customer approves this request via `GET
+/// /access-requests/{id}/coordinates`. For in-cluster approval, the
+/// `kubectl patch` command is `None` until the operator has materialized the
+/// grant CR and reported its namespace/CRD coordinates back (before `queued`,
+/// or briefly after, before the operator's next ~5s pull).
+pub(crate) async fn fetch_approval_instructions(
     sdk_client: &alien_platform_api::Client,
     workspace: &str,
     id: &str,
@@ -755,7 +755,7 @@ async fn wait_task(
             .into_inner();
 
         if !json && !printed_kubectl_approve {
-            let instructions = fetch_kubectl_approve(sdk_client, workspace, id).await?;
+            let instructions = fetch_approval_instructions(sdk_client, workspace, id).await?;
             if let Some(message) = instructions.waiting_message() {
                 println!("{}", dim_label(&message));
                 println!();
@@ -850,7 +850,7 @@ pub(crate) async fn wait_for_approval(
             .into_inner();
 
         if !printed_kubectl_approve {
-            let instructions = fetch_kubectl_approve(sdk_client, workspace, id).await?;
+            let instructions = fetch_approval_instructions(sdk_client, workspace, id).await?;
             if let Some(message) = instructions.waiting_message() {
                 eprintln!("{}", dim_label(&message));
                 printed_kubectl_approve = true;
