@@ -38,6 +38,10 @@ pub struct CreateDeploymentRequest {
     pub environment_variables: Option<Vec<EnvironmentVariable>>,
     #[serde(default)]
     pub resource_prefix: Option<String>,
+    /// Stack input values, by input name. Stored with the deployment and read by every
+    /// deployment step, like the values a setup collects.
+    #[serde(default)]
+    pub input_values: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -528,7 +532,7 @@ async fn create_deployment(
                 stack_state,
                 environment_variables: req.environment_variables,
                 public_subdomain: None,
-                input_values: Default::default(),
+                input_values: req.input_values,
                 setup_item: None,
                 deployment_token: Some(raw_token.clone()),
             },

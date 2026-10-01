@@ -1975,7 +1975,8 @@ async fn deploy_local_dev_task(args: ResolvedDeployArgs, port: u16) -> Result<()
 
     let steps = FixedSteps::new(&["Prepare deployment", "Wait for deployment"]);
     steps.activate(0, Some(args.name.clone()));
-    let deployment_id = create_initial_deployment(&args.name, port, None).await?;
+    let deployment_id =
+        create_initial_deployment(&args.name, port, None, args.input_values.clone()).await?;
     steps.complete(0, Some(format!("{} ({})", args.name, deployment_id)));
 
     steps.activate(1, Some(format!("{} ({})", args.name, "queued")));

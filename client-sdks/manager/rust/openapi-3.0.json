@@ -6576,6 +6576,11 @@
             },
             "nullable": true
           },
+          "inputValues": {
+            "type": "object",
+            "description": "Stack input values, by input name. Stored with the deployment and read by every\ndeployment step, like the values a setup collects.",
+            "additionalProperties": {}
+          },
           "name": {
             "type": "string"
           },

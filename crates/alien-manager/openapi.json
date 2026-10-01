@@ -7351,6 +7351,14 @@
               "$ref": "#/components/schemas/EnvironmentVariable"
             }
           },
+          "inputValues": {
+            "type": "object",
+            "description": "Stack input values, by input name. Stored with the deployment and read by every\ndeployment step, like the values a setup collects.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "name": {
             "type": "string"
           },
