@@ -1244,7 +1244,12 @@ mod tests {
                     && filter.name.as_deref() == Some("deployment-1")
             })
             .times(1)
-            .returning(|_, _| Ok(vec![deployment_record()]));
+            .returning(|_, _| {
+                Ok(vec![DeploymentRecord {
+                    deployment_group_id: "dg_generated".to_string(),
+                    ..deployment_record()
+                }])
+            });
 
         let request = Request::builder()
             .method("GET")
@@ -1256,6 +1261,7 @@ mod tests {
 
         assert_eq!(status, StatusCode::OK, "{json}");
         assert_eq!(json["items"][0]["id"], "deployment-1");
+        assert_eq!(json["items"][0]["deploymentGroupId"], "dg_generated");
     }
 
     #[tokio::test]
