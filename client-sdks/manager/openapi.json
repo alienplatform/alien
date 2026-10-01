@@ -16635,6 +16635,14 @@
             "type": "string",
             "description": "OTLP protobuf, base64."
           },
+          "id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The site's sequence number for the batch. The manager keeps the\nhighest one it has passed on and skips any it already has, so a\nreport sent again doesn't duplicate telemetry."
+          },
           "signal": {
             "type": "string",
             "description": "`logs`, `metrics` or `traces`."
@@ -18430,6 +18438,14 @@
             "type": "integer",
             "description": "Telemetry batches passed to the telemetry backend.",
             "minimum": 0
+          },
+          "telemetryThrough": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Highest batch the manager has passed on for this deployment, across\nreports."
           }
         }
       },
