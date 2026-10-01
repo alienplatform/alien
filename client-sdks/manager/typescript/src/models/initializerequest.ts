@@ -28,6 +28,10 @@ export type InitializeRequest = {
   name?: string | null | undefined;
   permission?: string | null | undefined;
   platform?: PlatformEnum | null | undefined;
+  /**
+   * Stable prefix for resources owned by this deployment.
+   */
+  resourcePrefix?: string | null | undefined;
   scope?: string | null | undefined;
   /**
    * Customer setup item selected from the deployment-group contract.
@@ -51,6 +55,7 @@ export type InitializeRequest$Outbound = {
   name?: string | null | undefined;
   permission?: string | null | undefined;
   platform?: string | null | undefined;
+  resourcePrefix?: string | null | undefined;
   scope?: string | null | undefined;
   setupItem?: string | null | undefined;
   setupMethod?: string | null | undefined;
@@ -68,6 +73,7 @@ export const InitializeRequest$outboundSchema: z.ZodType<
   name: z.nullable(z.string()).optional(),
   permission: z.nullable(z.string()).optional(),
   platform: z.nullable(PlatformEnum$outboundSchema).optional(),
+  resourcePrefix: z.nullable(z.string()).optional(),
   scope: z.nullable(z.string()).optional(),
   setupItem: z.nullable(z.string()).optional(),
   setupMethod: z.nullable(z.string()).optional(),

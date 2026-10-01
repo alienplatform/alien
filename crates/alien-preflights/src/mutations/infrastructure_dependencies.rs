@@ -45,7 +45,7 @@ impl StackMutation for InfrastructureDependenciesMutation {
         &self,
         mut stack: Stack,
         stack_state: &StackState,
-        _config: &DeploymentConfig,
+        config: &DeploymentConfig,
     ) -> Result<Stack> {
         let platform = stack_state.platform;
         info!(
@@ -61,8 +61,24 @@ impl StackMutation for InfrastructureDependenciesMutation {
                 continue;
             };
             let resource_type = entry.config.resource_type();
-            let deps =
-                self.get_dependencies_for_resource(&stack, &resource_id, &resource_type, platform);
+            // Frozen cloud infrastructure keeps its base-provider dependencies;
+            // Kubernetes workloads and logical pools retain Kubernetes placement.
+            let resource_platform = if platform == Platform::Kubernetes
+                && entry.lifecycle == alien_core::ResourceLifecycle::Frozen
+                && !matches!(
+                    resource_type.as_ref(),
+                    "compute-cluster" | "kubernetes-cluster"
+                ) {
+                config.base_platform.unwrap_or(platform)
+            } else {
+                platform
+            };
+            let deps = self.get_dependencies_for_resource(
+                &stack,
+                &resource_id,
+                &resource_type,
+                resource_platform,
+            );
 
             if let Some(entry) = stack.resources.get_mut(&resource_id) {
                 for dependency in deps {

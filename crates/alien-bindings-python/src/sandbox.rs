@@ -1,8 +1,8 @@
 use crate::error::map_alien_error;
 use crate::future_into_py;
 use alien_bindings::traits::{
-    CommandOutput, CreateSandboxRequest, JobPoll, RunCommandRequest, Sandbox, SandboxInstance,
-    SandboxState,
+    CommandOutput, CreateSandboxRequest, JobPoll, PreviewCapability, RunCommandRequest, Sandbox,
+    SandboxInstance, SandboxState,
 };
 use futures::lock::Mutex;
 use futures::stream::BoxStream;
@@ -48,6 +48,26 @@ pub(crate) struct JobResult {
     truncated: Option<bool>,
     error_code: Option<String>,
     error_message: Option<String>,
+}
+
+/// An authenticated way to reach a port inside a sandbox: send requests to
+/// `endpoint` with every header in `headers` until it expires.
+#[pyclass(frozen, get_all, skip_from_py_object)]
+#[derive(Clone)]
+pub(crate) struct Preview {
+    endpoint: String,
+    headers: BTreeMap<String, String>,
+    allowed_ports: Vec<u16>,
+    expires_in_seconds: u64,
+}
+
+fn preview(value: PreviewCapability) -> Preview {
+    Preview {
+        endpoint: value.endpoint,
+        headers: value.headers,
+        allowed_ports: value.allowed_ports,
+        expires_in_seconds: value.expires_in_seconds,
+    }
 }
 
 fn sandbox_info(value: SandboxInstance) -> SandboxInfo {
@@ -219,6 +239,7 @@ impl SandboxHandle {
             (value.reconnect, "reconnect"),
             (value.jobs, "jobs"),
             (value.pause_resume, "pauseResume"),
+            (value.preview, "preview"),
             (value.domain_egress_rules, "domainEgressRules"),
             (value.egress_deny, "egressDeny"),
             (value.enforced_limits, "enforcedLimits"),
@@ -406,6 +427,22 @@ impl SandboxHandle {
             inner
                 .write_files(&sandbox_id, BTreeMap::from([(path, contents)]))
                 .await
+                .map_err(map_alien_error)
+        })
+    }
+
+    fn preview<'py>(
+        &self,
+        py: Python<'py>,
+        sandbox_id: String,
+        port: u16,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            inner
+                .preview(&sandbox_id, port)
+                .await
+                .map(preview)
                 .map_err(map_alien_error)
         })
     }

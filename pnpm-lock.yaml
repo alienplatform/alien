@@ -227,6 +227,8 @@ importers:
         specifier: ^3.0.0
         version: 3.9.0(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@24.13.6)
 
+  packages/permissions: {}
+
   packages/scripts: {}
 
   packages/sdk:

@@ -12,8 +12,8 @@
 //! `package` builds a plugin's release binary and zips it with
 //! `metadata.json` into the bundle format `publish` expects.
 //!
-//! `init`, `check`, `test`, and `package` are fully local and need no
-//! platform account. `permissions`, `publish`, `list`, and `invoke` talk to
+//! `init`, `check`, `test`, `permissions`, and `package` are fully local and
+//! need no platform account. `publish`, `list`, and `invoke` talk to
 //! the Alien platform API and are only available with the `platform`
 //! feature enabled.
 
@@ -38,7 +38,7 @@ pub use check::check_task;
 pub use docs::docs_task;
 pub use init::init_task;
 pub use package::package_task;
-pub use permissions::{permissions_task, Cloud};
+pub use permissions::{permissions_task, Cloud, PermissionsOptions};
 #[cfg(feature = "platform")]
 use platform_actions::InvokeTaskOptions;
 #[cfg(feature = "platform")]
@@ -53,8 +53,8 @@ pub use test::test_task;
 Operations plugins package named operations (`plugin/operation`) that Remote
 Operator runs in a deployment. Each operation declares its risk, and invoking
 one goes through the project's approval policy and access requests. `init`,
-`check`, `test`, and `package` need no platform account (`cargo` may download
-the plugin's dependencies); `permissions`, `publish`, `list`, and `invoke` need a
+`check`, `test`, `permissions`, and `package` need no platform account (`cargo`
+may download the plugin's dependencies); `publish`, `list`, and `invoke` need a
 linked platform workspace.
 
 See also: `alien commands --help` for application RPC handled by your Worker,
@@ -112,11 +112,10 @@ pub enum OperationsAction {
         /// Destination directory. Defaults to `./<name>`.
         directory: Option<String>,
     },
-    /// Validate a plugin's manifest. When the plugin has a
-    /// `generate-metadata` binary, also build and run it (like `test` and
-    /// `package` do) and fail if `metadata.json` differs from the metadata its
-    /// typed operations generate. Needs no platform account; `cargo` may
-    /// download the plugin's dependencies.
+    /// Validate a plugin's manifest, then build and run its required
+    /// `generate-metadata` binary and fail if `metadata.json` differs from
+    /// the metadata its typed operations generate. Needs no platform account;
+    /// `cargo` may download the plugin's dependencies.
     Check {
         /// Plugin directory containing `metadata.json`. Defaults to the
         /// current directory.
@@ -143,6 +142,9 @@ pub enum OperationsAction {
         /// Cloud to generate a policy for.
         #[arg(long)]
         cloud: Cloud,
+
+        #[command(flatten)]
+        options: PermissionsOptions,
     },
     /// Generate MCP tool schemas and a Markdown reference page from a
     /// plugin's manifest. Fully offline.
@@ -218,9 +220,16 @@ pub async fn local_operations_task(args: &OperationsArgs) -> Option<Result<()>> 
             manifest_only,
         } => Some(check_task(directory.as_deref(), *manifest_only, args.json)),
         OperationsAction::Test { directory } => Some(test_task(directory.as_deref(), args.json)),
-        OperationsAction::Permissions { directory, cloud } => {
-            Some(permissions_task(directory.as_deref(), *cloud, args.json))
-        }
+        OperationsAction::Permissions {
+            directory,
+            cloud,
+            options,
+        } => Some(permissions_task(
+            directory.as_deref(),
+            *cloud,
+            options,
+            args.json,
+        )),
         OperationsAction::Docs { directory } => Some(docs_task(directory.as_deref(), args.json)),
         OperationsAction::Package { directory } => {
             Some(package_task(directory.as_deref(), args.json))

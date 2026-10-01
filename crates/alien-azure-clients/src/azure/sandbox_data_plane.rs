@@ -12,7 +12,7 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
-use alien_error::{Context, IntoAlienError};
+use alien_error::{Context, ContextError, IntoAlienError};
 use async_trait::async_trait;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
@@ -151,6 +151,9 @@ pub struct EgressHostRule {
 pub struct CreateSandbox {
     /// Public catalog disk image name, such as `ubuntu`.
     pub disk_image: String,
+    /// A disk image built in this group, by id. Set, it is what the sandbox starts from and
+    /// `disk_image` is not sent: a catalog name and a built image are two different sources.
+    pub disk_image_id: Option<String>,
     /// CPU in the data plane's units, such as `1000m`.
     pub cpu: String,
     /// Memory in the data plane's units, such as `2048Mi`.
@@ -175,8 +178,12 @@ pub struct CreateSandbox {
 /// than top level. A flat {disk, cpu, memory} is rejected with "'sourcesRef' is required when not
 /// using a preset sandbox type".
 fn create_body(request: &CreateSandbox) -> serde_json::Value {
+    let disk_image = match &request.disk_image_id {
+        Some(id) => serde_json::json!({ "id": id }),
+        None => serde_json::json!({ "name": request.disk_image, "isPublic": true }),
+    };
     let mut body = serde_json::json!({
-        "sourcesRef": { "diskImage": { "name": request.disk_image, "isPublic": true } },
+        "sourcesRef": { "diskImage": disk_image },
         "resources": { "cpu": request.cpu, "memory": request.memory },
     });
 
@@ -222,6 +229,82 @@ pub struct Sandbox {
     /// rather than into a sandbox it assumes is healthy.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
+}
+
+/// A disk image built into a sandbox group from a registry image.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskImage {
+    /// Server-minted id a sandbox's `sourcesRef.diskImage.id` names.
+    pub id: String,
+    /// Labels the image was created with; how an image is found again, since the id is minted.
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
+    /// Build state, absent when the data plane sent none.
+    #[serde(default)]
+    pub status: Option<DiskImageStatus>,
+}
+
+impl DiskImage {
+    /// The build state, such as `Ready` or `Failed`.
+    pub fn state(&self) -> Option<&str> {
+        self.status
+            .as_ref()
+            .and_then(|status| status.state.as_deref())
+    }
+}
+
+/// Where a disk image's build stands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskImageStatus {
+    /// `Ready` once a sandbox can start from it, `Failed` when the build gave up.
+    #[serde(default)]
+    pub state: Option<String>,
+    /// Why a build failed. Sent empty on a healthy image.
+    #[serde(default)]
+    pub error_message: Option<String>,
+}
+
+/// A registry image to build a disk image from.
+#[derive(Clone, Default)]
+pub struct CreateDiskImage {
+    /// Registry reference, such as `docker.io/library/python:3.14-slim`. Only a `linux/amd64`
+    /// image or index builds; Azure refuses anything else with `ImagePlatformNotSupported`.
+    pub base: String,
+    /// Labels to find the image by later.
+    pub labels: BTreeMap<String, String>,
+    /// Basic credentials for a private registry, as `(username, token)`. Absent pulls anonymously.
+    pub registry_credentials: Option<(String, String)>,
+}
+
+// Written by hand so a log line or a mock mismatch never prints the registry token.
+impl std::fmt::Debug for CreateDiskImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreateDiskImage")
+            .field("base", &self.base)
+            .field("labels", &self.labels)
+            .field(
+                "registry_credentials",
+                &self
+                    .registry_credentials
+                    .as_ref()
+                    .map(|(username, _)| (username, "<redacted>")),
+            )
+            .finish()
+    }
+}
+
+/// The disk image create body: `image.base`, the labels, and `registryCredentials` when set.
+fn disk_image_body(request: &CreateDiskImage) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "image": { "base": request.base },
+        "labels": request.labels,
+    });
+    if let Some((username, token)) = &request.registry_credentials {
+        body["registryCredentials"] = serde_json::json!({ "username": username, "token": token });
+    }
+    body
 }
 
 /// Result of a shell command.
@@ -283,6 +366,90 @@ pub trait SandboxDataPlaneApi: Send + Sync + std::fmt::Debug {
 
     /// Resumes a stopped sandbox. Returns once accepted, not once running.
     async fn resume_sandbox(&self, group: &str, sandbox_id: &str) -> Result<()>;
+
+    /// Builds a disk image from a registry image. Sent once: the id is server-minted, so a
+    /// re-send builds a duplicate. Look an image up by label before calling this.
+    async fn create_disk_image(&self, group: &str, request: CreateDiskImage) -> Result<DiskImage>;
+
+    /// Reads a disk image. A 404 means it is gone.
+    async fn get_disk_image(&self, group: &str, image_id: &str) -> Result<DiskImage>;
+
+    /// Lists every disk image in the group. The data plane filters by nothing, so a caller
+    /// matches labels itself.
+    async fn list_disk_images(&self, group: &str) -> Result<Vec<DiskImage>>;
+
+    /// Deletes a disk image. Sent once, so a 409 (a stopped sandbox's snapshot still holds the
+    /// image) returns at once for the caller to retry later rather than spending a backoff here.
+    async fn delete_disk_image(&self, group: &str, image_id: &str) -> Result<()>;
+}
+
+const REFUSED_IMAGE_TITLES: &[&str] = &[
+    "ImageNotFound",
+    "RegistryForbidden",
+    "RegistryAuthFailed",
+    "ImagePlatformNotSupported",
+];
+
+/// Azure's answer about the image names the image, not the group. Missing, denied and arm64-only
+/// titles are final; a 502 `DependencyError` may be a registry outage or rate limit, so it stays
+/// retryable. Any other answer keeps the shared per-status mapping.
+fn disk_image_refusal(
+    status: reqwest::StatusCode,
+    base: &str,
+    group: &str,
+    body: &str,
+    url: &str,
+) -> alien_error::AlienError<ErrorData> {
+    #[derive(Deserialize)]
+    struct Problem {
+        title: String,
+        #[serde(default)]
+        detail: String,
+    }
+
+    let http_error = |status: reqwest::StatusCode| {
+        alien_error::AlienError::new(ErrorData::HttpResponseError {
+            message: format!("Azure CreateDiskImage failed: HTTP {status}"),
+            url: url.to_string(),
+            http_status: status.as_u16(),
+            http_request_text: None,
+            http_response_text: Some(body.to_string()),
+        })
+    };
+    let reason = |problem: &Problem| {
+        format!(
+            "Azure refused to build a disk image from '{base}' ({}): {}",
+            problem.title, problem.detail
+        )
+    };
+
+    match serde_json::from_str::<Problem>(body) {
+        Ok(problem)
+            if status.is_client_error()
+                && REFUSED_IMAGE_TITLES.contains(&problem.title.as_str()) =>
+        {
+            http_error(status).context(ErrorData::InvalidInput {
+                message: reason(&problem),
+                field_name: None,
+            })
+        }
+        Ok(problem)
+            if status == reqwest::StatusCode::BAD_GATEWAY && problem.title == "DependencyError" =>
+        {
+            http_error(status).context(ErrorData::RemoteServiceUnavailable {
+                message: reason(&problem),
+            })
+        }
+        _ => crate::azure::common::create_azure_http_error_with_context(
+            status,
+            "CreateDiskImage",
+            "Resource",
+            group,
+            body,
+            url,
+            None,
+        ),
+    }
 }
 
 /// The `executeShellCommand` body, which is `command` plus an optional `workingDirectory` and
@@ -645,6 +812,107 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
         )?;
         Ok(())
     }
+
+    async fn create_disk_image(&self, group: &str, request: CreateDiskImage) -> Result<DiskImage> {
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
+        let url = self.base.build_url(
+            &format!("{}/diskimages", self.group_path(group)),
+            Some(vec![("api-version", API_VERSION.into())]),
+        );
+
+        let base = request.base.clone();
+        let body = disk_image_body(&request).to_string();
+        let request = AzureRequestBuilder::new(Method::PUT, url)
+            .content_type_json()
+            .content_length(&body)
+            .body(body)
+            .build()?;
+        let signed = self.base.sign_request(request, &token).await?;
+        let request_url = signed.url().to_string();
+        // Sent once and outside the shared executor: its error carries the request body, which
+        // can hold a registry token, and maps a 404 to "group not found" when Azure meant the tag.
+        let response = self
+            .base
+            .client
+            .execute(signed)
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                message: format!("Azure CreateDiskImage: HTTP error for '{base}'"),
+            })?;
+        let status = response.status();
+        if status.is_success() {
+            return Self::parse(response, "CreateDiskImage").await;
+        }
+        let body = response.text().await.unwrap_or_default();
+        Err(disk_image_refusal(
+            status,
+            &base,
+            group,
+            &body,
+            &request_url,
+        ))
+    }
+
+    async fn get_disk_image(&self, group: &str, image_id: &str) -> Result<DiskImage> {
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
+        let url = self.base.build_url(
+            &format!("{}/diskimages/{image_id}", self.group_path(group)),
+            Some(vec![("api-version", API_VERSION.into())]),
+        );
+
+        let request = AzureRequestBuilder::new(Method::GET, url).build()?;
+        let signed = self.base.sign_request(request, &token).await?;
+        let response = self
+            .base
+            .execute_request(signed, "GetDiskImage", image_id)
+            .await?;
+        Self::parse(response, "GetDiskImage").await
+    }
+
+    async fn list_disk_images(&self, group: &str) -> Result<Vec<DiskImage>> {
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
+        let url = self.base.build_url(
+            &format!("{}/diskimages", self.group_path(group)),
+            Some(vec![("api-version", API_VERSION.into())]),
+        );
+
+        let request = AzureRequestBuilder::new(Method::GET, url).build()?;
+        let signed = self.base.sign_request(request, &token).await?;
+        let response = self
+            .base
+            .execute_request(signed, "ListDiskImages", group)
+            .await?;
+        // A bare array, not ARM's `{"value": [...]}`.
+        Self::parse(response, "ListDiskImages").await
+    }
+
+    async fn delete_disk_image(&self, group: &str, image_id: &str) -> Result<()> {
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
+        let url = self.base.build_url(
+            &format!("{}/diskimages/{image_id}", self.group_path(group)),
+            Some(vec![("api-version", API_VERSION.into())]),
+        );
+
+        let request = AzureRequestBuilder::new(Method::DELETE, url).build()?;
+        let signed = self.base.sign_request(request, &token).await?;
+        self.base
+            .execute_request_once(signed, "DeleteDiskImage", image_id)
+            .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -699,6 +967,7 @@ mod tests {
                 "grp",
                 CreateSandbox {
                     disk_image: "ubuntu".to_string(),
+                    disk_image_id: None,
                     cpu: "1".to_string(),
                     memory: "2Gi".to_string(),
                     disk: None,
@@ -953,6 +1222,7 @@ mod tests {
     fn the_create_body_carries_the_variables_the_caller_asked_for() {
         let body = create_body(&CreateSandbox {
             disk_image: "ubuntu".to_string(),
+            disk_image_id: None,
             cpu: "1000m".to_string(),
             memory: "2048Mi".to_string(),
             disk: None,
@@ -1100,5 +1370,253 @@ mod tests {
                 "action":{"type":"Rewrite","host":"h","path":"/p","scheme":"https","headers":[]}}]}"#,
         )
         .expect("every field the SDK models must still parse");
+    }
+
+    /// A sandbox started from a built image names it by id alone: `isPublic` would send the
+    /// data plane looking for the id in the public catalog.
+    #[test]
+    fn a_built_disk_image_is_named_by_id() {
+        let body = create_body(&CreateSandbox {
+            disk_image: "ubuntu".to_string(),
+            disk_image_id: Some("9bb20405-f156-4ca3-930d-dd7526674c1a".to_string()),
+            ..CreateSandbox::default()
+        });
+
+        assert_eq!(
+            body["sourcesRef"]["diskImage"],
+            serde_json::json!({ "id": "9bb20405-f156-4ca3-930d-dd7526674c1a" })
+        );
+    }
+
+    /// The wire formats the live service answered with: a create that is `Ready` in its own
+    /// response, and a list that is a bare array rather than ARM's `{"value": [...]}`.
+    #[tokio::test]
+    async fn a_disk_image_is_built_and_listed_in_the_shapes_the_service_sends() {
+        let server = MockServer::start_async().await;
+        let client = client_against(&server);
+        let images = format!(
+            "/subscriptions/{}/resourceGroups/rg/sandboxGroups/grp/diskimages",
+            AzureClientConfig::mock().subscription_id
+        );
+        let image = r#"{"id":"img-1","labels":{"alienImage":"abc"},
+            "image":{"base":"docker.io/library/python:3.14-slim"},
+            "status":{"state":"Ready","createdAt":"2026-09-28T18:05:17Z"},"sizeInMB":208}"#;
+
+        let create = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PUT)
+                    .path(images.clone())
+                    .query_param("api-version", API_VERSION)
+                    .json_body(serde_json::json!({
+                        "image": { "base": "registry.example.com/team/agent:1" },
+                        "labels": { "alienImage": "abc" },
+                        "registryCredentials": { "username": "deployment", "token": "t" },
+                    }));
+                then.status(200).body(image);
+            })
+            .await;
+        let built = client
+            .create_disk_image(
+                "grp",
+                CreateDiskImage {
+                    base: "registry.example.com/team/agent:1".to_string(),
+                    labels: BTreeMap::from([("alienImage".to_string(), "abc".to_string())]),
+                    registry_credentials: Some(("deployment".to_string(), "t".to_string())),
+                },
+            )
+            .await
+            .expect("the build is accepted");
+        create.assert_async().await;
+        assert_eq!(built.id, "img-1");
+        assert_eq!(built.state(), Some("Ready"));
+
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET).path(images.clone());
+                then.status(200).body(format!("[{image}]"));
+            })
+            .await;
+        let listed = client
+            .list_disk_images("grp")
+            .await
+            .expect("the list parses");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].labels["alienImage"], "abc");
+    }
+
+    /// An arm64-only image is refused at create with a 400 whose `detail` is the only place the
+    /// reason lives, so the error has to carry it rather than a bare status.
+    #[tokio::test]
+    async fn a_refused_build_carries_azures_reason() {
+        let server = MockServer::start_async().await;
+        let client = client_against(&server);
+        let create = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PUT);
+                then.status(400).body(
+                    r#"{"title":"ImagePlatformNotSupported","status":400,"detail":"The container image 'docker.io/arm64v8/alpine:3.19' does not provide a linux/amd64 variant. Only linux/amd64 images are supported.","errorCode":15}"#,
+                );
+            })
+            .await;
+
+        let error = client
+            .create_disk_image(
+                "grp",
+                CreateDiskImage {
+                    base: "docker.io/arm64v8/alpine:3.19".to_string(),
+                    registry_credentials: Some(("deployment".to_string(), "secret".to_string())),
+                    ..CreateDiskImage::default()
+                },
+            )
+            .await
+            .expect_err("an arm64-only image is refused");
+
+        assert_eq!(create.hits(), 1, "a build is never re-sent");
+        let rendered = format!("{error}");
+        assert!(rendered.contains("linux/amd64"), "{rendered}");
+        let serialized = serde_json::to_string(&error).expect("the error serializes");
+        assert!(
+            !serialized.contains("secret"),
+            "the registry token must not reach the error chain: {serialized}"
+        );
+    }
+
+    /// Each of Azure's answers about the image names the image rather than the group. The 4xx
+    /// ones are final; a failed pull (502) may be a registry outage, so it stays retryable.
+    #[tokio::test]
+    async fn a_registry_refusal_names_the_image_not_the_group() {
+        for (status, body, expected, retryable) in [
+            (
+                404,
+                r#"{"title":"ImageNotFound","status":404,"detail":"The image 'docker.io/library/python:0.0-nope' was not found in the registry."}"#,
+                "not found in the registry",
+                false,
+            ),
+            (
+                403,
+                r#"{"title":"RegistryForbidden","status":403,"detail":"Pulling the image was forbidden. Provide 'registryCredentials' to authenticate."}"#,
+                "Provide 'registryCredentials'",
+                false,
+            ),
+            (
+                401,
+                r#"{"title":"RegistryAuthFailed","status":401,"detail":"Authentication failed when pulling container image."}"#,
+                "Authentication failed when pulling",
+                false,
+            ),
+            (
+                502,
+                r#"{"title":"DependencyError","status":502,"detail":"buildah pull failed with exit code 125."}"#,
+                "buildah pull failed",
+                true,
+            ),
+        ] {
+            let server = MockServer::start_async().await;
+            let client = client_against(&server);
+            let create = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::PUT);
+                    then.status(status).body(body);
+                })
+                .await;
+
+            let error = client
+                .create_disk_image(
+                    "grp",
+                    CreateDiskImage {
+                        base: "docker.io/library/python:0.0-nope".to_string(),
+                        registry_credentials: Some((
+                            "deployment".to_string(),
+                            "secret".to_string(),
+                        )),
+                        ..CreateDiskImage::default()
+                    },
+                )
+                .await
+                .expect_err("a refused build fails");
+
+            assert_eq!(create.hits(), 1);
+            let rendered = error.to_string();
+            assert!(rendered.contains(expected), "{status}: {rendered}");
+            assert!(!rendered.contains("'grp'"), "{status}: {rendered}");
+            assert_eq!(error.retryable, retryable, "{status}: {rendered}");
+            let serialized = serde_json::to_string(&error).expect("the error serializes");
+            assert!(!serialized.contains("secret"), "{serialized}");
+        }
+    }
+
+    /// A bodiless 403 is this plane's own RBAC refusing the caller, which is about the group.
+    #[tokio::test]
+    async fn a_bodiless_403_keeps_the_group_access_error() {
+        let server = MockServer::start_async().await;
+        let client = client_against(&server);
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PUT);
+                then.status(403);
+            })
+            .await;
+
+        let error = client
+            .create_disk_image("grp", CreateDiskImage::default())
+            .await
+            .expect_err("a denied caller fails");
+
+        assert!(
+            matches!(error.error, Some(ErrorData::RemoteAccessDenied { .. })),
+            "{error:?}"
+        );
+    }
+
+    /// A titled 4xx that is not one of the image refusals, such as the plane's RBAC answering with
+    /// a body, keeps the shared mapping rather than reading as a refused image.
+    #[tokio::test]
+    async fn an_unknown_titled_refusal_keeps_the_shared_mapping() {
+        let server = MockServer::start_async().await;
+        let client = client_against(&server);
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PUT);
+                then.status(403)
+                    .body(r#"{"title":"AuthorizationFailed","status":403,"detail":"denied"}"#);
+            })
+            .await;
+
+        let error = client
+            .create_disk_image("grp", CreateDiskImage::default())
+            .await
+            .expect_err("a denied caller fails");
+
+        assert!(
+            matches!(error.error, Some(ErrorData::RemoteAccessDenied { .. })),
+            "{error:?}"
+        );
+    }
+
+    /// A 409 means a stopped sandbox's snapshot still holds the image. It comes back once, typed
+    /// as a conflict, so the caller can keep the id and try again later.
+    #[tokio::test]
+    async fn a_held_disk_image_delete_returns_a_conflict_at_once() {
+        let server = MockServer::start_async().await;
+        let client = client_against(&server);
+        let delete = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::DELETE);
+                then.status(409).body(
+                    r#"{"title":"DiskImageHasDependents","status":409,"detail":"Cannot delete disk image 'img-1': it is referenced by 1 snapshot(s)"}"#,
+                );
+            })
+            .await;
+
+        let error = client
+            .delete_disk_image("grp", "img-1")
+            .await
+            .expect_err("a held image is not deleted");
+
+        assert_eq!(delete.hits(), 1, "a held image is not retried in a backoff");
+        assert!(
+            matches!(error.error, Some(ErrorData::RemoteResourceConflict { .. })),
+            "{error:?}"
+        );
     }
 }

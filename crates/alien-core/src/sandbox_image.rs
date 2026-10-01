@@ -6,8 +6,10 @@
 //! agent listening on a port no caller dials, or an exec into a uid the image never created.
 //!
 //! So the values live here once and both kinds render the block that carries them from this
-//! module. The GCP Dockerfiles are committed as generated text because the release workflow builds
-//! them with `docker build`, which cannot call a Rust function.
+//! module. The same holds for the default sandbox base both kinds start from: its toolchain is
+//! listed here once, and a probe reads that list rather than restating it. The Dockerfiles and the
+//! tool list are committed as generated text because CI builds them with `docker build` and probes
+//! them from a shell, neither of which can call a Rust function.
 
 /// Path the agent binary is installed at inside every sandbox image.
 ///
@@ -21,6 +23,18 @@ pub const AGENT_PATH: &str = "/usr/local/bin/alien-sandbox-agent";
 /// the agent on one port and the client dials the other, and nothing catches it until a sandbox
 /// hangs. AWS scopes its endpoint token to an explicit port set, so this cannot be discovered.
 pub const AGENT_PORT: u16 = 8971;
+
+/// Mode of the agent binary, owned by `0:0` so the exec uid cannot rewrite its supervisor.
+pub const AGENT_MODE: u32 = 0o755;
+
+/// Name of the exec identity's passwd and group entries.
+pub const EXEC_USER: &str = "sandbox";
+
+/// Mode of the session root, which the exec uid owns.
+pub const SESSION_ROOT_MODE: u32 = 0o700;
+
+/// `RUST_LOG` for a GCP image, which the agent needs set before it logs anything.
+pub const GCP_AGENT_LOG_FILTER: &str = "info";
 
 /// How an image ends, and the isolation that ending permits.
 ///
@@ -80,6 +94,61 @@ pub struct SandboxImage {
     pub isolation: Isolation,
 }
 
+impl SandboxImage {
+    /// Gid the supervised command runs as, always equal to the exec uid.
+    pub fn exec_gid(&self) -> u32 {
+        self.exec_uid
+    }
+
+    /// The agent's configuration contract as `(name, value)` pairs, in the order the `ENV` block
+    /// lists them.
+    pub fn contract_env_vars(&self) -> [(&'static str, String); 6] {
+        [
+            ("ALIEN_SANDBOX_ROOT", self.session_root.to_string()),
+            ("ALIEN_SANDBOX_PORT", self.port.to_string()),
+            (
+                "ALIEN_SANDBOX_AUTHORIZATION",
+                self.authorization.env_value().to_string(),
+            ),
+            ("ALIEN_SANDBOX_EXEC_UID", self.exec_uid.to_string()),
+            ("ALIEN_SANDBOX_EXEC_GID", self.exec_gid().to_string()),
+            (
+                "ALIEN_SANDBOX_ISOLATION",
+                self.isolation.env_value().to_string(),
+            ),
+        ]
+    }
+
+    /// The `uid:gid` the image runs as, or `None` when it declares no user and starts as root.
+    /// Why the gid is explicit is in the `USER` comment [`entrypoint`] renders.
+    pub fn user(&self) -> Option<String> {
+        match self.isolation {
+            Isolation::UidSplit => None,
+            Isolation::Platform => Some(format!("{}:{}", self.exec_uid, self.exec_gid())),
+        }
+    }
+
+    /// The port the image exposes, as an OCI `ExposedPorts` key.
+    pub fn exposed_port(&self) -> String {
+        format!("{}/tcp", self.port)
+    }
+
+    /// The exec identity's `/etc/passwd` line, without a trailing newline.
+    pub fn passwd_entry(&self) -> String {
+        format!(
+            "{EXEC_USER}:x:{uid}:{gid}::{root}:/sbin/nologin",
+            uid = self.exec_uid,
+            gid = self.exec_gid(),
+            root = self.session_root,
+        )
+    }
+
+    /// The exec identity's `/etc/group` line, without a trailing newline.
+    pub fn group_entry(&self) -> String {
+        format!("{EXEC_USER}:x:{gid}:", gid = self.exec_gid())
+    }
+}
+
 /// The Lambda MicroVM image, rendered per deployment onto a customer base image.
 ///
 /// The agent runs as root so it can drop to [`SandboxImage::exec_uid`] before every spawn; inside
@@ -111,57 +180,122 @@ pub const GCP_AGENT_PLATFORM: SandboxImage = SandboxImage {
     isolation: Isolation::Platform,
 };
 
+/// Every variable a GCP Agent Platform image sets: the contract, then `RUST_LOG`.
+pub fn gcp_agent_platform_env() -> Vec<(&'static str, String)> {
+    let mut env = GCP_AGENT_PLATFORM.contract_env_vars().to_vec();
+    env.push(("RUST_LOG", GCP_AGENT_LOG_FILTER.to_string()));
+    env
+}
+
+/// The image every default sandbox builds on, by index digest so both architectures are pinned.
+///
+/// Bumped by hand, then regenerated: Renovate skips the generated Dockerfiles and does not read
+/// this file.
+pub const DEFAULT_SANDBOX_BASE_IMAGE: &str = "public.ecr.aws/docker/library/buildpack-deps:26.04@sha256:159ea382e6fb39e62480ee932113f885f7bd787cd4895fc4dc71aebb175077fd";
+
+/// The image uv and uvx are copied out of, by index digest.
+pub const DEFAULT_SANDBOX_UV_IMAGE: &str = "ghcr.io/astral-sh/uv:0.12.21@sha256:a7aed3216253ee804de3e2d8afa5073baa1a177335345d43845cd4165e43b711";
+
+/// A tool the default sandbox base ships, and the command that shows it runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SandboxTool {
+    /// The Ubuntu archive package it comes from, or `None` for one copied out of
+    /// [`DEFAULT_SANDBOX_UV_IMAGE`].
+    pub package: Option<&'static str>,
+    /// Prints the tool's version and exits zero.
+    pub version_command: &'static str,
+}
+
+/// The toolchain of the default sandbox base, and the one list its probes read.
+///
+/// Every tool lands in `/usr/bin` or `/usr/local/bin`: a supervised command gets a fixed `PATH`
+/// and never the image's `ENV`, so a tool anywhere else is invisible to it.
+pub const DEFAULT_SANDBOX_TOOLS: &[SandboxTool] = &[
+    SandboxTool {
+        package: Some("nodejs"),
+        version_command: "node --version",
+    },
+    SandboxTool {
+        package: Some("npm"),
+        version_command: "npm --version",
+    },
+    SandboxTool {
+        package: Some("ripgrep"),
+        version_command: "rg --version",
+    },
+    SandboxTool {
+        package: Some("jq"),
+        version_command: "jq --version",
+    },
+    SandboxTool {
+        package: Some("zip"),
+        version_command: "zip -v",
+    },
+    SandboxTool {
+        package: Some("less"),
+        version_command: "less --version",
+    },
+    SandboxTool {
+        package: Some("nano"),
+        version_command: "nano --version",
+    },
+    SandboxTool {
+        package: Some("vim-tiny"),
+        version_command: "vim.tiny --version",
+    },
+    SandboxTool {
+        package: Some("htop"),
+        version_command: "htop --version",
+    },
+    SandboxTool {
+        package: None,
+        version_command: "uv --version",
+    },
+    SandboxTool {
+        package: None,
+        version_command: "uvx --version",
+    },
+];
+
 /// The `RUN` step creating the exec identity and the session root it owns.
 pub fn identity_setup(image: &SandboxImage) -> String {
-    let SandboxImage {
-        exec_uid,
-        session_root,
-        ..
-    } = *image;
     format!(
-        r#"RUN printf 'sandbox:x:{exec_uid}:{exec_uid}::{session_root}:/sbin/nologin\n' >> /etc/passwd \
- && printf 'sandbox:x:{exec_uid}:\n' >> /etc/group \
- && mkdir -p {session_root} \
- && chown {exec_uid}:{exec_uid} {session_root} \
- && chmod 0700 {session_root}"#
+        r#"RUN printf '{passwd}\n' >> /etc/passwd \
+ && printf '{group}\n' >> /etc/group \
+ && mkdir -p {root} \
+ && chown {uid}:{gid} {root} \
+ && chmod {SESSION_ROOT_MODE:04o} {root}"#,
+        passwd = image.passwd_entry(),
+        group = image.group_entry(),
+        root = image.session_root,
+        uid = image.exec_uid,
+        gid = image.exec_gid(),
     )
 }
 
 /// The `ENV` block carrying the agent's configuration contract.
 pub fn contract_env(image: &SandboxImage) -> String {
-    let SandboxImage {
-        exec_uid,
-        session_root,
-        port,
-        authorization,
-        isolation,
-    } = *image;
-    format!(
-        r#"ENV ALIEN_SANDBOX_ROOT={session_root} \
-    ALIEN_SANDBOX_PORT={port} \
-    ALIEN_SANDBOX_AUTHORIZATION={authorization} \
-    ALIEN_SANDBOX_EXEC_UID={exec_uid} \
-    ALIEN_SANDBOX_EXEC_GID={exec_uid} \
-    ALIEN_SANDBOX_ISOLATION={isolation}"#,
-        authorization = authorization.env_value(),
-        isolation = isolation.env_value(),
-    )
+    let vars: Vec<String> = image
+        .contract_env_vars()
+        .iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect();
+    format!("ENV {}", vars.join(" \\\n    "))
 }
 
 /// `EXPOSE`, the image's ending, and the `ENTRYPOINT`.
 pub fn entrypoint(image: &SandboxImage) -> String {
-    let ending = match image.isolation {
-        Isolation::UidSplit => String::new(),
-        Isolation::Platform => format!(
+    let ending = match image.user() {
+        None => String::new(),
+        Some(user) => format!(
             "# Explicit gid so a runtime that does not read /etc/passwd cannot start the agent in \
              group 0, which\n# makes the exec drop a privilege crossing whose setgroups needs a \
-             CAP_SETGID this image lacks, so\n# every exec fails.\nUSER {uid}:{uid}\n",
-            uid = image.exec_uid
+             CAP_SETGID this image lacks, so\n# every exec fails.\nUSER {user}\n"
         ),
     };
     format!(
         "EXPOSE {port}\n{ending}ENTRYPOINT [\"{AGENT_PATH}\"]",
-        port = image.port
+        port = image.exposed_port()
     )
 }
 
@@ -173,24 +307,88 @@ const GCP_DOCKERFILE: &str = "docker/Dockerfile.alien-sandbox-agent";
 #[cfg(test)]
 const GCP_DEFAULT_DOCKERFILE: &str = "docker/Dockerfile.alien-sandbox-gcp";
 
-/// Set to regenerate the committed GCP Dockerfiles instead of comparing against them.
+/// Path of the committed default sandbox base Dockerfile, relative to the repository root.
 #[cfg(test)]
-const GCP_DOCKERFILE_UPDATE: &str = "UPDATE_SANDBOX_AGENT_DOCKERFILE";
+const DEFAULT_SANDBOX_DOCKERFILE: &str = "docker/Dockerfile.alien-sandbox-default";
+
+/// Path of the committed tool list a probe of the default sandbox base reads.
+#[cfg(test)]
+const DEFAULT_SANDBOX_TOOLS_FILE: &str = "docker/sandbox-default-tools.txt";
+
+/// Set to regenerate every committed file this module renders instead of comparing against them.
+/// Named for the agent Dockerfile; every generated header prints the name, so a rename rewrites all.
+#[cfg(test)]
+const SANDBOX_FILES_UPDATE: &str = "UPDATE_SANDBOX_AGENT_DOCKERFILE";
+
+/// Renders [`DEFAULT_SANDBOX_DOCKERFILE`], the tools-only base every default sandbox builds on.
+#[cfg(test)]
+fn default_sandbox_dockerfile() -> String {
+    let packages: Vec<&str> = DEFAULT_SANDBOX_TOOLS
+        .iter()
+        .filter_map(|tool| tool.package)
+        .collect();
+    format!(
+        r#"# Generated by `cargo test -p alien-core --lib sandbox_image`. Do not edit by hand.
+# Regenerate with {SANDBOX_FILES_UPDATE}=1 in front of that command.
+#
+# Multi-arch tools-only base for the default sandbox images, with no agent. An image that runs the
+# agent adds it and its own ending on top, and a runtime with no in-guest agent runs this as is,
+# so it declares no USER, ENTRYPOINT or ENV.
+
+FROM {DEFAULT_SANDBOX_BASE_IMAGE}
+
+# No version pins: the -updates and -security pockets supersede a pinned version and the arm64
+# ports lag behind, so a pin breaks the build. The published digest is what fixes the versions.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      {packages} \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from={DEFAULT_SANDBOX_UV_IMAGE} /uv /uvx /usr/local/bin/
+"#,
+        packages = packages.join(" "),
+    )
+}
+
+/// Renders [`DEFAULT_SANDBOX_TOOLS_FILE`], one version command per line.
+#[cfg(test)]
+fn default_sandbox_tools_list() -> String {
+    let mut list = format!(
+        "# Generated by `cargo test -p alien-core --lib sandbox_image`. Do not edit by hand.
+# Regenerate with {SANDBOX_FILES_UPDATE}=1 in front of that command.
+#
+# One command per tool the default sandbox base ships; each prints a version and exits zero.
+"
+    );
+    for tool in DEFAULT_SANDBOX_TOOLS {
+        list.push_str(tool.version_command);
+        list.push('\n');
+    }
+    list
+}
+
+/// Where a GCP image's final stage starts.
+#[cfg(test)]
+enum GcpBase {
+    Image(&'static str),
+    /// A build-arg with no default, which whoever builds the image must pass.
+    BuildArg(&'static str),
+}
 
 /// Renders [`GCP_DOCKERFILE`], the minimal wolfi image.
 #[cfg(test)]
 fn gcp_agent_platform_dockerfile() -> String {
     gcp_dockerfile(
         "Multi-arch build for the alien-sandbox-agent Docker image",
-        "docker.io/chainguard/wolfi-base:latest",
+        GcpBase::Image("docker.io/chainguard/wolfi-base:latest"),
         "# git is for the sandboxed command, not the agent, and pulls 24 transitive packages. That cost
 # lands here because this image is the sandbox, with no customer base image underneath to carry it.
 RUN apk add --no-cache git",
     )
 }
 
-/// Renders [`GCP_DEFAULT_DOCKERFILE`], the published default GCP sandbox image: the agent on
-/// `buildpack-deps`, a full Ubuntu build toolchain.
+/// Renders [`GCP_DEFAULT_DOCKERFILE`], the default GCP sandbox image: the agent on the default
+/// sandbox base ([`DEFAULT_SANDBOX_DOCKERFILE`]), which whoever builds it passes by digest.
 #[cfg(test)]
 fn gcp_default_sandbox_dockerfile() -> String {
     assert_eq!(
@@ -198,8 +396,8 @@ fn gcp_default_sandbox_dockerfile() -> String {
         "the userdel below exists only because Ubuntu's own user holds the exec uid"
     );
     gcp_dockerfile(
-        "Multi-arch build for the default GCP sandbox image: buildpack-deps plus the agent",
-        "docker.io/library/buildpack-deps:26.04",
+        "Multi-arch build for the default GCP sandbox image: the default sandbox base plus the agent",
+        GcpBase::BuildArg("SANDBOX_DEFAULT_BASE"),
         "# Ubuntu ships `ubuntu` at uid 1000. Appending a second entry for that uid leaves `id` and every
 # tool resolving it to `ubuntu`, so the exec user would not be `sandbox`.
 RUN userdel --remove ubuntu",
@@ -213,16 +411,29 @@ RUN userdel --remove ubuntu",
 /// architectures from binaries cross-compiled outside Docker; and `RUST_LOG`, which the agent's own
 /// `EnvFilter` needs before it will emit anything.
 #[cfg(test)]
-fn gcp_dockerfile(title: &str, base: &str, base_setup: &str) -> String {
+fn gcp_dockerfile(title: &str, base: GcpBase, base_setup: &str) -> String {
     let image = &GCP_AGENT_PLATFORM;
+    // An ARG read by a FROM must precede the first FROM, or it is scoped to a stage and empty.
+    // BuildKit reads a parser directive only on the first lines, before any other comment.
+    let (directive, base_arg, base) = match base {
+        GcpBase::Image(reference) => (String::new(), String::new(), reference.to_string()),
+        GcpBase::BuildArg(name) => (
+            "# check=skip=InvalidDefaultArgInFrom\n".to_string(),
+            format!(
+                "# No default: the base's digest exists only once it is built, so whoever builds \
+                 this image\n# passes it. The check directive on line 1 is for this.\nARG {name}\n\n"
+            ),
+            format!("${{{name}}}"),
+        ),
+    };
     format!(
-        r#"# Generated by `cargo test -p alien-core --lib sandbox_image`. Do not edit by hand.
-# Regenerate with {GCP_DOCKERFILE_UPDATE}=1 in front of that command.
+        r#"{directive}# Generated by `cargo test -p alien-core --lib sandbox_image`. Do not edit by hand.
+# Regenerate with {SANDBOX_FILES_UPDATE}=1 in front of that command.
 #
 # {title}
 # Run directly as the GCP Agent Platform sandbox; nothing layers on top of it
 
-FROM docker.io/chainguard/wolfi-base:latest AS binary-selector
+{base_arg}FROM docker.io/chainguard/wolfi-base:latest AS binary-selector
 
 COPY target/aarch64-unknown-linux-musl/release/alien-sandbox-agent /tmp/alien-sandbox-agent-aarch64
 COPY target/x86_64-unknown-linux-musl/release/alien-sandbox-agent /tmp/alien-sandbox-agent-x86_64
@@ -240,7 +451,7 @@ FROM {base}
 
 # Root-owned and unwritable by uid {exec_uid}: the supervised command runs under that uid and must not
 # be able to rewrite its own supervisor.
-COPY --from=binary-selector --chown=0:0 --chmod=0755 \
+COPY --from=binary-selector --chown=0:0 --chmod={AGENT_MODE:04o} \
      /tmp/alien-sandbox-agent {AGENT_PATH}
 
 # Numeric ids and a plain append rather than adduser, which differs across base distributions.
@@ -255,7 +466,7 @@ COPY --from=binary-selector --chown=0:0 --chmod=0755 \
 # The release build resolves tracing-subscriber once across every package it names, and five of
 # them ask for env-filter, so the agent's fmt::init() has an EnvFilter under it. Unset, that
 # filter discards the startup warning saying this image serves requests without a capability.
-ENV RUST_LOG=info
+ENV RUST_LOG={GCP_AGENT_LOG_FILTER}
 
 {entrypoint}
 "#,
@@ -299,10 +510,12 @@ mod tests {
         for (file, rendered) in [
             (GCP_DOCKERFILE, gcp_agent_platform_dockerfile()),
             (GCP_DEFAULT_DOCKERFILE, gcp_default_sandbox_dockerfile()),
+            (DEFAULT_SANDBOX_DOCKERFILE, default_sandbox_dockerfile()),
+            (DEFAULT_SANDBOX_TOOLS_FILE, default_sandbox_tools_list()),
         ] {
             let path = committed_path(file);
 
-            if std::env::var_os(GCP_DOCKERFILE_UPDATE).is_some() {
+            if std::env::var_os(SANDBOX_FILES_UPDATE).is_some() {
                 std::fs::write(&path, &rendered)
                     .unwrap_or_else(|error| panic!("{} must be writable: {error}", path.display()));
                 continue;
@@ -314,15 +527,40 @@ mod tests {
                 committed == rendered,
                 "{file} has drifted from the contract it is rendered from.\n\
                  {}\n\
-                 Regenerate it: {GCP_DOCKERFILE_UPDATE}=1 cargo test -p alien-core --lib sandbox_image",
+                 Regenerate it: {SANDBOX_FILES_UPDATE}=1 cargo test -p alien-core --lib sandbox_image",
                 first_difference(&committed, &rendered)
             );
         }
     }
 
-    /// The ending an image declares and the isolation it claims come off one value, so they
-    /// cannot disagree. The AWS half is rendered at run time and reaches no committed file, which
-    /// Every consumer now derives these, so nothing else compares them against a number. The
+    /// An image built without a Dockerfile carries what the CI images carry, so the env the
+    /// accessor hands out is read back from the committed file rather than restated.
+    #[test]
+    fn the_gcp_env_accessor_is_every_env_the_committed_dockerfile_sets() {
+        let committed = std::fs::read_to_string(committed_path(GCP_DEFAULT_DOCKERFILE)).unwrap();
+        let mut set = Vec::new();
+        let mut in_env = false;
+        for line in committed.lines() {
+            let line = line.trim();
+            let rest = match line.strip_prefix("ENV ") {
+                Some(rest) => rest,
+                None if in_env => line,
+                None => continue,
+            };
+            in_env = rest.ends_with('\\');
+            for pair in rest.trim_end_matches('\\').split_whitespace() {
+                let (name, value) = pair.split_once('=').expect("ENV name=value");
+                set.push((name.to_string(), value.to_string()));
+            }
+        }
+        let accessor: Vec<(String, String)> = gcp_agent_platform_env()
+            .into_iter()
+            .map(|(name, value)| (name.to_string(), value))
+            .collect();
+        assert_eq!(accessor, set);
+    }
+
+    /// Every consumer derives these, so nothing else compares them against a number. The
     /// setup emitters tell the agent which uid to drop to; if that stops matching the uid the
     /// image creates, the sandbox starts and every exec fails.
     #[test]
@@ -338,6 +576,8 @@ mod tests {
         }
     }
 
+    /// The ending an image declares and the isolation it claims come off one value, so they
+    /// cannot disagree. The AWS half is rendered at run time and reaches no committed file, which
     /// is why the whole-file comparison above covers only the GCP side of it.
     #[test]
     fn the_ending_an_image_declares_follows_its_isolation() {

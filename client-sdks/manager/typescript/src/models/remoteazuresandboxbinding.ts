@@ -35,7 +35,10 @@ export type RemoteAzureSandboxBinding = {
   dataPlaneEndpoint: string;
   disk?: string | null | undefined;
   /**
-   * Catalog disk image every sandbox is created from.
+   * Catalog name or registry image every sandbox is created from. A registry image is
+   *
+   * @remarks
+   * started from the disk image built from it, found by label in the group.
    */
   diskImage: string;
   /**

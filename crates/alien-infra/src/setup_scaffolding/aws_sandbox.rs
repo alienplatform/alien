@@ -7,9 +7,11 @@ use std::collections::BTreeMap;
 use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi, Role};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::import::data::AwsSandboxImportData;
-use alien_core::remote_bindings::{remote_binding_for_entry, remote_binding_is_deliverable};
 use alien_core::sandbox_build_role::{
     sandbox_build_role_arn, sandbox_build_role_name, SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME,
+};
+use alien_core::sandbox_setup_inputs::{
+    aws_sandbox_build_role, aws_sandbox_remote_grant, aws_sandbox_setup_inputs, SetupAccount,
 };
 use alien_core::{
     setup_resource_tags, AwsSandboxEgressScaffolding, ClientConfig, Platform, RemoteBindings,
@@ -49,7 +51,16 @@ pub(super) async fn reconcile(
     let SandboxCode::Image { image } = &sandbox.code else {
         return Err(not_a_bundle(sandbox));
     };
-    let build_role = build_role(aws, sandbox, image, lifecycle);
+    let build_role = aws_sandbox_build_role(
+        sandbox,
+        image,
+        lifecycle,
+        SetupAccount {
+            partition,
+            account_id: &aws.account_id,
+            region: &aws.region,
+        },
+    );
     let policy = build_policy(&build_role, sandbox)?;
     let image_arn = setup_built_image(ctx, aws, sandbox, lifecycle);
     let trust = serde_json::to_value(build_role.trust_policy())
@@ -166,7 +177,7 @@ async fn remote_access(
     stack_state: &StackState,
     sandbox: &Sandbox,
 ) -> Result<ScaffoldingProgress> {
-    let wanted = remote_grant(stack, sandbox);
+    let wanted = aws_sandbox_remote_grant(stack, sandbox);
     let declared = stack
         .resources()
         .find(|(_, entry)| entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
@@ -250,18 +261,6 @@ async fn remote_access(
     Ok(ScaffoldingProgress::InProgress)
 }
 
-/// The remote grant setup owes this sandbox: the one the template setups render for it.
-fn remote_grant(
-    stack: &Stack,
-    sandbox: &Sandbox,
-) -> Option<&'static alien_core::remote_bindings::RemoteBindingDefinition> {
-    stack
-        .resources
-        .get(&sandbox.id)
-        .filter(|entry| remote_binding_is_deliverable(entry))
-        .and_then(remote_binding_for_entry)
-}
-
 /// The role a Remote Bindings controller has created, or `None` while it is still being created.
 fn remote_bindings_role(stack_state: &StackState, bindings_id: &str) -> Result<Option<String>> {
     let Some(state) = stack_state.resources.get(bindings_id) else {
@@ -313,23 +312,6 @@ pub(super) async fn applied_policy(
     }
 }
 
-fn build_role<'a>(
-    aws: &'a alien_aws_clients::AwsClientConfig,
-    sandbox: &'a Sandbox,
-    bundle_uri: &'a str,
-    lifecycle: ResourceLifecycle,
-) -> SandboxBuildRole<'a> {
-    SandboxBuildRole::builder()
-        .sandbox_id(&sandbox.id)
-        .partition(aws_partition(&aws.region))
-        .account_id(&aws.account_id)
-        .region(&aws.region)
-        .bundle_uri(bundle_uri)
-        .runtime_built(lifecycle == ResourceLifecycle::Live)
-        .maybe_private_base_image(sandbox.private_base_image.as_deref())
-        .build()
-}
-
 fn build_policy(build_role: &SandboxBuildRole<'_>, sandbox: &Sandbox) -> Result<serde_json::Value> {
     serde_json::to_value(
         build_role
@@ -360,23 +342,18 @@ pub(super) fn setup_inputs(
     lifecycle: ResourceLifecycle,
 ) -> Result<Vec<(&'static str, serde_json::Value)>> {
     let aws = aws_config(client_config)?;
-    let SandboxCode::Image { image } = &sandbox.code else {
-        return Err(not_a_bundle(sandbox));
+    let account = SetupAccount {
+        partition: aws_partition(&aws.region),
+        account_id: &aws.account_id,
+        region: &aws.region,
     };
-    let policy = build_policy(&build_role(aws, sandbox, image, lifecycle), sandbox)?;
-    let egress = serde_json::to_value(&sandbox.egress)
-        .into_alien_error()
-        .context(serialize_failed(&sandbox.id))?;
-    let network = aws_sandbox_egress::egress_network(stack, sandbox)?;
-    // An update that stops publishing keeps the setup-owned Remote Bindings role, so without
-    // this the grant would outlive the declaration.
-    let grant = remote_grant(stack, sandbox).map(|definition| definition.permission_set);
-    Ok(vec![
-        ("egress", egress),
-        ("egress network", serde_json::json!(network)),
-        ("build role policy", policy),
-        ("remote grant", serde_json::json!(grant)),
-    ])
+    aws_sandbox_setup_inputs(stack, sandbox, lifecycle, account).context(
+        ErrorData::ResourceConfigInvalid {
+            message: "the sandbox's bundle, build role policy or egress network cannot be resolved"
+                .to_string(),
+            resource_id: Some(sandbox.id.clone()),
+        },
+    )
 }
 
 /// What the template setups register for this sandbox, from the build role this step verified
@@ -749,6 +726,7 @@ mod tests {
         CreateMicrovmImageRequest, CreateMicrovmImageResponse, MockLambdaMicrovmsApi,
     };
     use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
+    use alien_core::remote_bindings::remote_binding_for_entry;
     use alien_core::{Network, SandboxEgress, SandboxLifecyclePolicy};
     use serde_json::{json, Value};
     use std::sync::{Arc, Mutex};

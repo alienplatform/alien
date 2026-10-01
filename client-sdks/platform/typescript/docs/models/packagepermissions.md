@@ -15,7 +15,7 @@ let value: PackagePermissions = {
 
 ## Fields
 
-| Field                                                   | Type                                                    | Required                                                | Description                                             |
-| ------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------- |
-| `rules`                                                 | [models.PackageRule](../models/packagerule.md)[]        | :heavy_check_mark:                                      | Explicit Kubernetes API requirements.                   |
-| `schemaVersion`                                         | *number*                                                | :heavy_check_mark:                                      | Schema version of the validated permission declaration. |
+| Field                                                    | Type                                                     | Required                                                 | Description                                              |
+| -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
+| `rules`                                                  | [models.PermissionsRule](../models/permissionsrule.md)[] | :heavy_check_mark:                                       | Explicit Kubernetes API requirements.                    |
+| `schemaVersion`                                          | *number*                                                 | :heavy_check_mark:                                       | Schema version of the validated permission declaration.  |

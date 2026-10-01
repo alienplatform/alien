@@ -1160,8 +1160,8 @@ fn reimport_runtime_metadata(
             ),
         })
     })?;
-    let baseline_frozen_digest = baseline_stack.frozen_resources_digest();
-    let target_frozen_digest = prepared_stack.frozen_resources_digest();
+    let baseline_frozen_digest = baseline_stack.setup_owned_digest();
+    let target_frozen_digest = prepared_stack.setup_owned_digest();
 
     metadata.setup_update_authorization =
         (baseline_frozen_digest != target_frozen_digest).then(|| SetupUpdateAuthorization {
@@ -1858,11 +1858,11 @@ mod setup_update_authorization_tests {
 
         assert_eq!(
             authorization.baseline_frozen_digest,
-            baseline.frozen_resources_digest()
+            baseline.setup_owned_digest()
         );
         assert_eq!(
             authorization.target_frozen_digest,
-            target.frozen_resources_digest()
+            target.setup_owned_digest()
         );
         assert_eq!(authorization.release_id, "release");
         assert_eq!(
@@ -1870,6 +1870,87 @@ mod setup_update_authorization_tests {
             Some("env-hash")
         );
         assert!(metadata.registry_access_granted);
+    }
+
+    /// The Live sandbox's image belongs to the runtime, so only its setup inputs may mint setup
+    /// authority: a rerun after a repository or egress change carries one, a tag or bundle none.
+    #[test]
+    fn a_live_sandbox_setup_input_change_mints_setup_authority() {
+        let with = |bundle: &str, private_base_image: &str, egress: alien_core::SandboxEgress| {
+            let sandbox = alien_core::Sandbox::new("agents".to_string())
+                .code(alien_core::SandboxCode::Image {
+                    image: bundle.to_string(),
+                })
+                .private_base_image(private_base_image.to_string())
+                .egress(egress)
+                .lifecycle(alien_core::SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            let network = alien_core::Network::new("net".to_string())
+                .settings(alien_core::NetworkSettings::Create {
+                    cidr: Some("10.0.0.0/16".to_string()),
+                    availability_zones: 2,
+                })
+                .build();
+            let mut stack = stack("live", "frozen");
+            for (id, config, lifecycle) in [
+                (
+                    "net",
+                    alien_core::Resource::new(network),
+                    ResourceLifecycle::Frozen,
+                ),
+                (
+                    "agents",
+                    alien_core::Resource::new(sandbox),
+                    ResourceLifecycle::Live,
+                ),
+            ] {
+                stack.resources.insert(
+                    id.to_string(),
+                    alien_core::ResourceEntry {
+                        config,
+                        lifecycle,
+                        dependencies: Vec::new(),
+                        remote_access: false,
+                        enabled_when: None,
+                    },
+                );
+            }
+            stack
+        };
+        const V1: &str = "s3://bucket/sandbox-bundle/v1/bundle.zip";
+        const BASE_A: &str = "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:1";
+        let baseline = with(V1, BASE_A, alien_core::SandboxEgress::Allow);
+        let reimport = |target: Stack| {
+            reimport_runtime_metadata(
+                &record(baseline.clone()),
+                &target,
+                "release",
+                &request(),
+                Default::default(),
+            )
+            .expect("reimport should succeed")
+            .setup_update_authorization
+        };
+
+        for setup_owned in [
+            with(
+                V1,
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-b:1",
+                alien_core::SandboxEgress::Allow,
+            ),
+            with(V1, BASE_A, alien_core::SandboxEgress::Deny),
+        ] {
+            assert!(reimport(setup_owned).is_some());
+        }
+        assert!(reimport(with(
+            "s3://bucket/sandbox-bundle/v2/bundle.zip",
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:2",
+            alien_core::SandboxEgress::Allow,
+        ))
+        .is_none());
     }
 
     #[test]

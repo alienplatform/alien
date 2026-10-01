@@ -256,6 +256,69 @@ export type ConfigureProjectSourceOperatorImage = {
 };
 
 /**
+ * Kubernetes log collection mechanism.
+ */
+export const ConfigureProjectSourceModeResponse = {
+  PodApi: "podApi",
+  NodeAgent: "nodeAgent",
+} as const;
+/**
+ * Kubernetes log collection mechanism.
+ */
+export type ConfigureProjectSourceModeResponse = ClosedEnum<
+  typeof ConfigureProjectSourceModeResponse
+>;
+
+/**
+ * Default log collection mode in a generated Helm chart.
+ */
+export type ConfigureProjectSourceLogCollector = {
+  /**
+   * Whether logs are collected by default; installers can override this value.
+   */
+  enabled: boolean;
+  /**
+   * Kubernetes log collection mechanism.
+   */
+  mode: ConfigureProjectSourceModeResponse;
+};
+
+export type ConfigureProjectSourceTokenSecret = {
+  key: string;
+  name: string;
+  prefix: string;
+  randomLength: number;
+};
+
+export type ConfigureProjectSourceRule = {
+  /**
+   * Kubernetes API group: empty for core resources, apps, or networking.k8s.io.
+   */
+  apiGroup: string;
+  resources: Array<string>;
+};
+
+export type ConfigureProjectSourceWorkloadReadAccess = {
+  rules: Array<ConfigureProjectSourceRule>;
+  serviceAccountProfile: string;
+};
+
+export type ConfigureProjectSourceSetupResources = {
+  tokenSecret: ConfigureProjectSourceTokenSecret;
+  workloadReadAccess: ConfigureProjectSourceWorkloadReadAccess;
+};
+
+export type ConfigureProjectSourceRuntimePersistence = {
+  /**
+   * Persist operator identity across restarts.
+   */
+  enabled: boolean;
+  existingClaim: string;
+  size: string;
+  storageClassName: string;
+};
+
+/**
  * Helm chart package configuration. If null, Helm packages will not be generated.
  */
 export type ConfigureProjectSourceHelm = {
@@ -268,9 +331,15 @@ export type ConfigureProjectSourceHelm = {
    */
   description: string;
   /**
+   * Default log collection mode in a generated Helm chart.
+   */
+  logCollector?: ConfigureProjectSourceLogCollector | undefined;
+  /**
    * Whether Helm chart package generation is enabled
    */
   enabled: boolean;
+  setupResources?: ConfigureProjectSourceSetupResources | undefined;
+  runtimePersistence?: ConfigureProjectSourceRuntimePersistence | undefined;
 };
 
 /**
@@ -844,13 +913,160 @@ export function configureProjectSourceOperatorImageFromJSON(
 }
 
 /** @internal */
+export const ConfigureProjectSourceModeResponse$inboundSchema: z.ZodEnum<
+  typeof ConfigureProjectSourceModeResponse
+> = z.enum(ConfigureProjectSourceModeResponse);
+
+/** @internal */
+export const ConfigureProjectSourceLogCollector$inboundSchema: z.ZodType<
+  ConfigureProjectSourceLogCollector,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  mode: ConfigureProjectSourceModeResponse$inboundSchema,
+});
+
+export function configureProjectSourceLogCollectorFromJSON(
+  jsonString: string,
+): SafeParseResult<ConfigureProjectSourceLogCollector, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ConfigureProjectSourceLogCollector$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ConfigureProjectSourceLogCollector' from JSON`,
+  );
+}
+
+/** @internal */
+export const ConfigureProjectSourceTokenSecret$inboundSchema: z.ZodType<
+  ConfigureProjectSourceTokenSecret,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+  prefix: z.string(),
+  randomLength: z.int(),
+});
+
+export function configureProjectSourceTokenSecretFromJSON(
+  jsonString: string,
+): SafeParseResult<ConfigureProjectSourceTokenSecret, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ConfigureProjectSourceTokenSecret$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ConfigureProjectSourceTokenSecret' from JSON`,
+  );
+}
+
+/** @internal */
+export const ConfigureProjectSourceRule$inboundSchema: z.ZodType<
+  ConfigureProjectSourceRule,
+  unknown
+> = z.object({
+  apiGroup: z.string(),
+  resources: z.array(z.string()),
+});
+
+export function configureProjectSourceRuleFromJSON(
+  jsonString: string,
+): SafeParseResult<ConfigureProjectSourceRule, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ConfigureProjectSourceRule$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ConfigureProjectSourceRule' from JSON`,
+  );
+}
+
+/** @internal */
+export const ConfigureProjectSourceWorkloadReadAccess$inboundSchema: z.ZodType<
+  ConfigureProjectSourceWorkloadReadAccess,
+  unknown
+> = z.object({
+  rules: z.array(z.lazy(() => ConfigureProjectSourceRule$inboundSchema)),
+  serviceAccountProfile: z.string(),
+});
+
+export function configureProjectSourceWorkloadReadAccessFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ConfigureProjectSourceWorkloadReadAccess,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ConfigureProjectSourceWorkloadReadAccess$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ConfigureProjectSourceWorkloadReadAccess' from JSON`,
+  );
+}
+
+/** @internal */
+export const ConfigureProjectSourceSetupResources$inboundSchema: z.ZodType<
+  ConfigureProjectSourceSetupResources,
+  unknown
+> = z.object({
+  tokenSecret: z.lazy(() => ConfigureProjectSourceTokenSecret$inboundSchema),
+  workloadReadAccess: z.lazy(() =>
+    ConfigureProjectSourceWorkloadReadAccess$inboundSchema
+  ),
+});
+
+export function configureProjectSourceSetupResourcesFromJSON(
+  jsonString: string,
+): SafeParseResult<ConfigureProjectSourceSetupResources, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ConfigureProjectSourceSetupResources$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ConfigureProjectSourceSetupResources' from JSON`,
+  );
+}
+
+/** @internal */
+export const ConfigureProjectSourceRuntimePersistence$inboundSchema: z.ZodType<
+  ConfigureProjectSourceRuntimePersistence,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  existingClaim: z.string(),
+  size: z.string(),
+  storageClassName: z.string(),
+});
+
+export function configureProjectSourceRuntimePersistenceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ConfigureProjectSourceRuntimePersistence,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ConfigureProjectSourceRuntimePersistence$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ConfigureProjectSourceRuntimePersistence' from JSON`,
+  );
+}
+
+/** @internal */
 export const ConfigureProjectSourceHelm$inboundSchema: z.ZodType<
   ConfigureProjectSourceHelm,
   unknown
 > = z.object({
   chartName: z.string(),
   description: z.string(),
+  logCollector: z.lazy(() => ConfigureProjectSourceLogCollector$inboundSchema)
+    .optional(),
   enabled: z.boolean(),
+  setupResources: z.lazy(() =>
+    ConfigureProjectSourceSetupResources$inboundSchema
+  ).optional(),
+  runtimePersistence: z.lazy(() =>
+    ConfigureProjectSourceRuntimePersistence$inboundSchema
+  ).optional(),
 });
 
 export function configureProjectSourceHelmFromJSON(

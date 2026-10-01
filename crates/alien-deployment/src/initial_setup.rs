@@ -509,6 +509,10 @@ mod tests {
         CreateMicrovmImageResponse, MicrovmImage, MicrovmImageVersion, MockLambdaMicrovmsApi,
     };
     use alien_aws_clients::AwsClientConfigExt as _;
+    use alien_azure_clients::azure::sandbox_data_plane::{
+        DiskImage, DiskImageStatus, MockSandboxDataPlaneApi,
+    };
+    use alien_azure_clients::AzureClientConfigExt as _;
     use alien_bindings::{BindingsProvider, BindingsProviderApi};
     use alien_core::{
         ClientConfig, EnvironmentVariablesSnapshot, Platform, RuntimeMetadata, SetupScaffolding,
@@ -1193,6 +1197,125 @@ mod tests {
             before,
             "the registered image is taken as it is"
         );
+    }
+
+    /// An imported Azure sandbox naming a registry image is built during setup, so the handoff
+    /// only reaches Provisioning, where linked workloads deploy, with its binding published.
+    #[tokio::test]
+    async fn imported_setup_builds_an_azure_registry_image_before_handing_off() {
+        const PYTHON: &str = "docker.io/library/python:3.14-slim";
+
+        let sandbox = alien_core::Sandbox::new("agents".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: PYTHON.to_string(),
+            })
+            .egress(alien_core::SandboxEgress::Allow)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let stack = Stack::new("test".to_string())
+            .add(sandbox, ResourceLifecycle::Frozen)
+            .build();
+        let mut registered = alien_infra::ImporterRegistry::built_in()
+            .run(
+                &alien_core::Sandbox::RESOURCE_TYPE,
+                Platform::Azure,
+                serde_json::json!({
+                    "sandboxGroup": "test-agents",
+                    "region": "westus2",
+                    "resourceGroup": "rg",
+                }),
+                &alien_core::import::ImportContext {
+                    resource_id: "agents",
+                    platform: Platform::Azure,
+                    region: "westus2",
+                    stack_settings: &StackSettings::default(),
+                    management_config: None,
+                    resource: &stack.resources["agents"],
+                },
+            )
+            .unwrap();
+        registered.controller_platform = Some(Platform::Azure);
+        let mut stack_state = StackState::with_resource_prefix(Platform::Azure, "test".to_string());
+        stack_state
+            .resources
+            .insert("agents".to_string(), registered);
+        let mut state = DeploymentState {
+            status: DeploymentStatus::InitialSetup,
+            platform: Platform::Azure,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(stack_state),
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            runtime_metadata: Some(RuntimeMetadata {
+                prepared_stack: Some(stack),
+                initial_setup_authority: InitialSetupAuthority::ImportedHandoff,
+                ..Default::default()
+            }),
+        };
+
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_list_disk_images()
+            .returning(|_| Ok(Vec::new()));
+        client
+            .expect_create_disk_image()
+            .withf(|group, request| group == "test-agents" && request.base == PYTHON)
+            .times(1)
+            .returning(|_, request| {
+                Ok(DiskImage {
+                    id: "img-1".to_string(),
+                    labels: request.labels,
+                    status: Some(DiskImageStatus {
+                        state: Some("Ready".to_string()),
+                        error_message: None,
+                    }),
+                })
+            });
+        let client: Arc<dyn alien_azure_clients::azure::sandbox_data_plane::SandboxDataPlaneApi> =
+            Arc::new(client);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_azure_sandbox_data_plane_client()
+            .returning(move |_, _, _| Ok(client.clone()));
+        let provider = Arc::new(provider);
+
+        for _ in 0..6 {
+            if state.status != DeploymentStatus::InitialSetup {
+                break;
+            }
+            state = handle_initial_setup(
+                state,
+                config(),
+                ClientConfig::Azure(Box::new(alien_azure_clients::AzureClientConfig::mock())),
+                provider.clone(),
+            )
+            .await
+            .unwrap()
+            .state;
+        }
+
+        assert_eq!(
+            state.status,
+            DeploymentStatus::Provisioning,
+            "{:?}",
+            state.error
+        );
+        let sandbox = &state.stack_state.unwrap().resources["agents"];
+        assert_eq!(sandbox.status, ResourceStatus::Running);
+        let binding = sandbox
+            .get_internal_controller()
+            .unwrap()
+            .expect("a sandbox has controller state")
+            .get_binding_params()
+            .unwrap()
+            .expect("the built image is published before the handoff");
+        assert_eq!(binding["diskImage"], PYTHON);
     }
 
     /// The binding a linked workload is handed, from the controller state as persisted.

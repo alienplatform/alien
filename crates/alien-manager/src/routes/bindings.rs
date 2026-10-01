@@ -212,7 +212,8 @@ pub struct RemoteAzureSandboxBinding {
     pub region: String,
     /// Resource group the data-plane path is scoped by.
     pub resource_group: String,
-    /// Catalog disk image every sandbox is created from.
+    /// Catalog name or registry image every sandbox is created from. A registry image is
+    /// started from the disk image built from it, found by label in the group.
     pub disk_image: String,
     /// Idle seconds after which a sandbox pauses, where the declaration asked for one.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1062,6 +1063,20 @@ fn deployment_status_allows_remote_bindings(status: Option<DeploymentStatus>) ->
     }
 }
 
+/// The AWS controller keeps publishing the previous image version while a roll builds and after
+/// one fails, so that binding stays servable. Azure publishes only the current binding; GCP keeps
+/// its old template but rolls under Provisioning/ProvisionFailed, so both still need `Running`.
+fn sandbox_status_allows_remote_bindings(platform: Platform, status: ResourceStatus) -> bool {
+    matches!(
+        (platform, status),
+        (_, ResourceStatus::Running)
+            | (
+                Platform::Aws,
+                ResourceStatus::Updating | ResourceStatus::UpdateFailed
+            )
+    )
+}
+
 fn remote_binding_expiry(
     provider_expires_at: DateTime<Utc>,
     now: DateTime<Utc>,
@@ -1486,7 +1501,7 @@ fn remote_sandbox_binding(
     }
     // Frozen or Live: a Frozen sandbox's binding was registered by the setup stack, a Live
     // one's is published by the runtime controller once its image build reaches ACTIVE. Both
-    // arrive through `remote_binding_params`, so the Running check below is the real gate.
+    // arrive through `remote_binding_params`, so the status check below is the real gate.
     if !matches!(
         resource.lifecycle,
         Some(ResourceLifecycle::Frozen | ResourceLifecycle::Live)
@@ -1495,7 +1510,7 @@ fn remote_sandbox_binding(
             "Sandbox resource '{resource_id}' has no lifecycle in the deployment's stack state"
         )));
     }
-    if resource.status != ResourceStatus::Running {
+    if !sandbox_status_allows_remote_bindings(deployment.platform, resource.status) {
         return Err(ErrorData::bad_request(format!(
             "Sandbox resource '{resource_id}' is not running"
         )));

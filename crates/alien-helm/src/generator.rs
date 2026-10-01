@@ -22,6 +22,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_operations_sdk::KubernetesOperationPermissions;
+use alien_permissions::operations::kubernetes::OperatorFeature;
 use indexmap::IndexMap;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -63,8 +64,11 @@ pub struct ManagerFetchHelmValuesOptions<'a> {
 /// Version of the operator RBAC policy enforced by this generator.
 ///
 /// Renderers expose this value so callers can reject manifests produced by a
-/// generator that predates policy-aware Kubernetes operation permissions.
-pub const OPERATOR_RBAC_POLICY_VERSION: u32 = 2;
+/// generator with a different policy. Version 3 replaced the fixed read-only
+/// baseline with the Operator runtime rules. Version 4 binds the dynamic
+/// container Role only to product charts, retaining access for cleanup when
+/// an installed release withdraws image approvals.
+pub const OPERATOR_RBAC_POLICY_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperatorPermission {
@@ -149,12 +153,9 @@ pub struct OperatorManifestOptions<'a> {
     /// namespaced one can filter within its namespace. `None` manages everything
     /// in scope.
     pub label_selector: Option<&'a str>,
-    /// Whether the installed Operator includes the Kubernetes operations
-    /// plugin. This gates operation-specific RBAC independently of the
-    /// requested permission tier.
-    pub kubernetes_operations_enabled: bool,
-    /// Declared requirements from enabled custom operations only. The
-    /// generator validates these before applying the permission ceiling.
+    /// Declared Kubernetes requirements of every enabled operation, builtin
+    /// or custom. The generator validates these before applying the
+    /// permission ceiling. The Operator's own runtime rules are always added.
     pub custom_operation_permissions: &'a [KubernetesOperationPermissions],
     pub permission: OperatorPermission,
     pub format: OperatorOutputFormat,
@@ -260,6 +261,10 @@ fn generate_helm_chart_internal(
     );
     files.insert("values.schema.json".to_string(), values_schema_json(stack)?);
     files.insert("templates/_helpers.tpl".to_string(), helpers_tpl());
+    files.insert(
+        "templates/_runtime-identity.tpl".to_string(),
+        include_str!("templates/_runtime-identity.tpl").to_string(),
+    );
     files.insert(
         "templates/serviceaccount.yaml".to_string(),
         serviceaccount_tpl(),
@@ -475,6 +480,7 @@ fn add_remote_operator_files(
         Some("{{ include \"deployment.remoteOperatorIdentityInitializedName\" . }}"),
         Some("{{ include \"deployment.remoteOperatorLogCollectorName\" . }}"),
         image_identity,
+        true,
     )?;
     let mut crd = None;
     let mut templates = Vec::new();
@@ -688,6 +694,11 @@ fn remote_operator_identity_record_tpl(
 {{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 22 | trimAll "-" -}}}}
 {{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
 {{{{- printf "%s-log-collector-%s" $releasePrefix $releaseIdentity }}}}
+{{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorLogCollectorDaemonSetName" -}}}}
+{{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 19 | trimAll "-" -}}}}
+{{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
+{{{{- printf "%s-log-collector-v2-%s" $releasePrefix $releaseIdentity }}}}
 {{{{- end -}}}}
 {{{{- define "deployment.remoteOperatorLifecycleCapabilityName" -}}}}
 {{{{ printf "%s-lifecycle-v2" (include "deployment.remoteOperatorIdentityRecordName" .) | trunc 253 | trimSuffix "-" }}}}
@@ -959,7 +970,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       automountServiceAccountToken: false
       restartPolicy: Never
@@ -1022,7 +1033,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
@@ -1101,7 +1112,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "deployment.remoteOperatorCleanupName" . }}
       restartPolicy: Never
@@ -1343,7 +1354,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
@@ -1569,7 +1580,7 @@ fn remote_operator_checks_tpl() -> String {
 {{- end -}}
 {{- end -}}
 {{- if .Values.remoteOperator.enabled -}}
-{{- if not .Values.management.url -}}
+{{- if not (include "deployment.managementUrl" .) -}}
   {{- fail "management.url is required when Remote Operator is enabled." -}}
 {{- end -}}
 {{- $expected := include "deployment.remoteOperatorAccessRequestCrd" . | fromYaml -}}
@@ -1774,7 +1785,7 @@ fn remote_operator_checks_tpl() -> String {
 }
 
 pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Result<String> {
-    generate_operator_manifest_inner(options, None, None, None, None, None, None)
+    generate_operator_manifest_inner(options, None, None, None, None, None, None, false)
 }
 
 /// Generate a standalone Operator manifest carrying an exact image receipt.
@@ -1782,14 +1793,23 @@ pub fn generate_operator_manifest_with_image_identity(
     options: OperatorManifestOptions<'_>,
     image_identity: OperatorImageIdentityOptions<'_>,
 ) -> Result<String> {
-    generate_operator_manifest_inner(options, None, None, None, None, None, Some(image_identity))
+    generate_operator_manifest_inner(
+        options,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(image_identity),
+        false,
+    )
 }
 
 /// Render a Remote Operator for inclusion in a product Helm chart.
 pub fn generate_product_operator_manifest(
     options: ProductOperatorManifestOptions<'_>,
 ) -> Result<String> {
-    generate_product_operator_manifest_with_identity_marker(options, None, None, None)
+    generate_product_operator_manifest_with_identity_marker(options, None, None, None, false)
 }
 
 /// Render a product Remote Operator manifest carrying an exact image receipt.
@@ -1802,14 +1822,20 @@ pub fn generate_product_operator_manifest_with_image_identity(
         None,
         None,
         Some(image_identity),
+        false,
     )
 }
 
+/// `dynamic_containers` binds the dynamic container Role. Only a product chart
+/// passes `true`: it must still reconcile saved workloads after a release
+/// withdraws image approvals. A standalone Remote Operator has no installed
+/// release that could approve an image, so it never receives this access.
 fn generate_product_operator_manifest_with_identity_marker(
     options: ProductOperatorManifestOptions<'_>,
     identity_initialized_config_map: Option<&str>,
     log_collector_name: Option<&str>,
     image_identity: Option<OperatorImageIdentityOptions<'_>>,
+    dynamic_containers: bool,
 ) -> Result<String> {
     generate_operator_manifest_inner(
         options.manifest,
@@ -1819,6 +1845,7 @@ fn generate_product_operator_manifest_with_identity_marker(
         identity_initialized_config_map,
         log_collector_name,
         image_identity,
+        dynamic_containers,
     )
 }
 
@@ -1830,6 +1857,7 @@ fn generate_operator_manifest_inner(
     identity_initialized_config_map: Option<&str>,
     log_collector_name: Option<&str>,
     image_identity: Option<OperatorImageIdentityOptions<'_>>,
+    dynamic_containers: bool,
 ) -> Result<String> {
     if options.format == OperatorOutputFormat::RawManifest && credentials_secret_name.is_none() {
         validate_runtime_encryption_key(options.encryption_key)?;
@@ -1918,7 +1946,6 @@ fn generate_operator_manifest_inner(
             &operator_name,
             &labels,
             &crd_names,
-            options.kubernetes_operations_enabled,
             options.permission,
             options.custom_operation_permissions,
         ));
@@ -1933,7 +1960,6 @@ fn generate_operator_manifest_inner(
             &operator_name,
             &labels,
             &crd_names,
-            options.kubernetes_operations_enabled,
             options.permission,
             options.custom_operation_permissions,
         ));
@@ -1941,16 +1967,18 @@ fn generate_operator_manifest_inner(
     }
     // Dynamic workloads need write access in this deployment namespace only.
     // Keep it in a Role even when inventory observation uses a ClusterRole.
-    docs.push(dynamic_container_role_doc(
-        namespace,
-        &operator_name,
-        &labels,
-    ));
-    docs.push(dynamic_container_rolebinding_doc(
-        namespace,
-        &operator_name,
-        &labels,
-    ));
+    if dynamic_containers {
+        docs.push(dynamic_container_role_doc(
+            namespace,
+            &operator_name,
+            &labels,
+        ));
+        docs.push(dynamic_container_rolebinding_doc(
+            namespace,
+            &operator_name,
+            &labels,
+        ));
+    }
     if creates_credentials_secret {
         docs.push(operator_secret_doc(
             namespace,
@@ -1986,6 +2014,7 @@ fn generate_operator_manifest_inner(
         operator_image_report.as_ref(),
         &log_collector_name,
         integrated_product_chart,
+        dynamic_containers,
     ));
     if let Some(log_collector) = options
         .log_collector
@@ -2015,6 +2044,10 @@ fn generate_operator_manifest_inner(
             )
         };
         let mut collector_labels = labels.clone();
+        collector_labels.insert(
+            "app.kubernetes.io/name".to_string(),
+            "log-collector".to_string(),
+        );
         collector_labels.insert(
             "app.kubernetes.io/component".to_string(),
             "whitelabeled-log-collector".to_string(),
@@ -2056,7 +2089,7 @@ fn generate_operator_manifest_inner(
             credentials_secret_name,
             log_collector.image,
             &collector_labels,
-            options.format == OperatorOutputFormat::HelmTemplate,
+            options.format,
         ));
         for doc in node_docs {
             docs.push(format!("{{{{- if and .Values.logCollector.enabled (eq (default \"nodeAgent\" .Values.logCollector.mode) \"nodeAgent\") }}}}\n{doc}{{{{- end }}}}\n"));
@@ -2398,7 +2431,6 @@ fn operator_role_doc(
     operator_name: &str,
     labels: &BTreeMap<String, String>,
     crd_names: &AccessRequestCrdNames,
-    kubernetes_operations_enabled: bool,
     permission: OperatorPermission,
     custom_operations: &[KubernetesOperationPermissions],
 ) -> String {
@@ -2409,12 +2441,7 @@ fn operator_role_doc(
         operator_name,
         labels,
     );
-    yaml.push_str(&operator_rules(
-        crd_names,
-        kubernetes_operations_enabled,
-        permission,
-        custom_operations,
-    ));
+    yaml.push_str(&operator_rules(crd_names, permission, custom_operations));
     yaml
 }
 
@@ -2460,19 +2487,29 @@ fn dynamic_container_role_doc(
         &role_name,
         labels,
     );
-    yaml.push_str(
-        r#"rules:
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "create", "update", "delete"]
-  - apiGroups: [""]
-    resources: ["services", "secrets"]
-    verbs: ["get", "list", "create", "update", "delete"]
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["list"]
-"#,
-    );
+    yaml.push_str(&operator_feature_rules(OperatorFeature::DynamicContainers));
+    yaml
+}
+
+/// The `rules:` block of the Role a runtime feature needs, from the same list
+/// the permission review shows.
+fn operator_feature_rules(feature: OperatorFeature) -> String {
+    let mut yaml = String::from("rules:\n");
+    for rule in alien_permissions::operations::kubernetes::operator_runtime_rules()
+        .into_iter()
+        .filter(|rule| rule.feature == Some(feature))
+    {
+        yaml.push_str(&format!(
+            "  - apiGroups: [{}]\n    resources: [{}]\n    verbs: [{}]\n",
+            yaml_string(&rule.api_group),
+            yaml_string(&rule.resource),
+            rule.verbs
+                .iter()
+                .map(|verb| yaml_string(verb))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     yaml
 }
 
@@ -2533,14 +2570,11 @@ struct OperatorRuleGrant {
 /// Kubernetes operation rules shared by the namespaced `Role` and cluster-wide
 /// `ClusterRole`.
 ///
-/// Base access is read-only inventory (`get/list/watch`; never `secrets`). The
-/// Kubernetes operations plugin adds `pods/log` access. When that plugin is
-/// enabled and the permission ceiling is `Remediation`, it additionally grants
-/// exactly what the initial mutating operations require:
-///   - `pods` `delete` — `restart-pod` (the controller reschedules the pod)
-///   - workload `scale` `patch` — `scale` (the `scale` subresource)
-///
-/// No operation-specific rule is emitted when the plugin is disabled.
+/// The Operator's own runtime rules come from
+/// [`alien_permissions::operations::kubernetes::operator_runtime_rules`], the
+/// same list the permission review shows. Every other workload rule comes from
+/// an enabled operation's declared requirements, filtered by the permission
+/// ceiling: `Diagnostics` keeps read verbs only.
 ///
 /// Plus the access-request custom resource, which the operator creates
 /// (materializing a control-plane access request the customer must authorize)
@@ -2553,11 +2587,10 @@ struct OperatorRuleGrant {
 /// a vendor build grants access to *their* CRD, matching the CRD doc below.
 fn operator_rules(
     names: &AccessRequestCrdNames,
-    kubernetes_operations_enabled: bool,
     permission: OperatorPermission,
     custom_operations: &[KubernetesOperationPermissions],
 ) -> String {
-    // Normalize builtin and custom grants together. Names are part of the key:
+    // Normalize runtime and operation grants together. Names are part of the key:
     // sharing a grant never widens a named requirement to all resources.
     let mut rules = BTreeMap::<OperatorRuleScope, OperatorRuleGrant>::new();
     let mut add_rule = |group: &str, resource: &str, resource_names, verbs, reason| {
@@ -2572,95 +2605,38 @@ fn operator_rules(
         grant.reasons.insert(reason);
     };
     let status_resource = format!("{}/status", names.plural);
-    let baseline: &[(&str, &[&str], &[&str], &str)] = &[
+    for rule in alien_permissions::operations::kubernetes::operator_runtime_rules()
+        .into_iter()
+        .filter(|rule| rule.feature.is_none())
+    {
+        add_rule(
+            &rule.api_group,
+            &rule.resource,
+            BTreeSet::new(),
+            rule.verbs.into_iter().collect(),
+            format!("the Operator runtime: {}.", rule.reason),
+        );
+    }
+    let access_requests: [(&str, &[&str], &str); 2] = [
         (
-            "",
-            &[
-                "pods",
-                "services",
-                "configmaps",
-                "persistentvolumeclaims",
-                "events",
-                "endpoints",
-            ],
-            &["get", "list", "watch"],
-            "baseline resource inventory.",
-        ),
-        (
-            "apps",
-            &["deployments", "statefulsets", "daemonsets", "replicasets"],
-            &["get", "list", "watch"],
-            "baseline workload inventory.",
-        ),
-        (
-            "batch",
-            &["jobs", "cronjobs"],
-            &["get", "list", "watch"],
-            "baseline job inventory.",
-        ),
-        (
-            "metrics.k8s.io",
-            &["pods"],
-            &["get", "list", "watch"],
-            "baseline pod metrics.",
-        ),
-        (
-            &names.group,
-            &[&names.plural],
+            &names.plural,
             &["get", "list", "watch", "create", "update", "patch"],
             "access-request materialization and approval observation.",
         ),
         (
-            &names.group,
-            &[&status_resource],
+            &status_resource,
             &["get", "update", "patch"],
             "access-request status reporting.",
         ),
     ];
-    for (group, resources, verbs, reason) in baseline {
-        for resource in *resources {
-            add_rule(
-                group,
-                resource,
-                BTreeSet::new(),
-                verbs
-                    .iter()
-                    .map(|verb| (*verb).to_owned())
-                    .collect::<BTreeSet<_>>(),
-                (*reason).to_owned(),
-            );
-        }
-    }
-    if kubernetes_operations_enabled {
+    for (resource, verbs, reason) in access_requests {
         add_rule(
-            "",
-            "pods/log",
+            &names.group,
+            resource,
             BTreeSet::new(),
-            BTreeSet::from(["get".to_owned()]),
-            "the kubernetes/logs operation.".to_owned(),
+            verbs.iter().map(|verb| (*verb).to_owned()).collect(),
+            reason.to_owned(),
         );
-    }
-    if kubernetes_operations_enabled && permission == OperatorPermission::Remediation {
-        add_rule(
-            "",
-            "pods",
-            BTreeSet::new(),
-            BTreeSet::from(["delete".to_owned()]),
-            "the kubernetes/restart-pod operation.".to_owned(),
-        );
-        for resource in [
-            "deployments/scale",
-            "statefulsets/scale",
-            "replicasets/scale",
-        ] {
-            add_rule(
-                "apps",
-                resource,
-                BTreeSet::new(),
-                BTreeSet::from(["patch".to_owned()]),
-                "the kubernetes/scale operation.".to_owned(),
-            );
-        }
     }
     for operation in custom_operations {
         for rule in &operation.permissions.rules {
@@ -2668,8 +2644,17 @@ fn operator_rules(
                 .verbs
                 .iter()
                 .filter(|verb| {
-                    permission == OperatorPermission::Remediation
-                        || matches!(verb.as_str(), "get" | "list" | "watch")
+                    alien_permissions::operations::kubernetes::grants_verb(
+                        match permission {
+                            OperatorPermission::Diagnostics => {
+                                alien_permissions::operations::KubernetesMode::Diagnostics
+                            }
+                            OperatorPermission::Remediation => {
+                                alien_permissions::operations::KubernetesMode::Remediation
+                            }
+                        },
+                        verb,
+                    )
                 })
                 .cloned()
                 .collect();
@@ -2811,7 +2796,7 @@ spec:
               properties:
                 state:
                   type: string
-                  description: PENDING_APPROVAL | APPROVED | EXPIRED
+                  description: PENDING_APPROVAL | APPROVED | EXPIRED | REVOKED
                 commandCount:
                   type: integer
                   description: Number of commands this grant covers.
@@ -2856,17 +2841,11 @@ fn operator_clusterrole_doc(
     operator_name: &str,
     labels: &BTreeMap<String, String>,
     crd_names: &AccessRequestCrdNames,
-    kubernetes_operations_enabled: bool,
     permission: OperatorPermission,
     custom_operations: &[KubernetesOperationPermissions],
 ) -> String {
     let mut yaml = operator_cluster_metadata_doc("ClusterRole", operator_name, labels);
-    yaml.push_str(&operator_rules(
-        crd_names,
-        kubernetes_operations_enabled,
-        permission,
-        custom_operations,
-    ));
+    yaml.push_str(&operator_rules(crd_names, permission, custom_operations));
     yaml
 }
 
@@ -2961,9 +2940,7 @@ fn operator_pod_log_role_doc(
         &name,
         labels,
     ));
-    yaml.push_str(
-        "rules:\n  - apiGroups: [\"\"]\n    resources: [\"pods/log\"]\n    verbs: [\"get\"]\n",
-    );
+    yaml.push_str(&operator_feature_rules(OperatorFeature::PodLogs));
     if format == OperatorOutputFormat::HelmTemplate {
         yaml.push_str("{{- end }}\n");
     }
@@ -3034,6 +3011,7 @@ fn operator_deployment_doc(
     operator_image_report: Option<&OperatorImageReport>,
     log_collector_name: &str,
     integrated_product_chart: bool,
+    dynamic_containers: bool,
 ) -> String {
     let mut yaml = operator_metadata_doc("apps/v1", "Deployment", namespace, operator_name, labels);
     yaml.push_str("spec:\n");
@@ -3116,6 +3094,11 @@ fn operator_deployment_doc(
     if let Some(label_selector) = label_selector {
         append_env_value(&mut yaml, "OPERATOR_LABEL_SELECTOR", label_selector);
     }
+    // The Operator reports the dynamic-container capability only when its
+    // chart bound the Role for it.
+    if dynamic_containers {
+        append_env_value(&mut yaml, "OPERATOR_DYNAMIC_CONTAINERS", "true");
+    }
     // Use the host chart's standard appVersion so the pasted template does not
     // require a vendor-specific values key. Raw manifests omit it.
     if options.format == OperatorOutputFormat::HelmTemplate {
@@ -3177,6 +3160,10 @@ fn operator_deployment_doc(
                 "              value: {{{{ tpl {} . | quote }}}}\n",
                 helm_string(log_collector_name)
             ));
+            if integrated_product_chart {
+                yaml.push_str("            - name: OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET\n");
+                yaml.push_str("              value: {{ include \"deployment.remoteOperatorLogCollectorDaemonSetName\" . | quote }}\n");
+            }
             yaml.push_str("            - name: OPERATOR_POD_LOG_MAX_STREAMS\n");
             yaml.push_str(
                 "              value: {{ default 32 .Values.logCollector.maxStreams | quote }}\n",
@@ -3477,9 +3464,17 @@ fn operator_log_collector_daemonset_doc(
     credentials_secret_name: &str,
     image: &str,
     labels: &BTreeMap<String, String>,
-    include_credential_revision: bool,
+    format: OperatorOutputFormat,
 ) -> String {
-    let mut yaml = operator_metadata_doc("apps/v1", "DaemonSet", namespace, collector_name, labels);
+    let daemonset_name = match format {
+        OperatorOutputFormat::HelmTemplate => {
+            "{{ include \"deployment.remoteOperatorLogCollectorDaemonSetName\" . }}".to_string()
+        }
+        OperatorOutputFormat::RawManifest => format!("{collector_name}-v2"),
+    };
+    let include_credential_revision = format == OperatorOutputFormat::HelmTemplate;
+    let mut yaml =
+        operator_metadata_doc("apps/v1", "DaemonSet", namespace, &daemonset_name, labels);
     yaml.push_str("spec:\n");
     yaml.push_str("  selector:\n");
     yaml.push_str("    matchLabels:\n");
@@ -3858,7 +3853,9 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
     name: ""
     tokenKey: sync-token
   name: ""
-  # Use the resolved management endpoint supplied by the installation flow.
+  # Resolved management endpoint captured when this package was built.
+  defaultUrl: ""
+  # Override the captured or installed endpoint when routing changes.
   url: ""
   # Leave unset to create a deployment from the bootstrap token.
   deploymentId: null
@@ -3879,9 +3876,9 @@ runtime:
   podAnnotations: {}
   automountServiceAccountToken: true
   encryption:
-    # Generate once with openssl rand -hex 32; retain across upgrades.
-    # Alternatively reference an existing Secret below.
-    key: "replace-me-with-a-stable-64-character-encryption-secret"
+    # Empty generates a key on first install and retains it across upgrades.
+    # Alternatively provide a stable 64-character hex key or an existing Secret.
+    key: ""
     existingSecret:
       name: ""
       key: encryption-key
@@ -3933,9 +3930,8 @@ runtime:
   data:
     mountPath: /var/lib/deployment-operator
     persistence:
-      # With the Remote Operator disabled, Pod-log cursors live here. An
-      # emptyDir can replay retained lines after the runtime Pod is replaced.
-      enabled: false
+      # Required for bootstrap identity and durable local runtime state.
+      enabled: true
       existingClaim: ""
       storageClassName: ""
       accessModes:
@@ -4558,6 +4554,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         },
         "name": { "type": "string" },
         "url": { "type": "string" },
+        "defaultUrl": { "type": "string" },
         "deploymentId": { "type": ["string", "null"] },
         "setupItem": { "type": "string" },
         "updates": { "type": "string", "enum": ["auto", "approval-required"] },
@@ -4598,7 +4595,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "key": { "type": "string" },
+            "key": { "type": "string", "pattern": "^$|^[a-fA-F0-9]{64}$" },
             "existingSecret": {
               "type": "object",
               "additionalProperties": false,
@@ -4609,7 +4606,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             }
           }
         },
-        "replicas": { "type": "integer", "minimum": 1 },
+        "replicas": { "type": "integer", "minimum": 1, "maximum": 1 },
         "resources": { "type": "object" },
         "api": {
           "type": "object",
@@ -5180,11 +5177,11 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
                     "required": ["management", "inputValues"],
                     "properties": {
                         "management": {
-                            "required": ["url"],
-                            "properties": {
-                                "url": { "minLength": 1 },
-                                "deploymentId": { "type": "null" }
-                            }
+                            "anyOf": [
+                                { "required": ["url"], "properties": { "url": { "minLength": 1 } } },
+                                { "required": ["defaultUrl"], "properties": { "defaultUrl": { "minLength": 1 } } }
+                            ],
+                            "properties": { "deploymentId": { "type": "null" } }
                         },
                         "inputValues": { "required": required }
                     }
@@ -5226,11 +5223,31 @@ fn helpers_tpl() -> String {
 {{- printf "%s-logs" ((include "deployment.fullname" .) | trunc 58 | trimSuffix "-") -}}
 {{- end -}}
 
+{{- define "deployment.logCollectorDaemonSetName" -}}
+{{- printf "%s-logs-v2" ((include "deployment.fullname" .) | trunc 55 | trimSuffix "-") -}}
+{{- end -}}
+
 {{- define "deployment.labels" -}}
 app.kubernetes.io/name: {{ include "deployment.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
+{{- end -}}
+
+{{- define "deployment.logCollectorNameLabel" -}}
+{{- ternary "node-log-collector" "log-collector" (eq (include "deployment.name" .) "log-collector") -}}
+{{- end -}}
+
+{{- define "deployment.logCollectorLabels" -}}
+{{- $labels := include "deployment.labels" . | fromYaml -}}
+{{- $_ := set $labels "app.kubernetes.io/name" (include "deployment.logCollectorNameLabel" .) -}}
+{{- toYaml $labels -}}
+{{- end -}}
+
+{{- define "deployment.hookLabels" -}}
+{{- $labels := include "deployment.labels" . | fromYaml -}}
+{{- $_ := set $labels "app.kubernetes.io/name" (ternary "remote-operator-hook" "lifecycle-hook" (eq (include "deployment.name" .) "lifecycle-hook")) -}}
+{{- toYaml $labels -}}
 {{- end -}}
 
 {{- define "deployment.managerServiceAccountName" -}}
@@ -5510,7 +5527,7 @@ stringData:
   sync-token: {{ .Values.management.token | quote }}
   {{- end }}
   {{- if $createEncryptionSecret }}
-  encryption-key: {{ required "runtime.encryption.key or runtime.encryption.existingSecret.name is required" .Values.runtime.encryption.key | quote }}
+  encryption-key: {{ include "deployment.runtimeEncryptionKey" . | quote }}
   {{- end }}
   {{- if .Values.infrastructure }}
   external-bindings.json: {{ toJson .Values.infrastructure | quote }}
@@ -5880,7 +5897,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
@@ -6205,7 +6222,8 @@ spec:
 }
 
 fn deployment_tpl() -> String {
-    r#"apiVersion: apps/v1
+    r#"{{- include "deployment.validateRuntimeIdentity" . -}}
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "deployment.fullname" . }}
@@ -6309,7 +6327,7 @@ spec:
               value: {{ .Values.basePlatformConfig.azure.location | quote }}
             {{- end }}
             - name: SYNC_URL
-              value: {{ .Values.management.url | quote }}
+              value: {{ include "deployment.managementUrl" . | quote }}
             - name: OPERATOR_NAME
               value: {{ .Values.management.name | quote }}
             - name: OPERATOR_RESOURCE_PREFIX
@@ -6370,6 +6388,8 @@ spec:
               value: {{ default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue | quote }}
             - name: OPERATOR_POD_LOG_LEGACY_DAEMONSET
               value: {{ include "deployment.logCollectorName" . | quote }}
+            - name: OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET
+              value: {{ include "deployment.logCollectorDaemonSetName" . | quote }}
             - name: OPERATOR_POD_LOG_MAX_STREAMS
               value: {{ default 32 .Values.logCollector.maxStreams | quote }}
             {{- end }}
@@ -6524,7 +6544,7 @@ kind: ServiceAccount
 metadata:
   name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 automountServiceAccountToken: true
 {{- end }}
@@ -6539,7 +6559,7 @@ kind: Role
 metadata:
   name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 rules:
   - apiGroups: [""]
@@ -6557,7 +6577,7 @@ kind: RoleBinding
 metadata:
   name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -6586,7 +6606,7 @@ kind: ConfigMap
 metadata:
   name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 data:
   collector.conf: |
@@ -6657,20 +6677,20 @@ fn whitelabeled_log_collector_daemonset_tpl() -> String {
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ include "deployment.logCollectorName" . }}
+  name: {{ include "deployment.logCollectorDaemonSetName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "deployment.name" . }}
+      app.kubernetes.io/name: {{ include "deployment.logCollectorNameLabel" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/component: log-collector
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.logCollectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: log-collector
         alien.dev/log-collector-exclude: "true"
       annotations:
@@ -7238,15 +7258,12 @@ management:
   token: "replace-with-bootstrap-token"
   url: "https://management.example.com"
 
-runtime:
-  encryption:
-    # Generate once: openssl rand -hex 32. Keep the same key across upgrades.
-    key: "replace-with-generated-64-character-hex-key"
-  data:
-    persistence:
-      enabled: true
-      # Set only if your cluster has no suitable default storage class.
-      # storageClassName: "your-storage-class"
+# Identity storage and encryption are configured automatically.
+# If your cluster has no suitable default storage class, uncomment:
+# runtime:
+#   data:
+#     persistence:
+#       storageClassName: "your-storage-class"
 
 # Add the application inputs required by this chart.
 inputValues: {}
@@ -7262,25 +7279,32 @@ fn readme_md(chart_name: &str) -> String {
 
 ## Install
 
-For a managed package, download its generated values file and use its install
-command. To prepare a new deployment manually, copy the bootstrap example:
+For a managed package, use the installation command supplied by its deployment
+page. The chart supplies storage and encryption defaults; a values file is only
+needed for additional configuration. To prepare an installation manually, copy
+the bootstrap example:
 
 ```bash
 cp examples/bootstrap.yaml install-values.yaml
 ```
 
-Edit `install-values.yaml` to set a bootstrap token, the management endpoint,
-and a stable encryption key, plus any application `inputValues` required by
-this chart. Generate the key once with
-`openssl rand -hex 32` and keep the resulting values file private.
+Edit `install-values.yaml` to set a bootstrap token and any application
+`inputValues` required by this chart. Set the management endpoint only when the
+installation service supplies an override or the chart has no endpoint default.
+The chart generates an encryption key on first installation and reuses it on
+upgrades. Keep credentials and any values file containing them private.
 
 ```bash
 helm install {chart_name} . --namespace={namespace} --create-namespace --values install-values.yaml --atomic --wait --timeout 10m
 ```
 
-Use the management endpoint resolved by your installation service, including
-any configured manager or active custom domain. The chart does not assume a
-hosted endpoint. The setup item defaults to `deployment`; override
+Managed packages can supply the project's resolved management endpoint as a
+chart default. The installation service supplies an override when the selected
+manager or active custom domain differs from that captured default. Existing
+runtime installations retain their installed endpoint across chart upgrades unless
+`management.url` explicitly supplies a new endpoint. `management.defaultUrl` is
+the package default, used only for an installation without an assigned endpoint.
+The chart does not assume a hosted endpoint. The setup item defaults to `deployment`; override
 `management.setupItem` when your setup link selects another item. Leave
 `management.deploymentId` unset for a new installation. Set it only when
 connecting an already registered
@@ -7290,14 +7314,20 @@ bindings and service-account identities.
 ## Credentials and storage
 
 The bootstrap token is exchanged for a deployment credential on first connection.
-Keep the same encryption key across upgrades: changing it makes stored encrypted
-data unreadable. Existing Secrets are supported through
-`management.existingSecret` and `runtime.encryption.existingSecret`.
+The chart generates an encryption key on first install and reuses the installed
+Secret on upgrades. Explicit keys and existing Secrets remain supported through
+`runtime.encryption.key`, `management.existingSecret`, and
+`runtime.encryption.existingSecret`. Keep the original key: changing it makes
+stored encrypted data unreadable. A missing key must be restored, not regenerated.
 
-Enable `runtime.data.persistence.enabled` when the Operator's identity and log
-cursor must survive Pod replacement. The chart uses the cluster's default
-storage class; set `runtime.data.persistence.storageClassName` only when needed.
-The chart does not install a storage driver by default.
+Runtime persistence is on by default and required for bootstrap installations.
+The identity, deployment credential, and log cursor survive Pod replacement.
+Keep an existing installation's identity claim unchanged; moving from ephemeral
+storage or to another claim requires migrating the state before an upgrade.
+The chart uses the cluster's default storage class; set
+`runtime.data.persistence.storageClassName` only when needed, or supply
+`runtime.data.persistence.existingClaim`. It does not install a storage driver.
+A Remote Operator uses its own mandatory identity PVC.
 
 ## Auto-updates
 
@@ -7326,11 +7356,10 @@ logCollector:
 deployments and clusters that restrict node access. The Operator supports 32
 concurrent streams by default (`logCollector.maxStreams`, up to 256) and a
 bounded 64 MiB queue. Kubernetes exposes only retained Pod logs, so rotation
-or a prolonged API outage can lose lines. The default runtime Operator keeps
-its resume cursor on `emptyDir`; replacing that Pod can replay retained lines.
-Set `runtime.data.persistence.enabled: true` to keep the cursor on a PVC if the
-cluster has suitable storage. A Remote Operator already keeps its cursor on
-its identity PVC; runtime persistence affects only the separate runtime Pod.
+or a prolonged API outage can lose lines. The runtime Operator keeps
+its resume cursor on the runtime PVC by default. Explicitly configured ephemeral
+runtime storage can replay retained lines after Pod replacement. A Remote
+Operator keeps its cursor on its own mandatory identity PVC.
 
 `nodeAgent` runs a Fluent Bit DaemonSet and reads the selected Pod log files on
 each node. Choose it for larger workloads in clusters that permit read-only
@@ -7341,6 +7370,18 @@ If the Remote Operator uses `nodeAgent` and its setup-owned collector token is
 rotated, set `remoteOperator.collectorTokenRevision` to the new token's
 64-character SHA-256 hex digest during the chart upgrade. This restarts both
 the receiver and the DaemonSet with the new credential.
+
+Node collectors use their own `app.kubernetes.io/name` label so
+receiver selectors do not match collector Pods. Charts generated before this
+label change used the receiver's name label. The collector DaemonSets now have
+a `v2` name so `helm upgrade` creates the new DaemonSet and removes the old one
+without changing its immutable selector. Collector ConfigMap, ServiceAccount
+and RBAC names stay the same. The receiver Deployment keeps its existing
+selector and identity. The replacement collector starts with an empty
+log buffer and reads the selected log files from the beginning. When switching
+from nodeAgent to podApi, the Operator checks both collector names and waits for
+their Pods to stop, including when the chart is rendered without cluster access.
+Use an Operator image built with this chart version for that transition.
 "#
     )
 }
@@ -7426,7 +7467,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -7453,7 +7493,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -7479,7 +7518,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -7538,8 +7576,6 @@ mod tests {
                 // so the kind is registered before any namespaced object.
                 "CustomResourceDefinition",
                 "ServiceAccount",
-                "Role",
-                "RoleBinding",
                 "Role",
                 "RoleBinding",
                 "Secret",
@@ -7644,7 +7680,7 @@ mod tests {
     }
 
     #[test]
-    fn operator_remediation_adds_only_restart_and_scale_writes() {
+    fn operator_remediation_without_operations_adds_no_workload_writes() {
         let manifest = generate_operator_manifest(OperatorManifestOptions {
             custom_operation_permissions: &[],
             manager_url: "https://manager.example.com",
@@ -7659,7 +7695,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Remediation,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -7690,10 +7725,6 @@ mod tests {
         assert_eq!(
             writes,
             BTreeSet::from([
-                ("", "pods", "delete"),
-                ("apps", "deployments/scale", "patch"),
-                ("apps", "statefulsets/scale", "patch"),
-                ("apps", "replicasets/scale", "patch"),
                 ("accessrequests.alien", "alienaccessrequests", "create"),
                 ("accessrequests.alien", "alienaccessrequests", "update"),
                 ("accessrequests.alien", "alienaccessrequests", "patch"),
@@ -7732,7 +7763,6 @@ mod tests {
             label_domain: Some("acme.dev"),
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -7959,12 +7989,12 @@ mod tests {
             None
         );
 
-        // Namespace scope grants inventory and dynamic-workload Roles.
-        assert_eq!(docs_by_kind(&docs, "Role").len(), 2);
+        // Namespace scope grants one inventory Role.
+        assert_eq!(docs_by_kind(&docs, "Role").len(), 1);
         assert!(docs_by_kind(&docs, "ClusterRole").is_empty());
 
         // Label scope is cluster-wide: emits the selector env and ClusterRole/
-        // ClusterRoleBinding. Dynamic workload writes remain namespace-scoped.
+        // ClusterRoleBinding.
         let manifest = generate_operator_manifest(OperatorManifestOptions {
             custom_operation_permissions: &[],
             manager_url: "https://manager.example.com",
@@ -7979,7 +8009,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Cluster,
             label_selector: Some("app.kubernetes.io/part-of=my-saas"),
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -7994,15 +8023,10 @@ mod tests {
             Some("app.kubernetes.io/part-of=my-saas")
         );
 
-        let roles = docs_by_kind(&docs, "Role");
-        assert_eq!(
-            roles.len(),
-            1,
-            "only the dynamic workload Role is namespaced"
+        assert!(
+            docs_by_kind(&docs, "Role").is_empty(),
+            "a standalone cluster-scoped Operator binds no namespaced Role"
         );
-        assert!(yaml_path(&roles[0], &["metadata", "name"])
-            .and_then(YamlValue::as_str)
-            .is_some_and(|name| name.starts_with("alien-dc-")));
         let cluster_role = docs_by_kind(&docs, "ClusterRole")
             .into_iter()
             .next()
@@ -8044,7 +8068,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::HelmTemplate,
         })
@@ -8115,7 +8138,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         });
@@ -8138,7 +8160,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         });
@@ -8159,7 +8180,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Cluster,
             label_selector: Some("   "),
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         });
@@ -8212,9 +8232,25 @@ mod tests {
         include_collector: bool,
         label_domain: Option<&str>,
     ) -> HelmChart {
+        product_chart_for_stack(&sample_stack(), include_collector, label_domain)
+    }
+
+    /// `sample_stack` plus an approved dynamic container repository, which is
+    /// what lets the API schedule containers on the installed release.
+    fn dynamic_container_stack() -> Stack {
+        let mut stack = sample_stack();
+        stack.dynamic_container_repositories = vec!["registry.example.com/dynamic".to_string()];
+        stack
+    }
+
+    fn product_chart_for_stack(
+        stack: &Stack,
+        include_collector: bool,
+        label_domain: Option<&str>,
+    ) -> HelmChart {
         let registry = HelmRegistry::built_in();
         generate_product_helm_chart(
-            &sample_stack(),
+            stack,
             HelmOptions {
                 registry: &registry,
                 stack_settings: StackSettings::default(),
@@ -8222,7 +8258,7 @@ mod tests {
             },
             ProductOperatorManifestOptions {
                 manifest: OperatorManifestOptions {
-                    manager_url: "{{ .Values.management.url }}",
+                    manager_url: r#"{{ include "deployment.managementUrl" . }}"#,
                     group_token: "",
                     encryption_key: "",
                     image: "registry.example.com/operator@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -8239,7 +8275,6 @@ mod tests {
                     label_domain,
                     scope: OperatorScope::Namespace,
                     label_selector: None,
-                    kubernetes_operations_enabled: true,
                     custom_operation_permissions: &[],
                     permission: OperatorPermission::Remediation,
                     format: OperatorOutputFormat::HelmTemplate,
@@ -8465,8 +8500,15 @@ infrastructureExistingSecret: customer-bindings
             );
         crate::test_utils::helm_template(&chart.files, Some(&registered))
             .assert_ok("registered deployment keeps its stored inputs");
+        let captured_endpoint = values.replace(
+            "  url: https://manager.example.test",
+            "  defaultUrl: https://manager.example.test",
+        );
+        crate::test_utils::helm_template(&chart.files, Some(&captured_endpoint))
+            .assert_ok("bootstrap with captured management endpoint");
         let missing_inputs = values.replace("  ingestUrl: https://ingest.example.test\n", "");
         for invalid in [
+            captured_endpoint.replace("  ingestUrl: https://ingest.example.test\n", ""),
             missing_inputs.clone(),
             missing_inputs.replace(
                 "  token: ax_test",
@@ -9375,9 +9417,262 @@ remoteOperator:
         assert_ne!(cleanup_name, operator_name);
     }
 
+    type Grant = (String, String, String, Vec<String>);
+
+    /// Every grant of every Role or ClusterRole bound to `service_account`, as
+    /// `(apiGroup, resource, verb, resourceNames)`.
+    fn grants_bound_to(docs: &[YamlValue], service_account: &str) -> BTreeSet<Grant> {
+        let bound: Vec<(&str, &str)> = docs
+            .iter()
+            .filter(|doc| {
+                matches!(
+                    yaml_str(doc, "kind"),
+                    Some("RoleBinding" | "ClusterRoleBinding")
+                )
+            })
+            .filter(|doc| {
+                doc["subjects"].as_sequence().is_some_and(|subjects| {
+                    subjects
+                        .iter()
+                        .any(|subject| subject["name"].as_str() == Some(service_account))
+                })
+            })
+            .map(|doc| {
+                (
+                    doc["roleRef"]["kind"].as_str().unwrap(),
+                    doc["roleRef"]["name"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        let mut grants = BTreeSet::new();
+        for (kind, name) in bound {
+            let role = docs
+                .iter()
+                .find(|doc| yaml_str(doc, "kind") == Some(kind) && doc["metadata"]["name"] == name)
+                .unwrap_or_else(|| panic!("{kind} {name} is bound but not rendered"));
+            for rule in role["rules"].as_sequence().unwrap() {
+                let names: Vec<String> = rule["resourceNames"]
+                    .as_sequence()
+                    .into_iter()
+                    .flatten()
+                    .map(|name| name.as_str().unwrap().to_owned())
+                    .collect();
+                for group in rule["apiGroups"].as_sequence().unwrap() {
+                    for resource in rule["resources"].as_sequence().unwrap() {
+                        for verb in rule["verbs"].as_sequence().unwrap() {
+                            grants.insert((
+                                group.as_str().unwrap().to_owned(),
+                                resource.as_str().unwrap().to_owned(),
+                                verb.as_str().unwrap().to_owned(),
+                                names.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        grants
+    }
+
+    /// What the permission review shows for an install with `features`: the
+    /// runtime rules those features select plus the access-request rules.
+    fn reviewed_grants(features: &[OperatorFeature]) -> BTreeSet<Grant> {
+        let mut grants: BTreeSet<_> =
+            alien_permissions::operations::kubernetes::operator_runtime_rules()
+                .into_iter()
+                .filter(|rule| {
+                    rule.feature
+                        .is_none_or(|feature| features.contains(&feature))
+                })
+                .flat_map(|rule| {
+                    rule.verbs.into_iter().map(move |verb| {
+                        (rule.api_group.clone(), rule.resource.clone(), verb, vec![])
+                    })
+                })
+                .collect();
+        for (resource, verbs) in [
+            (
+                "alienaccessrequests",
+                &["get", "list", "watch", "create", "update", "patch"][..],
+            ),
+            (
+                "alienaccessrequests/status",
+                &["get", "update", "patch"][..],
+            ),
+        ] {
+            for verb in verbs {
+                grants.insert((
+                    "accessrequests.alien".to_owned(),
+                    resource.to_owned(),
+                    (*verb).to_owned(),
+                    vec![],
+                ));
+            }
+        }
+        grants
+    }
+
+    fn product_release_values(log_mode: Option<&str>) -> String {
+        let log_collector = log_mode
+            .map(|mode| format!("logCollector:\n  enabled: true\n  mode: {mode}\n"))
+            .unwrap_or_default();
+        format!(
+            "management:\n  url: https://manager.example.com\n{log_collector}remoteOperator:\n  enabled: true\n  existingSecret:\n    name: setup-owned\n    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+        )
+    }
+
+    fn rendered_product_release(chart: HelmChart, values: &str) -> Vec<YamlValue> {
+        let mut files = chart.files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let rendered =
+            crate::test_utils::helm_template_for_release(&files, Some(values), "customer-one");
+        rendered.assert_ok("product release");
+        parse_manifest_docs(&rendered.stdout)
+    }
+
+    /// The Remote Operator Deployment; a product release also renders the
+    /// stack's own workloads.
+    fn remote_operator_deployment(docs: &[YamlValue]) -> YamlValue {
+        docs_by_kind(docs, "Deployment")
+            .into_iter()
+            .find(|deployment| {
+                deployment["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.contains("-operator"))
+            })
+            .expect("Remote Operator Deployment")
+    }
+
+    #[test]
+    fn standalone_operators_bind_exactly_the_reviewed_grants() {
+        // No log collection: the Operator runtime rules and the access-request CRD.
+        let docs = parse_manifest_docs(&operator_test_manifest());
+        assert_eq!(
+            grants_bound_to(&docs, "my-saas-operator"),
+            reviewed_grants(&[])
+        );
+        let deployment = remote_operator_deployment(&docs);
+        assert_eq!(
+            operator_env_value(&deployment, "OPERATOR_DYNAMIC_CONTAINERS"),
+            None
+        );
+
+        // Pod log collection adds `pods/log get` and nothing else.
+        let docs = parse_manifest_docs(&operator_test_manifest_with_log_collector());
+        assert_eq!(
+            grants_bound_to(&docs, "my-saas-operator"),
+            reviewed_grants(&[OperatorFeature::PodLogs])
+        );
+    }
+
+    #[test]
+    fn product_releases_bind_exactly_the_reviewed_grants() {
+        // The Operator ServiceAccount shares the Remote Operator Deployment's name.
+        // A product release also lets the Operator mark its own identity
+        // ConfigMap initialized; that grant names the one ConfigMap.
+        let bound_grants = |docs: &[YamlValue]| {
+            let deployment = remote_operator_deployment(docs);
+            let operator = deployment["metadata"]["name"].as_str().unwrap();
+            assert!(
+                operator.starts_with("customer-one-remote-operator-"),
+                "{operator}"
+            );
+            let (named, unnamed): (BTreeSet<Grant>, BTreeSet<Grant>) =
+                grants_bound_to(docs, operator)
+                    .into_iter()
+                    .partition(|(_, _, _, names)| !names.is_empty());
+            let identity_marker = format!("{operator}-initialized");
+            assert_eq!(
+                named,
+                ["get", "patch", "update"]
+                    .map(|verb| (
+                        String::new(),
+                        "configmaps".to_owned(),
+                        verb.to_owned(),
+                        vec![identity_marker.clone()]
+                    ))
+                    .into_iter()
+                    .collect()
+            );
+            unnamed
+        };
+        // Product installs retain cleanup access even without approved images.
+        let docs = rendered_product_release(sample_product_chart(), &product_release_values(None));
+        assert_eq!(
+            bound_grants(&docs),
+            reviewed_grants(&[OperatorFeature::DynamicContainers])
+        );
+        assert_eq!(
+            operator_env_value(
+                &remote_operator_deployment(&docs),
+                "OPERATOR_DYNAMIC_CONTAINERS"
+            ),
+            Some("true")
+        );
+
+        // Pod API log collection binds the pod-log Role; the node collector does not.
+        let docs = rendered_product_release(
+            sample_product_chart_with_collector(true),
+            &product_release_values(Some("podApi")),
+        );
+        assert_eq!(
+            bound_grants(&docs),
+            reviewed_grants(&[OperatorFeature::DynamicContainers, OperatorFeature::PodLogs])
+        );
+        let docs = rendered_product_release(
+            sample_product_chart_with_collector(true),
+            &product_release_values(Some("nodeAgent")),
+        );
+        assert_eq!(
+            bound_grants(&docs),
+            reviewed_grants(&[OperatorFeature::DynamicContainers])
+        );
+
+        // Approved images can run with the same retained access used for cleanup.
+        let docs = rendered_product_release(
+            product_chart_for_stack(&dynamic_container_stack(), true, None),
+            &product_release_values(Some("podApi")),
+        );
+        assert_eq!(
+            bound_grants(&docs),
+            reviewed_grants(&[OperatorFeature::DynamicContainers, OperatorFeature::PodLogs])
+        );
+        assert_eq!(
+            operator_env_value(
+                &remote_operator_deployment(&docs),
+                "OPERATOR_DYNAMIC_CONTAINERS"
+            ),
+            Some("true")
+        );
+        let dynamic_role = docs_by_kind(&docs, "Role")
+            .into_iter()
+            .find(|role| {
+                yaml_path(role, &["metadata", "name"])
+                    .and_then(YamlValue::as_str)
+                    .is_some_and(|name| name.starts_with("alien-dc-"))
+            })
+            .expect("dynamic container Role");
+        assert_eq!(dynamic_role["metadata"]["namespace"], "default");
+
+        // Updating the same product release to an empty approval list must keep
+        // every grant and the capability needed to suspend/delete old workloads.
+        let withdrawn = rendered_product_release(
+            sample_product_chart_with_collector(true),
+            &product_release_values(Some("podApi")),
+        );
+        assert_eq!(bound_grants(&withdrawn), bound_grants(&docs));
+        assert_eq!(
+            operator_env_value(
+                &remote_operator_deployment(&withdrawn),
+                "OPERATOR_DYNAMIC_CONTAINERS"
+            ),
+            Some("true")
+        );
+    }
+
     #[test]
     fn product_dynamic_role_name_follows_the_helm_release() {
-        let mut files = sample_product_chart().files;
+        let mut files = product_chart_for_stack(&dynamic_container_stack(), false, None).files;
         files.shift_remove("templates/remote-operator-checks.yaml");
         let values = r#"
 management:
@@ -9516,7 +9811,12 @@ remoteOperator:
     fn product_chart_remote_operator_removal_requires_the_exact_release_name() {
         let chart = sample_product_chart();
         let render = |values: &str| {
-            crate::test_utils::helm_template_for_release(&chart.files, Some(values), "shop")
+            // This compares complete resources; use the same explicit key so
+            // independently rendered first-install Secrets remain comparable.
+            let values = format!(
+                "runtime:\n  encryption:\n    key: {TEST_RUNTIME_ENCRYPTION_KEY}\n{values}"
+            );
+            crate::test_utils::helm_template_for_release(&chart.files, Some(&values), "shop")
         };
         let has_rollback_guard = |manifest: &str| {
             docs_by_kind(&parse_manifest_docs(manifest), "Job")
@@ -9787,6 +10087,172 @@ logCollector:
             operator_env_value(&changed_runtime, "OPERATOR_POD_LOG_LABEL_VALUE"),
             Some("e2e456")
         );
+    }
+
+    #[test]
+    fn offline_pod_api_render_checks_both_collector_generations() {
+        let mut files = sample_product_chart_with_collector(true).files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        for remote_enabled in [false, true] {
+            let values = format!(
+                r#"
+management:
+  url: https://manager.example.test
+logCollector:
+  enabled: true
+  mode: nodeAgent
+remoteOperator:
+  enabled: {remote_enabled}
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#
+            );
+            let node_agent = crate::test_utils::helm_template(&files, Some(&values));
+            node_agent.assert_ok("render node collector offline");
+            let node_docs = parse_manifest_docs(&node_agent.stdout);
+            let collectors = docs_by_kind(&node_docs, "DaemonSet");
+            assert_eq!(collectors.len(), 1);
+            let replacement_name = collectors[0]["metadata"]["name"].as_str().unwrap();
+            let legacy_name = collectors[0]["spec"]["template"]["spec"]["serviceAccountName"]
+                .as_str()
+                .unwrap();
+            assert_ne!(legacy_name, replacement_name);
+            let pod_api = crate::test_utils::helm_template(
+                &files,
+                Some(&values.replace("mode: nodeAgent", "mode: podApi")),
+            );
+            pod_api.assert_ok("render Pod API collector offline");
+            let pod_docs = parse_manifest_docs(&pod_api.stdout);
+            assert!(docs_by_kind(&pod_docs, "DaemonSet").is_empty());
+            let operators = docs_by_kind(&pod_docs, "Deployment");
+            let readers: Vec<_> = operators
+                .iter()
+                .filter(|deployment| {
+                    operator_env_value(deployment, "OPERATOR_POD_LOG_LEGACY_DAEMONSET").is_some()
+                })
+                .collect();
+            assert_eq!(readers.len(), 1);
+            assert_eq!(
+                operator_env_value(readers[0], "OPERATOR_POD_LOG_LEGACY_DAEMONSET"),
+                Some(legacy_name)
+            );
+            assert_eq!(
+                operator_env_value(readers[0], "OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET"),
+                Some(replacement_name)
+            );
+        }
+    }
+
+    #[test]
+    fn node_collector_selectors_do_not_match_other_workloads() {
+        let mut files = sample_product_chart_with_collector(true).files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let long_fullname = format!("{}-logs-v2", "a".repeat(55));
+        for (remote_enabled, runtime_name, fullname) in [
+            (false, "operator", ""),
+            (true, "operator", ""),
+            (false, "log-collector", ""),
+            (false, "lifecycle-hook", ""),
+            (false, "operator", long_fullname.as_str()),
+        ] {
+            let values = format!(
+                r#"
+nameOverride: {runtime_name}
+fullnameOverride: "{fullname}"
+management:
+  url: https://manager.example.test
+logCollector:
+  enabled: true
+  mode: nodeAgent
+runtime:
+  pdb:
+    enabled: true
+  networkPolicy:
+    enabled: true
+heartbeat:
+  collection:
+    nodes:
+      enabled: true
+clusterBootstrap:
+  metricsServer:
+    enabled: true
+remoteOperator:
+  enabled: {remote_enabled}
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#
+            );
+            let rendered = crate::test_utils::helm_template(&files, Some(&values));
+            rendered.assert_ok("collector selector isolation");
+            let docs = parse_manifest_docs(&rendered.stdout);
+            let mut resource_names = BTreeSet::new();
+            for doc in &docs {
+                let resource = (
+                    doc["kind"].as_str().unwrap(),
+                    doc["metadata"]["namespace"].as_str().unwrap_or("default"),
+                    doc["metadata"]["name"].as_str().unwrap(),
+                );
+                assert!(
+                    resource_names.insert(resource),
+                    "duplicate Kubernetes resource: {resource:?}"
+                );
+            }
+            let workloads: Vec<_> = docs
+                .iter()
+                .filter(|doc| {
+                    matches!(
+                        yaml_str(doc, "kind"),
+                        Some("Deployment" | "DaemonSet" | "StatefulSet" | "Job")
+                    )
+                })
+                .collect();
+            assert_eq!(docs_by_kind(&docs, "DaemonSet").len(), 1);
+            for doc in &docs {
+                let selector = match yaml_str(doc, "kind") {
+                    Some("Deployment" | "DaemonSet" | "StatefulSet" | "PodDisruptionBudget") => {
+                        &doc["spec"]["selector"]["matchLabels"]
+                    }
+                    Some("Service") => &doc["spec"]["selector"],
+                    Some("NetworkPolicy") => &doc["spec"]["podSelector"]["matchLabels"],
+                    _ => continue,
+                };
+                let selector = selector.as_mapping().expect("non-empty label selector");
+                assert!(!selector.is_empty());
+                let selected: Vec<_> = workloads
+                    .iter()
+                    .filter(|workload| {
+                        let namespace = |resource: &YamlValue| {
+                            resource["metadata"]["namespace"]
+                                .as_str()
+                                .unwrap_or("default")
+                                .to_string()
+                        };
+                        let labels = &workload["spec"]["template"]["metadata"]["labels"];
+                        namespace(doc) == namespace(workload)
+                            && selector
+                                .iter()
+                                .all(|(key, value)| labels.get(key) == Some(value))
+                    })
+                    .collect();
+                assert_eq!(
+                    selected.len(), 1,
+                    "{}/{} must select exactly its intended workload, remote enabled={remote_enabled}",
+                    doc["kind"].as_str().unwrap(),
+                    doc["metadata"]["name"].as_str().unwrap(),
+                );
+                if matches!(
+                    yaml_str(doc, "kind"),
+                    Some("Deployment" | "DaemonSet" | "StatefulSet")
+                ) {
+                    assert_eq!(
+                        selected[0]["metadata"], doc["metadata"],
+                        "workload must select its own Pods"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

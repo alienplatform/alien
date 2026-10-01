@@ -17,7 +17,9 @@ management:
     name: ""
     tokenKey: sync-token
   name: ""
-  # Use the resolved management endpoint supplied by the installation flow.
+  # Resolved management endpoint captured when this package was built.
+  defaultUrl: ""
+  # Override the captured or installed endpoint when routing changes.
   url: ""
   # Leave unset to create a deployment from the bootstrap token.
   deploymentId: null
@@ -38,9 +40,9 @@ runtime:
   podAnnotations: {}
   automountServiceAccountToken: true
   encryption:
-    # Generate once with openssl rand -hex 32; retain across upgrades.
-    # Alternatively reference an existing Secret below.
-    key: "replace-me-with-a-stable-64-character-encryption-secret"
+    # Empty generates a key on first install and retains it across upgrades.
+    # Alternatively provide a stable 64-character hex key or an existing Secret.
+    key: ""
     existingSecret:
       name: ""
       key: encryption-key
@@ -92,9 +94,8 @@ runtime:
   data:
     mountPath: /var/lib/deployment-operator
     persistence:
-      # With the Remote Operator disabled, Pod-log cursors live here. An
-      # emptyDir can replay retained lines after the runtime Pod is replaced.
-      enabled: false
+      # Required for bootstrap identity and durable local runtime state.
+      enabled: true
       existingClaim: ""
       storageClassName: ""
       accessModes:
@@ -272,6 +273,7 @@ ephemeralStorage:
         },
         "name": { "type": "string" },
         "url": { "type": "string" },
+        "defaultUrl": { "type": "string" },
         "deploymentId": { "type": ["string", "null"] },
         "setupItem": { "type": "string" },
         "updates": { "type": "string", "enum": ["auto", "approval-required"] },
@@ -312,7 +314,7 @@ ephemeralStorage:
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "key": { "type": "string" },
+            "key": { "type": "string", "pattern": "^$|^[a-fA-F0-9]{64}$" },
             "existingSecret": {
               "type": "object",
               "additionalProperties": false,
@@ -323,7 +325,7 @@ ephemeralStorage:
             }
           }
         },
-        "replicas": { "type": "integer", "minimum": 1 },
+        "replicas": { "type": "integer", "minimum": 1, "maximum": 1 },
         "resources": { "type": "object" },
         "api": {
           "type": "object",
@@ -803,11 +805,31 @@ ephemeralStorage:
 {{- printf "%s-logs" ((include "deployment.fullname" .) | trunc 58 | trimSuffix "-") -}}
 {{- end -}}
 
+{{- define "deployment.logCollectorDaemonSetName" -}}
+{{- printf "%s-logs-v2" ((include "deployment.fullname" .) | trunc 55 | trimSuffix "-") -}}
+{{- end -}}
+
 {{- define "deployment.labels" -}}
 app.kubernetes.io/name: {{ include "deployment.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
+{{- end -}}
+
+{{- define "deployment.logCollectorNameLabel" -}}
+{{- ternary "node-log-collector" "log-collector" (eq (include "deployment.name" .) "log-collector") -}}
+{{- end -}}
+
+{{- define "deployment.logCollectorLabels" -}}
+{{- $labels := include "deployment.labels" . | fromYaml -}}
+{{- $_ := set $labels "app.kubernetes.io/name" (include "deployment.logCollectorNameLabel" .) -}}
+{{- toYaml $labels -}}
+{{- end -}}
+
+{{- define "deployment.hookLabels" -}}
+{{- $labels := include "deployment.labels" . | fromYaml -}}
+{{- $_ := set $labels "app.kubernetes.io/name" (ternary "remote-operator-hook" "lifecycle-hook" (eq (include "deployment.name" .) "lifecycle-hook")) -}}
+{{- toYaml $labels -}}
 {{- end -}}
 
 {{- define "deployment.managerServiceAccountName" -}}
@@ -860,6 +882,90 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 
 {{- define "deployment.heartbeatNodeClusterRoleName" -}}
 {{- printf "%s-heartbeat-nodes" (include "deployment.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+=== templates/_runtime-identity.tpl ===
+{{- define "deployment.validateRuntimeIdentity" -}}
+{{- $storage := .Values.runtime.data.persistence -}}
+{{- $credentialConfigured := or .Values.management.token .Values.management.existingSecret.name -}}
+{{- if and $credentialConfigured (not .Values.management.deploymentId) (not $storage.enabled) -}}
+  {{- fail "A bootstrap installation requires persistent runtime storage. Set runtime.data.persistence.enabled=true; ephemeral storage requires an existing deployment ID and its deployment credential." -}}
+{{- end -}}
+{{- $name := include "deployment.fullname" . -}}
+{{- $installed := lookup "apps/v1" "Deployment" .Release.Namespace $name -}}
+{{- if $installed -}}
+  {{- $claim := default (printf "%s-runtime-data" $name) $storage.existingClaim -}}
+  {{- range $volume := $installed.spec.template.spec.volumes -}}
+    {{- if eq $volume.name "runtime-data" -}}
+      {{- $previousClaim := dig "persistentVolumeClaim" "claimName" "" $volume -}}
+      {{- if or (and $previousClaim (not $storage.enabled)) (and $storage.enabled (ne $claim $previousClaim)) -}}
+        {{- fail "Changing the runtime identity volume would discard the installed deployment state. Preserve the current claim, or migrate the existing state before upgrading." -}}
+      {{- end -}}
+    {{- end -}}
+    {{- if and (eq $volume.name "encryption-key") (ne $volume.secret.secretName (include "deployment.encryptionSecretName" $)) -}}
+      {{- fail "Changing the runtime encryption Secret requires a state migration. Preserve the installed Secret reference when upgrading." -}}
+    {{- end -}}
+  {{- end -}}
+  {{- range $container := $installed.spec.template.spec.containers -}}
+    {{- if eq $container.name "operator" -}}
+      {{- range $mount := $container.volumeMounts -}}
+        {{- if and (eq $mount.name "encryption-key") (ne $mount.subPath (include "deployment.encryptionSecretKey" $)) -}}
+          {{- fail "Changing the runtime encryption Secret key requires a state migration. Preserve the installed key selector when upgrading." -}}
+        {{- end -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
+{{- end -}}
+
+{{- define "deployment.managementUrl" -}}
+{{- $endpoint := .Values.management.defaultUrl -}}
+{{- $installed := lookup "apps/v1" "Deployment" .Release.Namespace (include "deployment.fullname" .) -}}
+{{- if $installed -}}
+  {{- range $container := $installed.spec.template.spec.containers -}}
+    {{- if eq $container.name "operator" -}}
+      {{- range $variable := $container.env -}}
+        {{- if and (eq $variable.name "SYNC_URL") $variable.value -}}
+          {{- $endpoint = $variable.value -}}
+        {{- end -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- default $endpoint .Values.management.url -}}
+{{- end -}}
+
+{{- define "deployment.runtimeEncryptionKey" -}}
+{{- if not (hasKey . "runtimeEncryptionKey") -}}
+  {{- $name := include "deployment.fullname" . -}}
+  {{- $installed := lookup "v1" "Secret" .Release.Namespace $name -}}
+  {{- $stored := "" -}}
+  {{- if and $installed (hasKey (default dict $installed.data) "encryption-key") -}}
+    {{- $stored = index $installed.data "encryption-key" | b64dec -}}
+    {{- if not (regexMatch "^[a-fA-F0-9]{64}$" $stored) -}}
+      {{- fail "The installed runtime encryption key is invalid. Restore the original key before upgrading." -}}
+    {{- end -}}
+  {{- end -}}
+  {{- $requested := .Values.runtime.encryption.key -}}
+  {{- if and $requested (not (regexMatch "^[a-fA-F0-9]{64}$" $requested)) -}}
+    {{- fail "runtime.encryption.key must be exactly 64 hex characters, or empty to generate it on first installation." -}}
+  {{- end -}}
+  {{- if and $stored $requested (ne $stored $requested) -}}
+    {{- fail "Changing the runtime encryption key would make the installed state unreadable. Keep the installed key." -}}
+  {{- end -}}
+  {{- $key := default $requested $stored -}}
+  {{- if not $key -}}
+    {{- $claim := default (printf "%s-runtime-data" $name) .Values.runtime.data.persistence.existingClaim -}}
+    {{- $identity := lookup "v1" "PersistentVolumeClaim" .Release.Namespace $claim -}}
+    {{- if or .Release.IsUpgrade $installed $identity -}}
+      {{- fail "Cannot generate a replacement encryption key for an existing installation. Restore its original Secret or provide the original runtime.encryption.key." -}}
+    {{- end -}}
+    {{- $key = randBytes 32 | sha256sum -}}
+  {{- end -}}
+  {{- $_ := set . "runtimeEncryptionKey" $key -}}
+{{- end -}}
+{{- .runtimeEncryptionKey -}}
 {{- end -}}
 
 === templates/serviceaccount.yaml ===
@@ -1069,7 +1175,7 @@ stringData:
   sync-token: {{ .Values.management.token | quote }}
   {{- end }}
   {{- if $createEncryptionSecret }}
-  encryption-key: {{ required "runtime.encryption.key or runtime.encryption.existingSecret.name is required" .Values.runtime.encryption.key | quote }}
+  encryption-key: {{ include "deployment.runtimeEncryptionKey" . | quote }}
   {{- end }}
   {{- if .Values.infrastructure }}
   external-bindings.json: {{ toJson .Values.infrastructure | quote }}
@@ -1111,6 +1217,7 @@ data:
   public-endpoints.json: {{ toJson (default dict .Values.publicEndpoints) | quote }}
 
 === templates/deployment.yaml ===
+{{- include "deployment.validateRuntimeIdentity" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -1215,7 +1322,7 @@ spec:
               value: {{ .Values.basePlatformConfig.azure.location | quote }}
             {{- end }}
             - name: SYNC_URL
-              value: {{ .Values.management.url | quote }}
+              value: {{ include "deployment.managementUrl" . | quote }}
             - name: OPERATOR_NAME
               value: {{ .Values.management.name | quote }}
             - name: OPERATOR_RESOURCE_PREFIX
@@ -1276,6 +1383,8 @@ spec:
               value: {{ default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue | quote }}
             - name: OPERATOR_POD_LOG_LEGACY_DAEMONSET
               value: {{ include "deployment.logCollectorName" . | quote }}
+            - name: OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET
+              value: {{ include "deployment.logCollectorDaemonSetName" . | quote }}
             - name: OPERATOR_POD_LOG_MAX_STREAMS
               value: {{ default 32 .Values.logCollector.maxStreams | quote }}
             {{- end }}
@@ -1405,7 +1514,7 @@ kind: ServiceAccount
 metadata:
   name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 automountServiceAccountToken: true
 {{- end }}
@@ -1417,7 +1526,7 @@ kind: Role
 metadata:
   name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 rules:
   - apiGroups: [""]
@@ -1432,7 +1541,7 @@ kind: RoleBinding
 metadata:
   name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -1458,7 +1567,7 @@ kind: ConfigMap
 metadata:
   name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 data:
   collector.conf: |
@@ -1526,20 +1635,20 @@ data:
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ include "deployment.logCollectorName" . }}
+  name: {{ include "deployment.logCollectorDaemonSetName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: log-collector
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "deployment.name" . }}
+      app.kubernetes.io/name: {{ include "deployment.logCollectorNameLabel" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/component: log-collector
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.logCollectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: log-collector
         alien.dev/log-collector-exclude: "true"
       annotations:
@@ -1958,7 +2067,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
@@ -2752,15 +2861,12 @@ management:
   token: "replace-with-bootstrap-token"
   url: "https://management.example.com"
 
-runtime:
-  encryption:
-    # Generate once: openssl rand -hex 32. Keep the same key across upgrades.
-    key: "replace-with-generated-64-character-hex-key"
-  data:
-    persistence:
-      enabled: true
-      # Set only if your cluster has no suitable default storage class.
-      # storageClassName: "your-storage-class"
+# Identity storage and encryption are configured automatically.
+# If your cluster has no suitable default storage class, uncomment:
+# runtime:
+#   data:
+#     persistence:
+#       storageClassName: "your-storage-class"
 
 # Add the application inputs required by this chart.
 inputValues: {}
@@ -2770,25 +2876,32 @@ inputValues: {}
 
 ## Install
 
-For a managed package, download its generated values file and use its install
-command. To prepare a new deployment manually, copy the bootstrap example:
+For a managed package, use the installation command supplied by its deployment
+page. The chart supplies storage and encryption defaults; a values file is only
+needed for additional configuration. To prepare an installation manually, copy
+the bootstrap example:
 
 ```bash
 cp examples/bootstrap.yaml install-values.yaml
 ```
 
-Edit `install-values.yaml` to set a bootstrap token, the management endpoint,
-and a stable encryption key, plus any application `inputValues` required by
-this chart. Generate the key once with
-`openssl rand -hex 32` and keep the resulting values file private.
+Edit `install-values.yaml` to set a bootstrap token and any application
+`inputValues` required by this chart. Set the management endpoint only when the
+installation service supplies an override or the chart has no endpoint default.
+The chart generates an encryption key on first installation and reuses it on
+upgrades. Keep credentials and any values file containing them private.
 
 ```bash
 helm install pure-fn . --namespace=pure-fn --create-namespace --values install-values.yaml --atomic --wait --timeout 10m
 ```
 
-Use the management endpoint resolved by your installation service, including
-any configured manager or active custom domain. The chart does not assume a
-hosted endpoint. The setup item defaults to `deployment`; override
+Managed packages can supply the project's resolved management endpoint as a
+chart default. The installation service supplies an override when the selected
+manager or active custom domain differs from that captured default. Existing
+runtime installations retain their installed endpoint across chart upgrades unless
+`management.url` explicitly supplies a new endpoint. `management.defaultUrl` is
+the package default, used only for an installation without an assigned endpoint.
+The chart does not assume a hosted endpoint. The setup item defaults to `deployment`; override
 `management.setupItem` when your setup link selects another item. Leave
 `management.deploymentId` unset for a new installation. Set it only when
 connecting an already registered
@@ -2798,14 +2911,20 @@ bindings and service-account identities.
 ## Credentials and storage
 
 The bootstrap token is exchanged for a deployment credential on first connection.
-Keep the same encryption key across upgrades: changing it makes stored encrypted
-data unreadable. Existing Secrets are supported through
-`management.existingSecret` and `runtime.encryption.existingSecret`.
+The chart generates an encryption key on first install and reuses the installed
+Secret on upgrades. Explicit keys and existing Secrets remain supported through
+`runtime.encryption.key`, `management.existingSecret`, and
+`runtime.encryption.existingSecret`. Keep the original key: changing it makes
+stored encrypted data unreadable. A missing key must be restored, not regenerated.
 
-Enable `runtime.data.persistence.enabled` when the Operator's identity and log
-cursor must survive Pod replacement. The chart uses the cluster's default
-storage class; set `runtime.data.persistence.storageClassName` only when needed.
-The chart does not install a storage driver by default.
+Runtime persistence is on by default and required for bootstrap installations.
+The identity, deployment credential, and log cursor survive Pod replacement.
+Keep an existing installation's identity claim unchanged; moving from ephemeral
+storage or to another claim requires migrating the state before an upgrade.
+The chart uses the cluster's default storage class; set
+`runtime.data.persistence.storageClassName` only when needed, or supply
+`runtime.data.persistence.existingClaim`. It does not install a storage driver.
+A Remote Operator uses its own mandatory identity PVC.
 
 ## Auto-updates
 
@@ -2834,11 +2953,10 @@ logCollector:
 deployments and clusters that restrict node access. The Operator supports 32
 concurrent streams by default (`logCollector.maxStreams`, up to 256) and a
 bounded 64 MiB queue. Kubernetes exposes only retained Pod logs, so rotation
-or a prolonged API outage can lose lines. The default runtime Operator keeps
-its resume cursor on `emptyDir`; replacing that Pod can replay retained lines.
-Set `runtime.data.persistence.enabled: true` to keep the cursor on a PVC if the
-cluster has suitable storage. A Remote Operator already keeps its cursor on
-its identity PVC; runtime persistence affects only the separate runtime Pod.
+or a prolonged API outage can lose lines. The runtime Operator keeps
+its resume cursor on the runtime PVC by default. Explicitly configured ephemeral
+runtime storage can replay retained lines after Pod replacement. A Remote
+Operator keeps its cursor on its own mandatory identity PVC.
 
 `nodeAgent` runs a Fluent Bit DaemonSet and reads the selected Pod log files on
 each node. Choose it for larger workloads in clusters that permit read-only
@@ -2849,6 +2967,18 @@ If the Remote Operator uses `nodeAgent` and its setup-owned collector token is
 rotated, set `remoteOperator.collectorTokenRevision` to the new token's
 64-character SHA-256 hex digest during the chart upgrade. This restarts both
 the receiver and the DaemonSet with the new credential.
+
+Node collectors use their own `app.kubernetes.io/name` label so
+receiver selectors do not match collector Pods. Charts generated before this
+label change used the receiver's name label. The collector DaemonSets now have
+a `v2` name so `helm upgrade` creates the new DaemonSet and removes the old one
+without changing its immutable selector. Collector ConfigMap, ServiceAccount
+and RBAC names stay the same. The receiver Deployment keeps its existing
+selector and identity. The replacement collector starts with an empty
+log buffer and reads the selected log files from the beginning. When switching
+from nodeAgent to podApi, the Operator checks both collector names and waits for
+their Pods to stop, including when the chart is rendered without cluster access.
+Use an Operator image built with this chart version for that transition.
 
 === files/stack.json ===
 {

@@ -93,6 +93,12 @@ pub struct OperatorConfig {
     #[builder(default)]
     pub observe_all_namespaces: bool,
 
+    /// The chart bound the dynamic container Role, so containers requested
+    /// through the API can run here. Set from `OPERATOR_DYNAMIC_CONTAINERS` in
+    /// the rendered manifest.
+    #[builder(default)]
+    pub dynamic_containers: bool,
+
     /// Vendor-provided app/release version this environment is running. Reported as
     /// a version-only `current_release` so the platform resolves a stackless release
     /// (observe). `None` for greenfield, where the deploy loop sets the release id.

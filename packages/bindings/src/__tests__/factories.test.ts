@@ -150,6 +150,12 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
     cancelJob: async () => {},
     readFile: async () => Buffer.from("contents"),
     writeFile: async () => {},
+    preview: async (_sandboxId, port) => ({
+      endpoint: "https://preview.example",
+      headers: { authorization: "Bearer preview-token" },
+      allowedPorts: [port],
+      expiresInSeconds: 300,
+    }),
     pause: async () => {},
     resume: async () => {},
     terminate: async () => {},

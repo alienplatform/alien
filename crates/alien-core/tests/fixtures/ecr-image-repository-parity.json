@@ -1,0 +1,97 @@
+{
+  "accepted": [
+    {
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/base:1.0",
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "repository": "base",
+      "repositoryKey": "123456789012.dkr.ecr.us-east-1.amazonaws.com/base"
+    },
+    {
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/agents/base:1.0",
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "repository": "team/agents/base",
+      "repositoryKey": "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/agents/base"
+    },
+    {
+      "image": "123456789012.dkr.ecr.{region}.amazonaws.com/team/base@sha256:abc123",
+      "accountId": "123456789012",
+      "region": "{region}",
+      "repository": "team/base",
+      "repositoryKey": "123456789012.dkr.ecr.{region}.amazonaws.com/team/base"
+    },
+    {
+      "image": "123456789012.dkr.ecr.cn-north-1.amazonaws.com.cn/base",
+      "accountId": "123456789012",
+      "region": "cn-north-1",
+      "repository": "base",
+      "repositoryKey": "123456789012.dkr.ecr.cn-north-1.amazonaws.com.cn/base"
+    },
+    {
+      "image": "123456789012.dkr.ecr.us-gov-west-1.amazonaws.com/my.base_image-x",
+      "accountId": "123456789012",
+      "region": "us-gov-west-1",
+      "repository": "my.base_image-x",
+      "repositoryKey": "123456789012.dkr.ecr.us-gov-west-1.amazonaws.com/my.base_image-x"
+    }
+  ],
+  "refused": [
+    {
+      "image": "public.ecr.aws/docker/library/alpine:3.20",
+      "repositoryKey": "public.ecr.aws/docker/library/alpine:3.20"
+    },
+    {
+      "image": "docker.io/library/alpine:3.20",
+      "repositoryKey": "docker.io/library/alpine:3.20"
+    },
+    {
+      "image": "https://123456789012.dkr.ecr.us-east-1.amazonaws.com/base:1.0",
+      "repositoryKey": "https://123456789012.dkr.ecr.us-east-1.amazonaws.com/base:1.0"
+    },
+    {
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com",
+      "repositoryKey": "123456789012.dkr.ecr.us-east-1.amazonaws.com"
+    },
+    {
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/",
+      "repositoryKey": "123456789012.dkr.ecr.us-east-1.amazonaws.com/"
+    },
+    {
+      "image": "12345.dkr.ecr.us-east-1.amazonaws.com/base",
+      "repositoryKey": "12345.dkr.ecr.us-east-1.amazonaws.com/base"
+    },
+    {
+      "image": "123456789012.dkr.ecr..amazonaws.com/base",
+      "repositoryKey": "123456789012.dkr.ecr..amazonaws.com/base"
+    },
+    {
+      "image": "123456789012.dkr.ecr.{account}.amazonaws.com/base",
+      "repositoryKey": "123456789012.dkr.ecr.{account}.amazonaws.com/base"
+    },
+    {
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/*",
+      "repositoryKey": "123456789012.dkr.ecr.us-east-1.amazonaws.com/*"
+    },
+    {
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/ba?e",
+      "repositoryKey": "123456789012.dkr.ecr.us-east-1.amazonaws.com/ba?e"
+    },
+    {
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/${AWS::AccountId}",
+      "repositoryKey": "123456789012.dkr.ecr.us-east-1.amazonaws.com/${AWS::AccountId}"
+    },
+    {
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/{region}/base",
+      "repositoryKey": "123456789012.dkr.ecr.us-east-1.amazonaws.com/{region}/base"
+    },
+    {
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/Base:1.0",
+      "repositoryKey": "123456789012.dkr.ecr.us-east-1.amazonaws.com/Base:1.0"
+    },
+    {
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/team//base",
+      "repositoryKey": "123456789012.dkr.ecr.us-east-1.amazonaws.com/team//base"
+    }
+  ]
+}

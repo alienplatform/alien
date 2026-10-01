@@ -8,6 +8,7 @@ use crate::core::split_certificate_chain;
 use crate::core::ResourceController;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
+use crate::worker::certificate_wait::{CERTIFICATE_WAIT_MAX_POLLS, CERTIFICATE_WAIT_POLL_SECS};
 use crate::worker::readiness_probe::{
     run_readiness_probe_with_dns_override, ReadinessProbeDnsOverride, READINESS_PROBE_MAX_ATTEMPTS,
 };
@@ -620,8 +621,8 @@ impl AwsWorkerController {
                 }))
             }
             _ => Ok(HandlerAction::Stay {
-                max_times: Some(60),
-                suggested_delay: Some(Duration::from_secs(5)),
+                max_times: Some(CERTIFICATE_WAIT_MAX_POLLS),
+                suggested_delay: Some(Duration::from_secs(CERTIFICATE_WAIT_POLL_SECS)),
             }),
         }
     }

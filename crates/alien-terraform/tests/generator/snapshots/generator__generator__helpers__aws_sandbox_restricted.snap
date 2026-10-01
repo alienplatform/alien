@@ -308,6 +308,12 @@ resource "aws_subnet" "default_network_private" {
     resource        = "default-network"
     "resource-type" = "network"
   }
+  depends_on = [
+    aws_iam_role.agents,
+    aws_iam_role_policy.agents,
+    aws_iam_role.agents_egress,
+    aws_iam_role_policy.agents_egress
+  ]
 }
 
 resource "aws_eip" "default_network_nat" {
@@ -400,6 +406,12 @@ resource "aws_security_group" "default_network_workload" {
     resource        = "default-network"
     "resource-type" = "network"
   }
+  depends_on = [
+    aws_iam_role.agents,
+    aws_iam_role_policy.agents,
+    aws_iam_role.agents_egress,
+    aws_iam_role_policy.agents_egress
+  ]
 }
 
 === agents.tf ===

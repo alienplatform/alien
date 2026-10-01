@@ -2431,45 +2431,47 @@ async fn initialize(
             }
         }
         crate::auth::Scope::Workspace | crate::auth::Scope::Project { .. } => {
-            // Admin / workspace tokens on standalone managers: find the most
-            // recent deployment and assign the agent to it. Self-hosted
-            // workflow where the operator creates a deployment via the API
-            // and then starts an agent with the admin token.
-            let filter = DeploymentFilter {
-                deployment_group_id: None,
-                deployment_ids: None,
-                statuses: None,
-                platforms: None,
-                limit: Some(1),
-                ..DeploymentFilter::default()
-            };
-            match state
+            // Self-hosted flow: the operator creates a deployment, then starts an agent with a
+            // workspace or project token. Being listed is not a sync grant, so the agent gets
+            // the newest deployment `Authz` lets the caller sync.
+            let filter = DeploymentFilter::default();
+            let deployments = match state
                 .deployment_store
                 .list_deployments(&subject, &filter)
                 .await
             {
-                Ok(deployments) if !deployments.is_empty() => {
-                    let deployment = &deployments[0];
-                    let deployment_id = deployment.id.clone();
-                    tracing::info!(
-                        %deployment_id,
-                        "Admin token: assigning agent to existing deployment"
-                    );
-                    Json(InitializeResponse {
-                        deployment_model: super::deployments::deployment_model_for_record(
-                            deployment,
-                        ),
-                        deployment_id,
-                        token: None,
-                    })
-                    .into_response()
-                }
-                Ok(_) => ErrorData::bad_request(
+                Ok(deployments) => deployments,
+                Err(e) => return e.into_response(),
+            };
+            // Only deployments the caller may read count, so a 400 reveals nothing it could not
+            // list itself.
+            if !deployments
+                .iter()
+                .any(|deployment| state.authz.can_read_deployment(&subject, deployment))
+            {
+                return ErrorData::bad_request(
                     "No deployments found. Create a deployment before initializing an agent.",
                 )
-                .into_response(),
-                Err(e) => e.into_response(),
+                .into_response();
             }
+            let Some(deployment) = deployments
+                .iter()
+                .find(|deployment| state.authz.can_sync_deployment(&subject, deployment))
+            else {
+                return ErrorData::forbidden("Caller cannot assign an agent to any deployment")
+                    .into_response();
+            };
+            let deployment_id = deployment.id.clone();
+            tracing::info!(
+                %deployment_id,
+                "Workspace or project token: assigning agent to existing deployment"
+            );
+            Json(InitializeResponse {
+                deployment_model: super::deployments::deployment_model_for_record(deployment),
+                deployment_id,
+                token: None,
+            })
+            .into_response()
         }
         crate::auth::Scope::Commands { .. } => {
             ErrorData::forbidden("Command credentials cannot initialize deployments")

@@ -1,7 +1,10 @@
 use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
-use alien_core::{ClientConfig, EnvironmentInfo, Platform, Stack, StackState};
+use alien_core::{
+    frozen_gated, gate_resolves_true, gate_value_as_bool, live_gate_resolves_true, live_gated,
+    ClientConfig, EnvironmentInfo, Platform, Stack, StackState,
+};
 use alien_error::AlienError;
 use alien_error::Context;
 use tracing::info;
@@ -185,7 +188,7 @@ fn strip_declined_frozen_resources(mut stack: Stack, answers: &alien_core::GateA
         .filter(|(_, input_id)| answers.get(*input_id) == Some(&false))
         .map(|(resource_id, _)| resource_id.clone())
         .collect();
-    remove_declined(&mut stack, &declined);
+    alien_core::remove_declined_resources(&mut stack, &declined);
     stack
 }
 
@@ -231,7 +234,7 @@ fn strip_frozen_dominated_live_resources(
         })
         .map(|(resource_id, _)| resource_id.clone())
         .collect();
-    remove_declined(&mut stack, &declined);
+    alien_core::remove_declined_resources(&mut stack, &declined);
     stack
 }
 
@@ -255,58 +258,15 @@ pub fn strip_declined_live_resources(
     persisted_gate_answers: &alien_core::GateAnswers,
     still_frozen_gating: &std::collections::HashSet<String>,
 ) -> Result<Stack> {
-    let mut declined: Vec<String> = Vec::new();
-    for (resource_id, input_id) in live_gated(&stack) {
-        let (accepted, _source) = live_gate_resolves_true(
-            &stack.inputs,
-            input_id,
-            input_values,
-            persisted_gate_answers,
-            still_frozen_gating,
-            resource_id,
-        )?;
-        if !accepted {
-            declined.push(resource_id.clone());
-        }
-    }
-    remove_declined(&mut stack, &declined);
+    let declined = alien_core::declined_live_resources(
+        &stack,
+        input_values,
+        persisted_gate_answers,
+        still_frozen_gating,
+    )
+    .map_err(|message| AlienError::new(ErrorData::MissingConfiguration { message }))?;
+    alien_core::remove_declined_resources(&mut stack, &declined);
     Ok(stack)
-}
-
-/// A live gate's answer: the provided value, else the answer recorded when
-/// the deployment was created (frozen dominance — a live resource sharing a
-/// frozen-gating input follows the fixed answer, not the declared default),
-/// else the declared default.
-fn live_gate_resolves_true(
-    inputs: &[alien_core::StackInputDefinition],
-    input_id: &str,
-    input_values: &std::collections::HashMap<String, serde_json::Value>,
-    persisted_gate_answers: &alien_core::GateAnswers,
-    still_frozen_gating: &std::collections::HashSet<String>,
-    resource_id: &str,
-) -> Result<(bool, &'static str)> {
-    // The recorded answer outranks the default only while the input actually
-    // gates a frozen resource — that is what dominance means. Once a release
-    // frees the input, its recorded answer is history, and a live gate
-    // resolves the way any other live gate does.
-    //
-    // The source travels with the answer so the audit log cannot describe a
-    // precedence this function did not apply.
-    if input_values.contains_key(input_id) {
-        return Ok((
-            gate_resolves_true(inputs, input_id, input_values, resource_id)?,
-            "provided",
-        ));
-    }
-    if still_frozen_gating.contains(input_id) {
-        if let Some(answer) = persisted_gate_answers.get(input_id) {
-            return Ok((*answer, "persisted"));
-        }
-    }
-    Ok((
-        gate_resolves_true(inputs, input_id, input_values, resource_id)?,
-        "default",
-    ))
 }
 
 /// The canonical resolved answers for every input that gates a Frozen
@@ -336,7 +296,8 @@ pub fn resolve_frozen_gate_answers_from_presence(
     let mut answers = alien_core::GateAnswers::new();
     for (resource_id, input_id) in frozen_gated(stack) {
         let answer = if present_resource_ids.is_empty() {
-            gate_resolves_true(&stack.inputs, input_id, input_values, resource_id)?
+            gate_resolves_true(&stack.inputs, input_id, input_values, resource_id)
+                .map_err(|message| AlienError::new(ErrorData::MissingConfiguration { message }))?
         } else {
             present_resource_ids.contains(resource_id.as_str())
         };
@@ -357,40 +318,6 @@ pub fn resolve_frozen_gate_answers_from_presence(
         }
     }
     Ok(answers)
-}
-
-/// The gate input of a setup-created gated resource, `None` for anything else.
-fn frozen_gate_of(entry: &alien_core::ResourceEntry) -> Option<&str> {
-    gate_of(entry, true)
-}
-
-/// The gate input of a runtime-created gated resource, `None` for anything
-/// else. The mirror of [`frozen_gate_of`] — which side of the setup boundary a
-/// gated resource falls on is decided in exactly these two places.
-fn live_gate_of(entry: &alien_core::ResourceEntry) -> Option<&str> {
-    gate_of(entry, false)
-}
-
-fn gate_of(entry: &alien_core::ResourceEntry, setup_created: bool) -> Option<&str> {
-    let input_id = entry.enabled_when.as_deref()?;
-    let emitted_in_setup =
-        alien_core::ownership_policy_for_resource_type(entry.config.resource_type().as_ref())
-            .should_emit_in_setup(entry.lifecycle);
-    (emitted_in_setup == setup_created).then_some(input_id)
-}
-
-/// Every gated resource setup creates, as `(resource_id, input_id)`.
-fn frozen_gated(stack: &Stack) -> impl Iterator<Item = (&String, &str)> {
-    stack
-        .resources()
-        .filter_map(|(resource_id, entry)| Some((resource_id, frozen_gate_of(entry)?)))
-}
-
-/// Every gated resource the runtime creates, as `(resource_id, input_id)`.
-fn live_gated(stack: &Stack) -> impl Iterator<Item = (&String, &str)> {
-    stack
-        .resources()
-        .filter_map(|(resource_id, entry)| Some((resource_id, live_gate_of(entry)?)))
 }
 
 /// The inputs that gate a setup-created resource in `stack`. Fixity applies
@@ -502,136 +429,6 @@ pub fn audit_live_gate_transitions(
             "A live gate transition was requested; the executor's status \
              transitions for this resource complete or fail it"
         );
-    }
-}
-
-fn remove_declined(stack: &mut Stack, declined: &[String]) {
-    if declined.is_empty() {
-        return;
-    }
-
-    for resource_id in declined {
-        info!(
-            resource_id = %resource_id,
-            "The deployer declined this gated resource; it leaves the desired stack"
-        );
-        stack.resources.shift_remove(resource_id);
-    }
-
-    // Removing the resource without its inbound links would leave a survivor pointing at
-    // something that was never created, which the executor and binding resolution both
-    // reject. Scrubbing here is what lets an ungated resource link a gated one.
-    for (resource_id, entry) in stack.resources.iter_mut() {
-        let dropped = match alien_core::resource_links_mut(&mut entry.config) {
-            Some(owner) => {
-                let before = owner.links().len();
-                owner
-                    .links_mut()
-                    .retain(|link| !declined.contains(&link.id));
-                before - owner.links().len()
-            }
-            None => 0,
-        };
-        if dropped > 0 {
-            info!(
-                resource_id = %resource_id,
-                dropped,
-                declined = ?declined,
-                "Dropped links to declined resources; this resource keeps its own lifecycle"
-            );
-        }
-
-        let ordering_before = entry.dependencies.len();
-        entry
-            .dependencies
-            .retain(|dependency| !declined.contains(&dependency.id));
-        // The release-time preflight refuses authored ordering edges onto gated resources,
-        // so one reaching here predates the rule; dropping it keeps the stack coherent.
-        if ordering_before > entry.dependencies.len() {
-            info!(
-                resource_id = %resource_id,
-                dropped = ordering_before - entry.dependencies.len(),
-                "Dropped ordering edges to declined resources"
-            );
-        }
-    }
-
-    scrub_declined_grants(stack, declined);
-}
-
-/// Drop grants naming a declined resource from every permission profile.
-///
-/// Not inert: GCP applies every non-`"*"` entry without consulting the desired resources.
-/// Nothing is lost, because the mutations re-derive them whenever the gate is accepted.
-fn scrub_declined_grants(stack: &mut Stack, declined: &[String]) {
-    let scrub = |profile: &mut alien_core::permissions::PermissionProfile| {
-        for resource_id in declined {
-            if profile.0.shift_remove(resource_id).is_some() {
-                info!(
-                    resource_id = %resource_id,
-                    "Dropped the grant for a declined resource"
-                );
-            }
-        }
-    };
-
-    for profile in stack.permissions.profiles.values_mut() {
-        scrub(profile);
-    }
-    match &mut stack.permissions.management {
-        alien_core::permissions::ManagementPermissions::Extend(profile)
-        | alien_core::permissions::ManagementPermissions::Override(profile) => scrub(profile),
-        alien_core::permissions::ManagementPermissions::Auto => {}
-    }
-}
-
-/// A gate value from the wire: JSON booleans stay booleans, and the
-/// CloudFormation parameter strings "true"/"false" coerce — CloudFormation
-/// has no boolean parameter type, so its registration payloads deliver gate
-/// answers as strings. Anything else is `None`, refused loudly by callers.
-fn gate_value_as_bool(value: &serde_json::Value) -> Option<bool> {
-    match value {
-        serde_json::Value::Bool(answer) => Some(*answer),
-        serde_json::Value::String(text) => match text.as_str() {
-            "true" => Some(true),
-            "false" => Some(false),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// The deployer's answer for a live gate: the provided value, else the
-/// input's declared boolean default.
-fn gate_resolves_true(
-    inputs: &[alien_core::StackInputDefinition],
-    input_id: &str,
-    input_values: &std::collections::HashMap<String, serde_json::Value>,
-    resource_id: &str,
-) -> Result<bool> {
-    if let Some(value) = input_values.get(input_id) {
-        return gate_value_as_bool(value).ok_or_else(|| {
-            AlienError::new(ErrorData::MissingConfiguration {
-                message: format!(
-                    "Input '{input_id}' enables resource '{resource_id}' but its value is not \
-                     a boolean: {value}"
-                ),
-            })
-        });
-    }
-
-    match inputs
-        .iter()
-        .find(|input| input.id == input_id)
-        .and_then(|input| input.default.as_ref())
-    {
-        Some(alien_core::StackInputDefaultValue::Boolean(answer)) => Ok(*answer),
-        _ => Err(AlienError::new(ErrorData::MissingConfiguration {
-            message: format!(
-                "Input '{input_id}' enables resource '{resource_id}' but no value was provided \
-                 and the input declares no boolean default"
-            ),
-        })),
     }
 }
 
@@ -937,14 +734,72 @@ mod tests {
             stack
         };
 
-        let digest_before = with_frozen(Some(true)).frozen_resources_digest();
+        let digest_before = with_frozen(Some(true)).setup_owned_digest();
         let stripped = strip_live(with_frozen(Some(true)), false);
 
         assert!(!stripped.resources.contains_key("cache"));
         assert_eq!(
             digest_before,
-            stripped.frozen_resources_digest(),
+            stripped.setup_owned_digest(),
             "a live decline must not rewrite any frozen entry"
+        );
+    }
+
+    /// A private base image on a Live sandbox is setup-owned, but a deployer who declined the
+    /// sandbox never got its build role, so the stripped stack must hash as if it were absent.
+    #[test]
+    fn a_declined_live_private_sandbox_leaves_the_setup_owned_digest_untouched() {
+        let with_sandbox = |gated: bool| {
+            let mut stack = live_gated_stack_with_linking_worker(Some(true));
+            let sandbox = alien_core::Sandbox::new("agents".to_string())
+                .code(alien_core::SandboxCode::Image {
+                    image: "s3://bucket/sandbox-bundle/v1/bundle.zip".to_string(),
+                })
+                .private_base_image(
+                    "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base:1".to_string(),
+                )
+                .egress(alien_core::SandboxEgress::Allow)
+                .lifecycle(alien_core::SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            stack.resources.insert(
+                "agents".to_string(),
+                alien_core::ResourceEntry {
+                    config: alien_core::Resource::new(sandbox),
+                    lifecycle: ResourceLifecycle::Live,
+                    dependencies: Vec::new(),
+                    remote_access: false,
+                    enabled_when: gated.then(|| "cacheEnabled".to_string()),
+                },
+            );
+            stack
+        };
+        let without_sandbox = strip_live(live_gated_stack_with_linking_worker(Some(true)), false);
+
+        let declined = strip_live(with_sandbox(true), false);
+        assert!(!declined.resources.contains_key("agents"));
+        assert_eq!(
+            declined.setup_owned_digest(),
+            without_sandbox.setup_owned_digest(),
+            "a declined sandbox must not add setup-owned state"
+        );
+        let kept = strip_live(with_sandbox(false), false);
+        let entry = &kept.resources["agents"];
+        let inputs = alien_core::sandbox_setup_inputs::comparable_aws_sandbox_setup_inputs(
+            &kept,
+            entry.config.downcast_ref().expect("a sandbox"),
+            entry.lifecycle,
+        );
+        assert_eq!(
+            inputs[0].0, "egress",
+            "the control resolves its setup inputs"
+        );
+        assert_ne!(
+            kept.setup_owned_digest(),
+            without_sandbox.setup_owned_digest(),
+            "the control: an ungated sandbox's setup inputs are setup-owned"
         );
     }
 

@@ -335,6 +335,11 @@ fn generate_terraform_module_internal(
         dedupe_gcp_support_resources(&mut per_resource)?;
     }
     apply_resource_dependencies(stack, &mut per_resource);
+    // EKS uses IAM roles for the cluster and IRSA, not Lambda execution.
+    // Making its subnets depend on those roles creates a Terraform cycle.
+    if target == TerraformTarget::Aws {
+        apply_aws_network_iam_dependency(stack, &mut per_resource);
+    }
     if matches!(platform, alien_core::Platform::Azure) {
         emit_azure_setup_resource_role_definitions(&mut per_resource, stack)?;
         apply_azure_resource_group_dependency(stack, &labels, &mut per_resource);
@@ -1050,6 +1055,136 @@ fn apply_resource_dependencies(stack: &Stack, per_resource: &mut IndexMap<String
     }
 }
 
+/// Lambda deletes a worker's Hyperplane ENI with the function's execution
+/// role and its permissions. If those are destroyed first, the ENI stays and
+/// the private subnets and workload security group it sits in can never be
+/// destroyed. The created network's private subnets and security groups
+/// therefore depend on every IAM role and policy, so Terraform destroys IAM
+/// last. IAM resources that already reference the network, such as an IRSA
+/// role trusting a cluster placed in it, are skipped to avoid a cycle.
+fn apply_aws_network_iam_dependency(
+    stack: &Stack,
+    per_resource: &mut IndexMap<String, TfFragment>,
+) {
+    const IAM_TYPES: [&str; 4] = [
+        "aws_iam_role",
+        "aws_iam_role_policy",
+        "aws_iam_role_policy_attachment",
+        "aws_iam_policy",
+    ];
+    let Some(network_id) = stack.resources().find_map(|(resource_id, entry)| {
+        (entry.config.resource_type() == Network::RESOURCE_TYPE).then_some(resource_id)
+    }) else {
+        return;
+    };
+    let holds_worker_enis =
+        |resource: &Block| match resource.labels.first().map(|label| label.as_str()) {
+            Some("aws_subnet") => resource
+                .labels
+                .get(1)
+                .is_some_and(|label| label.as_str().ends_with("_private")),
+            Some("aws_security_group") => true,
+            _ => false,
+        };
+    let targets: Vec<String> = per_resource
+        .get(network_id)
+        .into_iter()
+        .flat_map(|fragment| fragment.resource_blocks.iter())
+        .filter(|resource| holds_worker_enis(resource))
+        .filter_map(resource_address_text)
+        .collect();
+    if targets.is_empty() {
+        return;
+    }
+
+    let rendered: Vec<(String, String)> = per_resource
+        .values()
+        .flat_map(|fragment| fragment.resource_blocks.iter())
+        .filter_map(|resource| {
+            let address = resource_address_text(resource)?;
+            let body = hcl::format::to_string(&resource.body).ok()?;
+            Some((address, body))
+        })
+        .collect();
+    let direct_dependencies: IndexMap<&str, Vec<&str>> = rendered
+        .iter()
+        .map(|(address, body)| {
+            let dependencies = rendered
+                .iter()
+                .map(|(other, _)| other.as_str())
+                .filter(|other| *other != address && references_address(body, other))
+                .collect();
+            (address.as_str(), dependencies)
+        })
+        .collect();
+    let reaches_target = |start: &str| -> bool {
+        let mut pending = vec![start];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(address) = pending.pop() {
+            if !seen.insert(address) {
+                continue;
+            }
+            if targets.iter().any(|target| target == address) {
+                return true;
+            }
+            pending.extend(
+                direct_dependencies
+                    .get(address)
+                    .into_iter()
+                    .flatten()
+                    .copied(),
+            );
+        }
+        false
+    };
+    let iam_addresses: Vec<Expression> = rendered
+        .iter()
+        .filter(|(address, _)| {
+            IAM_TYPES
+                .iter()
+                .any(|provider_type| address.starts_with(&format!("{provider_type}.")))
+                && !reaches_target(address)
+        })
+        .filter_map(|(address, _)| {
+            let (provider_type, label) = address.split_once('.')?;
+            Some(expr::traversal([provider_type, label]))
+        })
+        .collect();
+    if iam_addresses.is_empty() {
+        return;
+    }
+    let Some(fragment) = per_resource.get_mut(network_id) else {
+        return;
+    };
+    for resource in &mut fragment.resource_blocks {
+        if holds_worker_enis(resource) {
+            upsert_depends_on(resource, &iam_addresses);
+        }
+    }
+}
+
+fn resource_address_text(resource: &Block) -> Option<String> {
+    if resource.identifier.as_str() != "resource" {
+        return None;
+    }
+    Some(format!(
+        "{}.{}",
+        resource.labels.first()?.as_str(),
+        resource.labels.get(1)?.as_str()
+    ))
+}
+
+/// Whether rendered HCL mentions `address` as a whole reference and not as a
+/// prefix of a longer label.
+fn references_address(body: &str, address: &str) -> bool {
+    body.match_indices(address).any(|(index, _)| {
+        body[index + address.len()..]
+            .chars()
+            .next()
+            .is_none_or(|next| !(next.is_alphanumeric() || next == '_'))
+    })
+}
+
 fn apply_azure_resource_group_dependency(
     stack: &Stack,
     labels: &IndexMap<String, String>,
@@ -1297,7 +1432,7 @@ fn versions_body(
         // emitters are ported, rather than letting a release decide for us.
         provider_attrs.push(attr(
             "azurerm",
-            provider_decl_attr("hashicorp/azurerm", ">= 3.100, < 5.0"),
+            provider_decl_attr("hashicorp/azurerm", ">= 4.75, < 5.0"),
         ));
         if include_azapi_provider {
             // Bounded for the same reason as azurerm, and more sharply: the sandbox group is a
@@ -2581,7 +2716,25 @@ fn providers_body(
                         "resource_provider_registrations",
                         Expression::String("none".to_string()),
                     ),
-                    Structure::Block(block("features", [])),
+                    // Track accepted creates before polling so failures remain
+                    // available to Terraform cleanup. Keep group deletion guarded:
+                    // retained key vaults are deliberately detached from state.
+                    nested(block(
+                        "features",
+                        [
+                            attr(
+                                "persist_id_on_create_before_polling_for_completion",
+                                Expression::Bool(true),
+                            ),
+                            nested(block(
+                                "resource_group",
+                                [attr(
+                                    "prevent_deletion_if_contains_resources",
+                                    Expression::Bool(true),
+                                )],
+                            )),
+                        ],
+                    )),
                 ]),
             }));
             if include_azapi_provider {

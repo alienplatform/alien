@@ -3,7 +3,7 @@
 use super::helpers::{
     custom_resource_registration, render_built_ins_template, try_render_built_ins,
 };
-use alien_cloudformation::CloudFormationTarget;
+use alien_cloudformation::{CfExpression, CloudFormationTarget};
 use alien_core::{
     import::data::AwsSandboxImportData,
     sandbox_build_role::{SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME},
@@ -812,29 +812,17 @@ fn an_eks_install_provisions_none_of_the_microvm_backend() {
         );
     }
 
-    // The mode is withheld only where a connector actually demands subnets, so an EKS installer
-    // keeps an option that works. Offering it is not enough on its own: the condition and the
-    // expressions that branch on it have to exist too, or the installer picks a documented answer
-    // and gets a template that renders the BYO branch with empty parameters.
+    // Managed EKS itself requires named subnets, even without a sandbox connector.
     let network_mode = template
         .parameters
         .get("NetworkMode")
         .expect("the network mode parameter must render");
-    let rendered = serde_json::to_string(network_mode).expect("parameter serializes");
-    assert!(
-        rendered.contains("use-default"),
-        "no sandbox is emitted here, so nothing forces named subnets: {rendered}"
-    );
-    assert!(
-        template.conditions.contains_key("NetworkModeUseExisting"),
-        "a template offering use-default has to keep the condition its branches read"
-    );
-    let settings = serde_json::to_string(&template.outputs).expect("outputs serialize")
-        + &serde_json::to_string(&template.resources).expect("resources serialize");
-    assert!(
-        settings.contains("use-default"),
-        "the mode is offered, so something has to render its branch: {}",
-        &settings[..settings.len().min(400)]
+    assert_eq!(
+        network_mode.allowed_values,
+        Some(vec![
+            CfExpression::from("create-new"),
+            CfExpression::from("use-existing")
+        ])
     );
 }
 

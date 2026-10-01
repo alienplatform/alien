@@ -14,6 +14,7 @@ use crate::Platform;
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::any::Any;
 use std::fmt::Debug;
 
@@ -25,10 +26,9 @@ pub enum SandboxCode {
     /// A prebuilt container image used as the sandbox root filesystem.
     #[serde(rename_all = "camelCase")]
     Image {
-        /// Image reference (e.g. `ubuntu:24.04`, `ghcr.io/myorg/sandbox:latest`).
-        ///
-        /// Two backends narrow it in opposite directions: AWS wants an `s3://` bundle, Azure a
-        /// bare catalog name such as `ubuntu`. Each refuses the other's shape while planning.
+        /// Image reference (e.g. `ubuntu:24.04`, `ghcr.io/myorg/sandbox:latest`). AWS wants an
+        /// `s3://` bundle; Azure takes a catalog name such as `ubuntu` or an amd64 registry
+        /// image, told apart by syntax. Each refuses what it cannot take while planning.
         image: String,
     },
     /// A Dockerfile `alien build` builds into the sandbox's base image.
@@ -604,7 +604,7 @@ impl Sandbox {
 
         // Read before the limits, because the image is declared whether or not any are.
         if platform == Platform::Azure {
-            self.azure_catalog_image()?;
+            self.azure_image()?;
         }
 
         let Some(limits) = self.limits.as_ref() else {
@@ -663,21 +663,10 @@ impl Sandbox {
         self.validate_capabilities(&capabilities, platform)
     }
 
-    /// The catalog disk image Azure creates a sandbox from.
-    ///
-    /// Azure names a public catalog entry rather than pulling a reference, so a registry path,
-    /// tag or digest has nowhere to go. An allowlist, because the answer to "what else could be
-    /// in there" is a name the data plane rejects at the first sandbox, long after the apply.
-    pub fn azure_catalog_image(&self) -> Result<&str> {
-        let refused = |value: &str, reason: &str| {
-            AlienError::new(ErrorData::SandboxLimitInvalid {
-                resource_id: self.id.clone(),
-                field: "code.image".to_string(),
-                value: value.to_string(),
-                reason: reason.to_string(),
-            })
-        };
-
+    /// What Azure creates this sandbox from: a catalog name or a registry image, told apart by
+    /// [`classify_azure_sandbox_image`]. Refused while planning, because a value the data plane
+    /// rejects would otherwise surface at the first sandbox, long after the apply.
+    pub fn azure_image(&self) -> Result<AzureSandboxImage<'_>> {
         let SandboxCode::Image { image } = &self.code else {
             return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
                 resource_id: self.id.clone(),
@@ -687,21 +676,21 @@ impl Sandbox {
             }));
         };
 
-        let image = image.trim();
-        if image.is_empty() {
-            return Err(refused(image, "a sandbox has to name an image"));
-        }
-        if !image
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-        {
-            return Err(refused(
-                image,
-                "Azure creates a sandbox from a public catalog disk image, so code.image must be \
-                 a bare catalog name such as 'ubuntu'",
-            ));
-        }
-        Ok(image)
+        classify_azure_sandbox_image(image).ok_or_else(|| {
+            let image = image.trim();
+            AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: self.id.clone(),
+                field: "code.image".to_string(),
+                value: image.to_string(),
+                reason: if image.is_empty() {
+                    "a sandbox has to name an image".to_string()
+                } else {
+                    "Azure creates a sandbox from a catalog name such as 'ubuntu' or from a \
+                     registry image such as 'docker.io/library/python:3.14-slim'"
+                        .to_string()
+                },
+            })
+        })
     }
 
     /// Checks the declared ceilings against Azure's sizing rule (the `AZURE_*` constants above).
@@ -1084,6 +1073,65 @@ impl ResourceDefinition for Sandbox {
     }
 }
 
+/// What an Azure sandbox starts from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AzureSandboxImage<'a> {
+    /// A public catalog disk image, such as `ubuntu`, which the data plane names directly.
+    Catalog(&'a str),
+    /// A registry image, which the controller builds into a disk image in the sandbox's group
+    /// before any sandbox can start from it.
+    Registry(&'a str),
+}
+
+impl<'a> AzureSandboxImage<'a> {
+    /// The declared value, trimmed.
+    pub fn as_str(&self) -> &'a str {
+        match self {
+            Self::Catalog(value) | Self::Registry(value) => value,
+        }
+    }
+}
+
+/// Label key the controller writes on every disk image it builds, and the provider finds it by.
+pub const AZURE_DISK_IMAGE_LABEL: &str = "alienImage";
+
+/// Classifies a declared `code.image` for Azure, or `None` when it is neither kind. A bare
+/// `[A-Za-z0-9._-]+` is checked first and always a catalog name; anything else must carry `/`,
+/// `:` or `@` and parse as an OCI reference.
+pub fn classify_azure_sandbox_image(image: &str) -> Option<AzureSandboxImage<'_>> {
+    let image = image.trim();
+    if image.is_empty() {
+        return None;
+    }
+    if image
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Some(AzureSandboxImage::Catalog(image));
+    }
+    (image.contains(|c| matches!(c, '/' | ':' | '@')) && OCI_REFERENCE.is_match(image))
+        .then_some(AzureSandboxImage::Registry(image))
+}
+
+/// The label value naming the disk image built from `reference`: a digest, since a label value
+/// may not carry a reference's `/`, `:` and `@`.
+pub fn azure_disk_image_label(reference: &str) -> String {
+    let digest = format!("{:x}", Sha256::digest(reference.trim().as_bytes()));
+    digest[..32].to_string()
+}
+
+/// The distribution reference grammar: `[host[:port]/]path[:tag][@digest]`.
+static OCI_REFERENCE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    let domain_component = r"(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])";
+    let domain = format!(r"{domain_component}(?:\.{domain_component})*(?::[0-9]+)?");
+    let path_component = r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*";
+    let name = format!(r"(?:{domain}/)?{path_component}(?:/{path_component})*");
+    let tag = r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}";
+    let digest = r"[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9a-fA-F]{32,}";
+    regex::Regex::new(&format!(r"^{name}(?::{tag})?(?:@{digest})?$"))
+        .expect("the OCI reference grammar compiles")
+});
+
 /// The one token a sandbox bundle URI may carry, replaced with the deploying region.
 ///
 /// AWS builds a MicroVM image only from a bucket in the image's own region, so a vendor
@@ -1287,68 +1335,65 @@ mod tests {
         ));
     }
 
+    /// The vectors' `repositoryKey`: registry host and repository, never the tag or digest, so a
+    /// new tag keeps the key. A reference the parser refuses stays whole.
+    fn repository_key(image: &str) -> String {
+        match parse_ecr_image_repository(image) {
+            Ok(parsed) => {
+                let host = image.split_once('/').map_or(image, |(host, _)| host);
+                format!("{host}/{}", parsed.repository)
+            }
+            Err(_) => image.to_string(),
+        }
+    }
+
     #[test]
     fn a_private_base_image_names_one_repository() {
-        let deployment = EcrImageRegion::Deployment;
-        let literal = EcrImageRegion::Literal;
-        let accepted = [
-            (
-                "123456789012.dkr.ecr.us-east-1.amazonaws.com/base:1.0",
-                literal("us-east-1"),
-                "base",
-            ),
-            (
-                "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/agents/base:1.0",
-                literal("us-east-1"),
-                "team/agents/base",
-            ),
-            (
-                "123456789012.dkr.ecr.{region}.amazonaws.com/team/base@sha256:abc123",
-                deployment,
-                "team/base",
-            ),
-            (
-                "123456789012.dkr.ecr.cn-north-1.amazonaws.com.cn/base",
-                literal("cn-north-1"),
-                "base",
-            ),
-            (
-                "123456789012.dkr.ecr.us-gov-west-1.amazonaws.com/my.base_image-x",
-                literal("us-gov-west-1"),
-                "my.base_image-x",
-            ),
-        ];
-        for (image, region, repository) in accepted {
+        let vectors: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/ecr-image-repository-parity.json"
+        ))
+        .expect("the ECR repository vectors must be JSON");
+        let field = |case: &serde_json::Value, name: &str| {
+            case[name]
+                .as_str()
+                .unwrap_or_else(|| panic!("vector must carry {name}: {case}"))
+                .to_string()
+        };
+
+        for case in vectors["accepted"].as_array().expect("accepted vectors") {
+            let image = field(case, "image");
+            let region = field(case, "region");
+            let region = if region == BUNDLE_REGION_TOKEN {
+                EcrImageRegion::Deployment
+            } else {
+                EcrImageRegion::Literal(&region)
+            };
             assert_eq!(
-                parse_ecr_image_repository(image),
+                parse_ecr_image_repository(&image),
                 Ok(EcrImageRepository {
-                    account_id: "123456789012",
+                    account_id: &field(case, "accountId"),
                     region,
-                    repository,
+                    repository: &field(case, "repository"),
                 }),
+                "{image}"
+            );
+            assert_eq!(
+                repository_key(&image),
+                field(case, "repositoryKey"),
                 "{image}"
             );
         }
 
-        for refused in [
-            "public.ecr.aws/docker/library/alpine:3.20",
-            "docker.io/library/alpine:3.20",
-            "https://123456789012.dkr.ecr.us-east-1.amazonaws.com/base:1.0",
-            "123456789012.dkr.ecr.us-east-1.amazonaws.com",
-            "123456789012.dkr.ecr.us-east-1.amazonaws.com/",
-            "12345.dkr.ecr.us-east-1.amazonaws.com/base",
-            "123456789012.dkr.ecr..amazonaws.com/base",
-            "123456789012.dkr.ecr.{account}.amazonaws.com/base",
-            "123456789012.dkr.ecr.us-east-1.amazonaws.com/*",
-            "123456789012.dkr.ecr.us-east-1.amazonaws.com/ba?e",
-            "123456789012.dkr.ecr.us-east-1.amazonaws.com/${AWS::AccountId}",
-            "123456789012.dkr.ecr.us-east-1.amazonaws.com/{region}/base",
-            "123456789012.dkr.ecr.us-east-1.amazonaws.com/Base:1.0",
-            "123456789012.dkr.ecr.us-east-1.amazonaws.com/team//base",
-        ] {
+        for case in vectors["refused"].as_array().expect("refused vectors") {
+            let image = field(case, "image");
             assert!(
-                parse_ecr_image_repository(refused).is_err(),
-                "{refused} must be refused"
+                parse_ecr_image_repository(&image).is_err(),
+                "{image} must be refused"
+            );
+            assert_eq!(
+                repository_key(&image),
+                field(case, "repositoryKey"),
+                "{image}"
             );
         }
     }
@@ -1946,10 +1991,8 @@ mod tests {
             .expect("the ceiling itself is allowed");
     }
 
-    /// An image reference Azure cannot honour is refused while planning, not at the first sandbox.
-    ///
-    /// `code.image`'s own documentation gives a tag and a registry path as examples — exactly
-    /// what Azure cannot take, so this is the shape a customer is most likely to declare.
+    /// An image Azure can take neither as a catalog name nor as a registry image is refused while
+    /// planning, not at the first sandbox.
     #[test]
     fn an_image_azure_cannot_pull_is_refused_while_planning() {
         let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
@@ -1957,15 +2000,8 @@ mod tests {
         // image is ever read.
         sandbox.limits = None;
 
-        for image in [
-            "ubuntu:24.04",
-            "ghcr.io/myorg/sandbox:latest",
-            "ubuntu@sha256:abc",
-            "",
-            "   ",
-            "ubuntu latest",
-            "ubuntu?x",
-        ] {
+        // A digest too short to be one, blanks, a space and a query string.
+        for image in ["ubuntu@sha256:abc", "", "   ", "ubuntu latest", "ubuntu?x"] {
             sandbox.code = SandboxCode::Image {
                 image: image.to_string(),
             };
@@ -1973,11 +2009,6 @@ mod tests {
                 .validate_for_platform(Platform::Azure)
                 .expect_err("an image Azure has nowhere to put is refused");
             assert_eq!(error.code, "SANDBOX_LIMIT_INVALID", "image '{image}'");
-
-            // The same declaration is ordinary everywhere that pulls a reference.
-            sandbox
-                .validate_for_platform(Platform::Kubernetes)
-                .expect("a registry reference is what every other backend takes");
         }
 
         for image in ["ubuntu", "ubuntu-22.04", "debian_slim"] {
@@ -1989,16 +2020,92 @@ mod tests {
                 .unwrap_or_else(|error| panic!("'{image}' is a catalog name: {error}"));
         }
 
+        for image in [
+            "ubuntu:24.04",
+            "ghcr.io/myorg/sandbox:latest",
+            "docker.io/library/python:3.14-slim",
+            "localhost:5000/team/agent@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d",
+        ] {
+            sandbox.code = SandboxCode::Image {
+                image: image.to_string(),
+            };
+            sandbox
+                .validate_for_platform(Platform::Azure)
+                .unwrap_or_else(|error| panic!("'{image}' is a registry image: {error}"));
+        }
+
         // Surrounding space is trimmed rather than carried into the create body.
         sandbox.code = SandboxCode::Image {
             image: " ubuntu ".to_string(),
         };
         assert_eq!(
             sandbox
-                .azure_catalog_image()
+                .azure_image()
                 .expect("a padded name is still a name"),
-            "ubuntu"
+            AzureSandboxImage::Catalog("ubuntu")
         );
+    }
+
+    /// Every value the catalog allowlist `[A-Za-z0-9._-]+` accepts stays a catalog name, so a
+    /// declaration that planned under it keeps its meaning. Exhaustive to three characters, then a
+    /// fixed-seed sample of longer ones, some with surrounding space.
+    #[test]
+    fn every_value_the_catalog_allowlist_accepted_is_still_a_catalog_name() {
+        const ALPHABET: &[u8] =
+            b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-";
+
+        let assert_catalog = |value: &str| {
+            assert_eq!(
+                classify_azure_sandbox_image(value),
+                Some(AzureSandboxImage::Catalog(value.trim())),
+                "'{value}'"
+            );
+        };
+
+        for a in ALPHABET {
+            assert_catalog(&String::from_utf8(vec![*a]).unwrap());
+            for b in ALPHABET {
+                assert_catalog(&String::from_utf8(vec![*a, *b]).unwrap());
+                for c in ALPHABET {
+                    assert_catalog(&String::from_utf8(vec![*a, *b, *c]).unwrap());
+                }
+            }
+        }
+
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..20_000 {
+            let len = 4 + (next() % 60) as usize;
+            let mut value: String = (0..len)
+                .map(|_| ALPHABET[(next() % ALPHABET.len() as u64) as usize] as char)
+                .collect();
+            if next() % 4 == 0 {
+                value = format!("  {value}\t");
+            }
+            assert_catalog(&value);
+        }
+    }
+
+    /// The label is how the provider finds the image the controller built, so both must derive
+    /// the same one; it also has to fit a label value, which a raw reference does not.
+    #[test]
+    fn the_disk_image_label_is_stable_and_label_safe() {
+        let label = azure_disk_image_label("docker.io/library/python:3.14-slim");
+        assert_eq!(
+            label,
+            azure_disk_image_label(" docker.io/library/python:3.14-slim ")
+        );
+        assert_ne!(
+            label,
+            azure_disk_image_label("docker.io/library/python:3.13-slim")
+        );
+        assert_eq!(label.len(), 32);
+        assert!(label.chars().all(|c| c.is_ascii_hexdigit()), "{label}");
     }
 
     /// A deadline is accepted only where the platform itself terminates on it — the kubelet's

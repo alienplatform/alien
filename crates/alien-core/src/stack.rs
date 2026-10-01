@@ -97,9 +97,10 @@ pub struct Stack {
 }
 
 impl Stack {
-    /// Returns a deterministic digest of the complete Frozen resource set.
-    /// Resource and object-key ordering do not affect the digest.
-    pub fn frozen_resources_digest(&self) -> String {
+    /// Digest of what setup owns: every Frozen entry plus each Live sandbox's setup inputs. Without
+    /// a Live sandbox the bytes equal the Frozen-only projection. Declined gated entries must be
+    /// stripped by the caller.
+    pub fn setup_owned_digest(&self) -> String {
         let mut resources = self
             .resources
             .iter()
@@ -113,10 +114,34 @@ impl Stack {
             .collect::<Vec<_>>();
         resources.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
 
-        let encoded = serde_json::to_vec(&resources)
-            .expect("canonical Frozen resource projection always serializes");
+        let mut live_sandbox_inputs = self
+            .resources
+            .iter()
+            .filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Live)
+            .filter_map(|(id, entry)| {
+                let sandbox = entry.config.downcast_ref::<crate::Sandbox>()?;
+                let mut inputs = crate::sandbox_setup_inputs::comparable_aws_sandbox_setup_inputs(
+                    self,
+                    sandbox,
+                    entry.lifecycle,
+                );
+                for (_, value) in &mut inputs {
+                    canonicalize_json(value);
+                }
+                Some((id, inputs))
+            })
+            .collect::<Vec<_>>();
+        live_sandbox_inputs.sort_unstable_by_key(|(id, _)| *id);
+
+        let encoded = if live_sandbox_inputs.is_empty() {
+            serde_json::to_vec(&resources)
+        } else {
+            serde_json::to_vec(&(&resources, &live_sandbox_inputs))
+        }
+        .expect("canonical setup-owned projection always serializes");
         format!("{:x}", Sha256::digest(encoded))
     }
+
     /// Returns an iterator over the resources in the stack, including their lifecycle state.
     pub fn resources(&self) -> impl Iterator<Item = (&String, &ResourceEntry)> {
         self.resources.iter()
@@ -688,8 +713,224 @@ mod tests {
         assert_eq!(stack_extend, deserialized);
     }
 
+    fn digest_sandbox(id: &str, image: &str, private_base_image: Option<&str>) -> crate::Sandbox {
+        crate::Sandbox::new(id.to_string())
+            .code(crate::SandboxCode::Image {
+                image: image.to_string(),
+            })
+            .maybe_private_base_image(private_base_image.map(str::to_string))
+            .egress(crate::SandboxEgress::Deny)
+            .lifecycle(crate::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build()
+    }
+
+    /// Stored setup authorizations carry this digest, so its bytes must not move for any stack
+    /// without a Live sandbox.
     #[test]
-    fn frozen_resource_digest_is_order_independent_and_ignores_live_resources() {
+    fn setup_owned_digest_is_stable_without_a_live_sandbox() {
+        let stack = Stack::new("golden".to_string())
+            .add(
+                Storage::new("ledger".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                digest_sandbox(
+                    "frozen-agents",
+                    "s3://bucket/frozen.zip",
+                    Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base:1"),
+                ),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("scratch".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        assert_eq!(
+            stack.setup_owned_digest(),
+            "aacf34583a0bb9e3d48dd08be0bdd1da0f1d1e3666f93b844ecb0e1506ca537e"
+        );
+    }
+
+    struct LiveSandbox {
+        image: &'static str,
+        private_base_image: Option<&'static str>,
+        egress: crate::SandboxEgress,
+        network_id: &'static str,
+        remote_access: bool,
+    }
+
+    const BASE_A: &str = "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:1";
+
+    impl LiveSandbox {
+        fn installed() -> Self {
+            Self {
+                image: "s3://bucket/sandbox-bundle/v1/bundle.zip",
+                private_base_image: Some(BASE_A),
+                egress: crate::SandboxEgress::Allow,
+                network_id: "net-a",
+                remote_access: false,
+            }
+        }
+
+        fn digest(self) -> String {
+            let mut sandbox = digest_sandbox("agents", self.image, self.private_base_image);
+            sandbox.egress = self.egress;
+            let mut stack = Stack::new("stack".to_string())
+                .add(
+                    crate::Network::new(self.network_id.to_string())
+                        .settings(crate::NetworkSettings::Create {
+                            cidr: Some("10.0.0.0/16".to_string()),
+                            availability_zones: 2,
+                        })
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(sandbox, ResourceLifecycle::Live)
+                .build();
+            stack
+                .resources
+                .get_mut("agents")
+                .expect("sandbox")
+                .remote_access = self.remote_access;
+            let entry = &stack.resources["agents"];
+            crate::sandbox_setup_inputs::aws_sandbox_setup_inputs(
+                &stack,
+                entry.config.downcast_ref().expect("sandbox"),
+                entry.lifecycle,
+                crate::sandbox_setup_inputs::SETUP_INPUTS_COMPARISON_ACCOUNT,
+            )
+            .expect("the inputs resolve, so no case is compared by its whole configuration");
+            stack.setup_owned_digest()
+        }
+    }
+
+    #[test]
+    fn setup_owned_digest_follows_a_live_sandboxs_setup_inputs_but_not_its_image() {
+        let installed = LiveSandbox::installed().digest();
+
+        for (unchanged, why) in [
+            (
+                LiveSandbox {
+                    image: "s3://bucket/sandbox-bundle/v2/bundle.zip",
+                    ..LiveSandbox::installed()
+                },
+                "a new bundle under the same prefix",
+            ),
+            (
+                LiveSandbox {
+                    private_base_image: Some(
+                        "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:2",
+                    ),
+                    ..LiveSandbox::installed()
+                },
+                "a new tag",
+            ),
+            (
+                LiveSandbox {
+                    private_base_image: Some(
+                        "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a@sha256:abc",
+                    ),
+                    ..LiveSandbox::installed()
+                },
+                "a digest",
+            ),
+        ] {
+            assert_eq!(
+                installed,
+                unchanged.digest(),
+                "{why} is the runtime's to roll"
+            );
+        }
+
+        for (changed, what) in [
+            (
+                LiveSandbox {
+                    private_base_image: None,
+                    ..LiveSandbox::installed()
+                },
+                "a dropped private base",
+            ),
+            (
+                LiveSandbox {
+                    private_base_image: Some(
+                        "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-b:1",
+                    ),
+                    ..LiveSandbox::installed()
+                },
+                "another repository",
+            ),
+            (
+                LiveSandbox {
+                    private_base_image: Some(
+                        "210987654321.dkr.ecr.us-east-1.amazonaws.com/team/base-a:1",
+                    ),
+                    ..LiveSandbox::installed()
+                },
+                "another account",
+            ),
+            (
+                LiveSandbox {
+                    private_base_image: Some(
+                        "123456789012.dkr.ecr.{region}.amazonaws.com/team/base-a:1",
+                    ),
+                    ..LiveSandbox::installed()
+                },
+                "the deployment's region",
+            ),
+            (
+                LiveSandbox {
+                    egress: crate::SandboxEgress::Deny,
+                    ..LiveSandbox::installed()
+                },
+                "egress allow to deny",
+            ),
+            (
+                LiveSandbox {
+                    image: "s3://other-bucket/sandbox-bundle/v1/bundle.zip",
+                    ..LiveSandbox::installed()
+                },
+                "another bundle bucket",
+            ),
+            (
+                LiveSandbox {
+                    image: "s3://bucket/other-prefix/v1/bundle.zip",
+                    ..LiveSandbox::installed()
+                },
+                "another bundle prefix",
+            ),
+            (
+                LiveSandbox {
+                    remote_access: true,
+                    ..LiveSandbox::installed()
+                },
+                "a remote grant",
+            ),
+        ] {
+            assert_ne!(installed, changed.digest(), "{what} is setup-owned");
+        }
+
+        let deny = |network_id| {
+            LiveSandbox {
+                egress: crate::SandboxEgress::Deny,
+                network_id,
+                ..LiveSandbox::installed()
+            }
+            .digest()
+        };
+        assert_ne!(
+            deny("net-a"),
+            deny("net-b"),
+            "the connector's network is setup-owned"
+        );
+    }
+
+    #[test]
+    fn setup_owned_digest_is_order_independent() {
         let first = Stack::new("first".to_string())
             .add(
                 Storage::new("alpha".to_string()).build(),
@@ -719,9 +960,6 @@ mod tests {
             )
             .build();
 
-        assert_eq!(
-            first.frozen_resources_digest(),
-            second.frozen_resources_digest()
-        );
+        assert_eq!(first.setup_owned_digest(), second.setup_owned_digest());
     }
 }

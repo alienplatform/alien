@@ -153,7 +153,7 @@ jobs:
           VERSION: ${{ steps.qualification_version.outputs.version }}
         run: |
           cargo metadata --format-version 1 --locked >/dev/null
-          for pkg in packages/core packages/commands packages/sdk packages/testing \
+          for pkg in packages/core packages/permissions packages/commands packages/sdk packages/testing \
             client-sdks/platform/typescript client-sdks/manager/typescript \
             packages/bindings crates/alien-bindings-node \
             packages/bindings/npm/darwin-arm64 packages/bindings/npm/darwin-x64 \
@@ -218,7 +218,7 @@ jobs:
           # (crate manifest, wrapper, and each npm/<triple> skeleton) that must all
           # carry the release version BEFORE the native build on the runners, so the
           # loader embeds it and publish injects matching optionalDependencies.
-          for pkg in packages/core packages/commands packages/sdk packages/testing \
+          for pkg in packages/core packages/permissions packages/commands packages/sdk packages/testing \
             client-sdks/platform/typescript client-sdks/manager/typescript \
             packages/bindings crates/alien-bindings-node \
             packages/bindings/npm/darwin-arm64 packages/bindings/npm/darwin-x64 \
@@ -295,6 +295,20 @@ jobs:
         if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
         run: cargo metadata --format-version 1 >/dev/null
 
+      - name: Install permission compiler toolchain
+        if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+
+      - name: Regenerate versioned permission compiler
+        if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
+        run: |
+          VERSION=$(node -e 'const fs = require("node:fs"); console.log(fs.readFileSync("Cargo.lock", "utf8").match(/name = "wasm-bindgen"\nversion = "([^"]+)"/)[1])')
+          cargo +1.97.1 install --locked --version "$VERSION" wasm-bindgen-cli
+          node packages/permissions/scripts/generate.mjs
+
       # Dry-run build jobs start from the untagged commit, so carry the exact
       # versioned manifests that a real release would commit into those fresh
       # checkouts. This keeps the addon binary, wrapper, and platform packages
@@ -309,6 +323,8 @@ jobs:
             Cargo.toml
             Cargo.lock
             packages/core/package.json
+            packages/permissions/package.json
+            packages/permissions/generated
             packages/commands/package.json
             packages/sdk/package.json
             packages/testing/package.json
@@ -373,7 +389,7 @@ jobs:
         run: |
           git checkout --detach "${{ steps.merged_version.outputs.commit }}"
           cargo metadata --format-version 1 --locked >/dev/null
-          for pkg in packages/core packages/commands packages/sdk packages/testing \
+          for pkg in packages/core packages/permissions packages/commands packages/sdk packages/testing \
             client-sdks/platform/typescript client-sdks/manager/typescript \
             packages/bindings crates/alien-bindings-node \
             packages/bindings/npm/darwin-arm64 packages/bindings/npm/darwin-x64 \
@@ -662,8 +678,6 @@ jobs:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10.34.5
 
       - uses: actions/setup-node@v7
         with:
@@ -707,7 +721,7 @@ jobs:
         run: |
           if [ "${{ inputs.stable_action }}" = "qualification" ]; then
             mkdir -p qualified/npm
-            for package in core commands sdk testing; do
+            for package in core permissions commands sdk testing; do
               pnpm --filter "@alienplatform/${package}" pack --pack-destination qualified/npm
             done
             exit 0
@@ -731,6 +745,7 @@ jobs:
           }
 
           publish_tarball qualified/npm/alienplatform-core-${{ needs.prepare.outputs.version }}.tgz @alienplatform/core
+          publish_tarball qualified/npm/alienplatform-permissions-${{ needs.prepare.outputs.version }}.tgz @alienplatform/permissions
           publish_tarball qualified/npm/alienplatform-commands-${{ needs.prepare.outputs.version }}.tgz @alienplatform/commands
           publish_tarball qualified/npm/alienplatform-sdk-${{ needs.prepare.outputs.version }}.tgz @alienplatform/sdk
           publish_tarball qualified/npm/alienplatform-testing-${{ needs.prepare.outputs.version }}.tgz @alienplatform/testing
@@ -1033,8 +1048,6 @@ jobs:
         run: rustup target add x86_64-apple-darwin
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10.34.5
 
       - uses: actions/setup-node@v7
         with:
@@ -1140,8 +1153,6 @@ jobs:
         run: node packages/ai-gateway/scripts/validate-release-version.mjs "$VERSION"
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10.34.5
 
       - uses: actions/setup-node@v7
         with:
@@ -1205,8 +1216,6 @@ jobs:
         run: node packages/ai-gateway/scripts/validate-release-version.mjs "$VERSION"
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10.34.5
 
       - uses: actions/setup-node@v7
         with:
@@ -1342,8 +1351,6 @@ jobs:
         run: node packages/ai-gateway/scripts/validate-release-version.mjs "$VERSION"
 
       - uses: pnpm/action-setup@v6
-        with:
-          version: 10.34.5
 
       - uses: actions/setup-node@v7
         with:
@@ -2162,74 +2169,41 @@ jobs:
           SANDBOX_AGENT: ghcr.io/alienplatform/alien-sandbox-agent@${{ steps.publish_sandbox_agent.outputs.digest }}
         run: ./scripts/smoke-sandbox-agent.sh "$SANDBOX_AGENT"
 
-      # The default GCP sandbox, rendered from the same contract as alien-sandbox-agent onto
-      # buildpack-deps. Its own repository, as every other image has, so promotion gives it
-      # v<version> and latest; published digests are never deleted.
-      - name: Metadata (alien-sandbox-gcp)
-        id: meta_sandbox_gcp
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/alienplatform/alien-sandbox-gcp
-          tags: |
-            type=raw,value=qualification-${{ inputs.source_ref }}
-
-      - name: Publish alien-sandbox-gcp
-        id: publish_sandbox_gcp
-        uses: depot/build-push-action@v1
-        with:
-          project: ${{ vars.DEPOT_PROJECT_ID }}
-          context: .
-          file: docker/Dockerfile.alien-sandbox-gcp
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta_sandbox_gcp.outputs.tags }}
-          labels: ${{ steps.meta_sandbox_gcp.outputs.labels }}
-          provenance: true
-          sbom: true
-
-      - name: Smoke-test alien-sandbox-gcp
-        env:
-          SANDBOX_GCP: ghcr.io/alienplatform/alien-sandbox-gcp@${{ steps.publish_sandbox_gcp.outputs.digest }}
-        run: ./scripts/smoke-sandbox-agent.sh "$SANDBOX_GCP"
-
       # Agent Platform pulls a sandbox image with no registry credentials, and GitHub makes a
       # package private on its first push, so this fails until the package is set to public.
-      - name: Check the sandbox images pull anonymously
+      - name: Check the sandbox agent image pulls anonymously
         env:
           SANDBOX_AGENT_DIGEST: ${{ steps.publish_sandbox_agent.outputs.digest }}
-          SANDBOX_GCP_DIGEST: ${{ steps.publish_sandbox_gcp.outputs.digest }}
         run: |
-          for image in "alien-sandbox-agent@${SANDBOX_AGENT_DIGEST}" "alien-sandbox-gcp@${SANDBOX_GCP_DIGEST}"; do
-            name="${image%@*}"
-            digest="${image#*@}"
-            status=$(curl -sS --connect-timeout 10 --max-time 30 -o token.json -w '%{http_code}' \
-              "https://ghcr.io/token?scope=repository:alienplatform/${name}:pull") ||
-              { echo "::error::could not reach ghcr's token endpoint for ${name}"; exit 1; }
-            case "$status" in
-              200) ;;
-              401|403)
-                echo "::error::ghcr.io/alienplatform/${name} is not anonymously pullable (HTTP ${status}); set the package's visibility to public"
-                exit 1 ;;
-              *) echo "::error::ghcr's token endpoint answered HTTP ${status} for ${name}"; exit 1 ;;
-            esac
-            token=$(jq -r '.token' token.json)
-            status=$(curl -sS --connect-timeout 10 --max-time 30 -o /dev/null -w '%{http_code}' \
-              -H "Authorization: Bearer ${token}" \
-              -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
-              "https://ghcr.io/v2/alienplatform/${name}/manifests/${digest}") ||
-              { echo "::error::could not reach ghcr to read ${name}@${digest}"; exit 1; }
-            if [ "$status" != 200 ]; then
-              echo "::error::ghcr answered HTTP ${status} for an anonymous read of ${name}@${digest}"
-              exit 1
-            fi
-          done
+          name=alien-sandbox-agent
+          digest="$SANDBOX_AGENT_DIGEST"
+          status=$(curl -sS --connect-timeout 10 --max-time 30 -o token.json -w '%{http_code}' \
+            "https://ghcr.io/token?scope=repository:alienplatform/${name}:pull") ||
+            { echo "::error::could not reach ghcr's token endpoint for ${name}"; exit 1; }
+          case "$status" in
+            200) ;;
+            401|403)
+              echo "::error::ghcr.io/alienplatform/${name} is not anonymously pullable (HTTP ${status}); set the package's visibility to public"
+              exit 1 ;;
+            *) echo "::error::ghcr's token endpoint answered HTTP ${status} for ${name}"; exit 1 ;;
+          esac
+          token=$(jq -r '.token' token.json)
+          status=$(curl -sS --connect-timeout 10 --max-time 30 -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+            "https://ghcr.io/v2/alienplatform/${name}/manifests/${digest}") ||
+            { echo "::error::could not reach ghcr to read ${name}@${digest}"; exit 1; }
+          if [ "$status" != 200 ]; then
+            echo "::error::ghcr answered HTTP ${status} for an anonymous read of ${name}@${digest}"
+            exit 1
+          fi
 
       - name: Record qualified image digests
         env:
           RELEASE_COMMIT: ${{ inputs.source_ref }}
         run: |
           DIGESTS='{}'
-          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-manager alien-sandbox-agent alien-sandbox-gcp; do
+          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-manager alien-sandbox-agent; do
             qualified="ghcr.io/alienplatform/${name}:qualification-${RELEASE_COMMIT}"
             digest=$(docker buildx imagetools inspect "$qualified" |
               sed -n 's/^Digest:[[:space:]]*//p' | head -n1)

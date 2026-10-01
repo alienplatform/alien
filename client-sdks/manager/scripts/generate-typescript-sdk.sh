@@ -18,11 +18,15 @@ if [[ -n "$(git -C "$repo_root" status --porcelain --untracked-files=all -- "$sd
   exit 1
 fi
 
-"$speakeasy_bin" generate sdk \
-  --lang typescript \
-  --schema "$repo_root/client-sdks/manager/openapi.json" \
-  --out "$sdk_dir" \
-  --skip-versioning
+# `--skip-versioning` exists only on `speakeasy run`, which reads the target from
+# .speakeasy/workflow.yaml (source: ../openapi.json).
+(
+  cd "$sdk_dir"
+  "$speakeasy_bin" run \
+    --target manager-typescript \
+    --skip-upload-spec \
+    --skip-versioning
+)
 
 while IFS= read -r -d '' generated_file; do
   if [[ "$generated_file" == *.md && -f "$repo_root/$generated_file" ]]; then
