@@ -471,6 +471,7 @@ pub async fn build_and_post_release_simple(
             // dev mode is single-project; "default" is the canonical
             // sentinel and is required by the wire schema.
             project_id: "default".to_string(),
+            channel: None,
         })
         .send()
         .await

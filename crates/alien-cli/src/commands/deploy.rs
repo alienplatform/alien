@@ -622,7 +622,7 @@ async fn create_self_deployment(
     if ctx.is_standalone() {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "token".to_string(),
-            message: "--token is required when creating a deployment against a standalone manager."
+            message: "Pass --token: this manager creates deployments with a deployment-group token (from `alien onboard`)."
                 .to_string(),
         }));
     }
@@ -1203,7 +1203,7 @@ async fn deploy_task_with_environment(
     #[cfg(not(feature = "platform"))]
     if args.channel != "production" {
         return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "Named release channels require platform mode.".to_string(),
+            message: "This manager doesn't support release channels: every release goes to every deployment.".to_string(),
         }));
     }
 
@@ -1938,7 +1938,7 @@ pub fn validate_deploy_config(args: &DeployArgs) -> Result<()> {
     #[cfg(not(feature = "platform"))]
     if args.channel != "production" {
         return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "Named release channels require platform mode.".to_string(),
+            message: "This manager doesn't support release channels: every release goes to every deployment.".to_string(),
         }));
     }
 

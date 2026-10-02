@@ -210,6 +210,20 @@ jobs:
         env:
           VERSION: ${{ steps.bump.outputs.version }}
 
+      # The manager's Helm chart and ECS module default to the release image.
+      - name: Set manager chart and module versions
+        if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
+        run: |
+          sed -i -E \
+            -e "s/^version: .*/version: ${VERSION}/" \
+            -e "s/^appVersion: .*/appVersion: \"${VERSION}\"/" \
+            infra/helm/alien-manager/Chart.yaml
+          sed -i -E \
+            "s#(ghcr.io/alienplatform/alien-manager:v)[0-9][^\"]*#\1${VERSION}#" \
+            infra/aws-ecs-manager/variables.tf
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+
       - name: Set JavaScript package versions
         if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
         run: |
@@ -2282,6 +2296,24 @@ jobs:
                 --tag "${image}:latest" \
                 "${image}@${source_digest}"
             done
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.qualification_head_sha }}
+
+      - uses: azure/setup-helm@v5
+
+      # The manager's Helm chart, versioned with the release and defaulting to
+      # the image promoted above.
+      - name: Publish alien-manager chart
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" |
+            helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
+          helm package infra/helm/alien-manager \
+            --version "$VERSION" --app-version "$VERSION" --destination dist
+          helm push "dist/alien-manager-${VERSION}.tgz" oci://ghcr.io/alienplatform/charts
 
   # Publish the GitHub release only after the registries and binary store have
   # accepted their qualified artifacts. Homebrew follows because its formula

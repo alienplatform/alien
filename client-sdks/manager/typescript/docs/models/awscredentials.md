@@ -35,6 +35,15 @@ const value: models.AwsCredentialsImds = {
 };
 ```
 
+### `models.AwsCredentialsContainer`
+
+```typescript
+const value: models.AwsCredentialsContainer = {
+  endpoint: "<value>",
+  type: "container",
+};
+```
+
 ### `models.AwsCredentialsProfile`
 
 ```typescript
@@ -55,4 +64,3 @@ const value: models.AwsCredentialsWebIdentity = {
   type: "webIdentity",
 };
 ```
-

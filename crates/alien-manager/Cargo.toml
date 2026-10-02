@@ -31,7 +31,7 @@ openapi = [
 
 [dependencies]
 # Core Alien crates
-alien-core = { workspace = true }
+alien-core = { workspace = true, features = ["bundle-signature"] }
 alien-error = { workspace = true, features = ["axum"] }
 alien-commands = { workspace = true, features = ["server"] }
 alien-bindings = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
@@ -48,7 +48,7 @@ alien-azure-clients = { workspace = true }
 alien-gcp-clients = { workspace = true }
 
 # Web framework
-axum = { workspace = true, features = ["tokio", "http2", "json", "query", "macros"] }
+axum = { workspace = true, features = ["tokio", "http1", "http2", "json", "query", "macros"] }
 tower-http = { version = "0.7.0", features = ["cors"] }
 
 # Async runtime
@@ -83,6 +83,12 @@ reqwest = { workspace = true, features = ["json"] }
 
 # URL
 url = { workspace = true }
+alien-helm = { workspace = true }
+alien-tunnel = { workspace = true, features = ["manager"] }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true, features = ["tokio"] }
+tokio-tungstenite = { workspace = true }
 form_urlencoded = { workspace = true }
 urlencoding = { workspace = true }
 
@@ -93,6 +99,7 @@ aegis = { workspace = true, optional = true }
 
 # Telemetry parsing
 prost = { workspace = true }
+opentelemetry-proto = { version = "0.30", features = ["gen-tonic-messages", "logs"] }
 prost-types = { workspace = true }
 
 # Binary data

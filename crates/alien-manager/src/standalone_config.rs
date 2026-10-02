@@ -52,6 +52,22 @@ pub struct ManagerTomlConfig {
     pub impersonation: ImpersonationSection,
     #[serde(default)]
     pub telemetry: TelemetryConfig,
+    #[serde(default)]
+    pub operator: OperatorSection,
+}
+
+/// The Operator that Helm charts served by this manager install.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct OperatorSection {
+    /// Operator image, `repository:tag`. Defaults to the published image
+    /// matching this manager's version. Deployments pull it through the
+    /// manager, so they need no access to its registry.
+    pub image: Option<String>,
+    /// The Operator image's registry serves plain HTTP (a private registry
+    /// without TLS).
+    #[serde(default)]
+    pub insecure_registry: bool,
 }
 
 // ── Section configs ─────────────────────────────────────────────────────────
@@ -216,6 +232,9 @@ pub struct TelemetryConfig {
     pub headers: HashMap<String, String>,
 }
 
+/// Environment variable holding the whole configuration as TOML.
+pub const CONFIG_ENV: &str = "ALIEN_MANAGER_CONFIG";
+
 // ── Loading ─────────────────────────────────────────────────────────────────
 
 impl Default for ManagerTomlConfig {
@@ -227,6 +246,7 @@ impl Default for ManagerTomlConfig {
             commands: CommandsSection::default(),
             impersonation: ImpersonationSection::default(),
             telemetry: TelemetryConfig::default(),
+            operator: OperatorSection::default(),
         }
     }
 }
@@ -236,8 +256,10 @@ impl ManagerTomlConfig {
     ///
     /// Resolution order:
     /// 1. If `path` is `Some`, load from that exact file (error if missing).
-    /// 2. Otherwise try `alien-manager.toml` in the current working directory.
-    /// 3. If no file exists, fall back to all defaults.
+    /// 2. Otherwise read TOML from the `ALIEN_MANAGER_CONFIG` environment
+    ///    variable (for platforms that set environment but mount no files).
+    /// 3. Otherwise try `alien-manager.toml` in the current working directory.
+    /// 4. If no file exists, fall back to all defaults.
     ///
     /// After loading, environment variable overrides are applied.
     pub fn load(path: Option<&Path>) -> Result<Self, String> {
@@ -247,6 +269,12 @@ impl ManagerTomlConfig {
                     .map_err(|e| format!("Failed to read config file {}: {}", p.display(), e))?;
                 toml::from_str(&contents)
                     .map_err(|e| format!("Failed to parse {}: {}", p.display(), e))?
+            }
+            None if std::env::var_os(CONFIG_ENV).is_some() => {
+                let contents = std::env::var(CONFIG_ENV)
+                    .map_err(|e| format!("{CONFIG_ENV} is not valid UTF-8: {e}"))?;
+                toml::from_str(&contents)
+                    .map_err(|e| format!("Failed to parse {CONFIG_ENV}: {e}"))?
             }
             None => {
                 let default_path = PathBuf::from("alien-manager.toml");
@@ -285,6 +313,9 @@ impl ManagerTomlConfig {
         }
         if let Ok(val) = std::env::var("OTLP_ENDPOINT") {
             self.telemetry.otlp_endpoint = Some(val);
+        }
+        if let Ok(val) = std::env::var("STATE_DIR") {
+            self.database.state_dir = PathBuf::from(val);
         }
     }
 

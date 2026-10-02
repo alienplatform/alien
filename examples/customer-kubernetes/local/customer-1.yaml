@@ -1,0 +1,11 @@
+# What customer-1's admin passes to the chart: where the service keeps its
+# files. For Amazon S3 with the pod's own AWS identity, leave out the
+# endpoint and keys.
+infrastructure:
+  bucket:
+    type: storage
+    service: s3
+    bucketName: customer-1-files
+    endpoint: http://s3.storage.svc
+    accessKeyId: demo-key
+    secretAccessKey: demo-secret
