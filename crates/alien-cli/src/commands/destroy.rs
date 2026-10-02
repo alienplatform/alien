@@ -44,9 +44,9 @@ pub struct DestroyArgs {
     #[arg(long)]
     pub name: String,
 
-    /// Target platform
+    /// Target platform (required by `alien destroy`; `alien dev destroy` is always local)
     #[arg(long)]
-    pub platform: String,
+    pub platform: Option<String>,
 
     /// Force-destroy: skip resource teardown and delete the record immediately.
     #[arg(long)]
@@ -59,7 +59,13 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
     let steps = FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]);
     steps.activate(0, Some(format!("Deployment {}", args.name)));
 
-    let platform = Platform::from_str(&args.platform).map_err(|e| {
+    let platform_name = args.platform.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "platform".to_string(),
+            message: "--platform is required".to_string(),
+        })
+    })?;
+    let platform = Platform::from_str(&platform_name).map_err(|e| {
         AlienError::new(ErrorData::ValidationError {
             field: "platform".to_string(),
             message: e,
@@ -93,7 +99,7 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
     steps.activate(1, Some("Discovering manager...".to_string()));
 
     let manager_ctx = ctx
-        .resolve_manager(&tracked_deployment.project_id, &args.platform)
+        .resolve_manager(&tracked_deployment.project_id, &platform_name)
         .await?;
     let manager_client = manager_ctx.client;
 
