@@ -28,6 +28,7 @@ fn plain_input_stack() -> Stack {
                 min_items: None,
                 max_items: None,
             }),
+            generate: None,
             env: vec![StackInputEnvironmentMapping {
                 name: "API_BASE_URL".to_string(),
                 target_resources: None,
@@ -74,6 +75,7 @@ fn terraform_rejects_deployer_secret_inputs_until_provider_state_safety_exists()
             default: None,
             platforms: None,
             validation: None,
+            generate: None,
             env: vec![],
         }])
         .add(
@@ -121,6 +123,7 @@ fn a_secret_input_cannot_reach_the_input_values_output() {
             default: None,
             platforms: None,
             validation: None,
+            generate: None,
             env: vec![],
         }])
         .add(
@@ -162,6 +165,7 @@ fn inputs_colliding_after_normalization_are_refused() {
             default: None,
             platforms: None,
             validation: None,
+            generate: None,
             env: Vec::new(),
         }
     }

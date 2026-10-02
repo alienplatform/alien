@@ -51,6 +51,7 @@ use utoipa::OpenApi;
     StackInputDefinition,
     StackInputEnvironmentMapping,
     StackInputEnvironmentVariableType,
+    StackInputGenerate,
     StackInputKind,
     StackInputProvider,
     StackInputValidation,

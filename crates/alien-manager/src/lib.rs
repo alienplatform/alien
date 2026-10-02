@@ -37,6 +37,7 @@ pub mod commands;
 pub mod config;
 mod credential_materialization;
 pub mod error;
+pub(crate) mod generated_inputs;
 pub(crate) mod ids;
 pub mod registry;
 pub mod standalone_config;

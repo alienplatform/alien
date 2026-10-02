@@ -2356,6 +2356,29 @@ async fn initialize(
                     Err(e) => return e.into_response(),
                 };
 
+            // The release the deployment starts on. Generated secret inputs
+            // get their value from its stack now, once, and keep it in the
+            // stored input values for every later update.
+            let initial_release = if req.initial_desired_release == InitialDesiredRelease::Active {
+                match state.release_store.get_latest_release(&subject).await {
+                    Ok(release) => release,
+                    Err(e) => return e.into_response(),
+                }
+            } else {
+                None
+            };
+            let mut input_values = req.input_values;
+            if let Some(stack) = initial_release
+                .as_ref()
+                .and_then(|release| release.stacks.get(&platform))
+            {
+                crate::generated_inputs::generate_missing_input_values(
+                    &stack.inputs,
+                    platform,
+                    &mut input_values,
+                );
+            }
+
             // Create deployment with a token (reuse the agent's Bearer token)
             let dep_token = headers
                 .get("authorization")
@@ -2378,7 +2401,7 @@ async fn initialize(
                         stack_state,
                         environment_variables: None,
                         public_subdomain: None,
-                        input_values: req.input_values,
+                        input_values,
                         setup_item: req.setup_item,
                         deployment_token: dep_token,
                     },
@@ -2389,16 +2412,14 @@ async fn initialize(
                 Err(e) => return e.into_response(),
             };
 
-            if req.initial_desired_release == InitialDesiredRelease::Active {
-                // Initialize is the agent's own bootstrap: keep the caller's
-                // subject for reads and writes so embedders can authorize
-                // against the agent's scope rather than a service credential.
-                if let Ok(Some(release)) = state.release_store.get_latest_release(&subject).await {
-                    let _ = state
-                        .deployment_store
-                        .set_deployment_desired_release(&subject, &deployment.id, &release.id)
-                        .await;
-                }
+            // Initialize is the agent's own bootstrap: keep the caller's
+            // subject for reads and writes so embedders can authorize
+            // against the agent's scope rather than a service credential.
+            if let Some(release) = &initial_release {
+                let _ = state
+                    .deployment_store
+                    .set_deployment_desired_release(&subject, &deployment.id, &release.id)
+                    .await;
             }
 
             // Create a deployment token for the new deployment

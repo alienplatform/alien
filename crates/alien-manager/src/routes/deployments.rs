@@ -492,11 +492,25 @@ async fn create_deployment(
     }
 
     // Auto-assign latest release if available
-    let desired_release_id = match state.release_store.get_latest_release(&subject).await {
-        Ok(Some(release)) => Some(release.id),
-        Ok(None) => None,
+    let latest_release = match state.release_store.get_latest_release(&subject).await {
+        Ok(release) => release,
         Err(e) => return e.into_response(),
     };
+    let desired_release_id = latest_release.as_ref().map(|release| release.id.clone());
+
+    // Generated secret inputs get their value now, once, and keep it in the
+    // stored input values for every later update.
+    let mut input_values = req.input_values;
+    if let Some(stack) = latest_release
+        .as_ref()
+        .and_then(|release| release.stacks.get(&req.platform))
+    {
+        crate::generated_inputs::generate_missing_input_values(
+            &stack.inputs,
+            req.platform,
+            &mut input_values,
+        );
+    }
 
     // Create the deployment first (token is set after).
     let (raw_token, key_prefix, key_hash) = ids::generate_token(TokenType::Deployment.prefix());
@@ -532,7 +546,7 @@ async fn create_deployment(
                 stack_state,
                 environment_variables: req.environment_variables,
                 public_subdomain: None,
-                input_values: req.input_values,
+                input_values,
                 setup_item: None,
                 deployment_token: Some(raw_token.clone()),
             },

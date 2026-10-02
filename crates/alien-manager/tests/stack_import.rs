@@ -1990,3 +1990,119 @@ async fn a_state_write_back_without_the_answer_map_does_not_erase_the_record() {
         "body = {json:#}"
     );
 }
+
+fn stack_with_storage_and_generated_secret(resource_id: &str) -> Stack {
+    Stack::new("imported".to_string())
+        .add(
+            Storage::new(resource_id.to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .inputs(vec![alien_core::StackInputDefinition {
+            id: "databasePassword".to_string(),
+            kind: alien_core::StackInputKind::Secret,
+            provided_by: vec![alien_core::StackInputProvider::Developer],
+            required: true,
+            label: "Database password".to_string(),
+            description: "Password the app uses for its database.".to_string(),
+            placeholder: None,
+            default: None,
+            platforms: None,
+            validation: None,
+            generate: Some(alien_core::StackInputGenerate { length: 48 }),
+            env: vec![],
+        }])
+        .build()
+}
+
+/// A generated secret is created by the first registration and survives a
+/// re-registration whose setup artifact (which never carries it) replaces the
+/// stored input values.
+#[tokio::test]
+async fn a_generated_secret_is_created_once_and_kept_across_reimport() {
+    let stack = stack_with_storage_and_generated_secret("assets");
+    let fixture = make_fixture(Some(stack.clone())).await;
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+
+    let (s1, j1) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(s1, StatusCode::CREATED, "body = {:#}", j1);
+    let first: StackImportResponse = serde_json::from_value(j1).unwrap();
+    let imported = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &first.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    let generated = imported.input_values["databasePassword"]
+        .as_str()
+        .expect("the generated value is stored as a string")
+        .to_string();
+    assert_eq!(generated.len(), 48);
+    assert!(generated.bytes().all(|byte| byte.is_ascii_alphanumeric()));
+
+    fixture
+        .deployment_store
+        .reconcile(
+            &alien_manager::auth::Subject::system(),
+            ReconcileData {
+                deployment_id: imported.id,
+                session: "test-reconcile".to_string(),
+                execution_claim: None,
+                state: DeploymentState {
+                    status: DeploymentStatus::Running,
+                    platform: imported.platform,
+                    current_release: Some(ReleaseInfo {
+                        release_id: fixture.release_id.clone(),
+                        version: None,
+                        description: None,
+                        stack,
+                    }),
+                    target_release: None,
+                    stack_state: imported.stack_state,
+                    error: None,
+                    environment_info: imported.environment_info,
+                    runtime_metadata: imported.runtime_metadata,
+                    retry_requested: false,
+                    protocol_version: imported.deployment_protocol_version,
+                },
+                update_heartbeat: false,
+                suggested_delay_ms: None,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                capabilities: vec![],
+                operator_version: None,
+                operations_report: None,
+            },
+        )
+        .await
+        .expect("deployment should reach a stable state before re-import");
+
+    let mut body = body;
+    body.resources[0].import_data = serde_json::to_value(AwsStorageImportData {
+        bucket_name: "acme-imports-v2".to_string(),
+        bucket_arn: "arn:aws:s3:::acme-imports-v2".to_string(),
+    })
+    .unwrap();
+    let (s2, j2) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(s2, StatusCode::OK, "body = {:#}", j2);
+
+    let reimported = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &first.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    assert_eq!(
+        reimported.status, "update-pending",
+        "the re-import was applied"
+    );
+    assert_eq!(
+        reimported.input_values["databasePassword"], generated,
+        "re-registration must not rotate the generated secret"
+    );
+}
