@@ -23,7 +23,7 @@ fn serve_once(status_line: &'static str, body: String) -> String {
 async fn a_forbidden_initialize_keeps_the_server_message() {
     let body = serde_json::json!({
         "code": "FORBIDDEN",
-        "message": "Cannot create deployment in this group",
+        "message": "Caller cannot initialize a deployment in this group",
         "retryable": false,
         "internal": false,
         "httpStatusCode": 403,
@@ -43,7 +43,7 @@ async fn a_forbidden_initialize_keeps_the_server_message() {
 
     assert_eq!(err.code, "FORBIDDEN", "{err:?}");
     assert_eq!(
-        err.message, "Cannot create deployment in this group",
+        err.message, "Caller cannot initialize a deployment in this group",
         "{err:?}"
     );
 }

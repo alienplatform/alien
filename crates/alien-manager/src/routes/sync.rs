@@ -2318,8 +2318,10 @@ async fn initialize(
                 .await
             {
                 if !state.authz.can_sync_deployment(&subject, &existing) {
-                    return ErrorData::forbidden("Caller cannot initialize this deployment")
-                        .into_response();
+                    return ErrorData::forbidden(
+                        "Caller cannot initialize a deployment in this group",
+                    )
+                    .into_response();
                 }
                 if let Some(requested) = &stack_state {
                     if existing
@@ -2365,7 +2367,7 @@ async fn initialize(
                 deployment_group_id: Some(&dg_id),
             };
             if !state.authz.can_create_deployment(&subject, create_ctx) {
-                return ErrorData::forbidden("Cannot create deployment in this group")
+                return ErrorData::forbidden("Caller cannot initialize a deployment in this group")
                     .into_response();
             }
 

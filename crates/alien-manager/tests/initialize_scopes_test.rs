@@ -336,7 +336,7 @@ async fn initialize_admits_sync_callers_and_refuses_other_deployment_roles() {
     assert_eq!(status, 403, "{body}");
     assert_eq!(
         body["message"],
-        json!("Caller cannot initialize this deployment"),
+        json!("Caller cannot initialize a deployment in this group"),
         "{body}"
     );
     assert!(body.get("token").is_none(), "{body}");
@@ -367,7 +367,7 @@ async fn initialize_admits_sync_callers_and_refuses_other_deployment_roles() {
     let body: Value = resp.json().await.unwrap();
     assert_eq!(
         body["message"],
-        json!("Caller cannot initialize this deployment"),
+        json!("Caller cannot initialize a deployment in this group"),
         "{body}"
     );
     let resp = client
@@ -381,7 +381,7 @@ async fn initialize_admits_sync_callers_and_refuses_other_deployment_roles() {
     let body: Value = resp.json().await.unwrap();
     assert_eq!(
         body["message"],
-        json!("Cannot create deployment in this group"),
+        json!("Caller cannot initialize a deployment in this group"),
         "{body}"
     );
 
