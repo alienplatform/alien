@@ -60,6 +60,7 @@ prost-types = "0.13"
 port_check = { workspace = true }
 
 # OCI image extraction
+tar = { workspace = true }
 dockdash = { workspace = true }
 
 # HTTP client

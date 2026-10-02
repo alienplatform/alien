@@ -29,6 +29,30 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
+/// Read both Docker image-store identities without resolving mutable names.
+fn archive_image_ids(path: &Path) -> std::io::Result<Vec<String>> {
+    let image = dockdash::Image::from_tarball(path).map_err(std::io::Error::other)?;
+    let mut archive = tar::Archive::new(std::fs::File::open(path)?);
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        if entry.path()?.as_ref() != Path::new("index.json") {
+            continue;
+        }
+        let index: serde_json::Value = serde_json::from_reader(&mut entry)?;
+        let manifests = index["manifests"]
+            .as_array()
+            .ok_or_else(|| std::io::Error::other("OCI index has no manifests"))?;
+        let [manifest] = manifests.as_slice() else {
+            return Err(std::io::Error::other("Expected a single-image OCI archive"));
+        };
+        let digest = manifest["digest"]
+            .as_str()
+            .ok_or_else(|| std::io::Error::other("OCI image manifest has no digest"))?;
+        return Ok(vec![digest.to_string(), image.config_digest().to_string()]);
+    }
+    Err(std::io::Error::other("OCI archive has no index.json"))
+}
+
 /// Default Docker network name for Alien containers.
 const NETWORK_NAME: &str = "deployment-network";
 
@@ -613,9 +637,7 @@ impl LocalContainerManager {
             .await
     }
 
-    /// `docker load` an OCI tarball and return a reference the daemon can
-    /// `create` from, re-tagging by image ID when the containerd image store
-    /// registered only the tar's literal annotation name.
+    /// Load an OCI archive and return its immutable image identity.
     async fn load_oci_tarball_into_docker(
         &self,
         tarball_path: &Path,
@@ -626,6 +648,22 @@ impl LocalContainerManager {
             container_id = %container_id,
             "Loading OCI image from local tarball"
         );
+
+        let archive_path = tarball_path.to_path_buf();
+        let image_ids = tokio::task::spawn_blocking(move || archive_image_ids(&archive_path))
+            .await
+            .into_alien_error()
+            .context(ErrorData::DockerContainerError {
+                container: container_id.to_string(),
+                operation: "read_image_identity".to_string(),
+                reason: "Image archive reader failed".to_string(),
+            })?
+            .into_alien_error()
+            .context(ErrorData::DockerContainerError {
+                container: container_id.to_string(),
+                operation: "read_image_identity".to_string(),
+                reason: "Cannot identify the single image in the OCI archive".to_string(),
+            })?;
 
         // Use `docker load` instead of `import_image` to preserve CMD/ENTRYPOINT
         // docker import is for filesystem tarballs, docker load is for OCI image tarballs
@@ -649,113 +687,32 @@ impl LocalContainerManager {
             }));
         }
 
-        // Parse output to extract image tag
-        // docker load output format: "Loaded image: <tag>" or "Loaded image ID: sha256:..."
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let loaded_image = stdout
-            .lines()
-            .find_map(|line| {
-                let trimmed = line.trim();
-                if trimmed.starts_with("Loaded image:") {
-                    Some(
-                        trimmed
-                            .trim_start_matches("Loaded image:")
-                            .trim()
-                            .to_string(),
-                    )
-                } else if trimmed.starts_with("Loaded image ID:") {
-                    Some(
-                        trimmed
-                            .trim_start_matches("Loaded image ID:")
-                            .trim()
-                            .to_string(),
-                    )
-                } else {
-                    None
+        // Classic Docker identifies images by config digest; the containerd store
+        // uses the manifest digest. Never resolve a mutable annotation or tag: an
+        // existing normalized alias can still refer to a previous load's content.
+        for image_id in &image_ids {
+            match self.docker.inspect_image(image_id).await {
+                Ok(_) => return Ok(image_id.clone()),
+                Err(bollard::errors::Error::DockerResponseServerError {
+                    status_code: 404, ..
+                }) => continue,
+                Err(error) => {
+                    return Err(error).into_alien_error().context(
+                        ErrorData::DockerContainerError {
+                            container: container_id.to_string(),
+                            operation: "inspect_loaded_image".to_string(),
+                            reason: format!("Failed to inspect loaded image {image_id}"),
+                        },
+                    );
                 }
-            })
-            .unwrap_or_else(|| {
-                // Fallback: generate a tag
-                format!("alien-local/{}:latest", container_id)
-            });
-
-        info!(
-            image_tag = %loaded_image,
-            container_id = %container_id,
-            tarball = %tarball_path.display(),
-            "Successfully loaded OCI image with docker load"
-        );
-
-        // With Docker's containerd image store, `docker load` registers the
-        // image under the tar's literal `io.containerd.image.name` annotation
-        // (e.g. `worker:tag`), while every docker CLI/API lookup normalizes
-        // the reference to `docker.io/library/worker:tag` — a name the load
-        // did NOT register, so `create` fails with "No such image" even
-        // though the content is present. Re-tagging by image ID registers
-        // the normalized reference. Uses the same bollard client `create`
-        // will use (a CLI `docker tag` could target a different daemon via
-        // the active docker context). On the classic image store the initial
-        // inspect succeeds and nothing else runs.
-        if self.docker.inspect_image(&loaded_image).await.is_err() {
-            let images = self
-                .docker
-                .list_images(None::<bollard::image::ListImagesOptions<String>>)
-                .await
-                .into_alien_error()
-                .context(ErrorData::DockerContainerError {
-                    container: container_id.to_string(),
-                    operation: "list_images".to_string(),
-                    reason: "Failed to list images to locate the loaded OCI image".to_string(),
-                })?;
-            // Compare with the `docker.io/library/` default-registry prefix
-            // stripped from both sides: depending on the image store, the
-            // daemon may report the tag in literal or normalized form.
-            let normalize = |t: &str| {
-                t.strip_prefix("docker.io/library/")
-                    .unwrap_or(t)
-                    .to_string()
-            };
-            let wanted = normalize(&loaded_image);
-            let image_id = images
-                .iter()
-                .find(|img| img.repo_tags.iter().any(|t| normalize(t) == wanted))
-                .map(|img| img.id.clone())
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::DockerContainerError {
-                        container: container_id.to_string(),
-                        operation: "resolve_loaded_image".to_string(),
-                        reason: format!(
-                            "docker load reported image '{}' but the daemon can neither \
-                             inspect it nor list it — the load did not register usable content",
-                            loaded_image
-                        ),
-                    })
-                })?;
-            let (repo, tag) = loaded_image.rsplit_once(':').ok_or_else(|| {
-                AlienError::new(ErrorData::DockerContainerError {
-                    container: container_id.to_string(),
-                    operation: "resolve_loaded_image".to_string(),
-                    reason: format!("Loaded image reference '{}' has no tag", loaded_image),
-                })
-            })?;
-            self.docker
-                .tag_image(
-                    &image_id,
-                    Some(bollard::image::TagImageOptions { repo, tag }),
-                )
-                .await
-                .into_alien_error()
-                .context(ErrorData::DockerContainerError {
-                    container: container_id.to_string(),
-                    operation: "tag_image".to_string(),
-                    reason: format!(
-                        "Failed to tag loaded image {} as {}",
-                        image_id, loaded_image
-                    ),
-                })?;
+            }
         }
-
-        Ok(loaded_image)
+        Err(AlienError::new(ErrorData::DockerContainerError {
+            container: container_id.to_string(),
+            operation: "resolve_loaded_image".to_string(),
+            reason: "Docker loaded the archive but its exact image identity is unavailable"
+                .to_string(),
+        }))
     }
 
     /// Make a registry image available to the daemon and return a reference
