@@ -86,8 +86,8 @@ url = { workspace = true }
 alien-helm = { workspace = true }
 alien-tunnel = { workspace = true, features = ["manager"] }
 http-body-util = { workspace = true }
-hyper = { workspace = true }
-hyper-util = { workspace = true, features = ["tokio"] }
+hyper = { workspace = true, features = ["server", "http1"] }
+hyper-util = { workspace = true, features = ["service", "tokio"] }
 tokio-tungstenite = { workspace = true }
 form_urlencoded = { workspace = true }
 urlencoding = { workspace = true }
