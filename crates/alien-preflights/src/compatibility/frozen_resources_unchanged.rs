@@ -55,7 +55,7 @@ fn runtime_managed_frozen_change(platform: Platform, old: &Resource, new: &Resou
                 old_group.instance_type.as_deref(),
                 new_group.instance_type.as_deref(),
             )
-            && profile_matches_catalog(new_group)
+            && profile_matches_catalog(new_group, installed_configurable_disk(old_group))
         {
             old_group.instance_type = new_group.instance_type.clone();
             old_group.profile = new_group.profile.clone();
@@ -69,10 +69,20 @@ fn same_aws_architecture(old: Option<&str>, new: Option<&str>) -> bool {
         .is_some_and(|(old, new)| is_same_architecture_aws_machine(old, new))
 }
 
-/// The profile must be one the compute mutation could produce for this machine: the catalog's,
-/// with a configurable disk grown to the workload's request, and nested virtualization only on a
-/// machine that supports it.
-fn profile_matches_catalog(group: &CapacityGroup) -> bool {
+/// The installed disk size when the installed machine's disk is configurable; `None` when it is
+/// fixed or unrecorded, where the new machine's catalog disk is the only size with no request.
+fn installed_configurable_disk(group: &CapacityGroup) -> Option<u64> {
+    let spec = find_instance_type(Platform::Aws, group.instance_type.as_deref()?)?;
+    spec.has_configurable_ephemeral_storage()
+        .then(|| group.profile.as_ref().map(|p| p.ephemeral_storage_bytes))
+        .flatten()
+}
+
+/// The profile must be one the compute mutation could produce for this machine with the
+/// workload's disk request unchanged: a configurable disk kept at the installed size (or the
+/// catalog disk when the installed one was fixed or unrecorded), a fixed disk at the catalog's,
+/// and nested virtualization only on a machine that supports it. A disk change needs setup.
+fn profile_matches_catalog(group: &CapacityGroup, installed_disk_bytes: Option<u64>) -> bool {
     let (Some(spec), Some(profile)) = (
         group
             .instance_type
@@ -83,10 +93,17 @@ fn profile_matches_catalog(group: &CapacityGroup) -> bool {
         return false;
     };
     let catalog = spec.to_machine_profile();
+    let disk = profile.ephemeral_storage_bytes;
     let storage_matches = if spec.has_configurable_ephemeral_storage() {
-        profile.ephemeral_storage_bytes >= catalog.ephemeral_storage_bytes
-            && max_configurable_ephemeral_storage_bytes(Platform::Aws)
-                .is_some_and(|max| profile.ephemeral_storage_bytes <= max)
+        match installed_disk_bytes {
+            Some(installed) => {
+                disk == installed
+                    && disk >= catalog.ephemeral_storage_bytes
+                    && max_configurable_ephemeral_storage_bytes(Platform::Aws)
+                        .is_some_and(|max| disk <= max)
+            }
+            None => disk == catalog.ephemeral_storage_bytes,
+        }
     } else {
         profile.ephemeral_storage_bytes == catalog.ephemeral_storage_bytes
     };
@@ -743,9 +760,48 @@ mod tests {
         assert!(result.success, "{:?}", result.errors);
     }
 
+    /// A cluster with no workload skips the compute mutation, so its profile is whatever the
+    /// stack declares; a machine change must not carry a disk change past setup.
+    #[tokio::test]
+    async fn a_machine_change_cannot_grow_the_disk_past_setup() {
+        let old = with_machine(machine_cluster("t4g.micro", 2), "t4g.micro");
+        let mut new = with_machine(machine_cluster("t4g.micro", 2), "t4g.small");
+        new.capacity_groups[0]
+            .profile
+            .as_mut()
+            .expect("catalog profile")
+            .ephemeral_storage_bytes = 1024 * 1024 * 1024 * 1024;
+        assert!(!frozen_check(Platform::Aws, old, new).await.success);
+    }
+
+    #[tokio::test]
+    async fn a_machine_change_cannot_shrink_the_disk_past_setup() {
+        let mut old = machine_cluster("t4g.micro", 2);
+        old.capacity_groups[0].profile = Some(
+            find_instance_type(Platform::Aws, "t4g.micro")
+                .expect("catalog machine")
+                .to_machine_profile_for_storage(100 * 1024 * 1024 * 1024),
+        );
+        let new = with_machine(machine_cluster("t4g.micro", 2), "t4g.small");
+        assert!(!frozen_check(Platform::Aws, old, new).await.success);
+    }
+
+    #[tokio::test]
+    async fn a_fixed_disk_machine_moves_to_a_catalog_disk() {
+        let old = with_machine(machine_cluster("i4i.xlarge", 2), "i4i.xlarge");
+        let new = with_machine(machine_cluster("i4i.xlarge", 2), "m7i.large");
+        let result = frozen_check(Platform::Aws, old, new).await;
+        assert!(result.success, "{:?}", result.errors);
+    }
+
     #[tokio::test]
     async fn a_machine_change_keeps_the_storage_the_workload_requested() {
-        let old = with_machine(machine_cluster("t4g.micro", 2), "t4g.micro");
+        let mut old = machine_cluster("t4g.micro", 2);
+        old.capacity_groups[0].profile = Some(
+            find_instance_type(Platform::Aws, "t4g.micro")
+                .expect("catalog machine")
+                .to_machine_profile_for_storage(200 * 1024 * 1024 * 1024),
+        );
         let mut new = machine_cluster("c7g.medium", 2);
         new.capacity_groups[0].profile = Some(
             find_instance_type(Platform::Aws, "c7g.medium")
