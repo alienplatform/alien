@@ -1166,15 +1166,23 @@ impl LocalContainerManager {
     /// Resume an existing container without replacing its filesystem or configuration.
     pub async fn resume_container(&self, container_id: &str) -> Result<()> {
         let docker_name = format!("alien-{container_id}");
-        self.docker
+        match self
+            .docker
             .start_container(&docker_name, None::<StartContainerOptions<String>>)
             .await
-            .into_alien_error()
-            .context(ErrorData::DockerContainerError {
-                container: container_id.to_string(),
-                operation: "resume".to_string(),
-                reason: "Failed to start the existing container".to_string(),
-            })
+        {
+            Ok(())
+            | Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 304, ..
+            }) => Ok(()),
+            Err(error) => Err(error)
+                .into_alien_error()
+                .context(ErrorData::DockerContainerError {
+                    container: container_id.to_string(),
+                    operation: "resume".to_string(),
+                    reason: "Failed to start the existing container".to_string(),
+                }),
+        }
     }
 
     /// Stops a container.
@@ -1200,15 +1208,25 @@ impl LocalContainerManager {
                 reason: "Failed to preserve stop across daemon restart".to_string(),
             })?;
 
-        self.docker
+        match self
+            .docker
             .stop_container(&docker_name, Some(StopContainerOptions { t: 10 }))
             .await
-            .into_alien_error()
-            .context(ErrorData::DockerContainerError {
-                container: container_id.to_string(),
-                operation: "stop".to_string(),
-                reason: "Failed to stop Docker container".to_string(),
-            })?;
+        {
+            Ok(())
+            | Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 304, ..
+            }) => {}
+            Err(error) => {
+                return Err(error)
+                    .into_alien_error()
+                    .context(ErrorData::DockerContainerError {
+                        container: container_id.to_string(),
+                        operation: "stop".to_string(),
+                        reason: "Failed to stop Docker container".to_string(),
+                    })
+            }
+        }
 
         debug!(container_id = %container_id, "Container stopped");
         Ok(())
