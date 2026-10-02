@@ -646,7 +646,7 @@ impl LocalContainerManager {
         // Use `docker load` instead of `import_image` to preserve CMD/ENTRYPOINT
         // docker import is for filesystem tarballs, docker load is for OCI image tarballs
         let output = tokio::process::Command::new("docker")
-            .args(&["load", "-i", &archive.file.path().to_string_lossy()])
+            .args(["load", "-i", &archive.file.path().to_string_lossy()])
             .output()
             .await
             .into_alien_error()
