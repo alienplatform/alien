@@ -57,13 +57,16 @@ pub(crate) fn prepare_load_archive(path: &Path) -> io::Result<LoadArchive> {
         .ok_or_else(|| io::Error::other("OCI manifest has no layers"))?;
     let mut uncompressed = HashMap::new();
     let mut docker_layers = Vec::new();
-    for (i, layer) in layers.iter().enumerate() {
+    for layer in layers {
         let source = digest_path(&layer["digest"])?;
         let media = layer["mediaType"]
             .as_str()
             .ok_or_else(|| io::Error::other("Layer has no media type"))?;
         if media == "application/vnd.oci.image.layer.v1.tar+zstd" {
-            let dest = format!("docker-layers/{i}.tar");
+            let dest = format!(
+                "docker-layers/{}.tar",
+                source.trim_start_matches("blobs/sha256/")
+            );
             uncompressed.insert(source, dest.clone());
             docker_layers.push(dest);
         } else if matches!(
