@@ -381,10 +381,32 @@ impl DeploymentLoop {
     ) {
         let deployment_id = deployment.id.clone();
 
-        // Always release the lock when we are done, even on error.
-        let result = self
-            .process_deployment_inner(deployment, execution_claim.clone(), session, options)
-            .await;
+        // Local runtime shutdown can outlast a lease while workers drain.
+        // Keep ownership through runtime control as well as the normal runner.
+        let local = deployment.platform == Platform::Local;
+        let transport = ManagerTransport::new(
+            self.deployment_store.clone(),
+            self.server_bindings.bindings_provider.clone(),
+            self.server_bindings.target_bindings_providers.clone(),
+            deployment.project_id.clone(),
+            session.to_string(),
+            execution_claim.clone(),
+        );
+        let operation =
+            self.process_deployment_inner(deployment, execution_claim.clone(), session, options);
+        let result = if local {
+            alien_deployment::runner::run_with_lease_renewal(&deployment_id, &transport, async {
+                operation
+                    .await
+                    .context(alien_deployment::ErrorData::DeploymentError {
+                        message: "Apply local deployment runtime state".to_string(),
+                    })
+            })
+            .await
+            .map_err(|error| error.into_generic())
+        } else {
+            operation.await
+        };
 
         if let Err(e) = &result {
             error!(

@@ -228,7 +228,7 @@ async fn run_step_loop_inner(
 /// The operation is cancelled if Alien cannot confirm ownership before the
 /// lease safety deadline. Callers remain responsible for acquiring and
 /// releasing the lease.
-pub(crate) async fn run_with_lease_renewal<T>(
+pub async fn run_with_lease_renewal<T>(
     deployment_id: &str,
     transport: &dyn DeploymentLoopTransport,
     operation: impl Future<Output = Result<T>>,
