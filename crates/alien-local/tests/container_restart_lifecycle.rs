@@ -88,14 +88,17 @@ async fn crash_stop_daemon_restart_resume_update_and_destroy_preserve_data() {
         "false"
     );
     assert_eq!(
-        std::fs::read_to_string(
-            state
-                .path()
-                .join("container-volumes")
-                .join(&id)
-                .join("value")
-        )
-        .unwrap(),
+        docker(&[
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--volumes-from",
+            &name,
+            "alpine:3.20",
+            "cat",
+            "/data/value"
+        ]),
         "sentinel"
     );
     assert!(manager
@@ -110,5 +113,13 @@ async fn crash_stop_daemon_restart_resume_update_and_destroy_preserve_data() {
     manager.start_container(&id, config()).await.unwrap();
     assert_eq!(docker(&["exec", &name, "cat", "/data/value"]), "sentinel");
     manager.delete_container_and_storage(&id).await.unwrap();
-    assert!(!state.path().join("container-volumes").join(&id).exists());
+    let volume = format!("alien-{id}-data");
+    let result = Command::new("docker")
+        .args(["volume", "inspect", &volume])
+        .output()
+        .unwrap();
+    assert!(
+        !result.status.success(),
+        "destroy must remove the named volume"
+    );
 }
