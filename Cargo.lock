@@ -992,6 +992,8 @@ dependencies = [
  "http 1.5.0",
  "http-body-util",
  "httpmock",
+ "hyper 1.11.1",
+ "hyper-util",
  "mockall",
  "nanoid",
  "ngrok",

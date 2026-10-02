@@ -49,6 +49,8 @@ alien-gcp-clients = { workspace = true }
 
 # Web framework
 axum = { workspace = true, features = ["tokio", "http2", "json", "query", "macros"] }
+hyper = { workspace = true, features = ["server", "http1", "http2"] }
+hyper-util = { workspace = true, features = ["server", "server-auto", "service", "tokio"] }
 tower-http = { version = "0.7.0", features = ["cors"] }
 
 # Async runtime
