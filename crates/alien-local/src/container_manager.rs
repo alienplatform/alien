@@ -1182,6 +1182,25 @@ impl LocalContainerManager {
         let docker_name = format!("alien-{}", container_id);
 
         self.docker
+            .update_container(
+                &docker_name,
+                bollard::container::UpdateContainerOptions::<String> {
+                    restart_policy: Some(bollard::models::RestartPolicy {
+                        name: Some(bollard::models::RestartPolicyNameEnum::UNLESS_STOPPED),
+                        maximum_retry_count: None,
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DockerContainerError {
+                container: container_id.to_string(),
+                operation: "stop".to_string(),
+                reason: "Failed to preserve stop across daemon restart".to_string(),
+            })?;
+
+        self.docker
             .stop_container(&docker_name, Some(StopContainerOptions { t: 10 }))
             .await
             .into_alien_error()

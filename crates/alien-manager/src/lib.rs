@@ -65,3 +65,5 @@ pub use routes::RouterOptions;
 pub use server::AlienManager;
 pub use standalone_config::ManagerTomlConfig;
 pub use traits::*;
+
+mod local_runtime;
