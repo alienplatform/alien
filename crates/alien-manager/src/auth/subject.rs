@@ -357,6 +357,9 @@ pub enum Role {
     /// from another repository, provision, or any other project access. Paired with
     /// [`Scope::Project`]; covers every repository of the project unless `Authz` narrows by it.
     SandboxImagePusher,
+    /// A capability that may request a compute plan for one deployment; grants no reads. Only
+    /// meaningful on [`Scope::Deployment`]; the issuer sets its lifetime.
+    ComputePlanner,
 }
 
 #[cfg(test)]
@@ -682,6 +685,16 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Role>(&json).expect("deserialize role"),
             Role::RemoteBindingResolver
+        );
+    }
+
+    #[test]
+    fn compute_planner_has_a_stable_wire_name() {
+        let json = serde_json::to_string(&Role::ComputePlanner).expect("serialize role");
+        assert_eq!(json, r#""compute-planner""#);
+        assert_eq!(
+            serde_json::from_str::<Role>(&json).expect("deserialize role"),
+            Role::ComputePlanner
         );
     }
 }

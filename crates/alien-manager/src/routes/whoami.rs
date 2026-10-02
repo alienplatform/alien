@@ -10,7 +10,7 @@ use axum::{
 use serde::Serialize;
 
 use super::{auth, AppState};
-use crate::auth::{Scope, SubjectKind};
+use crate::auth::{Role, Scope, SubjectKind};
 use crate::error::ErrorData;
 
 #[derive(Debug, Serialize)]
@@ -60,6 +60,11 @@ async fn whoami(State(state): State<AppState>, headers: HeaderMap) -> Response {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+
+    if subject.role == Role::ComputePlanner {
+        return ErrorData::forbidden("Compute plan credentials cannot inspect manager identity")
+            .into_response();
+    }
 
     let (kind, id) = match &subject.kind {
         SubjectKind::User { id, .. } => ("user", id.clone()),

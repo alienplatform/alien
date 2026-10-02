@@ -102,6 +102,12 @@ pub trait Authz: Send + Sync {
     fn can_sync_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
     fn can_acquire_deployments(&self, subject: &Subject, deployments: &[DeploymentRecord]) -> bool;
 
+    // -- Compute planning --------------------------------------------------
+    /// Request a compute plan for one deployment. Defaults to deny so an embedder decides.
+    fn can_plan_compute(&self, _subject: &Subject, _deployment: &DeploymentRecord) -> bool {
+        false
+    }
+
     // -- Telemetry ingest --------------------------------------------------
     /// Authorize an OTLP signal from the authenticated subject.
     fn can_ingest_telemetry(&self, subject: &Subject, signal: TelemetrySignal) -> bool;

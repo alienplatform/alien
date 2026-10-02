@@ -34,12 +34,12 @@ impl OssAuthz {
         )
     }
 
-    /// Capability roles share the project scope without its reads. A deny-list so every other
-    /// project-scoped subject keeps the reads it has today.
+    /// Capability roles share a project or deployment scope without its reads. A deny-list so
+    /// every other subject on those scopes keeps its reads.
     fn project_reader(s: &Subject) -> bool {
         !matches!(
             s.role,
-            Role::ImageRepositoryProvisioner | Role::SandboxImagePusher
+            Role::ImageRepositoryProvisioner | Role::SandboxImagePusher | Role::ComputePlanner
         )
     }
 
@@ -517,7 +517,11 @@ mod tests {
     // OSS mints no capability role and denies it everything, provisioning and push included; an
     // embedder's Authz is what grants each role its one operation on one project.
     fn the_image_capability_roles_have_no_project_access() {
-        for role in [Role::ImageRepositoryProvisioner, Role::SandboxImagePusher] {
+        for role in [
+            Role::ImageRepositoryProvisioner,
+            Role::SandboxImagePusher,
+            Role::ComputePlanner,
+        ] {
             let mut subject = admin();
             subject.scope = Scope::Project {
                 project_id: "default".to_string(),
@@ -547,6 +551,75 @@ mod tests {
             assert!(!OssAuthz.can_push_image(&subject, "default", "repo"));
             assert!(!OssAuthz.can_provision_image_repository(&subject, "default"));
         }
+    }
+
+    #[test]
+    // Paired with its own deployment's scope, the compute plan capability still reads nothing: the
+    // scope's grants are role-gated, and the release read falls to the deny-list.
+    fn the_compute_planner_has_no_access_to_its_own_deployment() {
+        let mut subject = deployment_token("d1");
+        subject.role = Role::ComputePlanner;
+        let dep = deployment("d1", "dg-a");
+
+        assert!(!OssAuthz.can_read_deployment(&subject, &dep));
+        assert!(!OssAuthz.can_sync_deployment(&subject, &dep));
+        assert!(!OssAuthz.can_update_deployment(&subject, &dep));
+        assert!(!OssAuthz.can_delete_deployment(&subject, &dep));
+        assert!(!OssAuthz.can_acquire_deployments(&subject, std::slice::from_ref(&dep)));
+        assert!(!OssAuthz.can_dispatch_command(&subject, &dep));
+        assert!(!OssAuthz.can_read_command(&subject, &dep));
+        assert!(!OssAuthz.can_act_on_deployment(&subject, &dep));
+        assert!(!OssAuthz.can_read_release(&subject, &release()));
+        assert!(!OssAuthz.can_export_release(&subject, &release()));
+        assert!(!OssAuthz.can_resolve_remote_binding(
+            &subject,
+            &dep,
+            RemoteBindingKind::Sandbox,
+            "box"
+        ));
+        for signal in [
+            TelemetrySignal::Logs,
+            TelemetrySignal::Traces,
+            TelemetrySignal::Metrics,
+        ] {
+            assert!(!OssAuthz.can_ingest_telemetry(&subject, signal));
+        }
+        let command = alien_commands::server::CommandAccessContext {
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
+            deployment_id: "d1".to_string(),
+            target: alien_core::CommandTarget::new(
+                "daemon-a",
+                alien_core::CommandTargetType::Daemon,
+            ),
+        };
+        assert!(!OssAuthz.can_read_command_context(&subject, &command));
+        assert!(!OssAuthz.can_push_image(&subject, "default", "repo"));
+        assert!(!OssAuthz.can_provision_image_repository(&subject, "default"));
+        assert!(!OssAuthz.can_plan_compute(&subject, &dep));
+        assert!(!OssAuthz.can_execute_command(&subject, &dep));
+        assert!(!OssAuthz.can_receive_command(&subject, &dep, &command.target));
+        assert!(!OssAuthz.can_create_deployment(
+            &subject,
+            DeploymentCreateCtx {
+                workspace_id: "default",
+                project_id: "default",
+                deployment_group_id: Some("dg-a"),
+            }
+        ));
+        assert!(!OssAuthz.can_create_release(&subject, "default"));
+        assert!(!OssAuthz.can_create_deployment_group(&subject, "default"));
+        let group = DeploymentGroupRecord {
+            id: "dg-a".to_string(),
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
+            name: "dg-a".to_string(),
+            max_deployments: 10,
+            deployment_count: 0,
+            created_at: Utc::now(),
+        };
+        assert!(!OssAuthz.can_read_deployment_group(&subject, &group));
+        assert!(!OssAuthz.can_update_deployment_group(&subject, &group));
     }
 
     #[test]

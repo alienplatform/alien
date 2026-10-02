@@ -1223,8 +1223,8 @@ fn require_push_auth(state: &AppState, subject: &Subject, repo_name: &str) -> Re
     }
 }
 
-/// A project-scoped capability shares the scope whose pulls skip repo validation below, so it is
-/// refused before that match.
+/// A capability role shares a scope whose pulls skip repo validation below (a project, or a
+/// deployment's own project repository), so it is refused before that match.
 fn refuse_capability_pull(subject: &Subject) -> Result<(), Response> {
     if subject.role == Role::ImageRepositoryProvisioner {
         return Err(oci_error(
@@ -1238,6 +1238,13 @@ fn refuse_capability_pull(subject: &Subject) -> Result<(), Response> {
             StatusCode::FORBIDDEN,
             "DENIED",
             "Sandbox image push credentials cannot pull images",
+        ));
+    }
+    if subject.role == Role::ComputePlanner {
+        return Err(oci_error(
+            StatusCode::FORBIDDEN,
+            "DENIED",
+            "Compute plan credentials cannot pull images",
         ));
     }
     Ok(())
@@ -1845,6 +1852,18 @@ mod tests {
             assert_eq!(refused.status(), StatusCode::FORBIDDEN);
         }
         assert!(refuse_capability_pull(&subject(Role::ProjectDeveloper)).is_ok());
+
+        let deployment_scoped = |role| Subject {
+            scope: Scope::Deployment {
+                project_id: "default".to_string(),
+                deployment_id: "d1".to_string(),
+            },
+            ..subject(role)
+        };
+        let refused = refuse_capability_pull(&deployment_scoped(Role::ComputePlanner))
+            .expect_err("a compute plan credential must not reach the own-project pull bypass");
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        assert!(refuse_capability_pull(&deployment_scoped(Role::DeploymentManager)).is_ok());
     }
 
     #[test]

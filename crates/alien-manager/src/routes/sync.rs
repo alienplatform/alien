@@ -2237,7 +2237,9 @@ fn release_info_from_record(
 /// or workspace bearer for self-hosted operator workflows. New deployments
 /// are created via `DeploymentStore::create_deployment(caller, …)` so
 /// embedders that proxy to an upstream API write the row in the dg's
-/// workspace, not the manager's.
+/// workspace, not the manager's. A deployment bearer restarting gets its
+/// own id back. Every branch returns 403 unless `Authz` lets the caller
+/// sync the deployment or create one.
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/v1/initialize",
@@ -2272,6 +2274,10 @@ async fn initialize(
                 Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
                 Err(e) => return e.into_response(),
             };
+            if !state.authz.can_sync_deployment(&subject, &deployment) {
+                return ErrorData::forbidden("Caller cannot initialize this deployment")
+                    .into_response();
+            }
 
             Json(InitializeResponse {
                 deployment_id,
@@ -2281,8 +2287,8 @@ async fn initialize(
             .into_response()
         }
         crate::auth::Scope::DeploymentGroup {
+            project_id,
             deployment_group_id: dg_id,
-            ..
         } => {
             let name = req
                 .name
@@ -2311,6 +2317,10 @@ async fn initialize(
                 .get_deployment_by_name(&subject, &dg_id, &name)
                 .await
             {
+                if !state.authz.can_sync_deployment(&subject, &existing) {
+                    return ErrorData::forbidden("Caller cannot initialize this deployment")
+                        .into_response();
+                }
                 if let Some(requested) = &stack_state {
                     if existing
                         .stack_state
@@ -2347,6 +2357,16 @@ async fn initialize(
                     .into_response(),
                     Err(e) => e.into_response(),
                 };
+            }
+
+            let create_ctx = crate::auth::DeploymentCreateCtx {
+                workspace_id: &subject.workspace_id,
+                project_id: &project_id,
+                deployment_group_id: Some(&dg_id),
+            };
+            if !state.authz.can_create_deployment(&subject, create_ctx) {
+                return ErrorData::forbidden("Cannot create deployment in this group")
+                    .into_response();
             }
 
             let settings =

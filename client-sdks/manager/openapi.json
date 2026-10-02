@@ -1203,7 +1203,7 @@
         "tags": [
           "sync"
         ],
-        "summary": "`POST /v1/initialize` — Inbound: deployment-group bearer (typical),\nor workspace bearer for self-hosted operator workflows. New deployments\nare created via `DeploymentStore::create_deployment(caller, …)` so\nembedders that proxy to an upstream API write the row in the dg's\nworkspace, not the manager's.",
+        "summary": "`POST /v1/initialize` — Inbound: deployment-group bearer (typical),\nor workspace bearer for self-hosted operator workflows. New deployments\nare created via `DeploymentStore::create_deployment(caller, …)` so\nembedders that proxy to an upstream API write the row in the dg's\nworkspace, not the manager's. A deployment bearer restarting gets its\nown id back. Every branch returns 403 unless `Authz` lets the caller\nsync the deployment or create one.",
         "operationId": "initialize",
         "requestBody": {
           "content": {
@@ -9772,6 +9772,10 @@
           "status"
         ],
         "properties": {
+          "computePlanCapability": {
+            "type": "boolean",
+            "description": "True when this manager recognizes the compute-planner capability role."
+          },
           "operationResultContract": {
             "type": "boolean",
             "description": "True when operation result contracts are persisted before commands\nbecome executable."
