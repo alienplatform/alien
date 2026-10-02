@@ -1085,9 +1085,9 @@ mod tests {
             .build()
     }
 
-    /// The dev manager as `alien dev destroy` sees it: one deployment named `api`, which stays
-    /// listed for one poll after the delete is accepted (cleanup runs asynchronously), then
-    /// disappears.
+    /// The dev manager as `alien dev destroy` sees it: one failed deployment named `api`, which
+    /// stays listed as `deleting` for one poll after the delete is accepted (cleanup runs
+    /// asynchronously), then disappears.
     #[derive(Default)]
     struct DestroyManagerState {
         deleted: Vec<(String, serde_json::Value)>,
@@ -1100,18 +1100,19 @@ mod tests {
         State(manager): State<SharedDestroyManager>,
     ) -> Json<serde_json::Value> {
         let mut manager = manager.lock().unwrap();
-        let visible = if manager.deleted.is_empty() {
-            true
+        // Deletable until the delete is accepted, then `deleting` for one poll, then gone.
+        let status = if manager.deleted.is_empty() {
+            Some("provisioning-failed")
         } else {
             manager.lists_after_delete += 1;
-            manager.lists_after_delete == 1
+            (manager.lists_after_delete == 1).then_some("deleting")
         };
-        let items = if visible {
+        let items = if let Some(status) = status {
             serde_json::json!([{
                 "id": "dep_1",
                 "name": "api",
                 "platform": "local",
-                "status": "deleting",
+                "status": status,
                 "deploymentGroupId": "dg_1",
                 "deploymentProtocolVersion": 1,
                 "projectId": "default",
