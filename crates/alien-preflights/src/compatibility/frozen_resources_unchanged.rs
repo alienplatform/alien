@@ -79,13 +79,15 @@ fn same_aws_architecture(old: Option<&str>, new: Option<&str>) -> bool {
         .is_some_and(|(old, new)| is_same_architecture_aws_machine(old, new))
 }
 
-/// The installed group's disk.
+/// The installed group's disk, from its machine: the catalog fixes some disks, and a recorded
+/// profile sizes the rest.
 enum InstalledDisk {
-    /// Sized from the workload's request by the mutation, so an unchanged request keeps it.
+    /// Sized from the workload's request by the mutation (the catalog disk when no profile was
+    /// recorded), so an unchanged request keeps it.
     Configurable(u64),
     /// A fixed size: it records no request, but a request it met was at most this size.
     Fixed(u64),
-    /// No profile recorded.
+    /// Not a catalog machine.
     Unknown,
 }
 
@@ -94,14 +96,19 @@ fn installed_disk(group: &CapacityGroup) -> InstalledDisk {
         .instance_type
         .as_deref()
         .and_then(|name| find_instance_type(Platform::Aws, name));
-    match (spec, group.profile.as_ref()) {
-        (Some(spec), Some(profile)) if spec.has_configurable_ephemeral_storage() => {
-            InstalledDisk::Configurable(profile.ephemeral_storage_bytes)
-        }
-        (Some(spec), Some(_)) => {
-            InstalledDisk::Fixed(spec.to_machine_profile().ephemeral_storage_bytes)
-        }
-        _ => InstalledDisk::Unknown,
+    let Some(spec) = spec else {
+        return InstalledDisk::Unknown;
+    };
+    let catalog_disk = spec.to_machine_profile().ephemeral_storage_bytes;
+    if spec.has_configurable_ephemeral_storage() {
+        InstalledDisk::Configurable(
+            group
+                .profile
+                .as_ref()
+                .map_or(catalog_disk, |p| p.ephemeral_storage_bytes),
+        )
+    } else {
+        InstalledDisk::Fixed(catalog_disk)
     }
 }
 
@@ -128,8 +135,9 @@ fn requested_disk(stack: &Stack, cluster: &ComputeCluster, group_id: &str) -> Op
 
 /// The profile must be one the compute mutation produces for this machine with the workload's
 /// disk request unchanged: a configurable disk kept at the installed size; off a fixed disk, the
-/// catalog disk grown to the containers' request, no larger than the installed disk; with no
-/// recorded profile, the catalog disk. A fixed disk stays at the catalog's, and nested
+/// catalog disk grown to the containers' request, no larger than the installed disk; off an
+/// uncatalogued machine, the catalog disk. A fixed disk stays at the catalog's and must cover
+/// the request, and nested
 /// virtualization needs a capable machine. Any other disk change needs setup; an explicit cluster
 /// whose release declares the disk is refused off a fixed disk, since the mutation drops it.
 fn profile_matches_catalog(
@@ -166,7 +174,7 @@ fn profile_matches_catalog(
                 InstalledDisk::Unknown => disk == catalog.ephemeral_storage_bytes,
             }
     } else {
-        profile.ephemeral_storage_bytes == catalog.ephemeral_storage_bytes
+        disk == catalog.ephemeral_storage_bytes && requested.is_some_and(|r| r <= disk)
     };
     profile
         .architecture
@@ -879,6 +887,51 @@ mod tests {
             },
         );
         stack
+    }
+
+    #[tokio::test]
+    async fn a_fixed_disk_target_must_cover_the_request() {
+        let old = with_machine(machine_cluster("m7i.large", 2), "m7i.large");
+        let new = with_machine(machine_cluster("m7i.large", 2), "i4i.xlarge");
+        let check = |storage: &'static str| {
+            let (old, new) = (
+                compute_stack(old.clone()),
+                stack_with_request(new.clone(), storage),
+            );
+            async move {
+                FrozenResourcesUnchangedCheck {
+                    platform: Platform::Aws,
+                }
+                .check(&old, &new)
+                .await
+                .unwrap()
+                .success
+            }
+        };
+        assert!(check("20Gi").await);
+        assert!(
+            !check("2Ti").await,
+            "937 GiB does not cover a 2 TiB request"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fixed_disk_machine_without_a_recorded_profile_moves_to_the_requested_disk() {
+        let mut old = with_machine(machine_cluster("i4i.xlarge", 2), "i4i.xlarge");
+        old.capacity_groups[0].profile = None;
+        let mut new = with_machine(machine_cluster("i4i.xlarge", 2), "m7i.large");
+        new.capacity_groups[0]
+            .profile
+            .as_mut()
+            .expect("catalog profile")
+            .ephemeral_storage_bytes = 40 * 1024 * 1024 * 1024;
+        let result = FrozenResourcesUnchangedCheck {
+            platform: Platform::Aws,
+        }
+        .check(&compute_stack(old), &stack_with_request(new, "40Gi"))
+        .await
+        .unwrap();
+        assert!(result.success, "{:?}", result.errors);
     }
 
     #[tokio::test]
