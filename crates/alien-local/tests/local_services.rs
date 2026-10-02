@@ -91,18 +91,34 @@ async fn test_graceful_shutdown() {
     let temp_dir = TempDir::new().unwrap();
     let provider = LocalBindingsProvider::new(temp_dir.path()).unwrap();
 
-    // Start a registry (has background task)
-    provider
+    let registry = provider.artifact_registry_manager().clone();
+    let url = registry.start_registry("shutdown-test").await.unwrap();
+    assert!(reqwest::get(format!("http://{url}/v2/"))
+        .await
+        .unwrap()
+        .status()
+        .is_success());
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), provider.shutdown())
+        .await
+        .expect("shutdown must complete");
+    assert!(!registry.is_running("shutdown-test").await);
+    assert!(
+        reqwest::get(format!("http://{url}/v2/")).await.is_err(),
+        "shutdown must close the listener even while a manager handle exists"
+    );
+    let recovered = LocalBindingsProvider::new(temp_dir.path()).unwrap();
+    let recovered_url = recovered
         .artifact_registry_manager()
         .start_registry("shutdown-test")
         .await
         .unwrap();
-
-    // Shutdown should complete without hanging
-    let shutdown_future = provider.shutdown();
-    tokio::time::timeout(std::time::Duration::from_secs(5), shutdown_future)
+    assert!(reqwest::get(format!("http://{recovered_url}/v2/"))
         .await
-        .expect("Shutdown should complete within 5 seconds");
+        .unwrap()
+        .status()
+        .is_success());
+    recovered.shutdown().await;
 }
 
 /// LocalBindingsProvider clones share the same underlying managers

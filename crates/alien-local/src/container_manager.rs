@@ -1163,6 +1163,20 @@ impl LocalContainerManager {
         })
     }
 
+    /// Resume an existing container without replacing its filesystem or configuration.
+    pub async fn resume_container(&self, container_id: &str) -> Result<()> {
+        let docker_name = format!("alien-{container_id}");
+        self.docker
+            .start_container(&docker_name, None::<StartContainerOptions<String>>)
+            .await
+            .into_alien_error()
+            .context(ErrorData::DockerContainerError {
+                container: container_id.to_string(),
+                operation: "resume".to_string(),
+                reason: "Failed to start the existing container".to_string(),
+            })
+    }
+
     /// Stops a container.
     pub async fn stop_container(&self, container_id: &str) -> Result<()> {
         let docker_name = format!("alien-{}", container_id);
