@@ -1666,6 +1666,57 @@ fn shared_bind_mount_user(_bind_mounts: &[BindMount]) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// Run with DOCKER_HOST pointing at a disposable daemon, on both image stores.
+    #[tokio::test]
+    #[ignore = "requires Docker and registry access"]
+    async fn mutable_archive_load_runs_the_new_content() {
+        let state = tempfile::tempdir().expect("state directory");
+        let manager =
+            LocalContainerManager::new(state.path().to_path_buf()).expect("container manager");
+        let tag = format!("alien-load-test-{}:latest", std::process::id());
+        let mut previous = None;
+        for version in ["app-v1", "app-v2", "app-v1"] {
+            let archive = state.path().join(format!("{version}.tar"));
+            let (image, _) = dockdash::Image::builder()
+                .from("alpine:3.20")
+                .cmd(vec!["echo".to_string(), version.to_string()])
+                .output_name_and_tag(&tag)
+                .output_to(archive.clone())
+                .build()
+                .await
+                .expect("build image archive");
+            let loaded = manager
+                .load_oci_tarball_into_docker(&archive, "load-test")
+                .await
+                .expect("load exact image");
+            assert!(archive_image_ids(image.path())
+                .expect("archive identities")
+                .contains(&loaded));
+            if let Some(previous) = previous {
+                assert_ne!(loaded, previous, "mutable tag must advance to new content");
+            }
+            // Seed the normalized alias, recreating the stale-alias condition on
+            // the next containerd load. The loader must not trust this name.
+            let output = tokio::process::Command::new("docker")
+                .args(["tag", &loaded, &tag])
+                .output()
+                .await
+                .expect("tag image");
+            assert!(output.status.success(), "{:?}", output);
+            let output = tokio::process::Command::new("docker")
+                .args(["run", "--rm", "--network", "none", &loaded])
+                .output()
+                .await
+                .expect("run exact loaded image");
+            assert!(output.status.success(), "{:?}", output);
+            assert_eq!(
+                String::from_utf8(output.stdout).expect("output").trim(),
+                version
+            );
+            previous = Some(loaded);
+        }
+    }
+
     fn test_bind_mount(shared_with_host_workloads: bool) -> BindMount {
         BindMount {
             host_path: PathBuf::from("/tmp/alien-test-binding"),
