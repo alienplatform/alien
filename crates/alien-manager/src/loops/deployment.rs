@@ -502,7 +502,9 @@ impl DeploymentLoop {
                         None => None,
                     };
                     if let Some(provider) = provider {
-                        provider.shutdown().await;
+                        provider.shutdown_for_stop().await.context(GenericError {
+                            message: "Stop local deployment processes".to_string(),
+                        })?;
                         self.local_bindings_cache
                             .lock()
                             .expect("local bindings cache poisoned")

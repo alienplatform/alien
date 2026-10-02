@@ -209,6 +209,16 @@ impl LocalBindingsProvider {
         }
     }
 
+    /// Drain runtimes and retain all metadata and persistent data for resume.
+    /// A failed database stop remains tracked and is returned to the caller.
+    pub async fn shutdown_for_stop(self: Arc<Self>) -> Result<()> {
+        self.clone().shutdown().await;
+        // An in-flight startup recovery can finish after the first worker
+        // drain. Background tasks have now joined, so this drain is final.
+        self.worker_manager().shutdown_all().await;
+        self.postgres_manager.stop_all().await
+    }
+
     // ─────────────── Manager Accessors (for PlatformServiceProvider) ───────────────
 
     /// Returns the storage manager.
