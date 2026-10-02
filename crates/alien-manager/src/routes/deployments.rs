@@ -1459,6 +1459,7 @@ async fn local_runtime_operation(
     };
     if let Some(running) = running {
         control.desired_running = running;
+        control.pending = true;
         if let Err(error) =
             crate::local_runtime::write(state.kv.as_ref(), &id, &control, None).await
         {

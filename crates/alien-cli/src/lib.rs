@@ -126,6 +126,7 @@ impl Cli {
             Some(Commands::Deployments(args)) => args.wants_json_output(),
             Some(Commands::Status(args)) => args.wants_json_output(),
             Some(Commands::Dev(dev)) => match &dev.subcommand {
+                Some(DevSubcommand::Stop(args) | DevSubcommand::Resume(args)) => args.json,
                 Some(DevSubcommand::Release(args)) => args.json,
                 Some(DevSubcommand::Whoami(args)) => args.json,
                 Some(DevSubcommand::Debug(args)) => args.wants_json_output(),
@@ -308,6 +309,10 @@ pub struct DevCommand {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum DevSubcommand {
+    /// Stop local deployment processes, preserving metadata and persistent data.
+    Stop(crate::commands::LocalRuntimeArgs),
+    /// Resume a stopped local deployment.
+    Resume(crate::commands::LocalRuntimeArgs),
     /// Start the local manager only
     Server,
     /// Deployment commands against the local manager
@@ -1343,6 +1348,12 @@ async fn handle_dev_command(dev_cmd: DevCommand) -> Result<()> {
         }
         Some(DevSubcommand::Server) => {
             run_dev_server_only(port, dev_cmd.status_file, parsed_env_vars).await?;
+        }
+        Some(DevSubcommand::Stop(args)) => {
+            crate::commands::local_runtime_task(args, ctx, false).await?
+        }
+        Some(DevSubcommand::Resume(args)) => {
+            crate::commands::local_runtime_task(args, ctx, true).await?
         }
         Some(DevSubcommand::Deployments(args)) => deployments_task(args, ctx).await?,
         Some(DevSubcommand::Releases(args)) => releases_task(args, ctx).await?,

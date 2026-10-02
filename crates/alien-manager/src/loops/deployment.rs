@@ -459,24 +459,39 @@ impl DeploymentLoop {
                 })
             })?;
             if !control.desired_running {
-                if control.observed_running {
+                if control.pending || control.observed_running {
                     // This method owns the deployment lease. No controller can
                     // race this shutdown or recreate a process while it runs.
-                    let provider = get_or_create_local_bindings_provider(
-                        &self.local_bindings_cache,
-                        state_dir,
-                        &deployment_id,
-                    )?;
-                    provider.shutdown().await;
-                    self.local_bindings_cache
+                    let existing = self
+                        .local_bindings_cache
                         .lock()
                         .expect("local bindings cache poisoned")
-                        .remove(&deployment_id);
+                        .get(&deployment_id)
+                        .cloned();
+                    let provider = match existing {
+                        Some(provider) => Some(provider),
+                        None if control.observed_running => {
+                            Some(get_or_create_local_bindings_provider(
+                                &self.local_bindings_cache,
+                                state_dir,
+                                &deployment_id,
+                            )?)
+                        }
+                        None => None,
+                    };
+                    if let Some(provider) = provider {
+                        provider.shutdown().await;
+                        self.local_bindings_cache
+                            .lock()
+                            .expect("local bindings cache poisoned")
+                            .remove(&deployment_id);
+                    }
                     self.set_local_containers_running(state_dir, &deployment_id, false)
                         .await?;
                     let stopped = crate::local_runtime::LocalRuntimeStatus {
                         desired_running: false,
                         observed_running: false,
+                        pending: false,
                     };
                     crate::local_runtime::write(
                         self.server_bindings.kv.as_ref(),
@@ -488,14 +503,14 @@ impl DeploymentLoop {
                 }
                 return Ok(());
             }
-            if !control.observed_running {
+            if control.pending || !control.observed_running {
                 self.set_local_containers_running(state_dir, &deployment_id, true)
                     .await?;
             }
         }
-        let resuming = runtime_control
-            .as_ref()
-            .is_some_and(|(control, _)| control.desired_running && !control.observed_running);
+        let resuming = runtime_control.as_ref().is_some_and(|(control, _)| {
+            control.desired_running && (control.pending || !control.observed_running)
+        });
 
         let status = parse_status(&deployment.status);
 

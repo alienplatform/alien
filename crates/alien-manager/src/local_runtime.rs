@@ -14,6 +14,9 @@ pub struct LocalRuntimeStatus {
     pub desired_running: bool,
     /// Whether the last completed lifecycle operation left processes running.
     pub observed_running: bool,
+    /// Whether the requested lifecycle operation still needs to complete.
+    #[serde(default)]
+    pub pending: bool,
 }
 
 impl Default for LocalRuntimeStatus {
@@ -21,6 +24,7 @@ impl Default for LocalRuntimeStatus {
         Self {
             desired_running: true,
             observed_running: true,
+            pending: false,
         }
     }
 }
@@ -70,4 +74,49 @@ pub(crate) async fn write(
     .context(GenericError {
         message: "Persist local runtime desired state".to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_bindings::providers::kv::local::LocalKv;
+
+    #[tokio::test]
+    async fn concurrent_resume_survives_older_stop_completion_and_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("runtime.db");
+        let kv = LocalKv::new(path.clone()).await.unwrap();
+        let stop = LocalRuntimeStatus {
+            desired_running: false,
+            observed_running: true,
+            pending: true,
+        };
+        assert!(write(&kv, "app", &stop, None).await.unwrap());
+        let (_, stop_version) = read(&kv, "app").await.unwrap().unwrap();
+        let resume = LocalRuntimeStatus {
+            desired_running: true,
+            observed_running: true,
+            pending: true,
+        };
+        assert!(write(&kv, "app", &resume, None).await.unwrap());
+        let completed_stop = LocalRuntimeStatus {
+            desired_running: false,
+            observed_running: false,
+            pending: false,
+        };
+        assert!(!write(&kv, "app", &completed_stop, Some(stop_version))
+            .await
+            .unwrap());
+        drop(kv);
+        let kv = LocalKv::new(path).await.unwrap();
+        let (pending, version) = read(&kv, "app").await.unwrap().unwrap();
+        assert!(pending.desired_running && pending.pending);
+        assert!(
+            write(&kv, "app", &LocalRuntimeStatus::default(), Some(version))
+                .await
+                .unwrap()
+        );
+        let (complete, _) = read(&kv, "app").await.unwrap().unwrap();
+        assert!(complete.desired_running && complete.observed_running && !complete.pending);
+    }
 }
