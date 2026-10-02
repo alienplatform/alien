@@ -55,7 +55,7 @@ fn runtime_managed_frozen_change(platform: Platform, old: &Resource, new: &Resou
                 old_group.instance_type.as_deref(),
                 new_group.instance_type.as_deref(),
             )
-            && profile_matches_catalog(new_group, installed_configurable_disk(old_group))
+            && profile_matches_catalog(new_group, installed_disk(old_group))
         {
             old_group.instance_type = new_group.instance_type.clone();
             old_group.profile = new_group.profile.clone();
@@ -69,20 +69,36 @@ fn same_aws_architecture(old: Option<&str>, new: Option<&str>) -> bool {
         .is_some_and(|(old, new)| is_same_architecture_aws_machine(old, new))
 }
 
-/// The installed disk size when the installed machine's disk is configurable; `None` when it is
-/// fixed or unrecorded, where the new machine's catalog disk is the only size with no request.
-fn installed_configurable_disk(group: &CapacityGroup) -> Option<u64> {
-    let spec = find_instance_type(Platform::Aws, group.instance_type.as_deref()?)?;
-    spec.has_configurable_ephemeral_storage()
-        .then(|| group.profile.as_ref().map(|p| p.ephemeral_storage_bytes))
-        .flatten()
+/// The installed group's disk, which bounds what an unchanged workload request can produce.
+enum InstalledDisk {
+    /// A configurable disk already sized to the request: the new machine keeps this size.
+    Configurable(u64),
+    /// A fixed disk that met the request: the new disk fits between its catalog size and this.
+    Fixed(u64),
+    /// No catalog machine or profile recorded: only the new machine's catalog disk is known safe.
+    Unknown,
+}
+
+fn installed_disk(group: &CapacityGroup) -> InstalledDisk {
+    let spec = group
+        .instance_type
+        .as_deref()
+        .and_then(|name| find_instance_type(Platform::Aws, name));
+    match (spec, group.profile.as_ref()) {
+        (Some(spec), Some(profile)) if spec.has_configurable_ephemeral_storage() => {
+            InstalledDisk::Configurable(profile.ephemeral_storage_bytes)
+        }
+        (Some(spec), Some(_)) => {
+            InstalledDisk::Fixed(spec.to_machine_profile().ephemeral_storage_bytes)
+        }
+        _ => InstalledDisk::Unknown,
+    }
 }
 
 /// The profile must be one the compute mutation could produce for this machine with the
-/// workload's disk request unchanged: a configurable disk kept at the installed size (or the
-/// catalog disk when the installed one was fixed or unrecorded), a fixed disk at the catalog's,
-/// and nested virtualization only on a machine that supports it. A disk change needs setup.
-fn profile_matches_catalog(group: &CapacityGroup, installed_disk_bytes: Option<u64>) -> bool {
+/// workload's disk request unchanged (see `InstalledDisk`), a fixed disk at the catalog's, and
+/// nested virtualization only on a machine that supports it. A disk change needs setup.
+fn profile_matches_catalog(group: &CapacityGroup, installed: InstalledDisk) -> bool {
     let (Some(spec), Some(profile)) = (
         group
             .instance_type
@@ -95,15 +111,15 @@ fn profile_matches_catalog(group: &CapacityGroup, installed_disk_bytes: Option<u
     let catalog = spec.to_machine_profile();
     let disk = profile.ephemeral_storage_bytes;
     let storage_matches = if spec.has_configurable_ephemeral_storage() {
-        match installed_disk_bytes {
-            Some(installed) => {
-                disk == installed
-                    && disk >= catalog.ephemeral_storage_bytes
-                    && max_configurable_ephemeral_storage_bytes(Platform::Aws)
-                        .is_some_and(|max| disk <= max)
+        let within_limits = disk >= catalog.ephemeral_storage_bytes
+            && max_configurable_ephemeral_storage_bytes(Platform::Aws)
+                .is_some_and(|max| disk <= max);
+        within_limits
+            && match installed {
+                InstalledDisk::Configurable(installed) => disk == installed,
+                InstalledDisk::Fixed(installed) => disk <= installed,
+                InstalledDisk::Unknown => disk == catalog.ephemeral_storage_bytes,
             }
-            None => disk == catalog.ephemeral_storage_bytes,
-        }
     } else {
         profile.ephemeral_storage_bytes == catalog.ephemeral_storage_bytes
     };
@@ -787,11 +803,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_fixed_disk_machine_moves_to_a_catalog_disk() {
+    async fn a_fixed_disk_machine_moves_to_a_disk_its_request_fits() {
         let old = with_machine(machine_cluster("i4i.xlarge", 2), "i4i.xlarge");
-        let new = with_machine(machine_cluster("i4i.xlarge", 2), "m7i.large");
-        let result = frozen_check(Platform::Aws, old, new).await;
-        assert!(result.success, "{:?}", result.errors);
+        let with_disk = |bytes: u64| {
+            let mut cluster = machine_cluster("i4i.xlarge", 2);
+            cluster.capacity_groups[0].instance_type = Some("m7i.large".to_string());
+            cluster.capacity_groups[0].profile = Some(
+                find_instance_type(Platform::Aws, "m7i.large")
+                    .expect("catalog machine")
+                    .to_machine_profile_for_storage(bytes),
+            );
+            cluster
+        };
+        const GIB: u64 = 1024 * 1024 * 1024;
+        for requested in [0, 40 * GIB] {
+            let result = frozen_check(Platform::Aws, old.clone(), with_disk(requested)).await;
+            assert!(result.success, "{requested}: {:?}", result.errors);
+        }
+        assert!(
+            !frozen_check(Platform::Aws, old, with_disk(2048 * GIB))
+                .await
+                .success,
+            "a disk beyond the installed fixed disk is a disk change"
+        );
     }
 
     #[tokio::test]
