@@ -414,3 +414,56 @@ async fn imported_kubernetes_compute_retries_namespace_verification() -> Result<
     assert!(state.resources["compute"].outputs.is_none());
     Ok(())
 }
+
+fn machine_cluster(instance_type: &str) -> ComputeCluster {
+    ComputeCluster::new("compute".to_string())
+        .capacity_group(alien_core::CapacityGroup {
+            group_id: "general".to_string(),
+            instance_type: Some(instance_type.to_string()),
+            profile: None,
+            min_size: 1,
+            max_size: 1,
+            scale_policy: None,
+            nested_virtualization: None,
+        })
+        .build()
+}
+
+/// Planning runs `validate_update`, which ignores the platform; this executor's only fixture is
+/// Kubernetes, so it stands in for AWS here (the AWS-only rule lives in the Frozen preflight).
+#[tokio::test]
+async fn a_same_architecture_machine_change_plans_an_update() -> Result<()> {
+    let mut state = StackState::new(Platform::Kubernetes);
+    let mut installed = StackResourceState::new_pending(
+        ComputeCluster::RESOURCE_TYPE.to_string(),
+        Resource::new(machine_cluster("c7g.xlarge")),
+        Some(ResourceLifecycle::Frozen),
+        vec![],
+    );
+    installed.status = ResourceStatus::Running;
+    state.resources.insert("compute".to_string(), installed);
+    let executor = |machine| {
+        let stack = Stack::new("machine-change".to_string())
+            .add(machine_cluster(machine), ResourceLifecycle::Frozen)
+            .build();
+        StackExecutor::builder(
+            &stack,
+            ClientConfig::Kubernetes(Box::new(KubernetesClientConfig::InCluster {
+                namespace: Some("application".to_string()),
+                additional_headers: None,
+            })),
+        )
+        .deployment_config(&default_deployment_config())
+        .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+        .build()
+    };
+
+    let plan = executor("c7g.2xlarge")?.plan(&state)?;
+    assert!(plan.updates.contains_key("compute"));
+
+    let error = executor("m7i.large")?
+        .plan(&state)
+        .expect_err("a cross-architecture machine change cannot be updated");
+    assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+    Ok(())
+}

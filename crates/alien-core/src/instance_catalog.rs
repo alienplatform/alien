@@ -1215,6 +1215,18 @@ pub fn find_instance_type(platform: Platform, name: &str) -> Option<&'static Ins
         .find(|spec| spec.platform == platform && spec.name == name)
 }
 
+/// Whether a capacity group may roll from `old` to `new` at runtime: both are AWS catalog
+/// machines of one architecture, so the stack's images still run on the new machine.
+pub fn is_same_architecture_aws_machine(old: &str, new: &str) -> bool {
+    match (
+        find_instance_type(Platform::Aws, old),
+        find_instance_type(Platform::Aws, new),
+    ) {
+        (Some(old), Some(new)) => old.architecture == new.architecture,
+        _ => false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Instance type selection
 // ---------------------------------------------------------------------------
