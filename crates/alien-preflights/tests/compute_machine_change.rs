@@ -109,3 +109,17 @@ async fn mutated_same_arch_machine_change_passes_and_cross_arch_fails() {
     let cross_arch = prepare(release_stack(), "m7i.large", 1).await;
     assert!(!frozen_check_passes(&installed, &cross_arch).await);
 }
+
+/// Off a fixed disk the installed profile records no request, so the check reads the containers.
+#[tokio::test]
+async fn mutated_fixed_disk_machine_moves_to_the_requested_disk() {
+    let installed = prepare(release_stack(), "i4i.xlarge", 1).await;
+    assert_eq!(group_machine(&installed).0.as_deref(), Some("i4i.xlarge"));
+
+    let moved = prepare(release_stack(), "m7i.large", 1).await;
+    assert_eq!(
+        group_machine(&moved),
+        (Some("m7i.large".to_string()), 40 * 1024 * 1024 * 1024)
+    );
+    assert!(frozen_check_passes(&installed, &moved).await);
+}

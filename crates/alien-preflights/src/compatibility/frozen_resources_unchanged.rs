@@ -2,10 +2,11 @@ use crate::error::Result;
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::instance_catalog::{
     find_instance_type, is_same_architecture_aws_machine, max_configurable_ephemeral_storage_bytes,
+    parse_memory_bytes,
 };
 use alien_core::{
-    CapacityGroup, ComputeCluster, Platform, Resource, ResourceLifecycle, Sandbox, SandboxCode,
-    Stack,
+    CapacityGroup, ComputeCluster, Container, Platform, Resource, ResourceLifecycle, Sandbox,
+    SandboxCode, Stack,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -26,7 +27,12 @@ pub struct FrozenResourcesUnchangedCheck {
 /// Setup owns the ComputeCluster identity and network boundary; the runtime controller owns fleet
 /// capacity and, on AWS, a group's machine within one catalog architecture, which the stack's
 /// images target. Any other group, profile, placement or networking change needs setup.
-fn runtime_managed_frozen_change(platform: Platform, old: &Resource, new: &Resource) -> bool {
+fn runtime_managed_frozen_change(
+    platform: Platform,
+    new_stack: &Stack,
+    old: &Resource,
+    new: &Resource,
+) -> bool {
     let (Some(old_cluster), Some(new_cluster)) = (
         old.downcast_ref::<ComputeCluster>(),
         new.downcast_ref::<ComputeCluster>(),
@@ -55,7 +61,11 @@ fn runtime_managed_frozen_change(platform: Platform, old: &Resource, new: &Resou
                 old_group.instance_type.as_deref(),
                 new_group.instance_type.as_deref(),
             )
-            && profile_matches_catalog(new_group, installed_disk(old_group))
+            && profile_matches_catalog(
+                new_group,
+                installed_configurable_disk(old_group),
+                requested_disk(new_stack, new_cluster, &new_group.group_id),
+            )
         {
             old_group.instance_type = new_group.instance_type.clone();
             old_group.profile = new_group.profile.clone();
@@ -69,36 +79,46 @@ fn same_aws_architecture(old: Option<&str>, new: Option<&str>) -> bool {
         .is_some_and(|(old, new)| is_same_architecture_aws_machine(old, new))
 }
 
-/// The installed group's disk, which bounds what an unchanged workload request can produce.
-enum InstalledDisk {
-    /// A configurable disk already sized to the request: the new machine keeps this size.
-    Configurable(u64),
-    /// A fixed disk that met the request: the new disk fits between its catalog size and this.
-    Fixed(u64),
-    /// No catalog machine or profile recorded: only the new machine's catalog disk is known safe.
-    Unknown,
+/// The installed disk when it is configurable: the mutation sized it from the workload's request,
+/// so an unchanged request keeps it. `None` for a fixed or unrecorded disk, which records no request.
+fn installed_configurable_disk(group: &CapacityGroup) -> Option<u64> {
+    let spec = find_instance_type(Platform::Aws, group.instance_type.as_deref()?)?;
+    spec.has_configurable_ephemeral_storage()
+        .then(|| group.profile.as_ref().map(|p| p.ephemeral_storage_bytes))
+        .flatten()
 }
 
-fn installed_disk(group: &CapacityGroup) -> InstalledDisk {
-    let spec = group
-        .instance_type
-        .as_deref()
-        .and_then(|name| find_instance_type(Platform::Aws, name));
-    match (spec, group.profile.as_ref()) {
-        (Some(spec), Some(profile)) if spec.has_configurable_ephemeral_storage() => {
-            InstalledDisk::Configurable(profile.ephemeral_storage_bytes)
-        }
-        (Some(spec), Some(_)) => {
-            InstalledDisk::Fixed(spec.to_machine_profile().ephemeral_storage_bytes)
-        }
-        _ => InstalledDisk::Unknown,
-    }
+/// The largest ephemeral storage requested by the containers the compute mutation places on the
+/// group: those naming it as their pool, or with no pool when the cluster has one group. `None`
+/// when a request does not parse, which refuses any disk that needs the request.
+fn requested_disk(stack: &Stack, cluster: &ComputeCluster, group_id: &str) -> Option<u64> {
+    let single_group = cluster.capacity_groups.len() == 1;
+    stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<Container>())
+        .filter(|container| {
+            container.cluster.as_deref() == Some(cluster.id.as_str())
+                && match container.pool.as_deref() {
+                    Some(pool) => pool == group_id,
+                    None => single_group,
+                }
+        })
+        .filter_map(|container| container.ephemeral_storage.as_deref())
+        .try_fold(0, |max, storage| {
+            parse_memory_bytes(storage).ok().map(|bytes| max.max(bytes))
+        })
 }
 
-/// The profile must be one the compute mutation could produce for this machine with the
-/// workload's disk request unchanged (see `InstalledDisk`), a fixed disk at the catalog's, and
-/// nested virtualization only on a machine that supports it. A disk change needs setup.
-fn profile_matches_catalog(group: &CapacityGroup, installed: InstalledDisk) -> bool {
+/// The profile must be one the compute mutation produces for this machine: a configurable disk
+/// kept at the installed size, or after a fixed or unrecorded disk the catalog disk grown to the
+/// containers' request; a fixed disk at the catalog's; nested virtualization only on a capable
+/// machine. Any other disk change needs setup. An explicit cluster whose release declares the
+/// disk moving off a fixed disk is refused, since the declared size is gone after the mutation.
+fn profile_matches_catalog(
+    group: &CapacityGroup,
+    installed_disk: Option<u64>,
+    requested: Option<u64>,
+) -> bool {
     let (Some(spec), Some(profile)) = (
         group
             .instance_type
@@ -115,10 +135,13 @@ fn profile_matches_catalog(group: &CapacityGroup, installed: InstalledDisk) -> b
             && max_configurable_ephemeral_storage_bytes(Platform::Aws)
                 .is_some_and(|max| disk <= max);
         within_limits
-            && match installed {
-                InstalledDisk::Configurable(installed) => disk == installed,
-                InstalledDisk::Fixed(installed) => disk <= installed,
-                InstalledDisk::Unknown => disk == catalog.ephemeral_storage_bytes,
+            && match installed_disk {
+                Some(installed) => disk == installed,
+                None => requested.is_some_and(|r| {
+                    disk == spec
+                        .to_machine_profile_for_storage(r)
+                        .ephemeral_storage_bytes
+                }),
             }
     } else {
         profile.ephemeral_storage_bytes == catalog.ephemeral_storage_bytes
@@ -215,6 +238,7 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
                 if old_entry.config != new_entry.config
                     && !runtime_managed_frozen_change(
                         self.platform,
+                        new_stack,
                         &old_entry.config,
                         &new_entry.config,
                     )
@@ -802,29 +826,84 @@ mod tests {
         assert!(!frozen_check(Platform::Aws, old, new).await.success);
     }
 
+    /// The new stack with one pool-less container on the single-group cluster requesting
+    /// `storage`, as the compute mutation leaves an auto cluster with one group.
+    fn stack_with_request(cluster: ComputeCluster, storage: &str) -> Stack {
+        let mut stack = compute_stack(cluster);
+        let mut container = alien_core::Container::new("api".to_string())
+            .code(alien_core::ContainerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .permissions("test".to_string())
+            .build();
+        container.cluster = Some("compute".to_string());
+        container.ephemeral_storage = Some(storage.to_string());
+        stack.resources.insert(
+            "api".to_string(),
+            ResourceEntry {
+                config: Resource::new(container),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: vec![],
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        stack
+    }
+
     #[tokio::test]
-    async fn a_fixed_disk_machine_moves_to_a_disk_its_request_fits() {
+    async fn a_fixed_disk_machine_moves_to_the_disk_its_containers_request() {
+        const GIB: u64 = 1024 * 1024 * 1024;
         let old = with_machine(machine_cluster("i4i.xlarge", 2), "i4i.xlarge");
         let with_disk = |bytes: u64| {
-            let mut cluster = machine_cluster("i4i.xlarge", 2);
-            cluster.capacity_groups[0].instance_type = Some("m7i.large".to_string());
-            cluster.capacity_groups[0].profile = Some(
-                find_instance_type(Platform::Aws, "m7i.large")
-                    .expect("catalog machine")
-                    .to_machine_profile_for_storage(bytes),
-            );
+            let mut cluster = with_machine(machine_cluster("i4i.xlarge", 2), "m7i.large");
+            cluster.capacity_groups[0]
+                .profile
+                .as_mut()
+                .expect("catalog profile")
+                .ephemeral_storage_bytes = bytes;
             cluster
         };
-        const GIB: u64 = 1024 * 1024 * 1024;
-        for requested in [0, 40 * GIB] {
-            let result = frozen_check(Platform::Aws, old.clone(), with_disk(requested)).await;
-            assert!(result.success, "{requested}: {:?}", result.errors);
-        }
-        assert!(
-            !frozen_check(Platform::Aws, old, with_disk(2048 * GIB))
+        let check = |new: ComputeCluster, storage: Option<&str>| {
+            let old = compute_stack(old.clone());
+            let new = match storage {
+                Some(storage) => stack_with_request(new, storage),
+                None => compute_stack(new),
+            };
+            async move {
+                FrozenResourcesUnchangedCheck {
+                    platform: Platform::Aws,
+                }
+                .check(&old, &new)
                 .await
-                .success,
-            "a disk beyond the installed fixed disk is a disk change"
+                .unwrap()
+                .success
+            }
+        };
+
+        assert!(
+            check(with_disk(20 * GIB), None).await,
+            "no request: catalog disk"
+        );
+        assert!(
+            check(with_disk(40 * GIB), Some("40Gi")).await,
+            "the request's disk"
+        );
+        assert!(
+            !check(with_disk(500 * GIB), None).await,
+            "a disk nobody requested"
+        );
+        assert!(
+            !check(with_disk(500 * GIB), Some("40Gi")).await,
+            "more than requested"
         );
     }
 
