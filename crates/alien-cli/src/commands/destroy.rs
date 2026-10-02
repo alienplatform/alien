@@ -17,7 +17,7 @@ use alien_deployment::manager_api_transport::{
     ManagerApiTransport, SetupDeleteAcquireOutcome,
 };
 use alien_deployment::runner::{preserve_semantic_failure, RunnerPolicy, RunnerResult};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use clap::Parser;
 use std::str::FromStr;
@@ -379,9 +379,16 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         }
         LoopOutcome::Failure => {
             steps.fail(2, Some(format!("{:?}", loop_result.final_status)));
-            return Err(AlienError::new(ErrorData::DeploymentFailed {
+            let failed = ErrorData::DeploymentFailed {
                 message: format!("deletion failed at status {:?}", loop_result.final_status),
-            }));
+            };
+            // The final state's headline error names each failed resource and its cause.
+            return Err(
+                match alien_deployment::deployment_headline_error_from_state(&current) {
+                    Some(cause) => cause.context(failed),
+                    None => AlienError::new(failed),
+                },
+            );
         }
         LoopOutcome::Neutral => {
             steps.complete(2, Some("Deletion in progress".to_string()));

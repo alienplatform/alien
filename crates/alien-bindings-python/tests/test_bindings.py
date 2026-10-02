@@ -25,7 +25,7 @@ from alienplatform import (
     vault,
     worker,
 )
-from alienplatform.bindings import AiConnection, PostgresConnection
+from alienplatform.bindings import AiConnection, PostgresConnection, SandboxPreview
 
 
 def bind(name: str, value: dict[str, object]) -> None:
@@ -226,6 +226,47 @@ async def test_missing_binding_is_stable_alien_error() -> None:
     with pytest.raises(AlienError) as sandbox_error:
         await sandbox("missing-sandbox").capabilities()
     assert sandbox_error.value.code == "BINDING_NOT_CONFIGURED"
+
+
+@pytest.mark.asyncio
+async def test_sandbox_preview_returns_what_the_local_route_grants(tmp_path: Path) -> None:
+    requests: list[tuple[str, str | None]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            requests.append((self.path, self.headers["Authorization"]))
+            body = json.dumps({"endpoint": "http://127.0.0.1:49152", "allowedPorts": [8080]})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        token_path = tmp_path / "token"
+        token_path.write_text("route-token\n")
+        bind(
+            "sandbox-preview",
+            {
+                "service": "sandbox-local",
+                "managerUrl": f"http://127.0.0.1:{server.server_port}",
+                "sandboxKey": "preview-test",
+                "tokenPath": str(token_path),
+            },
+        )
+        binding = sandbox("sandbox-preview")
+        assert "preview" in await binding.capabilities()
+        preview = await binding.preview("s1", 8080)
+        assert preview == SandboxPreview("http://127.0.0.1:49152", {}, (8080,), 0)
+        assert requests == [("/v1/sessions/s1/preview?port=8080", "Bearer route-token")]
+    finally:
+        server.shutdown()
+        thread.join()
 
 
 @pytest.mark.asyncio

@@ -51,7 +51,7 @@ pub struct VaultArgs {
     pub action: VaultAction,
 
     /// Target deployment name (default: "default")
-    #[arg(long, default_value = "default")]
+    #[arg(long, default_value = "default", global = true)]
     pub deployment: String,
 
     /// State directory (default: .alien)
@@ -352,9 +352,22 @@ pub struct VaultRemoteArgs {
     #[command(subcommand)]
     pub action: VaultAction,
 
-    /// Target deployment ID or name
-    #[arg(long)]
-    pub deployment: String,
+    /// Target deployment ID or name (required). Global so it can follow the subcommand; clap
+    /// refuses a required global argument, so [`VaultRemoteArgs::deployment`] checks it.
+    #[arg(long, global = true)]
+    pub deployment: Option<String>,
+}
+
+impl VaultRemoteArgs {
+    /// The target deployment, or the error for a missing `--deployment`.
+    pub fn deployment(&self) -> Result<&str> {
+        self.deployment.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "deployment".to_string(),
+                message: "--deployment is required".to_string(),
+            })
+        })
+    }
 }
 
 /// Execute vault command via the manager API (standalone/platform mode).
@@ -362,11 +375,12 @@ pub async fn vault_remote_task(
     args: VaultRemoteArgs,
     ctx: crate::execution_context::ExecutionMode,
 ) -> Result<()> {
+    let deployment = args.deployment()?.to_string();
     let manager_url = ctx.manager_url();
     let http = ctx.auth_http().await?.client;
 
     // Resolve deployment ID: if the user passed a name, look it up.
-    let deployment_id = resolve_deployment_id(&args.deployment, &http, &manager_url).await?;
+    let deployment_id = resolve_deployment_id(&deployment, &http, &manager_url).await?;
 
     match args.action {
         VaultAction::Set {
@@ -402,7 +416,7 @@ pub async fn vault_remote_task(
 
             println!(
                 "Secret '{}' set in vault '{}' for deployment '{}'",
-                secret_name, vault_name, args.deployment,
+                secret_name, vault_name, deployment,
             );
         }
         VaultAction::Get {
@@ -466,7 +480,7 @@ pub async fn vault_remote_task(
 
             println!(
                 "Secret '{}' deleted from vault '{}' for deployment '{}'",
-                secret_name, vault_name, args.deployment,
+                secret_name, vault_name, deployment,
             );
         }
         VaultAction::List { vault_name } => {

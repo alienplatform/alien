@@ -632,7 +632,7 @@ impl DeploymentLoop {
         let provided_config = deployment.deployment_config.as_ref();
         let monitoring = provided_config
             .and_then(|config| config.monitoring.clone())
-            .or_else(|| self.build_monitoring_config(&deployment));
+            .or_else(|| build_monitoring_config(&self.config, &deployment));
 
         // 5. Build deployment config.
         // Management config resolution:
@@ -1002,23 +1002,29 @@ impl DeploymentLoop {
             created_at: chrono::Utc::now().to_rfc3339(),
         })
     }
+}
 
-    fn build_monitoring_config(
-        &self,
-        deployment: &DeploymentRecord,
-    ) -> Option<alien_core::OtlpConfig> {
-        let otlp_enabled =
-            self.config.otlp_endpoint.is_some() || self.config.enable_local_log_ingest();
-        let token = deployment.deployment_token.as_ref()?;
+/// Where a deployment without a monitoring config sends its logs: back to this manager, unless
+/// the deployment turned telemetry off. The platform leaves `monitoring` empty for `off`, so
+/// filling it here must honor the same setting.
+fn build_monitoring_config(
+    config: &ManagerConfig,
+    deployment: &DeploymentRecord,
+) -> Option<alien_core::OtlpConfig> {
+    let telemetry_off = deployment
+        .stack_settings
+        .as_ref()
+        .is_some_and(|settings| settings.telemetry == alien_core::TelemetryMode::Off);
+    let otlp_enabled = config.otlp_endpoint.is_some() || config.enable_local_log_ingest();
+    let token = deployment.deployment_token.as_ref()?;
 
-        otlp_enabled.then(|| alien_core::OtlpConfig {
-            logs_endpoint: format!("{}/v1/logs", self.config.base_url()),
-            logs_auth_header: format!("authorization=Bearer {}", token),
-            metrics_endpoint: None,
-            metrics_auth_header: None,
-            resource_attributes: std::collections::HashMap::new(),
-        })
-    }
+    (otlp_enabled && !telemetry_off).then(|| alien_core::OtlpConfig {
+        logs_endpoint: format!("{}/v1/logs", config.base_url()),
+        logs_auth_header: format!("authorization=Bearer {}", token),
+        metrics_endpoint: None,
+        metrics_auth_header: None,
+        resource_attributes: std::collections::HashMap::new(),
+    })
 }
 
 /// Builds the scoped token that authenticates Local/Kubernetes command pushes
@@ -1165,10 +1171,11 @@ fn state_from_record(
 #[cfg(test)]
 mod tests {
     use super::{
-        active_work_statuses, commands_receiver_env_vars, gcp_credential_handoff_retry_remaining,
-        get_or_create_local_bindings_provider, has_remote_stack_management_outputs,
-        manager_candidate_statuses, needs_provision_capability, parse_status,
-        retryable_failed_statuses, should_wait_for_credential_handoff, with_environment_snapshot,
+        active_work_statuses, build_monitoring_config, commands_receiver_env_vars,
+        gcp_credential_handoff_retry_remaining, get_or_create_local_bindings_provider,
+        has_remote_stack_management_outputs, manager_candidate_statuses,
+        needs_provision_capability, parse_status, retryable_failed_statuses,
+        should_wait_for_credential_handoff, with_environment_snapshot,
         worker_commands_push_env_vars, GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD,
     };
     use alien_core::{
@@ -1229,6 +1236,36 @@ mod tests {
             updated_at: None,
             error: None,
         }
+    }
+
+    /// A deployment that turned telemetry off gets no log endpoint from this manager, as the
+    /// platform already does; one that left it on gets this manager's.
+    #[test]
+    fn telemetry_off_gets_no_log_endpoint_from_the_manager() {
+        let config = crate::config::ManagerConfig {
+            enable_local_log_ingest: true,
+            ..Default::default()
+        };
+        let deployment_with = |telemetry: alien_core::TelemetryMode| DeploymentRecord {
+            deployment_token: Some("dep-token".to_string()),
+            stack_settings: Some(StackSettings {
+                telemetry,
+                ..Default::default()
+            }),
+            ..deployment_record(DeploymentStatus::Running, None)
+        };
+
+        assert!(
+            build_monitoring_config(&config, &deployment_with(alien_core::TelemetryMode::Off))
+                .is_none()
+        );
+        let monitoring =
+            build_monitoring_config(&config, &deployment_with(alien_core::TelemetryMode::Auto))
+                .expect("telemetry left on ships logs to the manager");
+        assert_eq!(
+            monitoring.logs_endpoint,
+            format!("{}/v1/logs", config.base_url())
+        );
     }
 
     fn deployment_status_str(status: DeploymentStatus) -> &'static str {

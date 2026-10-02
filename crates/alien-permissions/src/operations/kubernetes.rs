@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 use super::{catalog, invalid, sorted, types::*, Result};
 
 fn valid_token(value: &str) -> bool {
@@ -228,6 +230,118 @@ pub fn collect(plugins: &[CatalogPlugin]) -> Vec<KubernetesGrant> {
         }
     }
     grants.into_values().collect()
+}
+
+/// An installation option that needs Kubernetes access beyond the Operator's
+/// own sync work. The chart binds each feature's rules only when the feature
+/// is on, and the permission review shows them under that condition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OperatorFeature {
+    /// Release-independent workloads the deployment owner requests through the
+    /// API. Product charts retain this access to suspend or delete existing
+    /// workloads after an installed release withdraws image approvals.
+    DynamicContainers,
+    /// Pod log collection through the Kubernetes API (`podApi` mode).
+    PodLogs,
+}
+
+/// One rule the chart grants the Operator ServiceAccount for its own work.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorRuntimeRule {
+    pub api_group: String,
+    pub resource: String,
+    pub verbs: Vec<String>,
+    pub reason: String,
+    /// `None` on every install; `Some` only on installs with that feature.
+    pub feature: Option<OperatorFeature>,
+}
+
+/// Rules the Remote Operator uses for its own work, whatever operations are
+/// enabled. Each sync lists the Deployments, StatefulSets and DaemonSets in
+/// scope, then lists each workload's pods, events and pod metrics. Pod log
+/// collection in `podApi` mode lists DaemonSets and pods. Operations add their
+/// own declared rules on top of these.
+///
+/// Rules with a `feature` are bound only when the installation enables it;
+/// the Helm generator and the permission review read the same list.
+pub fn operator_runtime_rules() -> Vec<OperatorRuntimeRule> {
+    const INVENTORY: &str = "Workload inventory reported on every sync";
+    const DYNAMIC: &str = "Dynamic containers requested through the API, including suspension and cleanup after image approvals change";
+    let list = ["list"];
+    let manage = ["get", "list", "create", "update", "delete"];
+    [
+        ("apps", "deployments", &list[..], INVENTORY, None),
+        ("apps", "statefulsets", &list[..], INVENTORY, None),
+        (
+            "apps",
+            "daemonsets",
+            &list[..],
+            "Workload inventory reported on every sync; log collector discovery in podApi mode",
+            None,
+        ),
+        (
+            "",
+            "pods",
+            &list[..],
+            "Pod status of each observed workload; pod log discovery in podApi mode",
+            None,
+        ),
+        (
+            "",
+            "events",
+            &list[..],
+            "Recent events of each observed workload",
+            None,
+        ),
+        (
+            "metrics.k8s.io",
+            "pods",
+            &list[..],
+            "CPU and memory of each observed workload",
+            None,
+        ),
+        (
+            "apps",
+            "deployments",
+            &manage[..],
+            DYNAMIC,
+            Some(OperatorFeature::DynamicContainers),
+        ),
+        (
+            "",
+            "services",
+            &manage[..],
+            DYNAMIC,
+            Some(OperatorFeature::DynamicContainers),
+        ),
+        (
+            "",
+            "secrets",
+            &manage[..],
+            "Environment and registry credentials of dynamic containers",
+            Some(OperatorFeature::DynamicContainers),
+        ),
+        (
+            "",
+            "pods/log",
+            &["get"][..],
+            "Pod log collection through the Kubernetes API in podApi mode",
+            Some(OperatorFeature::PodLogs),
+        ),
+    ]
+    .into_iter()
+    .map(
+        |(api_group, resource, verbs, reason, feature)| OperatorRuntimeRule {
+            api_group: api_group.to_owned(),
+            resource: resource.to_owned(),
+            verbs: verbs.iter().map(|verb| (*verb).to_owned()).collect(),
+            reason: reason.to_owned(),
+            feature,
+        },
+    )
+    .collect()
 }
 
 pub fn grants_verb(mode: KubernetesMode, verb: &str) -> bool {

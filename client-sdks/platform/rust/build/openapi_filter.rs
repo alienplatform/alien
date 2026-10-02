@@ -90,6 +90,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "resolve",
     "retryDeployment",
     "revokeAPIKey",
+    "revokeAccessRequest",
     "setDeploymentGroupExternalId",
     "setDeploymentReleaseChannel",
     "verifyOperationCheck",

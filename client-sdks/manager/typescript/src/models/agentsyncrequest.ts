@@ -4,6 +4,11 @@
 
 import * as z from "zod/v4";
 import {
+  DynamicContainerReport,
+  DynamicContainerReport$Outbound,
+  DynamicContainerReport$outboundSchema,
+} from "./dynamiccontainerreport.js";
+import {
   ExecutionClaim,
   ExecutionClaim$Outbound,
   ExecutionClaim$outboundSchema,
@@ -64,6 +69,10 @@ export type AgentSyncRequest = {
   session?: string | undefined;
   supportsExecutionClaims?: boolean | undefined;
   application?: ObservedApplicationReport | null | undefined;
+  /**
+   * Absent for older Operators. This report has no secret values.
+   */
+  dynamicContainers?: Array<DynamicContainerReport> | null | undefined;
   operatorImage?: OperatorImageReport | null | undefined;
 };
 
@@ -80,6 +89,7 @@ export type AgentSyncRequest$Outbound = {
   session?: string | undefined;
   supportsExecutionClaims?: boolean | undefined;
   application?: ObservedApplicationReport$Outbound | null | undefined;
+  dynamicContainers?: Array<DynamicContainerReport$Outbound> | null | undefined;
   operatorImage?: OperatorImageReport$Outbound | null | undefined;
 };
 
@@ -100,6 +110,8 @@ export const AgentSyncRequest$outboundSchema: z.ZodType<
   session: z.string().optional(),
   supportsExecutionClaims: z.boolean().optional(),
   application: z.nullable(ObservedApplicationReport$outboundSchema).optional(),
+  dynamicContainers: z.nullable(z.array(DynamicContainerReport$outboundSchema))
+    .optional(),
   operatorImage: z.nullable(OperatorImageReport$outboundSchema).optional(),
 });
 

@@ -203,11 +203,32 @@ where
         }
     }
 
+    let failed_checks = find_failed_checks(error);
+    if !failed_checks.is_empty() {
+        rendered.push('\n');
+        rendered.push_str("Failed checks:");
+        for check in failed_checks {
+            rendered.push('\n');
+            // A message can span lines; keep them under its bullet.
+            rendered.push_str(&format!("  - {}", check.replace('\n', "\n    ")));
+        }
+    }
+
     if let Some(build_output) = find_build_output(error) {
         rendered.push('\n');
         rendered.push_str("Build output:");
         rendered.push('\n');
         rendered.push_str(&build_output);
+    }
+
+    let failed_resources = find_failed_resources(error);
+    if !failed_resources.is_empty() {
+        rendered.push('\n');
+        rendered.push_str("Failed resources:");
+        for failure in failed_resources {
+            rendered.push('\n');
+            rendered.push_str(&format!("  - {failure}"));
+        }
     }
 
     if let Some(hint) = report.hint {
@@ -262,6 +283,48 @@ fn build_output_from_context(context: Option<&Value>) -> Option<String> {
         .map(ToString::to_string)
 }
 
+/// Every error message of the preflight results carried by the first error in the chain that
+/// has any: a validation failure's own message only counts them.
+fn find_failed_checks<T>(error: &AlienError<T>) -> Vec<String>
+where
+    T: AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+{
+    let own = failed_checks_from_context(error.context.as_ref());
+    if !own.is_empty() {
+        return own;
+    }
+    error
+        .source
+        .as_deref()
+        .map(find_failed_checks_generic)
+        .unwrap_or_default()
+}
+
+fn find_failed_checks_generic(error: &AlienError<GenericError>) -> Vec<String> {
+    let own = failed_checks_from_context(error.context.as_ref());
+    if !own.is_empty() {
+        return own;
+    }
+    error
+        .source
+        .as_deref()
+        .map(find_failed_checks_generic)
+        .unwrap_or_default()
+}
+
+fn failed_checks_from_context(context: Option<&Value>) -> Vec<String> {
+    context
+        .and_then(|context| context.get("results"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|result| result.get("errors").and_then(Value::as_array))
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(ToString::to_string)
+        .collect()
+}
+
 fn request_id_from_context(context: Option<&Value>) -> Option<String> {
     let context = context?;
     context
@@ -272,10 +335,113 @@ fn request_id_from_context(context: Option<&Value>) -> Option<String> {
         .map(ToString::to_string)
 }
 
+/// `resource: root cause` for each resource of the first error in the chain that lists failed
+/// resources: a deployment failure's own message only counts them.
+fn find_failed_resources<T>(error: &AlienError<T>) -> Vec<String>
+where
+    T: AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+{
+    let own = failed_resources_from_context(error.context.as_ref());
+    if !own.is_empty() {
+        return own;
+    }
+    error
+        .source
+        .as_deref()
+        .map(find_failed_resources)
+        .unwrap_or_default()
+}
+
+/// The failed resources in a deployment failure's context, each with its root cause.
+pub(crate) fn failed_resources_from_context(context: Option<&Value>) -> Vec<String> {
+    context
+        .and_then(|context| context.get("resource_errors"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|failure| {
+            let resource_id = failure.get("resourceId").and_then(Value::as_str)?;
+            let cause = root_cause_message(failure.get("error")?)?;
+            Some(format!("{resource_id}: {cause}"))
+        })
+        .collect()
+}
+
+/// Walk the source chain of a serialized AlienError to find the root cause message.
+/// Prefers the deepest non-internal error; falls back to the deepest error overall.
+pub(crate) fn root_cause_message(error: &Value) -> Option<String> {
+    let mut deepest_non_internal: Option<&str> = None;
+    let mut deepest: Option<&str> = None;
+    let mut current = error;
+
+    loop {
+        let msg = current.get("message").and_then(|v| v.as_str());
+        let is_internal = current
+            .get("internal")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        if let Some(m) = msg {
+            deepest = Some(m);
+            if !is_internal {
+                deepest_non_internal = Some(m);
+            }
+        }
+
+        match current.get("source") {
+            Some(source) if source.is_object() => current = source,
+            _ => break,
+        }
+    }
+
+    deepest_non_internal.or(deepest).map(ToOwned::to_owned)
+}
+
 #[cfg(test)]
 mod event_tests {
     use super::*;
     use alien_error::Context;
+
+    /// `deployments get` renders the stored deployment error. A deployment failure's own
+    /// message only counts the failed resources, so each one is listed with its root cause.
+    #[test]
+    fn render_human_error_names_each_failed_resource() {
+        let cause = AlienError::new(crate::error::ErrorData::ValidationError {
+            field: "image".to_string(),
+            message: "the image was not found".to_string(),
+        })
+        .into_generic();
+        let failed = |resource_id: &str| alien_deployment::ResourceError {
+            resource_id: resource_id.to_string(),
+            resource_type: "container".to_string(),
+            error: Some(cause.clone()),
+        };
+        let stored = serde_json::to_value(
+            AlienError::new(alien_deployment::ErrorData::DeploymentFailed {
+                resource_errors: vec![failed("api"), failed("worker")],
+                total_resources: 10,
+                failed_resources: 2,
+                interrupted_resources: 4,
+            })
+            .into_generic(),
+        )
+        .expect("serialize the deployment error");
+        let error: AlienError =
+            serde_json::from_value(stored).expect("deserialize the stored deployment error");
+        let listed = "Failed resources:\n  - api: Validation failed for image: the image was not found\n  - worker: Validation failed for image: the image was not found";
+
+        let rendered = render_human_error(&error);
+        assert!(rendered.contains(listed), "{rendered}");
+
+        // `alien deploy` wraps the state's error in its own summary of the failed phase.
+        let deploy_error = Err::<(), _>(error)
+            .context(crate::error::ErrorData::DeploymentFailed {
+                message: "provisioning failed".to_string(),
+            })
+            .unwrap_err();
+        let rendered = render_human_error(&deploy_error);
+        assert!(rendered.contains(listed), "{rendered}");
+    }
 
     #[test]
     fn render_human_error_leaves_regular_errors_unchanged() {
@@ -287,6 +453,49 @@ mod event_tests {
         let rendered = render_human_error(&error);
 
         assert_eq!(rendered, "Validation failed for platform: unknown platform");
+    }
+
+    #[test]
+    fn render_human_error_lists_every_failed_preflight_check() {
+        let check = |description: &str, errors: &[&str]| alien_preflights::CheckResult {
+            code: None,
+            status: None,
+            check_description: Some(description.to_string()),
+            success: errors.is_empty(),
+            errors: errors.iter().map(ToString::to_string).collect(),
+            warnings: Vec::new(),
+        };
+        let error = Err::<(), _>(AlienError::new(
+            alien_preflights::error::ErrorData::ValidationFailed {
+                error_count: 3,
+                warning_count: 0,
+                results: vec![
+                    check(
+                        "Inputs are provided",
+                        &["Input 'apiKey' is not deployer-provided"],
+                    ),
+                    check("Sandboxes build", &[]),
+                    check("Input patterns", &["Input 'region' must match:\n^[a-z]+$"]),
+                    check(
+                        "Sandbox lifecycle",
+                        &["A source-built sandbox must be Live"],
+                    ),
+                ],
+            },
+        ))
+        .context(crate::error::ErrorData::ConfigurationError {
+            message: "Stack validation failed".to_string(),
+        })
+        .unwrap_err();
+
+        let rendered = render_human_error(&error);
+
+        assert!(
+            rendered.contains(
+                "Failed checks:\n  - Input 'apiKey' is not deployer-provided\n  - Input 'region' must match:\n    ^[a-z]+$\n  - A source-built sandbox must be Live"
+            ),
+            "{rendered}"
+        );
     }
 
     #[test]

@@ -581,6 +581,7 @@ pub async fn create_initial_deployment(
     deployment_name: &str,
     port: u16,
     environment_variables: Option<Vec<alien_core::EnvironmentVariable>>,
+    input_values: HashMap<String, serde_json::Value>,
 ) -> Result<String> {
     let client = local_dev_client(port);
 
@@ -600,6 +601,17 @@ pub async fn create_initial_deployment(
         .iter()
         .find(|d| d.name == deployment_name)
     {
+        // Inputs are fixed when a deployment is created, and the manager doesn't return them
+        // (they may be secrets), so a rerun can't tell whether they changed: say so instead of
+        // dropping them silently.
+        if !input_values.is_empty() {
+            eprintln!(
+                "{} local deployment '{deployment_name}' already exists; its inputs are set at \
+                 creation and were not changed. Destroy it with `alien dev destroy --name \
+                 {deployment_name}` to create it with new inputs.",
+                crate::ui::dim_label("Warning:")
+            );
+        }
         info!("Deployment '{}' already exists", deployment_name);
         return Ok(existing.id.clone());
     }
@@ -634,7 +646,8 @@ pub async fn create_initial_deployment(
         .body_map(|body| {
             let mut b = body
                 .name(deployment_name)
-                .platform(alien_manager_api::types::Platform::Local);
+                .platform(alien_manager_api::types::Platform::Local)
+                .input_values(input_values.into_iter().collect::<serde_json::Map<_, _>>());
             if let Some(ref vars) = env_vars {
                 b = b.environment_variables(vars.clone());
             }
@@ -691,7 +704,7 @@ pub async fn prepare_dev_session_deployment(
         wait_for_local_deployment_absent(port, deployment_name).await?;
     }
 
-    create_initial_deployment(deployment_name, port, environment_variables).await
+    create_initial_deployment(deployment_name, port, environment_variables, HashMap::new()).await
 }
 
 /// `alien dev destroy`: delete a local deployment by name and wait until it's gone. Dev
@@ -1168,6 +1181,78 @@ mod tests {
                 .contains("No local deployment is named 'missing'"),
             "{error:?}"
         );
+    }
+
+    /// `alien dev deploy --input` reaches the dev manager with the create request; a rerun
+    /// reuses the existing deployment, whose inputs were fixed at creation.
+    #[tokio::test]
+    async fn create_initial_deployment_sends_inputs() {
+        use axum::{extract::State, routing::get, Json, Router};
+        use std::sync::{Arc, Mutex};
+
+        fn deployment(name: &str) -> serde_json::Value {
+            serde_json::json!({
+                "id": "dep_1",
+                "name": name,
+                "platform": "local",
+                "status": "pending",
+                "deploymentGroupId": "dg_1",
+                "deploymentProtocolVersion": 1,
+                "projectId": "default",
+                "workspaceId": "default",
+                "retryRequested": false,
+                "createdAt": "2026-01-01T00:00:00Z",
+            })
+        }
+        type Created = Arc<Mutex<Vec<serde_json::Value>>>;
+        async fn list(State(created): State<Created>) -> Json<serde_json::Value> {
+            let items: Vec<_> = created
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|body| deployment(body["name"].as_str().unwrap()))
+                .collect();
+            Json(serde_json::json!({ "items": items }))
+        }
+        async fn create(
+            State(created): State<Created>,
+            Json(body): Json<serde_json::Value>,
+        ) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+            let name = body["name"].as_str().unwrap().to_string();
+            created.lock().unwrap().push(body);
+            // The manager answers a create with 201 Created.
+            (
+                axum::http::StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "deployment": deployment(&name),
+                    "deploymentModel": "push",
+                })),
+            )
+        }
+
+        let created: Created = Arc::default();
+        let app = Router::new()
+            .route("/v1/deployments", get(list).post(create))
+            .with_state(created.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let inputs = HashMap::from([("managedKey".to_string(), serde_json::json!(false))]);
+
+        create_initial_deployment("api", port, None, inputs.clone())
+            .await
+            .expect("the deployment is created");
+        assert_eq!(
+            created.lock().unwrap()[0]["inputValues"],
+            serde_json::json!({ "managedKey": false })
+        );
+
+        // A rerun reuses the deployment; inputs are only sent when creating it.
+        let rerun = create_initial_deployment("api", port, None, inputs)
+            .await
+            .expect("a rerun reuses the existing deployment");
+        assert_eq!(rerun, "dep_1");
+        assert_eq!(created.lock().unwrap().len(), 1);
     }
 
     #[test]

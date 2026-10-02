@@ -74,6 +74,9 @@ function fakeRemoteAddon() {
     cancelJob: async () => {},
     readFile: async (_sandboxId, path) => Buffer.from(path),
     writeFile: async () => {},
+    preview: async () => {
+      throw new Error("unused")
+    },
     pause: async () => {},
     resume: async () => {},
     terminate,
@@ -292,6 +295,7 @@ describe("Bindings.forRemoteDeployment", () => {
         "cancelJob",
         "readFile",
         "writeFiles",
+        "preview",
         "pause",
         "resume",
         "terminate",

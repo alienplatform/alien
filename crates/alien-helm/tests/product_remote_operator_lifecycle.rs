@@ -2878,7 +2878,6 @@ fn product_chart_with_scope(image: &str, scope: OperatorScope) -> HelmChart {
                 label_domain: None,
                 scope,
                 label_selector: None,
-                kubernetes_operations_enabled: true,
                 custom_operation_permissions: &[],
                 permission: OperatorPermission::Remediation,
                 format: OperatorOutputFormat::HelmTemplate,

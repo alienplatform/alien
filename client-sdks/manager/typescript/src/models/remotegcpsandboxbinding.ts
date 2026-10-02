@@ -12,10 +12,17 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
  *
  * @remarks
  *
- * No egress field, unlike the other two clouds: the policy lives on the environment template
- * named below, so it travels with the template rather than as a flag the client must read.
+ * The egress policy itself lives on the environment template named below; `allow_egress` reports
+ * it so a client can decide without reading the template.
  */
 export type RemoteGcpSandboxBinding = {
+  /**
+   * Whether the declaration asked for open egress, as the template enforces it. Sent only when
+   *
+   * @remarks
+   * true: released clients reject unknown fields, so a deny binding must stay byte-identical.
+   */
+  allowEgress?: boolean | undefined;
   /**
    * Reasoning engine the credential lease authorizes sandboxes under.
    */
@@ -39,6 +46,7 @@ export const RemoteGcpSandboxBinding$inboundSchema: z.ZodType<
   RemoteGcpSandboxBinding,
   unknown
 > = z.object({
+  allowEgress: z.boolean().optional(),
   engine: z.string(),
   maxLifetimeSeconds: z.nullable(z.int()).optional(),
   region: z.string(),

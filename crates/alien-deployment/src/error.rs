@@ -176,6 +176,17 @@ pub enum ErrorData {
     )]
     DeploymentCheckpointFailed { message: String },
 
+    /// A request to the manager API failed. Keeps the source's retryable flag and status: a
+    /// network error or a manager that says to retry is retried by the caller, a rejection is not.
+    #[error(
+        code = "MANAGER_REQUEST_FAILED",
+        message = "Manager request failed: {message}",
+        retryable = "inherit",
+        internal = "inherit",
+        http_status_code = "inherit"
+    )]
+    ManagerRequestFailed { message: String },
+
     /// Secret sync to vault failed.
     #[error(
         code = "SECRET_SYNC_FAILED",

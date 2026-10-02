@@ -634,3 +634,118 @@ async fn two_independent_containers_update_and_delete() {
     }
     panic!("owned Kubernetes objects survived empty target");
 }
+
+#[tokio::test]
+#[ignore = "requires explicit disposable Kind kubeconfig"]
+async fn withdrawn_image_approval_suspends_and_deletes_existing_workload() {
+    require_kind_context();
+    let namespace = std::env::var("ALIEN_DYNAMIC_KIND_NAMESPACE").expect("set Kind namespace");
+    assert!(namespace.starts_with("alien-dynamic-"));
+    let config = alien_k8s_clients::KubernetesClientConfig::try_kubeconfig()
+        .await
+        .expect("Kind kubeconfig");
+    let client = KubernetesClient::new(
+        alien_infra::resolve_kubeconfig(&config)
+            .await
+            .expect("resolve Kind kubeconfig"),
+    )
+    .await
+    .expect("Kind client");
+    let deployment_id = "dep_kind_withdrawn_approval";
+    let mut desired = target("withdrawn", 1, 1);
+    let stack = compute_stack();
+    reconcile(
+        &client,
+        &namespace,
+        deployment_id,
+        &[desired.clone()],
+        None,
+        &stack,
+    )
+    .await
+    .expect("create the previously approved workload");
+    let selector = format!("alien.dev/dynamic-deployment={deployment_id}");
+    let workloads = client
+        .list_deployments(&namespace, Some(selector.clone()), None)
+        .await
+        .expect("created workloads");
+    assert_eq!(workloads.items.len(), 1);
+    assert_eq!(workloads.items[0].spec.as_ref().unwrap().replicas, Some(1));
+    assert_eq!(
+        client
+            .list_secrets(&namespace, Some(selector.clone()), None)
+            .await
+            .expect("created credential")
+            .items
+            .len(),
+        1
+    );
+
+    desired.generation = 2;
+    desired.suspended_reason = Some("Installed release no longer approves this image".to_string());
+    desired.secret_env.clear();
+    let reports = reconcile(
+        &client,
+        &namespace,
+        deployment_id,
+        &[desired.clone()],
+        None,
+        &stack,
+    )
+    .await
+    .expect("suspend after approval withdrawal");
+    assert_eq!(reports[0].status, DynamicContainerStatus::Failing);
+    assert_eq!(reports[0].message, desired.suspended_reason);
+    let workloads = client
+        .list_deployments(&namespace, Some(selector.clone()), None)
+        .await
+        .expect("suspended workloads");
+    assert_eq!(workloads.items.len(), 1);
+    assert_eq!(workloads.items[0].spec.as_ref().unwrap().replicas, Some(0));
+    assert!(client
+        .list_secrets(&namespace, Some(selector.clone()), None)
+        .await
+        .expect("revoked credential")
+        .items
+        .is_empty());
+
+    desired.generation = 3;
+    desired.deleted = true;
+    let mut stopped = false;
+    for _ in 0..30 {
+        let reports = reconcile(
+            &client,
+            &namespace,
+            deployment_id,
+            &[desired.clone()],
+            None,
+            &stack,
+        )
+        .await
+        .expect("delete the withdrawn workload");
+        if reports[0].status == DynamicContainerStatus::Stopped {
+            stopped = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(stopped, "withdrawn workload deletion must finish");
+    assert!(client
+        .list_deployments(&namespace, Some(selector.clone()), None)
+        .await
+        .expect("deleted workloads")
+        .items
+        .is_empty());
+    assert!(client
+        .list_services(&namespace, Some(selector.clone()), None)
+        .await
+        .expect("deleted services")
+        .items
+        .is_empty());
+    assert!(client
+        .list_secrets(&namespace, Some(selector), None)
+        .await
+        .expect("deleted credentials")
+        .items
+        .is_empty());
+}

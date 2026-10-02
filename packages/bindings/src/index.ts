@@ -79,6 +79,7 @@ export type {
   RunCommandOptions,
   Sandbox,
   SandboxInstance,
+  SandboxPreview,
   SignedUrlMethod,
   SignedUrlOptions,
   Storage,
