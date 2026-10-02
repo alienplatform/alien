@@ -1575,21 +1575,21 @@ impl LocalContainerManager {
             if !metadata_file.exists() {
                 continue;
             }
-            match std::fs::read_to_string(&metadata_file) {
-                Ok(json) => match serde_json::from_str::<ContainerMetadata>(&json) {
-                    Ok(metadata) => metadata_list.push(metadata),
-                    Err(error) => warn!(
-                        path = %metadata_file.display(),
-                        error = %error,
-                        "Failed to parse container metadata"
-                    ),
-                },
-                Err(error) => warn!(
-                    path = %metadata_file.display(),
-                    error = %error,
-                    "Failed to read container metadata"
-                ),
-            }
+            let json = std::fs::read_to_string(&metadata_file)
+                .into_alien_error()
+                .context(ErrorData::LocalDirectoryError {
+                    path: metadata_file.display().to_string(),
+                    operation: "read metadata".to_string(),
+                    reason: "Cannot safely enumerate local containers".to_string(),
+                })?;
+            let metadata = serde_json::from_str::<ContainerMetadata>(&json)
+                .into_alien_error()
+                .context(ErrorData::LocalDirectoryError {
+                    path: metadata_file.display().to_string(),
+                    operation: "parse metadata".to_string(),
+                    reason: "Cannot safely enumerate local containers".to_string(),
+                })?;
+            metadata_list.push(metadata);
         }
         Ok(metadata_list)
     }
@@ -1784,6 +1784,15 @@ mod tests {
             .unwrap();
         assert!(output.status.success(), "{output:?}");
         assert_eq!(output.stdout, b"app-v2");
+    }
+
+    #[test]
+    fn corrupt_container_metadata_prevents_partial_lifecycle_operations() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("containers/app");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("metadata.json"), b"{invalid").unwrap();
+        assert!(LocalContainerManager::load_metadata_from_disk(root.path()).is_err());
     }
 
     fn test_bind_mount(shared_with_host_workloads: bool) -> BindMount {
