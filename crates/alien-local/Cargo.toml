@@ -61,6 +61,8 @@ port_check = { workspace = true }
 
 # OCI image extraction
 tar = { workspace = true }
+tempfile = { workspace = true }
+zstd = { workspace = true }
 dockdash = { workspace = true }
 
 # HTTP client

@@ -29,30 +29,6 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-/// Read both Docker image-store identities without resolving mutable names.
-fn archive_image_ids(path: &Path) -> std::io::Result<Vec<String>> {
-    let image = dockdash::Image::from_tarball(path).map_err(std::io::Error::other)?;
-    let mut archive = tar::Archive::new(std::fs::File::open(path)?);
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        if entry.path()?.as_ref() != Path::new("index.json") {
-            continue;
-        }
-        let index: serde_json::Value = serde_json::from_reader(&mut entry)?;
-        let manifests = index["manifests"]
-            .as_array()
-            .ok_or_else(|| std::io::Error::other("OCI index has no manifests"))?;
-        let [manifest] = manifests.as_slice() else {
-            return Err(std::io::Error::other("Expected a single-image OCI archive"));
-        };
-        let digest = manifest["digest"]
-            .as_str()
-            .ok_or_else(|| std::io::Error::other("OCI image manifest has no digest"))?;
-        return Ok(vec![digest.to_string(), image.config_digest().to_string()]);
-    }
-    Err(std::io::Error::other("OCI archive has no index.json"))
-}
-
 /// Default Docker network name for Alien containers.
 const NETWORK_NAME: &str = "deployment-network";
 
@@ -650,25 +626,27 @@ impl LocalContainerManager {
         );
 
         let archive_path = tarball_path.to_path_buf();
-        let image_ids = tokio::task::spawn_blocking(move || archive_image_ids(&archive_path))
-            .await
-            .into_alien_error()
-            .context(ErrorData::DockerContainerError {
-                container: container_id.to_string(),
-                operation: "read_image_identity".to_string(),
-                reason: "Image archive reader failed".to_string(),
-            })?
-            .into_alien_error()
-            .context(ErrorData::DockerContainerError {
-                container: container_id.to_string(),
-                operation: "read_image_identity".to_string(),
-                reason: "Cannot identify the single image in the OCI archive".to_string(),
-            })?;
+        let archive = tokio::task::spawn_blocking(move || {
+            crate::image_archive::prepare_load_archive(&archive_path)
+        })
+        .await
+        .into_alien_error()
+        .context(ErrorData::DockerContainerError {
+            container: container_id.to_string(),
+            operation: "read_image_identity".to_string(),
+            reason: "Image archive reader failed".to_string(),
+        })?
+        .into_alien_error()
+        .context(ErrorData::DockerContainerError {
+            container: container_id.to_string(),
+            operation: "read_image_identity".to_string(),
+            reason: "Cannot identify the single image in the OCI archive".to_string(),
+        })?;
 
         // Use `docker load` instead of `import_image` to preserve CMD/ENTRYPOINT
         // docker import is for filesystem tarballs, docker load is for OCI image tarballs
         let output = tokio::process::Command::new("docker")
-            .args(&["load", "-i", &tarball_path.to_string_lossy()])
+            .args(&["load", "-i", &archive.file.path().to_string_lossy()])
             .output()
             .await
             .into_alien_error()
@@ -690,7 +668,7 @@ impl LocalContainerManager {
         // Classic Docker identifies images by config digest; the containerd store
         // uses the manifest digest. Never resolve a mutable annotation or tag: an
         // existing normalized alias can still refer to a previous load's content.
-        for image_id in &image_ids {
+        for image_id in &archive.image_ids {
             match self.docker.inspect_image(image_id).await {
                 Ok(_) => return Ok(image_id.clone()),
                 Err(bollard::errors::Error::DockerResponseServerError {
@@ -1689,8 +1667,9 @@ mod tests {
                 .load_oci_tarball_into_docker(&archive, "load-test")
                 .await
                 .expect("load exact image");
-            assert!(archive_image_ids(image.path())
+            assert!(crate::image_archive::prepare_load_archive(image.path())
                 .expect("archive identities")
+                .image_ids
                 .contains(&loaded));
             if let Some(previous) = previous {
                 assert_ne!(loaded, previous, "mutable tag must advance to new content");
