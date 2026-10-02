@@ -1132,16 +1132,10 @@ impl LocalContainerManager {
                 // On Linux: maps to host gateway IP
                 // On Mac/Windows: Docker Desktop provides this automatically, but explicit is fine
                 extra_hosts: Some(vec!["host.docker.internal:host-gateway".to_string()]),
-                // Restart exited containers like every managed platform does.
-                // Without this a container that races its peers at startup —
-                // e.g. nginx resolving an upstream before that service joined
-                // the network — stays Exited forever, while in production it
-                // would self-heal. ALWAYS (not ON_FAILURE) matches the
-                // Kubernetes Deployment default and also covers entrypoints
-                // that exit 0 on failure; Docker applies exponential backoff
-                // between restarts, and a manual stop/rm still sticks.
+                // Recover from process exits, but preserve an explicit stop across
+                // daemon restarts. An explicit start enables crash recovery again.
                 restart_policy: Some(bollard::models::RestartPolicy {
-                    name: Some(bollard::models::RestartPolicyNameEnum::ALWAYS),
+                    name: Some(bollard::models::RestartPolicyNameEnum::UNLESS_STOPPED),
                     maximum_retry_count: None,
                 }),
                 ..Default::default()
