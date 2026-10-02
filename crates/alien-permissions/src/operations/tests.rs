@@ -178,23 +178,42 @@ fn compaction_preserves_partial_action_resource_overlaps() {
 }
 
 #[test]
-fn runtime_task_returns_the_complete_serialized_read_only_contract() {
+fn runtime_task_returns_the_complete_serialized_contract() {
     let result = run(json!({"task": "kubernetesOperatorRuntime"}));
     assert_eq!(result["ok"], true);
     let rules = result["value"].as_array().unwrap();
-    assert_eq!(rules.len(), 6);
-    for (rule, (group, resource)) in rules.iter().zip([
-        ("apps", "deployments"),
-        ("apps", "statefulsets"),
-        ("apps", "daemonsets"),
-        ("", "pods"),
-        ("", "events"),
-        ("metrics.k8s.io", "pods"),
+    assert_eq!(rules.len(), 10);
+    for (rule, (group, resource, verbs, feature)) in rules.iter().zip([
+        ("apps", "deployments", json!(["list"]), json!(null)),
+        ("apps", "statefulsets", json!(["list"]), json!(null)),
+        ("apps", "daemonsets", json!(["list"]), json!(null)),
+        ("", "pods", json!(["list"]), json!(null)),
+        ("", "events", json!(["list"]), json!(null)),
+        ("metrics.k8s.io", "pods", json!(["list"]), json!(null)),
+        (
+            "apps",
+            "deployments",
+            json!(["get", "list", "create", "update", "delete"]),
+            json!("dynamicContainers"),
+        ),
+        (
+            "",
+            "services",
+            json!(["get", "list", "create", "update", "delete"]),
+            json!("dynamicContainers"),
+        ),
+        (
+            "",
+            "secrets",
+            json!(["get", "list", "create", "update", "delete"]),
+            json!("dynamicContainers"),
+        ),
+        ("", "pods/log", json!(["get"]), json!("podLogs")),
     ]) {
         assert_eq!(rule["apiGroup"], group);
         assert_eq!(rule["resource"], resource);
-        assert_eq!(rule["verbs"], json!(["list"]));
-        assert_eq!(rule["resourceNames"], json!([]));
+        assert_eq!(rule["verbs"], verbs);
+        assert_eq!(rule["feature"], feature);
         assert!(!rule["reason"].as_str().unwrap().is_empty());
         assert_eq!(rule.as_object().unwrap().len(), 5);
     }

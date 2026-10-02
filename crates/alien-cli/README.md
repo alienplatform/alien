@@ -4,21 +4,27 @@ Developer-facing CLI for Alien.
 
 ## Commands
 
+The same commands work against alien.dev and against a manager you run.
+`alien login` connects to alien.dev; `alien login --manager <url> --token <key>`
+connects to your own.
+
 - **`alien init`** — Scaffold a new project from a template
-- **`alien build`** — Build the application into OCI images
-- **`alien release`** — Push images and create a release on the manager
-- **`alien onboard`** — Create a deployment group and generate a deployment link
-- **`alien projects packages get`** / **`update --file`** — Read or update installation package settings
-- **`alien projects create`** — Create a name-only Platform project for Dashboard, CLI, or agent onboarding
-- **`alien deployments`** — List and manage deployments
-- **`alien deploy`** / **`alien destroy`** — Deploy to or destroy from a cloud platform
-- **`alien vault`** — Manage vault secrets for a deployment
-- **`alien commands`** — Invoke remote commands on deployments
-- **`alien serve`** — Start a standalone alien-manager server
 - **`alien dev`** — Local development (embeds manager + runtime, hot reload)
   - `alien dev server` — Start only the local manager
   - `alien dev deploy` / `alien dev destroy` — Deploy/destroy against local manager
   - `alien dev release` / `alien dev vault` / `alien dev commands` — Local variants
+- **`alien build`** — Build the application into OCI images
+- **`alien release`** — Push images and create a release on the manager
+- **`alien onboard`** — Create a deployment group and print what the customer runs (a `helm install` command for Kubernetes, `--airgapped` for sites without a connection)
+- **`alien deployments`** — List and inspect deployments
+- **`alien logs`** — Search recent deployment logs
+- **`alien tokens`** — Create and revoke scoped tokens, such as tunnel tokens (`alien tokens create --tunnel`)
+- **`alien deploy`** / **`alien destroy`** — Deploy to or destroy from a cloud platform
+- **`alien vault`** — Manage vault secrets for a deployment
+- **`alien commands`** — Invoke remote commands on deployments
+- **`alien serve`** — Run a manager on this machine (`alien serve --init` writes `alien-manager.toml`)
+- **`alien projects packages get`** / **`update --file`** — Read or update installation package settings
+- **`alien projects create`** — Create a name-only project for Dashboard, CLI, or agent onboarding
 
 ### Installation package settings
 
@@ -82,4 +88,4 @@ alien dev --secret-file API_TOKEN="$HOME/.config/example/api-token:api,worker"
 ## Features
 
 - `otlp` (default) — OpenTelemetry forwarding
-- `platform` — OAuth/keyring for platform authentication, adds `login`, `workspaces`, `projects`, `link`, `manager` commands
+- `platform` (default) — alien.dev sign-in (OAuth, keyring) and the `login`, `workspaces`, `projects`, `link`, `manager` commands. Without it, point commands at a manager with `ALIEN_MANAGER_URL` and `ALIEN_API_KEY`.

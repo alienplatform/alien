@@ -61,6 +61,8 @@ url = { workspace = true }
 urlencoding = { workspace = true }
 hostname = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
+alien-tunnel = { workspace = true, features = ["operator"] }
+http = { workspace = true }
 
 # Debug-session tunnel (kubectl forwarding for pull-mode K8s `alien debug`)
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }

@@ -28,9 +28,7 @@ impl ResolvedRemoteBinding {
                     expires_at: credential_expires_at,
                 } = client_config.credentials;
                 Self::S3 {
-                    binding: alien_core::S3StorageBinding {
-                        bucket_name: binding.bucket_name.into(),
-                    },
+                    binding: alien_core::S3StorageBinding::bucket(binding.bucket_name),
                     client_config: Box::new(alien_core::AwsClientConfig {
                         account_id: client_config.account_id,
                         region: client_config.region,

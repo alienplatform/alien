@@ -282,6 +282,7 @@ async fn setup() -> TestSetup {
             CreateDeploymentGroupParams {
                 name: "test-group".to_string(),
                 max_deployments: 100,
+                setup: Default::default(),
             },
         )
         .await

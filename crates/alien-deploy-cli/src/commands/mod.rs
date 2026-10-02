@@ -13,3 +13,4 @@ pub use operator::{operator_command, OperatorArgs};
 pub use register::{register_command, RegisterArgs};
 pub use status::{status_command, StatusArgs};
 pub use up::{push_deletion, push_initial_setup, up_command, UpArgs};
+pub mod sync;

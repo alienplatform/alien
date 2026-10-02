@@ -400,34 +400,53 @@ impl StorageTestContext for AzureProviderTestContext {
 }
 
 // --- Kubernetes Provider Context ---
-#[cfg(feature = "kubernetes")]
+//
+// Kubernetes deployments outside a cloud account attach the customer's own
+// S3-compatible object storage (MinIO, Ceph RGW, ...) through an S3 binding
+// with an `endpoint`. This context exercises exactly that: platform
+// `kubernetes`, no base cloud, static keys, path-style addressing.
+//
+// Requires an S3-compatible store and a bucket, e.g.:
+//   docker run -d -p 9000:9000 -e MINIO_ROOT_USER=alien -e MINIO_ROOT_PASSWORD=alien-secret \
+//     quay.io/minio/minio server /data
+//   ALIEN_TEST_S3_COMPATIBLE_ENDPOINT=http://127.0.0.1:9000
+//   ALIEN_TEST_S3_COMPATIBLE_ACCESS_KEY_ID=alien
+//   ALIEN_TEST_S3_COMPATIBLE_SECRET_ACCESS_KEY=alien-secret
+//   ALIEN_TEST_S3_COMPATIBLE_BUCKET=alien-test (must exist)
+#[cfg(all(feature = "kubernetes", feature = "aws"))]
 struct KubernetesProviderTestContext {
     storage: Arc<dyn Storage>,
-    _temp_dir: TempDir, // TempDir is kept to ensure cleanup
 }
 
-#[cfg(feature = "kubernetes")]
+#[cfg(all(feature = "kubernetes", feature = "aws"))]
 impl AsyncTestContext for KubernetesProviderTestContext {
     async fn setup() -> Self {
         load_test_env();
         let binding_name = "test-k8s-storage";
+        let required = |name: &str| {
+            env::var(name).unwrap_or_else(|_| {
+                panic!("{name} must be set to run S3-compatible storage tests (see comment above)")
+            })
+        };
 
-        // Always use a local file backend for this specific test context
-        let temp_dir = tempfile::tempdir()
-            .expect("Failed to create temp dir for K8s file test (simplified context)");
-        let temp_dir_path_str = temp_dir.path().to_string_lossy().to_string();
+        let binding = StorageBinding::S3(bindings::S3StorageBinding {
+            endpoint: Some(required("ALIEN_TEST_S3_COMPATIBLE_ENDPOINT").into()),
+            access_key_id: Some(required("ALIEN_TEST_S3_COMPATIBLE_ACCESS_KEY_ID").into()),
+            secret_access_key: Some(required("ALIEN_TEST_S3_COMPATIBLE_SECRET_ACCESS_KEY").into()),
+            ..bindings::S3StorageBinding::bucket(required("ALIEN_TEST_S3_COMPATIBLE_BUCKET"))
+        });
 
-        let file_url = format!("file://{}", temp_dir_path_str);
-
-        let binding = StorageBinding::local(temp_dir_path_str.clone());
-
-        let mut env_map: HashMap<String, String> = env::vars().collect(); // Start with process env
-        let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");
-        env_map.insert(bindings::binding_env_var_name(binding_name), binding_json);
-        env_map.insert(
-            "ALIEN_DEPLOYMENT_TYPE".to_string(),
-            "kubernetes".to_string(),
-        );
+        // Only the binding and the platform: no cloud credentials, no base platform.
+        let env_map = HashMap::from([
+            (
+                bindings::binding_env_var_name(binding_name),
+                serde_json::to_string(&binding).expect("Failed to serialize binding"),
+            ),
+            (
+                "ALIEN_DEPLOYMENT_TYPE".to_string(),
+                "kubernetes".to_string(),
+            ),
+        ]);
 
         let provider = BindingsProvider::from_env(env_map)
             .await
@@ -435,29 +454,19 @@ impl AsyncTestContext for KubernetesProviderTestContext {
         let storage = provider
             .load_storage(binding_name)
             .await
-            .unwrap_or_else(|e| {
-                panic!(
-                    "Failed to load Kubernetes storage (file backend) for binding '{}' with URL '{}': {:?}",
-                    binding_name, file_url, e
-                )
-            });
-        Self {
-            storage,
-            _temp_dir: temp_dir,
-        }
+            .unwrap_or_else(|e| panic!("Failed to load S3-compatible storage: {e:?}"));
+        Self { storage }
     }
 }
 
-#[cfg(feature = "kubernetes")]
+#[cfg(all(feature = "kubernetes", feature = "aws"))]
 #[async_trait]
 impl StorageTestContext for KubernetesProviderTestContext {
     async fn get_storage(&self) -> Arc<dyn Storage> {
         self.storage.clone()
     }
     fn provider_name(&self) -> &'static str {
-        // We could make this dynamic based on the URL (e.g. "kubernetes_file", "kubernetes_s3")
-        // For now, keeping it simple.
-        "kubernetes"
+        "kubernetes-s3-compatible"
     }
 }
 
@@ -471,7 +480,7 @@ impl StorageTestContext for KubernetesProviderTestContext {
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
-#[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderTestContext::setup().await))]
+#[cfg_attr(all(feature = "kubernetes", feature = "aws"), case::kubernetes(KubernetesProviderTestContext::setup().await))]
 #[tokio::test]
 async fn test_put_and_get(#[case] ctx: impl StorageTestContext) {
     let storage = ctx.get_storage().await;
@@ -507,7 +516,7 @@ async fn test_put_and_get(#[case] ctx: impl StorageTestContext) {
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
-#[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderTestContext::setup().await))]
+#[cfg_attr(all(feature = "kubernetes", feature = "aws"), case::kubernetes(KubernetesProviderTestContext::setup().await))]
 #[tokio::test]
 async fn test_head_operation(#[case] ctx: impl StorageTestContext) {
     let storage = ctx.get_storage().await;
@@ -559,7 +568,7 @@ async fn test_head_operation(#[case] ctx: impl StorageTestContext) {
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
-#[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderTestContext::setup().await))]
+#[cfg_attr(all(feature = "kubernetes", feature = "aws"), case::kubernetes(KubernetesProviderTestContext::setup().await))]
 #[tokio::test]
 async fn test_delete_operation(#[case] ctx: impl StorageTestContext) {
     let storage = ctx.get_storage().await;
@@ -627,7 +636,7 @@ async fn test_delete_operation(#[case] ctx: impl StorageTestContext) {
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
-#[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderTestContext::setup().await))]
+#[cfg_attr(all(feature = "kubernetes", feature = "aws"), case::kubernetes(KubernetesProviderTestContext::setup().await))]
 #[tokio::test]
 async fn test_list_operations(#[case] ctx: impl StorageTestContext) {
     use futures::stream::BoxStream;
@@ -878,7 +887,7 @@ async fn test_list_operations(#[case] ctx: impl StorageTestContext) {
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
-#[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderTestContext::setup().await))]
+#[cfg_attr(all(feature = "kubernetes", feature = "aws"), case::kubernetes(KubernetesProviderTestContext::setup().await))]
 #[tokio::test]
 async fn test_copy_operation(#[case] ctx: impl StorageTestContext) {
     let storage = ctx.get_storage().await;
@@ -973,7 +982,7 @@ async fn test_copy_operation(#[case] ctx: impl StorageTestContext) {
 // #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
-#[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderTestContext::setup().await))]
+// S3-compatible stores share S3's lack of copy-if-not-exists, like the AWS case.
 #[tokio::test]
 async fn test_copy_if_not_exists_operation(#[case] ctx: impl StorageTestContext) {
     let storage = ctx.get_storage().await;
@@ -1091,7 +1100,7 @@ async fn test_copy_if_not_exists_operation(#[case] ctx: impl StorageTestContext)
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
-#[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderTestContext::setup().await))]
+#[cfg_attr(all(feature = "kubernetes", feature = "aws"), case::kubernetes(KubernetesProviderTestContext::setup().await))]
 #[tokio::test]
 async fn test_rename_operation(#[case] ctx: impl StorageTestContext) {
     let storage = ctx.get_storage().await;
@@ -1159,7 +1168,7 @@ async fn test_rename_operation(#[case] ctx: impl StorageTestContext) {
 // TODO (DOC): Unsupported on AWS right now.
 // #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
-#[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderTestContext::setup().await))]
+// S3-compatible stores share S3's lack of copy-if-not-exists, like the AWS case.
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[tokio::test]
 async fn test_rename_if_not_exists_operation(#[case] ctx: impl StorageTestContext) {
@@ -1312,7 +1321,7 @@ async fn test_rename_if_not_exists_operation(#[case] ctx: impl StorageTestContex
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
-#[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderTestContext::setup().await))]
+#[cfg_attr(all(feature = "kubernetes", feature = "aws"), case::kubernetes(KubernetesProviderTestContext::setup().await))]
 #[tokio::test]
 async fn test_put_multipart(#[case] ctx: impl StorageTestContext) {
     let storage = ctx.get_storage().await;
@@ -1322,8 +1331,9 @@ async fn test_put_multipart(#[case] ctx: impl StorageTestContext) {
 
     // Use appropriate part sizes for each provider based on their requirements
     let (part1_size, part2_size, use_fallback) = match provider_name {
-        "aws" | "gcp" => {
-            // AWS S3 and GCS both work well with 5MB parts
+        "aws" | "gcp" | "kubernetes-s3-compatible" => {
+            // The S3 protocol (AWS and S3-compatible stores) requires 5 MiB
+            // minimum parts except the last; GCS works well with the same.
             (5 * 1024 * 1024, 1024, true) // 5MB + 1KB, with fallback enabled
         }
         _ => {
@@ -1491,7 +1501,7 @@ async fn test_put_multipart(#[case] ctx: impl StorageTestContext) {
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
 // Azure does not support suffix range requests
 // #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
-#[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderTestContext::setup().await))]
+#[cfg_attr(all(feature = "kubernetes", feature = "aws"), case::kubernetes(KubernetesProviderTestContext::setup().await))]
 #[tokio::test]
 async fn test_get_with_options(#[case] ctx: impl StorageTestContext) {
     let storage = ctx.get_storage().await;
@@ -1661,7 +1671,7 @@ async fn test_get_with_options(#[case] ctx: impl StorageTestContext) {
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
-#[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderTestContext::setup().await))]
+#[cfg_attr(all(feature = "kubernetes", feature = "aws"), case::kubernetes(KubernetesProviderTestContext::setup().await))]
 #[tokio::test]
 async fn test_put_with_options(#[case] ctx: impl StorageTestContext) {
     let storage = ctx.get_storage().await;
@@ -1765,7 +1775,7 @@ async fn test_put_with_options(#[case] ctx: impl StorageTestContext) {
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
-#[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderTestContext::setup().await))]
+#[cfg_attr(all(feature = "kubernetes", feature = "aws"), case::kubernetes(KubernetesProviderTestContext::setup().await))]
 #[tokio::test]
 async fn test_delete_stream(#[case] ctx: impl StorageTestContext) {
     use futures::{stream, StreamExt as _};
@@ -1932,7 +1942,7 @@ async fn test_delete_stream(#[case] ctx: impl StorageTestContext) {
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
-#[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderTestContext::setup().await))]
+#[cfg_attr(all(feature = "kubernetes", feature = "aws"), case::kubernetes(KubernetesProviderTestContext::setup().await))]
 #[tokio::test]
 async fn test_get_ranges(#[case] ctx: impl StorageTestContext) {
     let storage = ctx.get_storage().await;
@@ -2068,7 +2078,7 @@ async fn test_get_ranges(#[case] ctx: impl StorageTestContext) {
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
-// #[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderTestContext::setup().await))]
+// #[cfg_attr(all(feature = "kubernetes", feature = "aws"), case::kubernetes(KubernetesProviderTestContext::setup().await))]
 #[tokio::test]
 async fn test_presigned_requests(#[case] ctx: impl StorageTestContext) {
     use std::time::Duration;
@@ -2307,4 +2317,78 @@ async fn test_presigned_requests(#[case] ctx: impl StorageTestContext) {
         "[{}] Presigned request test completed successfully",
         provider_name
     );
+}
+
+/// Compare-and-swap through `PutMode::Update` (HTTP `If-Match`): the write
+/// succeeds only against the current ETag, and a stale writer is rejected.
+/// Object-storage-native applications build locks and logs on this.
+#[rstest]
+#[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
+#[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
+#[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
+#[cfg_attr(all(feature = "kubernetes", feature = "aws"), case::kubernetes(KubernetesProviderTestContext::setup().await))]
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+#[tokio::test]
+async fn test_conditional_update(#[case] ctx: impl StorageTestContext) {
+    let storage = ctx.get_storage().await;
+    let provider_name = ctx.provider_name();
+    let path = Path::from(format!(
+        "conditional-update/{provider_name}/{}.json",
+        uuid::Uuid::new_v4()
+    ));
+
+    let first = storage
+        .put(&path, Bytes::from_static(b"v1").into())
+        .await
+        .unwrap_or_else(|e| panic!("[{provider_name}] initial put failed: {e:?}"));
+
+    let second = storage
+        .put_opts(
+            &path,
+            Bytes::from_static(b"v2").into(),
+            PutOptions {
+                mode: PutMode::Update(first.clone().into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_or_else(|e| panic!("[{provider_name}] update against current etag failed: {e:?}"));
+    assert_ne!(
+        first.e_tag, second.e_tag,
+        "[{provider_name}] a successful update must produce a new etag"
+    );
+
+    let stale = storage
+        .put_opts(
+            &path,
+            Bytes::from_static(b"stale").into(),
+            PutOptions {
+                mode: PutMode::Update(first.into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("update against a stale etag must be rejected");
+    assert!(
+        matches!(stale, object_store::Error::Precondition { .. }),
+        "[{provider_name}] stale update must fail with a precondition error, got {stale:?}"
+    );
+
+    let current = storage
+        .get(&path)
+        .await
+        .unwrap_or_else(|e| panic!("[{provider_name}] get failed: {e:?}"))
+        .bytes()
+        .await
+        .unwrap_or_else(|e| panic!("[{provider_name}] read failed: {e:?}"));
+    assert_eq!(
+        current.as_ref(),
+        b"v2",
+        "[{provider_name}] stale write must not land"
+    );
+
+    storage
+        .delete(&path)
+        .await
+        .unwrap_or_else(|e| panic!("[{provider_name}] cleanup delete failed: {e:?}"));
 }

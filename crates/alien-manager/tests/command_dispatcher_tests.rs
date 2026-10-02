@@ -55,6 +55,7 @@ async fn running_deployment(store: &SqliteDeploymentStore, platform: Platform) -
             CreateDeploymentGroupParams {
                 name: "g".to_string(),
                 max_deployments: 10,
+                setup: Default::default(),
             },
         )
         .await

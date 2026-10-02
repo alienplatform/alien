@@ -398,6 +398,7 @@ dependencies = [
  "alien-preflights",
  "async-trait",
  "base64 0.22.1",
+ "container-registry 0.3.1 (git+https://github.com/alienplatform/container_registry-rs.git?rev=fd28e7c)",
  "dirs 5.0.1",
  "dockdash",
  "dotenvy",
@@ -473,6 +474,7 @@ dependencies = [
  "keyring",
  "oauth2",
  "object_store",
+ "oci-client",
  "open",
  "portpicker",
  "predicates",
@@ -511,11 +513,20 @@ dependencies = [
  "alien-core",
  "alien-deployment",
  "alien-error",
+ "alien-helm",
  "alien-preflights",
  "clap",
+ "flate2",
+ "hex",
+ "oci-client",
  "serde",
  "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "tar",
+ "tempfile",
  "termcolor",
+ "tokio",
 ]
 
 [[package]]
@@ -685,6 +696,7 @@ dependencies = [
  "hostname 0.4.2",
  "httpmock",
  "libc",
+ "oci-client",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -800,12 +812,14 @@ dependencies = [
  "alien-operations-sdk",
  "alien-permissions",
  "alien-terraform",
+ "flate2",
  "indexmap 2.14.1",
  "insta",
  "serde",
  "serde_json",
  "serde_yaml",
  "sha2 0.10.9",
+ "tar",
  "tempfile",
 ]
 
@@ -969,10 +983,12 @@ dependencies = [
  "alien-deployment",
  "alien-error",
  "alien-gcp-clients",
+ "alien-helm",
  "alien-infra",
  "alien-local",
  "alien-permissions",
  "alien-preflights",
+ "alien-tunnel",
  "async-trait",
  "axum 0.8.9",
  "base64 0.22.1",
@@ -998,6 +1014,7 @@ dependencies = [
  "nanoid",
  "ngrok",
  "oci-client",
+ "opentelemetry-proto",
  "prost 0.13.5",
  "prost-types",
  "rand 0.9.5",
@@ -1010,6 +1027,7 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "toml 0.9.12+spec-1.1.0",
  "tower",
  "tower-http 0.7.1",
@@ -1092,6 +1110,7 @@ dependencies = [
  "alien-k8s-clients",
  "alien-local",
  "alien-manager-api",
+ "alien-tunnel",
  "async-trait",
  "aws-config",
  "aws-credential-types",
@@ -1104,6 +1123,7 @@ dependencies = [
  "fs2",
  "futures",
  "hostname 0.4.2",
+ "http 1.5.0",
  "k8s-openapi",
  "libc",
  "opentelemetry-proto",
@@ -1349,6 +1369,30 @@ dependencies = [
  "tracing-subscriber",
  "utoipa",
  "uuid",
+]
+
+[[package]]
+name = "alien-tunnel"
+version = "3.3.26"
+dependencies = [
+ "alien-error",
+ "alien-tunnel",
+ "bytes",
+ "futures",
+ "hex",
+ "http 1.5.0",
+ "http-body-util",
+ "hyper 1.11.1",
+ "hyper-util",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -4358,6 +4402,22 @@ dependencies = [
  "toml 0.8.23",
  "uncased",
  "version_check",
+]
+
+[[package]]
+name = "files"
+version = "0.1.0"
+dependencies = [
+ "alien-sdk",
+ "axum 0.8.9",
+ "bytes",
+ "futures",
+ "object_store",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

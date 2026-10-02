@@ -5,10 +5,18 @@
 import { deploymentsCreateDeployment } from "../funcs/deploymentsCreateDeployment.js";
 import { deploymentsDeleteDeployment } from "../funcs/deploymentsDeleteDeployment.js";
 import { deploymentsGetDeployment } from "../funcs/deploymentsGetDeployment.js";
+import { deploymentsGetDeploymentBundleSources } from "../funcs/deploymentsGetDeploymentBundleSources.js";
 import { deploymentsGetDeploymentInfo } from "../funcs/deploymentsGetDeploymentInfo.js";
+import { deploymentsGetDeploymentLogs } from "../funcs/deploymentsGetDeploymentLogs.js";
+import { deploymentsGetDeploymentRouting } from "../funcs/deploymentsGetDeploymentRouting.js";
+import { deploymentsGetDeploymentTarget } from "../funcs/deploymentsGetDeploymentTarget.js";
+import { deploymentsImportDeploymentStatus } from "../funcs/deploymentsImportDeploymentStatus.js";
 import { deploymentsListDeployments } from "../funcs/deploymentsListDeployments.js";
 import { deploymentsRedeploy } from "../funcs/deploymentsRedeploy.js";
 import { deploymentsRetryDeployment } from "../funcs/deploymentsRetryDeployment.js";
+import { deploymentsSetDeploymentChannel } from "../funcs/deploymentsSetDeploymentChannel.js";
+import { deploymentsSetDeploymentPin } from "../funcs/deploymentsSetDeploymentPin.js";
+import { deploymentsSignDeploymentBundle } from "../funcs/deploymentsSignDeploymentBundle.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
@@ -59,6 +67,39 @@ export class Deployments extends ClientSDK {
     ));
   }
 
+  async signDeploymentBundle(
+    request: operations.SignDeploymentBundleRequest,
+    options?: RequestOptions,
+  ): Promise<models.BundleSignatureResponse> {
+    return unwrapAsync(deploymentsSignDeploymentBundle(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async getDeploymentBundleSources(
+    request: operations.GetDeploymentBundleSourcesRequest,
+    options?: RequestOptions,
+  ): Promise<models.BundleSources> {
+    return unwrapAsync(deploymentsGetDeploymentBundleSources(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async setDeploymentChannel(
+    request: operations.SetDeploymentChannelRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentRoutingResponse> {
+    return unwrapAsync(deploymentsSetDeploymentChannel(
+      this,
+      request,
+      options,
+    ));
+  }
+
   async deleteDeployment(
     request: operations.DeleteDeploymentRequest,
     options?: RequestOptions,
@@ -81,6 +122,28 @@ export class Deployments extends ClientSDK {
     ));
   }
 
+  async getDeploymentLogs(
+    request: operations.GetDeploymentLogsRequest,
+    options?: RequestOptions,
+  ): Promise<models.RecentLogsResponse> {
+    return unwrapAsync(deploymentsGetDeploymentLogs(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async setDeploymentPin(
+    request: operations.SetDeploymentPinRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentRoutingResponse> {
+    return unwrapAsync(deploymentsSetDeploymentPin(
+      this,
+      request,
+      options,
+    ));
+  }
+
   async redeploy(
     request: operations.RedeployRequest,
     options?: RequestOptions,
@@ -97,6 +160,39 @@ export class Deployments extends ClientSDK {
     options?: RequestOptions,
   ): Promise<void> {
     return unwrapAsync(deploymentsRetryDeployment(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async getDeploymentRouting(
+    request: operations.GetDeploymentRoutingRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentRoutingResponse> {
+    return unwrapAsync(deploymentsGetDeploymentRouting(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async importDeploymentStatus(
+    request: operations.ImportDeploymentStatusRequest,
+    options?: RequestOptions,
+  ): Promise<models.StatusReportResponse> {
+    return unwrapAsync(deploymentsImportDeploymentStatus(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async getDeploymentTarget(
+    request: operations.GetDeploymentTargetRequest,
+    options?: RequestOptions,
+  ): Promise<any> {
+    return unwrapAsync(deploymentsGetDeploymentTarget(
       this,
       request,
       options,

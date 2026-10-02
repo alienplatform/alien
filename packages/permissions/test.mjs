@@ -153,24 +153,37 @@ test("committed browser compiler matches native Rust success and rejection behav
   )
 })
 
-test("browser runtime task returns the six required inventory grants", () => {
+test("browser runtime task returns inventory and conditional feature grants", () => {
   const result = JSON.parse(executeOperationPermissions('{"task":"kubernetesOperatorRuntime"}'))
   assert.equal(result.ok, true)
   assert.deepEqual(
-    result.value.map(({ apiGroup, resource, verbs, resourceNames }) => ({
+    result.value.map(({ apiGroup, resource, verbs, feature }) => ({
       apiGroup,
       resource,
       verbs,
-      resourceNames,
+      feature,
     })),
     [
-      ["apps", "deployments"],
-      ["apps", "statefulsets"],
-      ["apps", "daemonsets"],
-      ["", "pods"],
-      ["", "events"],
-      ["metrics.k8s.io", "pods"],
-    ].map(([apiGroup, resource]) => ({ apiGroup, resource, verbs: ["list"], resourceNames: [] })),
+      ...[
+        ["apps", "deployments"],
+        ["apps", "statefulsets"],
+        ["apps", "daemonsets"],
+        ["", "pods"],
+        ["", "events"],
+        ["metrics.k8s.io", "pods"],
+      ].map(([apiGroup, resource]) => ({ apiGroup, resource, verbs: ["list"], feature: null })),
+      ...[
+        ["apps", "deployments"],
+        ["", "services"],
+        ["", "secrets"],
+      ].map(([apiGroup, resource]) => ({
+        apiGroup,
+        resource,
+        verbs: ["get", "list", "create", "update", "delete"],
+        feature: "dynamicContainers",
+      })),
+      { apiGroup: "", resource: "pods/log", verbs: ["get"], feature: "podLogs" },
+    ],
   )
   assert.ok(result.value.every(rule => typeof rule.reason === "string" && rule.reason.length > 0))
 })

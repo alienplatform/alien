@@ -1611,6 +1611,258 @@ impl OperatorDb {
         }
     }
 
+    /// Sequence of the last air-gapped bundle target applied.
+    pub async fn get_airgap_sequence(&self) -> Result<Option<u64>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT value FROM state WHERE key = 'airgap_sequence'", ())
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query airgap_sequence".to_string(),
+            })?;
+        let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch airgap_sequence row".to_string(),
+            })?
+        else {
+            return Ok(None);
+        };
+        let value: String = row
+            .get(0)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read airgap_sequence".to_string(),
+            })?;
+        value
+            .parse()
+            .map(Some)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: format!("Stored airgap_sequence '{value}' is not a number"),
+            })
+    }
+
+    /// Buffered telemetry with an ID above `after`, oldest first. Air-gapped
+    /// deployments export it for the vendor instead of pushing it.
+    pub async fn telemetry_after(
+        &self,
+        after: i64,
+        limit: u32,
+    ) -> Result<Vec<(i64, String, Vec<u8>)>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, type, data FROM telemetry WHERE id > ? ORDER BY id LIMIT ?",
+                (after, limit as i64),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query telemetry".to_string(),
+            })?;
+        let mut results = Vec::new();
+        while let Some(row) =
+            rows.next()
+                .await
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to fetch telemetry row".to_string(),
+                })?
+        {
+            let read_failed = || ErrorData::DatabaseError {
+                message: "Failed to read a telemetry row".to_string(),
+            };
+            let id: i64 = row.get(0).into_alien_error().context(read_failed())?;
+            let telemetry_type: String = row.get(1).into_alien_error().context(read_failed())?;
+            let data: Vec<u8> = row.get(2).into_alien_error().context(read_failed())?;
+            results.push((id, telemetry_type, data));
+        }
+        Ok(results)
+    }
+
+    /// Delete buffered telemetry up to and including `through`, once the
+    /// vendor has acknowledged receiving it.
+    pub async fn delete_telemetry_through(&self, through: i64) -> Result<u64> {
+        let conn = self.conn.lock().await;
+        conn.execute("DELETE FROM telemetry WHERE id <= ?", (through,))
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to delete acknowledged telemetry".to_string(),
+            })
+    }
+
+    /// Keep the telemetry buffer under `max_bytes` by dropping the oldest
+    /// batches. Returns how many were dropped; the total is recorded so the
+    /// vendor learns about the gap.
+    pub async fn prune_telemetry(&self, max_bytes: u64) -> Result<u64> {
+        let conn = self.conn.lock().await;
+        let db_failed = |message: &str| ErrorData::DatabaseError {
+            message: message.to_string(),
+        };
+        // Oldest first: drop just enough to get under the limit.
+        let mut rows = conn
+            .query("SELECT id, LENGTH(data) FROM telemetry ORDER BY id", ())
+            .await
+            .into_alien_error()
+            .context(db_failed("Failed to size the telemetry buffer"))?;
+        let mut sizes: Vec<(i64, u64)> = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(db_failed("Failed to size the telemetry buffer"))?
+        {
+            let id: i64 = row
+                .get(0)
+                .into_alien_error()
+                .context(db_failed("Failed to read a telemetry id"))?;
+            let size: i64 = row
+                .get(1)
+                .into_alien_error()
+                .context(db_failed("Failed to read a telemetry size"))?;
+            sizes.push((id, size as u64));
+        }
+        drop(rows);
+        let mut total: u64 = sizes.iter().map(|(_, size)| size).sum();
+        let mut through = None;
+        let mut dropped = 0u64;
+        for (id, size) in &sizes {
+            if total <= max_bytes {
+                break;
+            }
+            total -= size;
+            through = Some(*id);
+            dropped += 1;
+        }
+        if let Some(through) = through {
+            conn.execute("DELETE FROM telemetry WHERE id <= ?", (through,))
+                .await
+                .into_alien_error()
+                .context(db_failed("Failed to drop old telemetry"))?;
+        }
+        if dropped > 0 {
+            conn.execute(
+                "INSERT INTO state (key, value, updated_at) VALUES ('airgap_telemetry_dropped', ?, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(state.value AS INTEGER) + CAST(excluded.value AS INTEGER) AS TEXT), updated_at = excluded.updated_at",
+                (dropped.to_string(),),
+            )
+            .await
+            .into_alien_error()
+            .context(db_failed("Failed to record dropped telemetry"))?;
+        }
+        Ok(dropped)
+    }
+
+    /// Telemetry batches dropped to stay under the buffer limit, in total.
+    pub async fn airgap_telemetry_dropped(&self) -> Result<u64> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT value FROM state WHERE key = 'airgap_telemetry_dropped'",
+                (),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read dropped telemetry".to_string(),
+            })?;
+        let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read dropped telemetry".to_string(),
+            })?
+        else {
+            return Ok(0);
+        };
+        let value: String = row
+            .get(0)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read dropped telemetry".to_string(),
+            })?;
+        value
+            .parse()
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: format!("Stored dropped telemetry count '{value}' is not a number"),
+            })
+    }
+
+    /// Record the sequence of the air-gapped bundle target just applied.
+    pub async fn set_airgap_sequence(&self, sequence: u64) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('airgap_sequence', ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (sequence.to_string(),),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to set airgap_sequence".to_string(),
+        })?;
+        Ok(())
+    }
+
+    /// Manager URL to open tunnel connections to, from the last sync.
+    /// `None` when the manager does not accept tunnels.
+    pub async fn get_tunnel_url(&self) -> Result<Option<String>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT value FROM state WHERE key = 'tunnel_url'", ())
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query tunnel_url".to_string(),
+            })?;
+        match rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch tunnel_url row".to_string(),
+            })? {
+            Some(row) => Ok(Some(row.get(0).into_alien_error().context(
+                ErrorData::DatabaseError {
+                    message: "Failed to read tunnel_url value".to_string(),
+                },
+            )?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Record the tunnel URL from the manager's sync response; `None` clears it.
+    pub async fn set_tunnel_url(&self, url: Option<&str>) -> Result<()> {
+        let conn = self.conn.lock().await;
+        let result = match url {
+            Some(url) => {
+                conn.execute(
+                    "INSERT INTO state (key, value, updated_at) VALUES ('tunnel_url', ?, datetime('now'))
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    (url.to_string(),),
+                )
+                .await
+            }
+            None => {
+                conn.execute("DELETE FROM state WHERE key = 'tunnel_url'", ())
+                    .await
+            }
+        };
+        result
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to set tunnel_url".to_string(),
+            })?;
+        Ok(())
+    }
+
     /// Set the commands URL from the manager's sync response.
     pub async fn set_commands_url(&self, url: &str) -> Result<()> {
         let conn = self.conn.lock().await;

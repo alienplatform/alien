@@ -41,6 +41,7 @@ members = [
   "crates/alien-cloudformation",
   "crates/alien-terraform",
   "crates/alien-helm",
+  "crates/alien-tunnel",
   "crates/alien-manager",
   "crates/alien-operator",
   "crates/alien-deploy-cli",
@@ -50,6 +51,7 @@ members = [
   "examples/custom-operations",
   "examples/endpoint-agent",
   "examples/byoc-database",
+  "examples/customer-kubernetes",
   "examples/slatedb-trace-store",
   "crates/alien-test",
   "tests/e2e/test-apps/comprehensive-rust",
@@ -112,6 +114,7 @@ alien-terraform = { path = "crates/alien-terraform", version = "3.3.26" }
 alien-helm = { path = "crates/alien-helm", version = "3.3.26" }
 alien-manager = { path = "crates/alien-manager", version = "3.3.26" }
 alien-observer = { path = "crates/alien-observer", version = "3.3.26" }
+alien-tunnel = { path = "crates/alien-tunnel", version = "3.3.26" }
 alien-deploy-cli = { path = "crates/alien-deploy-cli" }
 alien-manager-api = { path = "client-sdks/manager/rust", version = "3.3.26", default-features = false, features = ["rustls"] }
 alien-platform-api = { path = "client-sdks/platform/rust", version = "3.3.26", default-features = false, features = ["rustls"] }
@@ -201,6 +204,7 @@ tokio = { version = "1.48", features = ["sync", "macros", "io-util", "rt", "time
 tokio-postgres = "0.7"
 tokio-stream = "0.1"
 tokio-util = "0.7"
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 tonic = "0.13"
 tonic-build = "0.13"
 tonic-reflection = "0.13.1"

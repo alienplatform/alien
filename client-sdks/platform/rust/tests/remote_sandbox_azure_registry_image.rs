@@ -2,7 +2,7 @@ use alien_platform_api::types::Project;
 use serde_json::json;
 
 // A public custom image with a linux/amd64 variant runs on Azure from its registry digest, so the
-// saved Azure half names a `registryImage` and no `catalogImage`.
+// saved Azure half names a `registryImage`.
 fn project_with_a_custom_image_on_azure() -> serde_json::Value {
     json!({
         "id": "prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -28,9 +28,9 @@ fn project_with_a_custom_image_on_azure() -> serde_json::Value {
 }
 
 #[test]
-fn decodes_an_azure_half_with_a_registry_image_and_no_catalog_image() {
-    let project: Project = serde_json::from_value(project_with_a_custom_image_on_azure())
-        .expect("project decodes");
+fn decodes_an_azure_half_with_a_registry_image() {
+    let project: Project =
+        serde_json::from_value(project_with_a_custom_image_on_azure()).expect("project decodes");
     let azure = project
         .project_capabilities
         .expect("capabilities decode")
@@ -44,6 +44,5 @@ fn decodes_an_azure_half_with_a_registry_image_and_no_catalog_image() {
         azure.registry_image.as_ref().map(|image| image.as_str()),
         Some("docker.io/library/python@sha256:bbb")
     );
-    assert!(azure.catalog_image.is_none());
     assert_eq!(azure.idle_suspend_seconds.get(), 900);
 }

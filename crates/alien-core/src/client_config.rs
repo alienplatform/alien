@@ -84,6 +84,16 @@ pub enum AwsCredentials {
         /// Optional IMDS endpoint override
         endpoint: Option<String>,
     },
+    /// Container credentials endpoint: ECS task roles and EKS Pod Identity.
+    Container {
+        /// Credentials endpoint URL
+        endpoint: String,
+        /// Authorization header value for the endpoint
+        authorization_token: Option<String>,
+        /// File holding the authorization header value, re-read on each
+        /// refresh because the platform rotates it
+        authorization_token_file: Option<String>,
+    },
     /// AWS profile credentials loaded via the AWS CLI.
     Profile {
         /// AWS profile name
@@ -126,6 +136,19 @@ impl std::fmt::Debug for AwsCredentials {
             AwsCredentials::Imds { endpoint } => f
                 .debug_struct("AwsCredentials::Imds")
                 .field("endpoint", endpoint)
+                .finish(),
+            AwsCredentials::Container {
+                endpoint,
+                authorization_token,
+                authorization_token_file,
+            } => f
+                .debug_struct("AwsCredentials::Container")
+                .field("endpoint", endpoint)
+                .field(
+                    "authorization_token",
+                    &authorization_token.as_ref().map(|_| "[REDACTED]"),
+                )
+                .field("authorization_token_file", authorization_token_file)
                 .finish(),
             AwsCredentials::Profile { name } => f
                 .debug_struct("AwsCredentials::Profile")
