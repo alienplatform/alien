@@ -38,14 +38,15 @@ use crate::commands::{
 };
 use crate::commands::{
     build_and_post_release_simple, build_command, build_dev_status, commands_task,
-    commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task, destroy_task,
-    ensure_server_running_for_dev_session, ensure_server_running_with_env,
-    fetch_all_dev_deployment_live_states, init_task, local_operations_task, logs_task,
-    onboard_task, operations_task, prepare_dev_session_deployment, release_command, releases_task,
-    render_task, status_task, upgrade_task, validate_deploy_config, vault_remote_task, vault_task,
-    whoami_task, write_dev_status, BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs,
-    DeployArgs, DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs, OperationsArgs,
-    ReleaseArgs, ReleasesArgs, RenderArgs, StatusArgs, UpgradeArgs, WhoamiArgs,
+    commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task,
+    destroy_local_deployment, destroy_task, ensure_server_running_for_dev_session,
+    ensure_server_running_with_env, fetch_all_dev_deployment_live_states, init_task,
+    local_operations_task, logs_task, onboard_task, operations_task,
+    prepare_dev_session_deployment, release_command, releases_task, render_task, status_task,
+    upgrade_task, validate_deploy_config, vault_remote_task, vault_task, whoami_task,
+    write_dev_status, BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs, DeployArgs,
+    DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs, OperationsArgs, ReleaseArgs,
+    ReleasesArgs, RenderArgs, StatusArgs, UpgradeArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -1347,7 +1348,10 @@ async fn handle_dev_command(dev_cmd: DevCommand) -> Result<()> {
         Some(DevSubcommand::Releases(args)) => releases_task(args, ctx).await?,
         Some(DevSubcommand::Whoami(args)) => whoami_task(args, ctx).await?,
         Some(DevSubcommand::Deploy(args)) => deploy_task(args, ctx).await?,
-        Some(DevSubcommand::Destroy(args)) => destroy_task(args, ctx).await?,
+        Some(DevSubcommand::Destroy(args)) => {
+            destroy_local_deployment(port, &args.name, args.force).await?;
+            println!("{}", success_line("Deployment destroyed."));
+        }
         Some(DevSubcommand::Release(args)) => release_command(args, ctx).await?,
         Some(DevSubcommand::Vault(args)) => vault_task(args, port).await?,
         Some(DevSubcommand::Commands(args)) => commands_task_dev(args, port).await?,
