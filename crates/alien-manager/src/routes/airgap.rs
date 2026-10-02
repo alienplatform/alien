@@ -430,7 +430,7 @@ async fn status_report(
 }
 
 fn telemetry_mark_key(deployment_id: &str) -> String {
-    format!("airgap-telemetry-through/{deployment_id}")
+    format!("airgap-telemetry-through:{deployment_id}")
 }
 
 /// Highest telemetry batch already passed on for a deployment.
