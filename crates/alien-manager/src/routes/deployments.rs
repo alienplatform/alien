@@ -1274,6 +1274,7 @@ mod tests {
                     name: "local-dev".to_string(),
                     max_deployments: 100,
                     deployment_count: 1,
+                    setup: Default::default(),
                     created_at: Utc::now(),
                 }])
             });
