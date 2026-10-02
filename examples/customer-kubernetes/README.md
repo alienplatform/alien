@@ -3,15 +3,22 @@
 Keep your control plane in your cloud, and run one service inside each customer's Kubernetes cluster: on-prem, in their cloud account, or on a network with no internet at all. Customers install it once. You ship, watch and call every copy from a manager you run.
 
 ```
- Your cloud                                Customer clusters
-┌────────────────────────────────┐        ┌─────────────────────────────────────────┐
-│ Control plane ──▶ Manager      │◀═══════│ customer-1  Operator ─▶ files ─▶ S3     │
-│                   releases,    │◀═══════│ customer-2  Operator ─▶ files ─▶ MinIO  │
-│                   images, logs,│        └─────────────────────────────────────────┘
-│                   requests     │ by hand┌─────────────────────────────────────────┐
-│                                │◀─ ─ ─ ▶│ customer-3  air-gapped                  │
-│                                │        └─────────────────────────────────────────┘
-└────────────────────────────────┘
+╔════════════════════════════════╗        ╔══════════════════════════════════╗
+║ Your cloud                     ║        ║ Customer cluster                 ║
+║                                ║outbound║                                  ║
+║  ┌──────────────────────────┐  ║◀───────║  ┌──────────┐    ┌────────────┐  ║
+║  │ Alien Manager            │  ║───────▶║  │ Operator │───▶│ Your       │  ║
+║  │ releases, images, logs   │  ║        ║  │          │    │ service    │  ║
+║  └───┬────────────────▲─────┘  ║        ║  └──────────┘    └────────────┘  ║
+╚══════│════════════════│════════╝        ╚══════════════════════════════════╝
+       │ updates        │ reports         ╔══════════════════════════════════╗
+       ▼                │                 ║ Air-gapped customer cluster      ║
+   ┌──────────────────────────┐           ║ no network path to your cloud    ║
+   │ Signed update folder     │──────────▶║  ┌──────────┐    ┌────────────┐  ║
+   │ carried in and out by    │◀──────────║  │ Operator │───▶│ Your       │  ║
+   │ hand: USB, data diode    │           ║  │          │    │ service    │  ║
+   └──────────────────────────┘           ║  └──────────┘    └────────────┘  ║
+                                          ╚══════════════════════════════════╝
 ```
 
 ## What you get
@@ -27,24 +34,83 @@ You can run all of it on your laptop in about half an hour: a local cluster play
 
 ## How it works
 
-**The manager** is your side: one container (`ghcr.io/alienplatform/alien-manager`) with its state in a volume. It keeps your releases, decides which one each customer runs, serves the chart and images each cluster pulls with its own token, forwards logs to your OpenTelemetry backend, and forwards your control plane's requests to a given cluster.
+**The Alien Manager** is your side: one container (`ghcr.io/alienplatform/alien-manager`) with its state in a volume. It keeps your releases, decides which one each customer runs, serves the chart and images each cluster pulls with its own token, forwards logs to your OpenTelemetry backend, and forwards your control plane's requests to a given cluster.
 
 **The Operator** is the customer's side. The chart installs it next to your service. It keeps one outbound HTTPS connection to the manager, deploys the release it should run, sends logs, and carries your requests to the service. It updates itself when you upgrade the manager.
 
-**The service** is your code. This one is a small files service in Rust that keeps its data in the customer's own S3-compatible bucket (Amazon S3, MinIO, Ceph). [`alien.ts`](alien.ts) describes it:
+**The service** is your code, unchanged. This one is a small files service in Rust that keeps its data in the customer's own S3-compatible bucket (Amazon S3, MinIO, Ceph).
+
+## Describe your service
+
+One file, [`alien.ts`](alien.ts), says what the service needs. Alien turns it into the Helm chart customers install and the releases you ship. This is the whole file:
 
 ```ts
-const bucket = new alien.Storage("bucket").build() // the customer's bucket, named at install time
+import * as alien from "@alienplatform/core"
+
+// Set per customer when you onboard them. The service requires it on every
+// request, so the application keeps its own authentication end to end.
+const inputs = alien.inputs({
+  accessToken: alien.secret({
+    providedBy: "developer",
+    required: true,
+    label: "Access token",
+    description: "Token your control plane sends in the Authorization header.",
+    minLength: 32,
+    env: { name: "ACCESS_TOKEN", targetResources: ["api"] },
+  }),
+})
+
+// The customer's bucket: Amazon S3, MinIO, Ceph or any S3-compatible store.
+// The customer's admin names it in the Helm values when they install.
+const bucket = new alien.Storage("bucket").build()
 
 const api = new alien.Container("api")
-  .code({ type: "source", src: ".", toolchain: { type: "rust", binaryName: "files" } })
-  .tunnel(8080) // your control plane calls port 8080 through the manager, nobody else can
+  .code({
+    type: "source",
+    src: ".",
+    toolchain: { type: "rust", binaryName: "files" },
+  })
+  .cpu(0.5)
+  .memory("512Mi")
+  // Reachable from your control plane through the manager, and from nowhere
+  // else: the customer opens no inbound port.
+  .tunnel(8080)
+  .healthCheck({ path: "/health", method: "GET", timeoutSeconds: 2, failureThreshold: 3 })
   .link(bucket)
   .permissions("api")
   .build()
+
+export default new alien.Stack("files")
+  .platforms(["kubernetes"])
+  .inputs(inputs)
+  .add(bucket, "frozen")
+  .add(api, "live")
+  .permissions({
+    profiles: {
+      api: { bucket: ["storage/data-read", "storage/data-write"] },
+    },
+  })
+  .build()
 ```
 
-[`src/main.rs`](src/main.rs) serves `PUT`, `GET` and `DELETE /files/{key}` and `GET /files?prefix=`, streaming to and from the bucket it gets from Alien's bindings. It checks a per-customer `accessToken` on every request, so the service keeps its own authentication end to end.
+- **`.platforms(["kubernetes"])`** builds the stack for Kubernetes: a Helm chart that installs the Operator and your service.
+- **The bucket is `frozen`.** It belongs to the customer: their admin names it in the Helm values at install time, and your releases never change it.
+- **The container is `live`.** Alien builds it from this directory with the Rust toolchain, and every `alien release` rolls it out to every cluster.
+- **`.tunnel(8080)`** lets your control plane call port 8080 through the manager. Nothing else can reach it; the customer opens no inbound port.
+- **`.link(bucket)` with the `api` permission profile** gives the container read and write access to that bucket, and nothing more.
+- **The `accessToken` input** is set per customer when you onboard them, and reaches the container as `ACCESS_TOKEN`.
+
+The code never names a storage provider. [`src/main.rs`](src/main.rs) asks Alien's bindings for the linked bucket, and gets whichever one the customer configured:
+
+```rust
+let bindings = Bindings::from_env().expect("failed to load bindings");
+let storage = bindings
+    .storage("bucket")
+    .await
+    .expect("failed to load the 'bucket' storage binding");
+```
+
+It serves `PUT`, `GET` and `DELETE /files/{key}` and `GET /files?prefix=`, streaming to and from that bucket, and checks the customer's `accessToken` on every request, so the service keeps its own authentication end to end.
 
 ## Try it on your machine
 
@@ -54,13 +120,13 @@ A local [kind](https://kind.sigs.k8s.io) cluster plays your customers. `customer
 
 You need Docker (Docker Desktop, OrbStack or Docker Engine), and:
 
-| Tool | For | Install |
+| Tool | What it does here | Install |
 |---|---|---|
-| `alien` | you, the vendor | `curl -fsSL https://alien.dev/install \| sh` |
-| `alien-deploy` | the air-gapped customer's admin | `curl -fsSL https://alien.dev/install \| sh -s -- --binary alien-deploy` |
-| `kind`, `kubectl`, `helm` (3.14 or later) | the local cluster and the customers' installs | [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation), [kubectl](https://kubernetes.io/docs/tasks/tools/), [helm](https://helm.sh/docs/intro/install/) |
-| Rust, [Zig](https://ziglang.org/download/) and `cargo-zigbuild` | building the example service for Linux | [rustup](https://rustup.rs), then `cargo install cargo-zigbuild` |
-| `jq`, `openssl` | reading JSON output and making tokens in the steps below | your package manager |
+| `alien` | Your CLI: releases the service, onboards customers, reads logs | `curl -fsSL https://alien.dev/install \| sh` |
+| `alien-deploy` | Installs and updates the air-gapped site (`alien-deploy sync`). A real site's admin runs it; here, you do | `curl -fsSL https://alien.dev/install \| sh -s -- --binary alien-deploy` |
+| `kind`, `kubectl`, `helm` (3.14 or later) | The local cluster, and the customers' installs | [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation), [kubectl](https://kubernetes.io/docs/tasks/tools/), [helm](https://helm.sh/docs/intro/install/) |
+| Rust, [Zig](https://ziglang.org/download/) and `cargo-zigbuild` | Build the example service for Linux | [rustup](https://rustup.rs), then `cargo install cargo-zigbuild` |
+| `jq`, `openssl` | Read JSON output and make tokens in the steps below | your package manager |
 
 Then get the example:
 
