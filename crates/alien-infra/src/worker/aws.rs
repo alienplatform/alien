@@ -4450,7 +4450,10 @@ impl AwsWorkerController {
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
-        if let Some(certificate_arn) = self.certificate_arn.as_ref() {
+        // Custom-domain certificates belong to the customer and may be shared.
+        if let (Some(certificate_arn), false) =
+            (self.certificate_arn.as_ref(), self.uses_custom_domain)
+        {
             let aws_cfg = ctx.get_aws_config()?;
             let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
             match acm_client.delete_certificate(certificate_arn).await {
@@ -5559,15 +5562,18 @@ mod tests {
     ///
     /// The stack executor matters here: its best-effort delete rule decides what an
     /// access-denied answer does to the rest of the delete flow.
+    #[bon::builder]
     async fn delete_public_worker_in_created_vpc(
         mock_lambda: MockLambdaApi,
         mock_ec2: MockEc2Api,
         mock_acm: MockAcmApi,
+        #[builder(default)] uses_custom_domain: bool,
     ) -> ResourceStatus {
         let worker = function_public_ingress();
         let worker_id = worker.id.clone();
         let mut controller = AwsWorkerController::mock_ready(&format!("test-{worker_id}"));
         controller.certificate_arn = Some(TEST_CERTIFICATE_ARN.to_string());
+        controller.uses_custom_domain = uses_custom_domain;
 
         let mut state = StackState::new(Platform::Aws);
         state.resource_prefix = "test".to_string();
@@ -5636,9 +5642,14 @@ mod tests {
     /// `lambda:GetFunction` is granted only for functions that carry the stack's tags. A
     /// deleted function has no tags, so AWS answers the read that confirms the delete with
     /// AccessDenied instead of ResourceNotFound. The delete flow has to treat that as "gone"
-    /// and still wait for the Lambda network interfaces and delete the imported certificate.
+    /// and still wait for the Lambda network interfaces, deleting only imported certificates.
+    #[rstest]
+    #[case::imported_certificate(false)]
+    #[case::customer_certificate(true)]
     #[tokio::test]
-    async fn test_delete_finishes_cleanup_when_read_of_deleted_function_is_denied() {
+    async fn test_delete_finishes_cleanup_when_read_of_deleted_function_is_denied(
+        #[case] uses_custom_domain: bool,
+    ) {
         let calls = Arc::new(Mutex::new(Vec::new()));
 
         let mut mock_lambda = MockLambdaApi::new();
@@ -5679,23 +5690,26 @@ mod tests {
         let recorded = calls.clone();
         mock_acm
             .expect_delete_certificate()
+            .times(if uses_custom_domain { 0 } else { 1 })
             .withf(|certificate_arn| certificate_arn == TEST_CERTIFICATE_ARN)
             .returning(move |_| {
                 recorded.lock().unwrap().push("DeleteCertificate");
                 Ok(())
             });
 
-        let status = delete_public_worker_in_created_vpc(mock_lambda, mock_ec2, mock_acm).await;
+        let status = delete_public_worker_in_created_vpc()
+            .mock_lambda(mock_lambda)
+            .mock_ec2(mock_ec2)
+            .mock_acm(mock_acm)
+            .uses_custom_domain(uses_custom_domain)
+            .call()
+            .await;
 
-        assert_eq!(
-            *calls.lock().unwrap(),
-            [
-                "DeleteFunction",
-                "GetFunction",
-                "DescribeNetworkInterfaces",
-                "DeleteCertificate"
-            ]
-        );
+        let mut expected_calls = vec!["DeleteFunction", "GetFunction", "DescribeNetworkInterfaces"];
+        if !uses_custom_domain {
+            expected_calls.push("DeleteCertificate");
+        }
+        assert_eq!(*calls.lock().unwrap(), expected_calls);
         assert_eq!(status, ResourceStatus::Deleted);
     }
 
@@ -5728,8 +5742,12 @@ mod tests {
                 Err(access_denied())
             });
 
-        let status =
-            delete_public_worker_in_created_vpc(mock_lambda, mock_ec2, MockAcmApi::new()).await;
+        let status = delete_public_worker_in_created_vpc()
+            .mock_lambda(mock_lambda)
+            .mock_ec2(mock_ec2)
+            .mock_acm(MockAcmApi::new())
+            .call()
+            .await;
 
         assert_eq!(
             *calls.lock().unwrap(),
