@@ -8,7 +8,10 @@ import { ImportDeploymentStatusRequest } from "@alienplatform/manager-api/models
 let value: ImportDeploymentStatusRequest = {
   id: "<id>",
   statusReport: {
-    state: {},
+    state: {
+      "key": "Indiana",
+      "key1": "Virginia",
+    },
   },
 };
 ```

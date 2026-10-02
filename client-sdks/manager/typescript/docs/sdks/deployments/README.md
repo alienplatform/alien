@@ -1015,7 +1015,9 @@ async function run() {
   const result = await alienManager.deployments.importDeploymentStatus({
     id: "<id>",
     statusReport: {
-      state: {},
+      state: {
+
+      },
     },
   });
 
@@ -1044,7 +1046,9 @@ async function run() {
   const res = await deploymentsImportDeploymentStatus(alienManager, {
     id: "<id>",
     statusReport: {
-      state: {},
+      state: {
+
+      },
     },
   });
   if (res.ok) {

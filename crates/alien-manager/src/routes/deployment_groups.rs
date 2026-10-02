@@ -32,7 +32,6 @@ pub struct CreateDeploymentGroupRequest {
     pub max_deployments: i64,
     /// Stack input values applied to each deployment the group creates.
     #[serde(default)]
-    #[cfg_attr(feature = "openapi", schema(value_type = Object))]
     pub input_values: HashMap<String, serde_json::Value>,
     /// Environment variables applied to each deployment the group creates.
     #[serde(default)]

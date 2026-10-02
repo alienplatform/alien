@@ -9,16 +9,11 @@ import {
   ReportedTelemetry$outboundSchema,
 } from "./reportedtelemetry.js";
 
-/**
- * Deployment state as the environment's Operator last recorded it.
- */
-export type State = {};
-
 export type StatusReport = {
   /**
    * Deployment state as the environment's Operator last recorded it.
    */
-  state: State;
+  state: { [k: string]: any };
   /**
    * Telemetry the Operator buffered, as the OTLP batches it received.
    */
@@ -26,20 +21,8 @@ export type StatusReport = {
 };
 
 /** @internal */
-export type State$Outbound = {};
-
-/** @internal */
-export const State$outboundSchema: z.ZodType<State$Outbound, State> = z.object(
-  {},
-);
-
-export function stateToJSON(state: State): string {
-  return JSON.stringify(State$outboundSchema.parse(state));
-}
-
-/** @internal */
 export type StatusReport$Outbound = {
-  state: State$Outbound;
+  state: { [k: string]: any };
   telemetry?: Array<ReportedTelemetry$Outbound> | undefined;
 };
 
@@ -48,7 +31,7 @@ export const StatusReport$outboundSchema: z.ZodType<
   StatusReport$Outbound,
   StatusReport
 > = z.object({
-  state: z.lazy(() => State$outboundSchema),
+  state: z.record(z.string(), z.any()),
   telemetry: z.array(ReportedTelemetry$outboundSchema).optional(),
 });
 

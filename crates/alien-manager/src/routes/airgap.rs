@@ -259,7 +259,7 @@ async fn bundle_signature(
 #[serde(rename_all = "camelCase")]
 pub struct StatusReport {
     /// Deployment state as the environment's Operator last recorded it.
-    #[cfg_attr(feature = "openapi", schema(value_type = Object))]
+    #[cfg_attr(feature = "openapi", schema(value_type = std::collections::HashMap<String, serde_json::Value>))]
     pub state: DeploymentState,
     /// Telemetry the Operator buffered, as the OTLP batches it received.
     #[serde(default)]

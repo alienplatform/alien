@@ -9,11 +9,6 @@ import {
   EnvironmentVariable$outboundSchema,
 } from "./environmentvariable.js";
 
-/**
- * Stack input values applied to each deployment the group creates.
- */
-export type InputValues = {};
-
 export type CreateDeploymentGroupRequest = {
   /**
    * Environment variables applied to each deployment the group creates.
@@ -22,28 +17,15 @@ export type CreateDeploymentGroupRequest = {
   /**
    * Stack input values applied to each deployment the group creates.
    */
-  inputValues?: InputValues | undefined;
+  inputValues?: { [k: string]: any } | undefined;
   maxDeployments?: number | undefined;
   name: string;
 };
 
 /** @internal */
-export type InputValues$Outbound = {};
-
-/** @internal */
-export const InputValues$outboundSchema: z.ZodType<
-  InputValues$Outbound,
-  InputValues
-> = z.object({});
-
-export function inputValuesToJSON(inputValues: InputValues): string {
-  return JSON.stringify(InputValues$outboundSchema.parse(inputValues));
-}
-
-/** @internal */
 export type CreateDeploymentGroupRequest$Outbound = {
   environmentVariables?: Array<EnvironmentVariable$Outbound> | undefined;
-  inputValues?: InputValues$Outbound | undefined;
+  inputValues?: { [k: string]: any } | undefined;
   maxDeployments?: number | undefined;
   name: string;
 };
@@ -54,7 +36,7 @@ export const CreateDeploymentGroupRequest$outboundSchema: z.ZodType<
   CreateDeploymentGroupRequest
 > = z.object({
   environmentVariables: z.array(EnvironmentVariable$outboundSchema).optional(),
-  inputValues: z.lazy(() => InputValues$outboundSchema).optional(),
+  inputValues: z.record(z.string(), z.any()).optional(),
   maxDeployments: z.int().optional(),
   name: z.string(),
 });

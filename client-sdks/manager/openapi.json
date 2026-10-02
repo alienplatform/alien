@@ -8074,7 +8074,11 @@
           },
           "inputValues": {
             "type": "object",
-            "description": "Stack input values applied to each deployment the group creates."
+            "description": "Stack input values applied to each deployment the group creates.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "maxDeployments": {
             "type": "integer",
@@ -18413,7 +18417,11 @@
         "properties": {
           "state": {
             "type": "object",
-            "description": "Deployment state as the environment's Operator last recorded it."
+            "description": "Deployment state as the environment's Operator last recorded it.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "telemetry": {
             "type": "array",
