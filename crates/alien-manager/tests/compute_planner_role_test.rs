@@ -1,6 +1,6 @@
-//! A compute plan credential on its own deployment's scope gets nothing from any credentialed route
-//! under `OssAuthz`: a 403, an empty list, or the OCI version check's empty body. Each request
-//! carries a well-formed body, so a refusal is the authorization gate rather than a parse error.
+//! Under `OssAuthz`, a compute plan credential on its own deployment gets a 403, an empty list, or
+//! the OCI version check's `{}` from every credentialed route of the default router. Bodies are
+//! well-formed, so each refusal comes from the authorization gate, not a parse error.
 
 use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
@@ -92,7 +92,7 @@ fn free_port() -> u16 {
 }
 
 #[tokio::test]
-async fn a_compute_plan_credential_gets_nothing_from_any_credentialed_route() {
+async fn a_compute_plan_credential_gets_nothing_from_the_default_router() {
     let state_dir = tempfile::tempdir().unwrap();
     let db_path = state_dir.path().join("test.db");
     let db = Arc::new(
@@ -135,6 +135,7 @@ async fn a_compute_plan_credential_gets_nothing_from_any_credentialed_route() {
             CreateDeploymentGroupParams {
                 name: "group".to_string(),
                 max_deployments: 10,
+                setup: Default::default(),
             },
         )
         .await
@@ -276,6 +277,27 @@ async fn a_compute_plan_credential_gets_nothing_from_any_credentialed_route() {
         .as_str()
         .unwrap()
         .to_string();
+    setup(
+        Method::POST,
+        "/v1/release-channels",
+        Some(json!({ "name": "stable", "releaseId": release.id })),
+    )
+    .await;
+    let deployment_state = serde_json::to_value(alien_core::DeploymentState {
+        status: alien_core::DeploymentStatus::Running,
+        platform: alien_core::Platform::Local,
+        current_release: None,
+        target_release: None,
+        stack_state: None,
+        error: None,
+        environment_info: None,
+        runtime_metadata: None,
+        retry_requested: false,
+        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+    })
+    .unwrap();
+    let bundle_manifest =
+        base64::engine::general_purpose::STANDARD.encode(json!({ "deploymentId": id }).to_string());
 
     let upload_path = "/artifacts-uploads/namespaces/artifacts/repositories/default/uploads/u1";
     let upload_repo = "artifacts/default";
@@ -422,19 +444,7 @@ async fn a_compute_plan_credential_gets_nothing_from_any_credentialed_route() {
             Some(json!({
                 "deploymentId": id,
                 "session": "s",
-                "state": serde_json::to_value(alien_core::DeploymentState {
-                    status: alien_core::DeploymentStatus::Running,
-                    platform: alien_core::Platform::Local,
-                    current_release: None,
-                    target_release: None,
-                    stack_state: None,
-                    error: None,
-                    environment_info: None,
-                    runtime_metadata: None,
-                    retry_requested: false,
-                    protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
-                })
-                .unwrap(),
+                "state": deployment_state,
             })),
             Forbidden,
         ),
@@ -619,6 +629,88 @@ async fn a_compute_plan_credential_gets_nothing_from_any_credentialed_route() {
             format!("{upload_path}?{upload_query}"),
             None,
             Denied("cannot push"),
+        ),
+        (Method::GET, "/v1/manager".to_string(), None, Forbidden),
+        (
+            Method::POST,
+            "/v1/tokens".to_string(),
+            Some(json!({ "type": "tunnel", "deploymentGroupId": group.id })),
+            Forbidden,
+        ),
+        (
+            Method::GET,
+            format!("/v1/deployments/{id}/logs"),
+            None,
+            Forbidden,
+        ),
+        (
+            Method::GET,
+            format!("/v1/deployments/{id}/target"),
+            None,
+            Forbidden,
+        ),
+        (
+            Method::GET,
+            format!(
+                "/v1/deployments/{id}/bundle-sources?releaseId={}",
+                release.id
+            ),
+            None,
+            Forbidden,
+        ),
+        (
+            Method::POST,
+            format!("/v1/deployments/{id}/bundle-signature"),
+            Some(json!({ "manifest": bundle_manifest })),
+            Forbidden,
+        ),
+        (
+            Method::POST,
+            format!("/v1/deployments/{id}/status-report"),
+            Some(json!({ "state": deployment_state, "telemetry": [] })),
+            Forbidden,
+        ),
+        (
+            Method::GET,
+            "/v1/release-channels".to_string(),
+            None,
+            Forbidden,
+        ),
+        (
+            Method::POST,
+            "/v1/release-channels".to_string(),
+            Some(json!({ "name": "beta", "releaseId": release.id })),
+            Forbidden,
+        ),
+        (
+            Method::DELETE,
+            "/v1/release-channels/stable".to_string(),
+            None,
+            Forbidden,
+        ),
+        (
+            Method::POST,
+            format!("/v1/releases/{}/promote", release.id),
+            Some(json!({ "channel": "stable" })),
+            Forbidden,
+        ),
+        (
+            Method::GET,
+            format!("/v1/deployments/{id}/routing"),
+            None,
+            Forbidden,
+        ),
+        (
+            Method::PUT,
+            format!("/v1/deployments/{id}/channel"),
+            Some(json!({ "channel": "stable" })),
+            Forbidden,
+        ),
+        (
+            Method::PUT,
+            format!("/v1/deployments/{id}/pin"),
+            Some(json!({ "releaseId": release.id })),
+            Forbidden,
         ),
         (Method::GET, "/v2".to_string(), None, VersionCheck),
         (Method::GET, "/v2/".to_string(), None, VersionCheck),

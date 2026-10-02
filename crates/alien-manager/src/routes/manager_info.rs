@@ -14,6 +14,8 @@ use axum::{
 use serde::Serialize;
 
 use super::{auth, AppState};
+use crate::auth::Role;
+use crate::error::ErrorData;
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -62,8 +64,13 @@ pub fn router() -> Router<AppState> {
     )
 ))]
 async fn manager_info(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Err(e) = auth::require_auth(&state, &headers).await {
-        return e.into_response();
+    let subject = match auth::require_auth(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(e) => return e.into_response(),
+    };
+    if subject.role == Role::ComputePlanner {
+        return ErrorData::forbidden("Compute plan credentials cannot inspect manager identity")
+            .into_response();
     }
     let url = state.config.base_url();
     Json(ManagerInfoResponse {

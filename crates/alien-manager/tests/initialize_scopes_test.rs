@@ -1,7 +1,6 @@
-//! `POST /v1/initialize` under `OssAuthz` for every scope an agent or operator presents.
-//! Real deployment-group, deployment and admin tokens go through `TokenDbValidator`; bearers
-//! of the form `role:<deployment>` stand in for deployment-scoped roles OSS never mints, and
-//! `dg-denied:<group>` for a deployment-group deployer whose `Authz` refuses sync and create.
+//! `POST /v1/initialize` under `OssAuthz` for every scope an agent or operator presents. Real tokens
+//! go through `TokenDbValidator`; `role:<deployment>` stands in for deployment roles OSS never mints,
+//! and `dg-denied:<group>` for a group deployer whose `Authz` refuses sync and create.
 
 use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
@@ -235,6 +234,7 @@ async fn initialize_admits_sync_callers_and_refuses_other_deployment_roles() {
             CreateDeploymentGroupParams {
                 name: "group".to_string(),
                 max_deployments: 10,
+                setup: Default::default(),
             },
         )
         .await
