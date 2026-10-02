@@ -1655,9 +1655,17 @@ mod tests {
         let mut previous = None;
         for version in ["app-v1", "app-v2", "app-v1"] {
             let archive = state.path().join(format!("{version}.tar"));
+            let layer = dockdash::Layer::builder()
+                .expect("layer builder")
+                .data("/sentinel", version.as_bytes(), Some(0o644))
+                .expect("sentinel layer")
+                .build()
+                .await
+                .expect("zstd layer");
             let (image, _) = dockdash::Image::builder()
                 .from("alpine:3.20")
-                .cmd(vec!["echo".to_string(), version.to_string()])
+                .layer(layer)
+                .cmd(vec!["cat".to_string(), "/sentinel".to_string()])
                 .output_name_and_tag(&tag)
                 .output_to(archive.clone())
                 .build()

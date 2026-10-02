@@ -959,6 +959,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "workspace_root",
+ "zstd",
 ]
 
 [[package]]
