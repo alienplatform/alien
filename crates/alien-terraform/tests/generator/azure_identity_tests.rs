@@ -7,9 +7,9 @@
 
 use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
 use alien_core::{
-    AzureResourceGroup, ManagementPermissions, Network, NetworkSettings, PermissionProfile,
-    RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack, StackSettings, Worker,
-    WorkerCode,
+    AzureContainerAppsEnvironment, AzureResourceGroup, Key, ManagementPermissions, Network,
+    NetworkSettings, PermissionProfile, RemoteStackManagement, ResourceLifecycle, ServiceAccount,
+    Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_terraform::TerraformTarget;
 
@@ -420,4 +420,36 @@ fn azure_sandbox_management_grants_reach_the_module() {
         "session-content access belongs to sandbox/execute, not the management role",
     );
     assert_terraform_valid(&module, "azure_sandbox_management_grants");
+}
+
+#[test]
+fn azure_provider_tracks_partial_creates_and_protects_detached_keys() {
+    let stack = Stack::new("acme-rg".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            AzureContainerAppsEnvironment::new("environment".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Key::new("retained-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let providers = module
+        .get("providers.tf")
+        .expect("providers.tf")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        providers.contains("persist_id_on_create_before_polling_for_completion = true"),
+        "accepted creates must remain tracked if polling fails:\n{providers}"
+    );
+    assert!(
+        providers.contains("resource_group { prevent_deletion_if_contains_resources = true }"),
+        "group deletion must preserve detached key vaults:\n{providers}"
+    );
+    snapshot_module("azure_partial_create_with_retained_key", &module);
+    assert_terraform_valid(&module, "azure_provider_partial_create_with_retained_key");
 }

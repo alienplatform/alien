@@ -78,6 +78,10 @@ pub fn dockerfile(base_image: &str, agent: &AgentSource) -> Result<String> {
     Ok(format!(
         r#"FROM {base_image}
 
+# The base image may end as a non-root user. The lines below write /etc/passwd and the agent must
+# start as root to drop to the exec identity before every command, so root is set explicitly.
+USER 0:0
+
 {copy_agent}
 
 # Written with numeric ids and a plain append rather than useradd/adduser, which differ across
@@ -250,6 +254,23 @@ mod tests {
         ] {
             assert!(dockerfile.contains(expected.as_str()), "missing {expected}");
         }
+    }
+
+    /// A base image that ends as a non-root user must not carry that user into the identity
+    /// setup or the agent: the append to /etc/passwd fails and the agent can't drop privileges.
+    #[test]
+    fn everything_after_the_base_runs_as_root() {
+        let dockerfile = rendered();
+        let root = dockerfile
+            .find("\nUSER 0:0\n")
+            .expect("root is set explicitly");
+        let first_run = dockerfile.find("\nRUN ").expect("identity setup runs");
+        assert!(root < first_run, "root must be set before the first RUN");
+        assert_eq!(
+            dockerfile.matches("\nUSER ").count(),
+            1,
+            "nothing switches away from root before the agent starts"
+        );
     }
 
     /// A shell would re-parse the path and give the sandbox a process it did not ask for.

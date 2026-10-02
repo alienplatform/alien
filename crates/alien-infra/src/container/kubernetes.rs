@@ -87,6 +87,31 @@ async fn create_registry_pull_secret(
     .await
 }
 
+/// The container's image when the deployment token must become pull
+/// credentials for it. With a token (every connected deployment), that is
+/// every image. Without one (an air-gapped deployment), images from another
+/// registry, such as the environment's own, are pulled with the access the
+/// cluster already has; an image still pointing at the manager is returned
+/// so the missing token fails loudly.
+fn image_needing_pull_secret<'a>(
+    code: &'a ContainerCode,
+    has_deployment_token: bool,
+    manager_url: Option<&str>,
+) -> Option<&'a str> {
+    let ContainerCode::Image { image } = code else {
+        return None;
+    };
+    if has_deployment_token {
+        return Some(image);
+    }
+    let Some(manager_url) = manager_url else {
+        return Some(image);
+    };
+    let manager_host = alien_core::image_rewrite::strip_url_scheme(manager_url);
+    let image_host = image.split('/').next().unwrap_or_default();
+    (image_host == manager_host).then_some(image.as_str())
+}
+
 fn first_declared_container_port(config: &Container) -> Option<u16> {
     config.ports.first().map(|port| port.port)
 }
@@ -306,7 +331,11 @@ impl KubernetesContainerController {
         // Generate ServiceAccount name following Helm naming convention
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
-        let image_pull_secret_name = if let ContainerCode::Image { image } = &config.code {
+        let image_pull_secret_name = if let Some(image) = image_needing_pull_secret(
+            &config.code,
+            ctx.deployment_config.deployment_token.is_some(),
+            ctx.deployment_config.manager_url.as_deref(),
+        ) {
             let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceControllerConfigError {
                     resource_id: config.id.clone(),
@@ -1001,7 +1030,11 @@ impl KubernetesContainerController {
 
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
-        let image_pull_secret_name = if let ContainerCode::Image { image } = &config.code {
+        let image_pull_secret_name = if let Some(image) = image_needing_pull_secret(
+            &config.code,
+            ctx.deployment_config.deployment_token.is_some(),
+            ctx.deployment_config.manager_url.as_deref(),
+        ) {
             let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceControllerConfigError {
                     resource_id: config.id.clone(),
@@ -1654,7 +1687,11 @@ impl KubernetesContainerController {
                 status: ContainerStatus::Running,
                 current_replicas: 0, // Will be updated by runtime
                 desired_replicas: 0, // Will be updated by runtime
-                internal_dns: format!("{}.svc.cluster.local", workload_name),
+                // The internal Service shares the workload's name.
+                internal_dns: match &self.namespace {
+                    Some(namespace) => format!("{workload_name}.{namespace}.svc.cluster.local"),
+                    None => format!("{workload_name}.svc.cluster.local"),
+                },
                 replicas: Vec::new(), // Replica details tracked separately
                 public_endpoints: self
                     .public_endpoint

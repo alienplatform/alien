@@ -76,8 +76,8 @@ export type ResolveBindingResponseSandboxGcpAgentPlatform = {
    *
    * @remarks
    *
-   * No egress field, unlike the other two clouds: the policy lives on the environment template
-   * named below, so it travels with the template rather than as a flag the client must read.
+   * The egress policy itself lives on the environment template named below; `allow_egress` reports
+   * it so a client can decide without reading the template.
    */
   binding: RemoteGcpSandboxBinding;
   /**

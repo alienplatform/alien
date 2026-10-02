@@ -27,6 +27,8 @@ pub use build_targets::*;
 mod error;
 pub use error::*;
 
+#[cfg(feature = "bundle-signature")]
+pub mod bundle_signature;
 mod resource;
 pub mod sandbox_capability;
 #[cfg(feature = "sandbox-capability")]

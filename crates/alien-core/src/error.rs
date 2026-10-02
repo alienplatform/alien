@@ -214,6 +214,19 @@ pub enum ErrorData {
         platform: String,
     },
 
+    /// A bundle signature or signing key was rejected.
+    #[error(
+        code = "BUNDLE_SIGNATURE_INVALID",
+        message = "Bundle signature invalid: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    BundleSignatureInvalid {
+        /// Why the signature or key was rejected
+        reason: String,
+    },
+
     /// A sandbox capability was refused.
     #[error(
         code = "SANDBOX_CAPABILITY_REFUSED",

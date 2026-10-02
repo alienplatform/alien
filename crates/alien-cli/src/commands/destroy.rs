@@ -17,7 +17,7 @@ use alien_deployment::manager_api_transport::{
     ManagerApiTransport, SetupDeleteAcquireOutcome,
 };
 use alien_deployment::runner::{preserve_semantic_failure, RunnerPolicy, RunnerResult};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use clap::Parser;
 use std::str::FromStr;
@@ -44,9 +44,9 @@ pub struct DestroyArgs {
     #[arg(long)]
     pub name: String,
 
-    /// Target platform
+    /// Target platform (required by `alien destroy`; `alien dev destroy` is always local)
     #[arg(long)]
-    pub platform: String,
+    pub platform: Option<String>,
 
     /// Force-destroy: skip resource teardown and delete the record immediately.
     #[arg(long)]
@@ -59,7 +59,13 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
     let steps = FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]);
     steps.activate(0, Some(format!("Deployment {}", args.name)));
 
-    let platform = Platform::from_str(&args.platform).map_err(|e| {
+    let platform_name = args.platform.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "platform".to_string(),
+            message: "--platform is required".to_string(),
+        })
+    })?;
+    let platform = Platform::from_str(&platform_name).map_err(|e| {
         AlienError::new(ErrorData::ValidationError {
             field: "platform".to_string(),
             message: e,
@@ -93,7 +99,7 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
     steps.activate(1, Some("Discovering manager...".to_string()));
 
     let manager_ctx = ctx
-        .resolve_manager(&tracked_deployment.project_id, &args.platform)
+        .resolve_manager(&tracked_deployment.project_id, &platform_name)
         .await?;
     let manager_client = manager_ctx.client;
 
@@ -373,9 +379,16 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         }
         LoopOutcome::Failure => {
             steps.fail(2, Some(format!("{:?}", loop_result.final_status)));
-            return Err(AlienError::new(ErrorData::DeploymentFailed {
+            let failed = ErrorData::DeploymentFailed {
                 message: format!("deletion failed at status {:?}", loop_result.final_status),
-            }));
+            };
+            // The final state's headline error names each failed resource and its cause.
+            return Err(
+                match alien_deployment::deployment_headline_error_from_state(&current) {
+                    Some(cause) => cause.context(failed),
+                    None => AlienError::new(failed),
+                },
+            );
         }
         LoopOutcome::Neutral => {
             steps.complete(2, Some("Deletion in progress".to_string()));

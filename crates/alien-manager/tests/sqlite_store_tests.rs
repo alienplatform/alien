@@ -57,6 +57,7 @@ async fn create_test_group(store: &SqliteDeploymentStore) -> String {
             CreateDeploymentGroupParams {
                 name: "test-group".to_string(),
                 max_deployments: 100,
+                setup: Default::default(),
             },
         )
         .await
@@ -416,6 +417,7 @@ async fn list_by_deployment_group() {
             CreateDeploymentGroupParams {
                 name: "group-a".to_string(),
                 max_deployments: 10,
+                setup: Default::default(),
             },
         )
         .await
@@ -427,6 +429,7 @@ async fn list_by_deployment_group() {
             CreateDeploymentGroupParams {
                 name: "group-b".to_string(),
                 max_deployments: 10,
+                setup: Default::default(),
             },
         )
         .await
@@ -473,6 +476,7 @@ async fn list_by_deployment_group_and_name() {
             CreateDeploymentGroupParams {
                 name: "group-a".to_string(),
                 max_deployments: 10,
+                setup: Default::default(),
             },
         )
         .await
@@ -484,6 +488,7 @@ async fn list_by_deployment_group_and_name() {
             CreateDeploymentGroupParams {
                 name: "group-b".to_string(),
                 max_deployments: 10,
+                setup: Default::default(),
             },
         )
         .await
@@ -1371,6 +1376,7 @@ async fn group_count_computed() {
             CreateDeploymentGroupParams {
                 name: "counted-group".to_string(),
                 max_deployments: 100,
+                setup: Default::default(),
             },
         )
         .await

@@ -114,6 +114,11 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_OBSERVE_ALL_NAMESPACES")]
     pub operator_observe_all_namespaces: bool,
 
+    /// Run containers requested through the API. The rendered manifest sets
+    /// this together with the Role that allows it.
+    #[arg(long, env = "OPERATOR_DYNAMIC_CONTAINERS")]
+    pub operator_dynamic_containers: bool,
+
     /// Vendor-provided app/release version this environment runs (observe). Reported
     /// as a version-only current_release so the platform resolves a stackless release.
     #[arg(long, env = "OPERATOR_RELEASE_VERSION")]
@@ -165,6 +170,24 @@ pub struct Args {
     /// JSON map of setup-time stack inputs. Keep this file on a Secret volume.
     #[arg(long, env = "STACK_INPUT_VALUES_FILE")]
     pub stack_input_values_file: Option<PathBuf>,
+
+    /// Serve tunnel requests from the manager for the stack's declared tunnel
+    /// endpoints (`--tunnel-enabled=false` turns the tunnel off).
+    #[arg(long, env = "TUNNEL_ENABLED", default_value_t = true, action = clap::ArgAction::Set)]
+    pub tunnel_enabled: bool,
+
+    /// This Operator's own Deployment; set to let the Operator move itself to
+    /// the image the manager targets.
+    #[arg(long, env = "OPERATOR_SELF_UPDATE_DEPLOYMENT")]
+    pub self_update_deployment: Option<String>,
+
+    /// Air-gapped: Secret that bundles write deployment targets into.
+    #[arg(long, env = "AIRGAP_TARGET_SECRET")]
+    pub airgap_target_secret: Option<String>,
+
+    /// Air-gapped: Secret the Operator writes its deployment state into.
+    #[arg(long, env = "AIRGAP_STATUS_SECRET")]
+    pub airgap_status_secret: Option<String>,
 
     #[arg(long, env = "ALIEN_ENABLE_LOCAL_DEBUG", default_value_t = false)]
     pub enable_local_debug: bool,
@@ -586,6 +609,13 @@ async fn run_operator_cli(
         }
         (None, None) => {
             warn!("   Running in airgapped mode (no sync server connection)");
+            // Air-gapped deployments are registered by the vendor; the bundle
+            // carries the deployment ID the Operator reports under.
+            if db.get_deployment_id().await?.is_none() {
+                if let Some(deployment_id) = &configured_deployment_id {
+                    db.set_deployment_id(deployment_id).await?;
+                }
+            }
             None
         }
         (Some(_), None) => {
@@ -662,6 +692,7 @@ async fn run_operator_cli(
         .maybe_namespace(args.namespace)
         .maybe_label_selector(args.operator_label_selector)
         .observe_all_namespaces(args.operator_observe_all_namespaces)
+        .dynamic_containers(args.operator_dynamic_containers)
         .maybe_app_version(args.operator_release_version)
         .maybe_label_domain(
             args.operator_label_domain
@@ -676,6 +707,11 @@ async fn run_operator_cli(
         .maybe_public_endpoints(public_endpoints)
         .stack_settings(stack_settings)
         .local_debug_enabled(args.enable_local_debug)
+        .tunnel_enabled(args.tunnel_enabled)
+        .maybe_self_update_deployment(args.self_update_deployment)
+        .maybe_resource_prefix(args.operator_resource_prefix.clone())
+        .maybe_airgap_target_secret(args.airgap_target_secret)
+        .maybe_airgap_status_secret(args.airgap_status_secret)
         .maybe_local_debug_shell_command(args.local_debug_shell_command)
         .build();
 

@@ -26,13 +26,14 @@ const DEFAULT_LOG_SEARCH_FIELDS: &[&str] = &["body.message"];
 
 #[derive(Parser, Debug, Clone)]
 #[command(
-    about = "Search deployment and manager logs",
-    long_about = "Search logs directly in Deepstore. The platform API is used only to resolve the target manager and mint a scoped query token.",
+    about = "Show and search deployment logs",
+    long_about = "Show and search deployment logs.\n\nA manager you run keeps recent logs for each deployment; long-term search lives in the OpenTelemetry backend it forwards to.",
     after_help = "EXAMPLES:
     alien logs --deployment acme/production --follow
     alien logs --source ai-gateway --status provider-error --provider anthropic
     alien logs --source ai-gateway --model byo/claude-opus-5 --since 24h --json
-    alien logs --source encryption-gateway --status failed --operation decrypt"
+    alien logs --source encryption-gateway --status failed --operation decrypt
+    alien logs --source remote-sandbox --since 1h"
 )]
 pub struct LogsArgs {
     /// Deployment ID, or <deployment-group-name>/<deployment-name>.
@@ -130,6 +131,7 @@ pub enum LogSource {
     Application,
     AiGateway,
     EncryptionGateway,
+    RemoteSandbox,
 }
 
 impl LogSource {
@@ -138,6 +140,7 @@ impl LogSource {
             Self::Application => "application",
             Self::AiGateway => "ai-gateway",
             Self::EncryptionGateway => "encryption-gateway",
+            Self::RemoteSandbox => "sandbox-gateway",
         }
     }
 }
@@ -203,11 +206,7 @@ struct ResolvedLogsTarget {
 
 pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
     if ctx.is_dev() || ctx.is_standalone() {
-        return Err(AlienError::new(ErrorData::ConfigurationError {
-            message:
-                "`alien logs` requires Alien platform authentication so it can mint a Deepstore query token."
-                    .to_string(),
-        }));
+        return super::logs_manager::manager_logs_task(args, ctx).await;
     }
 
     validate_args(&args)?;
@@ -460,7 +459,8 @@ async fn resolve_deployment_target(
             allow_prompt,
         );
         Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "Deployment log discovery requires platform support.".to_string(),
+            message: "This manager doesn't index logs for discovery; pass --deployment."
+                .to_string(),
         }))
     }
 }
@@ -1205,6 +1205,13 @@ mod tests {
         let query = test_query("*", &[], None, true, Some(LogSource::AiGateway)).unwrap();
 
         assert_eq!(query, "attributes.alien\\.log\\.source:\"ai-gateway\"");
+    }
+
+    #[test]
+    fn remote_sandbox_source_reads_the_records_its_gateway_writes() {
+        let query = test_query("*", &[], None, true, Some(LogSource::RemoteSandbox)).unwrap();
+
+        assert_eq!(query, "attributes.alien\\.log\\.source:\"sandbox-gateway\"");
     }
 
     #[test]

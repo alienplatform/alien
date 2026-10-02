@@ -404,6 +404,7 @@ async fn build(
             CreateDeploymentGroupParams {
                 name: "mint-group".to_string(),
                 max_deployments: 100,
+                setup: Default::default(),
             },
         )
         .await
@@ -494,6 +495,12 @@ async fn build(
             RegistryRoutingTable::new(vec![]).expect("empty routing table is unambiguous"),
         ),
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
+        tunnels: None,
+        charts: None,
+        release_channels: None,
+        bundle_signing_key: None,
+        bundle_sources: None,
+        log_buffer: std::sync::Arc::new(alien_manager::LogBuffer::new()),
     };
 
     Fixture {

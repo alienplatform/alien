@@ -37,7 +37,6 @@ fn standalone_pod_logs_select_only_labeled_pods() {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -98,25 +97,14 @@ fn standalone_pod_logs_select_only_labeled_pods() {
     assert!(render(Some("bad/key/extra"), Some("agent")).is_err());
 }
 
-fn rendered_manifest(
-    scope: OperatorScope,
-    permission: OperatorPermission,
-    kubernetes_operations_enabled: bool,
-) -> String {
-    rendered_with_custom(
-        scope,
-        permission,
-        kubernetes_operations_enabled,
-        &[],
-        OperatorOutputFormat::RawManifest,
-    )
-    .expect("operator manifest should render")
+fn rendered_manifest(scope: OperatorScope, permission: OperatorPermission) -> String {
+    rendered_with_custom(scope, permission, &[], OperatorOutputFormat::RawManifest)
+        .expect("operator manifest should render")
 }
 
 fn rendered_with_custom(
     scope: OperatorScope,
     permission: OperatorPermission,
-    kubernetes_operations_enabled: bool,
     custom_operation_permissions: &[KubernetesOperationPermissions],
     format: OperatorOutputFormat,
 ) -> alien_core::Result<String> {
@@ -134,7 +122,6 @@ fn rendered_with_custom(
         label_domain: None,
         scope,
         label_selector: None,
-        kubernetes_operations_enabled,
         permission,
         format,
     })
@@ -179,7 +166,6 @@ fn custom_permissions_follow_enabled_consumers_with_stable_scoped_rbac() {
             let rendered = rendered_with_custom(
                 scope,
                 OperatorPermission::Diagnostics,
-                false,
                 &enabled,
                 OperatorOutputFormat::RawManifest,
             )
@@ -226,7 +212,6 @@ fn custom_permissions_follow_enabled_consumers_with_stable_scoped_rbac() {
                 rendered_with_custom(
                     scope,
                     OperatorPermission::Diagnostics,
-                    false,
                     &reordered,
                     OperatorOutputFormat::RawManifest
                 )
@@ -251,7 +236,6 @@ fn custom_rules_obey_ceiling_and_validate_before_filtering() {
         let manifest = rendered_with_custom(
             OperatorScope::Namespace,
             permission,
-            false,
             &[operation.clone()],
             OperatorOutputFormat::RawManifest,
         )
@@ -265,7 +249,6 @@ fn custom_rules_obey_ceiling_and_validate_before_filtering() {
         assert!(rendered_with_custom(
             OperatorScope::Namespace,
             OperatorPermission::Diagnostics,
-            false,
             &[operation.clone()],
             OperatorOutputFormat::RawManifest
         )
@@ -275,7 +258,6 @@ fn custom_rules_obey_ceiling_and_validate_before_filtering() {
     assert!(rendered_with_custom(
         OperatorScope::Namespace,
         OperatorPermission::Diagnostics,
-        false,
         &[operation],
         OperatorOutputFormat::RawManifest
     )
@@ -301,7 +283,6 @@ fn custom_rules_reject_malformed_identifiers_before_rendering() {
                 assert!(rendered_with_custom(
                     scope,
                     OperatorPermission::Diagnostics,
-                    false,
                     &[operation.clone()],
                     format,
                 )
@@ -312,28 +293,20 @@ fn custom_rules_reject_malformed_identifiers_before_rendering() {
 }
 
 #[test]
-fn shared_builtin_and_custom_grants_are_deduplicated_and_keep_both_reasons() {
+fn operation_grants_shared_with_the_runtime_keep_both_reasons() {
     let mut operation = custom_operation("inspector");
     let rule = &mut operation.permissions.rules[0];
     rule.api_group.clear();
-    rule.resource = "pods/log".to_owned();
-    rule.verbs = vec!["get".to_owned()];
+    rule.resource = "pods".to_owned();
+    rule.verbs = vec!["list".to_owned(), "get".to_owned()];
     rule.resource_names.clear();
-    for (builtin, custom, expected) in [
-        (true, true, 1),
-        (true, false, 1),
-        (false, true, 1),
-        (false, false, 0),
+    for (enabled, expected_verbs) in [
+        (vec![], &["list"][..]),
+        (vec![operation.clone()], &["get", "list"][..]),
     ] {
-        let enabled = if custom {
-            vec![operation.clone()]
-        } else {
-            vec![]
-        };
         let manifest = rendered_with_custom(
             OperatorScope::Namespace,
             OperatorPermission::Diagnostics,
-            builtin,
             &enabled,
             OperatorOutputFormat::RawManifest,
         )
@@ -344,13 +317,18 @@ fn shared_builtin_and_custom_grants_are_deduplicated_and_keep_both_reasons() {
             .as_sequence()
             .unwrap()
             .iter()
-            .filter(|rule| rule["resources"][0] == "pods/log")
+            .filter(|rule| rule["apiGroups"][0] == "" && rule["resources"][0] == "pods")
             .collect();
-        assert_eq!(rules.len(), expected);
-        assert_eq!(manifest.contains("the kubernetes/logs operation."), builtin);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0]["verbs"],
+            serde_yaml::to_value(expected_verbs).unwrap()
+        );
+        assert!(manifest
+            .contains("# Required by the Operator runtime: Pod status of each observed workload"));
         assert_eq!(
             manifest.contains("inspector/inspect: Inspect selected widgets"),
-            custom
+            !enabled.is_empty()
         );
     }
 }
@@ -363,47 +341,27 @@ fn parse_manifest(manifest: &str) -> Vec<YamlValue> {
 }
 
 #[test]
-fn dynamic_workload_permissions_stay_in_the_install_namespace() {
+fn standalone_manifests_bind_no_dynamic_workload_access() {
+    // A standalone Remote Operator has no installed release that could approve
+    // a dynamic container image, so neither scope binds the dynamic Role.
     for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
-        let docs = parse_manifest(&rendered_manifest(
-            scope,
-            OperatorPermission::Diagnostics,
-            false,
-        ));
-        let role = docs
+        let manifest = rendered_manifest(scope, OperatorPermission::Remediation);
+        let docs = parse_manifest(&manifest);
+        assert!(!docs.iter().any(|doc| {
+            doc["metadata"]["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("alien-dc-"))
+        }));
+        let grants = permission_grants(&manifest);
+        assert!(!grants
             .iter()
-            .find(|doc| {
-                doc["kind"] == "Role"
-                    && doc["metadata"]["name"]
-                        .as_str()
-                        .is_some_and(|name| name.starts_with("alien-dc-"))
-            })
-            .expect("dynamic workload Role");
-        let name = role["metadata"]["name"].as_str().unwrap();
-        assert_eq!(role["metadata"]["namespace"], "demo");
-        for (resource, verbs) in [
-            (
-                "deployments",
-                &["get", "list", "create", "update", "delete"][..],
-            ),
-            ("services", &["get", "list", "create", "update", "delete"]),
-            ("secrets", &["get", "list", "create", "update", "delete"]),
-            ("pods", &["list"]),
-        ] {
-            for verb in verbs {
-                assert!(
-                    rule_allows(role, resource, verb),
-                    "missing {verb} {resource}"
-                );
-            }
-        }
-        let binding = docs
+            .any(|(_, resource, _, _)| resource == "secrets"));
+        // Without enabled operations, everything outside the access-request CRD is a listing.
+        assert!(grants
             .iter()
-            .find(|doc| doc["kind"] == "RoleBinding" && doc["metadata"]["name"] == name)
-            .expect("dynamic workload RoleBinding");
-        assert_eq!(binding["metadata"]["namespace"], "demo");
-        assert_eq!(binding["roleRef"]["name"], name);
-        assert_eq!(binding["subjects"][0]["name"], "my-saas-operator");
+            .filter(|(group, ..)| group != "accessrequests.alien")
+            .all(|(_, _, verb, _)| verb == "list"));
+        assert!(!manifest.contains("OPERATOR_DYNAMIC_CONTAINERS"));
     }
 }
 
@@ -443,11 +401,8 @@ fn attribution_cannot_inject_grants_into_rendered_yaml() {
     for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
         let mut operation = custom_operation("inspector");
         operation.permissions.rules[0].reason = "Inspect widgets — 状態".to_owned();
-        let mut expected = permission_grants(&rendered_manifest(
-            scope,
-            OperatorPermission::Diagnostics,
-            false,
-        ));
+        let mut expected =
+            permission_grants(&rendered_manifest(scope, OperatorPermission::Diagnostics));
         for verb in ["get", "list", "watch"] {
             expected.insert((
                 "example.com".to_owned(),
@@ -459,7 +414,6 @@ fn attribution_cannot_inject_grants_into_rendered_yaml() {
         let valid = rendered_with_custom(
             scope,
             OperatorPermission::Diagnostics,
-            false,
             &[operation.clone()],
             OperatorOutputFormat::RawManifest,
         )
@@ -482,7 +436,6 @@ fn attribution_cannot_inject_grants_into_rendered_yaml() {
                     let rendered = rendered_with_custom(
                         scope,
                         OperatorPermission::Diagnostics,
-                        false,
                         &[malicious.clone()],
                         format,
                     );
@@ -520,18 +473,47 @@ fn rule_allows(role: &YamlValue, resource: &str, verb: &str) -> bool {
 }
 
 #[test]
-fn complete_operator_manifests_intersect_operation_enablement_with_permission_ceiling() {
-    let cases = [
-        (false, OperatorPermission::Diagnostics, false, false),
-        (false, OperatorPermission::Remediation, false, false),
-        (true, OperatorPermission::Diagnostics, true, false),
-        (true, OperatorPermission::Remediation, true, true),
-    ];
-
+fn operator_rbac_without_operations_is_the_runtime_and_access_request_rules() {
+    let mut expected = BTreeSet::new();
+    // These grants follow the runtime call sites, independently of the shared
+    // rule source used by the renderer.
+    for (group, resource) in [
+        ("apps", "deployments"),
+        ("apps", "statefulsets"),
+        ("apps", "daemonsets"),
+        ("", "pods"),
+        ("", "events"),
+        ("metrics.k8s.io", "pods"),
+    ] {
+        expected.insert((
+            group.to_owned(),
+            resource.to_owned(),
+            "list".to_owned(),
+            vec![],
+        ));
+    }
+    for (resource, verbs) in [
+        (
+            "alienaccessrequests",
+            &["create", "get", "list", "patch", "update", "watch"][..],
+        ),
+        ("alienaccessrequests/status", &["get", "patch", "update"]),
+    ] {
+        for verb in verbs {
+            expected.insert((
+                "accessrequests.alien".to_owned(),
+                resource.to_owned(),
+                (*verb).to_owned(),
+                vec![],
+            ));
+        }
+    }
     for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
-        for (operations_enabled, permission, expect_logs, expect_writes) in cases {
-            let manifest = rendered_manifest(scope, permission, operations_enabled);
-            let docs = parse_manifest(&manifest);
+        for permission in [
+            OperatorPermission::Diagnostics,
+            OperatorPermission::Remediation,
+        ] {
+            let docs = parse_manifest(&rendered_manifest(scope, permission));
             let rbac_kind = if scope == OperatorScope::Namespace {
                 "Role"
             } else {
@@ -539,62 +521,12 @@ fn complete_operator_manifests_intersect_operation_enablement_with_permission_ce
             };
             let role = docs
                 .iter()
-                .find(|doc| doc["kind"] == rbac_kind)
-                .expect("manifest should contain the scope-appropriate RBAC document");
-
-            assert!(
-                rule_allows(role, "pods", "get"),
-                "baseline pod inventory must remain available"
-            );
-            assert!(
-                rule_allows(role, "alienaccessrequests", "create"),
-                "access-request control resources must remain available"
-            );
-            assert_eq!(rule_allows(role, "pods/log", "get"), expect_logs);
-            assert_eq!(rule_allows(role, "pods", "delete"), expect_writes);
-            assert_eq!(
-                rule_allows(role, "deployments/scale", "patch"),
-                expect_writes
-            );
-
-            for rule in role["rules"]
-                .as_sequence()
-                .expect("RBAC document should contain rules")
-            {
-                assert!(
-                    !rule["resources"]
-                        .as_sequence()
-                        .expect("rule should contain resources")
-                        .iter()
-                        .any(|resource| resource == "secrets"),
-                    "operator RBAC must never grant access to Secrets"
-                );
-            }
-
-            assert_eq!(
-                manifest.contains("# Required by the kubernetes/logs operation."),
-                expect_logs
-            );
-            assert_eq!(
-                manifest.contains("# Required by the kubernetes/restart-pod operation."),
-                expect_writes
-            );
-            assert_eq!(
-                manifest.contains("# Required by the kubernetes/scale operation."),
-                expect_writes
-            );
-
-            if scope == OperatorScope::Namespace {
-                assert_eq!(role["metadata"]["namespace"], "demo");
-                assert!(docs.iter().all(|doc| doc["kind"] != "ClusterRole"));
-            } else {
-                assert!(role["metadata"].get("namespace").is_none());
-                let binding = docs
-                    .iter()
-                    .find(|doc| doc["kind"] == "ClusterRoleBinding")
-                    .expect("cluster scope should include a ClusterRoleBinding");
-                assert_eq!(binding["subjects"][0]["namespace"], "demo");
-            }
+                .find(|doc| {
+                    doc["kind"] == rbac_kind && doc["metadata"]["name"] == "my-saas-operator"
+                })
+                .expect("manifest should contain the scope-appropriate operator RBAC document");
+            let role_yaml = serde_yaml::to_string(role).unwrap();
+            assert_eq!(permission_grants(&role_yaml), expected);
         }
     }
 }
@@ -618,7 +550,6 @@ fn operator_template_accepts_cloud_identity_values() {
         label_domain: None,
         scope: OperatorScope::Namespace,
         label_selector: None,
-        kubernetes_operations_enabled: true,
         permission: OperatorPermission::Remediation,
         format: OperatorOutputFormat::HelmTemplate,
     })
@@ -705,7 +636,6 @@ fn operator_template_can_reference_setup_owned_credentials() {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Remediation,
             format: OperatorOutputFormat::HelmTemplate,
         },
@@ -788,7 +718,6 @@ fn operator_manifest_reports_exact_package_image_identity() {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Remediation,
             format: OperatorOutputFormat::RawManifest,
         },
@@ -896,14 +825,9 @@ fn compiled_operation_grants_match_rendered_rbac_in_both_scopes_and_modes() {
             (OperatorPermission::Diagnostics, KubernetesMode::Diagnostics),
             (OperatorPermission::Remediation, KubernetesMode::Remediation),
         ] {
-            let baseline = rendered_with_custom(
-                scope,
-                permission,
-                false,
-                &[],
-                OperatorOutputFormat::RawManifest,
-            )
-            .unwrap();
+            let baseline =
+                rendered_with_custom(scope, permission, &[], OperatorOutputFormat::RawManifest)
+                    .unwrap();
             let mut expected = role_grants(&baseline);
             for grant in operations::kubernetes::compile(&grants, mode).unwrap() {
                 for verb in grant.verbs {
@@ -918,7 +842,6 @@ fn compiled_operation_grants_match_rendered_rbac_in_both_scopes_and_modes() {
             let actual = rendered_with_custom(
                 scope,
                 permission,
-                false,
                 &[operation.clone()],
                 OperatorOutputFormat::RawManifest,
             )

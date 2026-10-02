@@ -30,7 +30,7 @@
 //! See `crates/alien-bindings/FORMAT.md` for the on-disk `localqueue.v1`
 //! contract, including the `"{id}:{uuid}"` caller-facing receipt-handle format.
 use crate::error::{ErrorData, Result};
-use crate::providers::local_store::{as_i64, as_text, query_all, LocalStore, StoreSpec};
+use crate::providers::local_store::{as_i64, as_text, query_all, LocalStore, Sharing, StoreSpec};
 use crate::traits::{
     Binding, MessagePayload, Queue, QueueMessage, LEASE_SECONDS, MAX_BATCH_SIZE, MAX_MESSAGE_BYTES,
 };
@@ -122,7 +122,7 @@ impl LocalQueue {
     /// `<data_dir>/localqueue.sqlite`.
     pub async fn new(data_dir: PathBuf) -> Result<Self> {
         Ok(Self {
-            store: LocalStore::open(data_dir, &QUEUE_SPEC).await?,
+            store: LocalStore::open(data_dir, &QUEUE_SPEC, Sharing::MultiProcess).await?,
         })
     }
 

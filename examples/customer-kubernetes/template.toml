@@ -1,0 +1,3 @@
+name = "customer-kubernetes"
+description = "Run a service in your customers' Kubernetes clusters, including air-gapped ones, from a manager you host."
+language = "Rust"

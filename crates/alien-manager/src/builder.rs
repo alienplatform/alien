@@ -50,6 +50,16 @@ pub struct AlienManagerBuilder {
     /// proprietary controllers (`container`, `compute-cluster`) before
     /// passing it in here.
     import_registry: Option<Arc<alien_infra::ImporterRegistry>>,
+    /// Open tunnel connections; `Some` mounts the tunnel routes.
+    tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
+    /// Chart settings; `Some` serves Helm charts from the registry.
+    charts: Option<Arc<crate::routes::charts::ChartSettings>>,
+    /// Release channels; `None` sends every release to every deployment.
+    release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
+    /// Signs air-gapped bundles.
+    bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
+    /// Where bundles' charts and Operator images come from.
+    bundle_sources: Option<Arc<dyn crate::traits::BundleSourceResolver>>,
 }
 
 impl AlienManagerBuilder {
@@ -73,7 +83,59 @@ impl AlienManagerBuilder {
             bindings_provider_override: None,
             target_bindings_providers_override: None,
             import_registry: None,
+            tunnels: None,
+            charts: None,
+            release_channels: None,
+            bundle_signing_key: None,
+            bundle_sources: None,
         }
+    }
+
+    /// Sign air-gapped bundles with `key`. Environments pin its public key,
+    /// so it must stay the same across restarts and replicas.
+    pub fn bundle_signing_key(
+        mut self,
+        key: alien_core::bundle_signature::BundleSigningKey,
+    ) -> Self {
+        self.bundle_signing_key = Some(Arc::new(key));
+        self
+    }
+
+    /// Resolve bundles' charts and Operator images with `resolver`, for a
+    /// manager whose charts are published elsewhere. Without it, bundles use
+    /// the charts this manager serves (see [`Self::charts`]).
+    pub fn bundle_sources(
+        mut self,
+        resolver: Arc<dyn crate::traits::BundleSourceResolver>,
+    ) -> Self {
+        self.bundle_sources = Some(resolver);
+        self
+    }
+
+    /// Route releases through channels (see [`crate::traits::ReleaseChannelStore`]).
+    /// Standalone defaults set a SQLite store next to the SQLite deployment store.
+    pub fn release_channels(mut self, store: Arc<dyn crate::traits::ReleaseChannelStore>) -> Self {
+        self.release_channels = Some(store);
+        self
+    }
+
+    /// Serve an installable Helm chart for every release with a Kubernetes
+    /// stack at `oci://<manager>/charts/<stack-id>`, pre-wired to this
+    /// manager.
+    pub fn charts(mut self, settings: crate::routes::charts::ChartSettings) -> Self {
+        self.charts = Some(Arc::new(settings));
+        self
+    }
+
+    /// Accept tunnel connections from operators and serve
+    /// `/v1/deployments/{deployment}/tunnels/{container}/...`, which forwards
+    /// requests into deployments over their operators' outbound connections.
+    ///
+    /// Off unless called. Operators only dial managers that advertise the
+    /// tunnel in their sync responses.
+    pub fn tunnels(mut self) -> Self {
+        self.tunnels = Some(alien_tunnel::manager::TunnelRegistry::new());
+        self
     }
 
     pub fn deployment_store(mut self, store: Arc<dyn DeploymentStore>) -> Self {
@@ -229,6 +291,13 @@ impl AlienManagerBuilder {
         );
 
         // --- Stores (only set if not already provided) ---
+        // Channel routing joins the deployments table, so it comes with the
+        // SQLite deployment store.
+        if self.deployment_store.is_none() && self.release_channels.is_none() {
+            self.release_channels = Some(Arc::new(
+                crate::stores::sqlite::SqliteReleaseChannelStore::new(db.clone()),
+            ));
+        }
         if self.deployment_store.is_none() {
             self.deployment_store = Some(Arc::new(
                 crate::stores::sqlite::SqliteDeploymentStore::new(db.clone()),
@@ -358,19 +427,26 @@ impl AlienManagerBuilder {
         }
 
         // --- Telemetry backend ---
+        // Forward to the configured OTLP endpoint, and keep recent logs
+        // readable through the manager (`alien logs`).
         if self.telemetry_backend.is_none() {
-            self.telemetry_backend = Some(
-                if let Some(ref endpoint) = toml_config.telemetry.otlp_endpoint {
-                    Arc::new(
-                        crate::providers::otlp_forwarding::OtlpForwardingBackend::new(
-                            endpoint.clone(),
-                            toml_config.telemetry.headers.clone(),
-                        ),
-                    ) as Arc<dyn TelemetryBackend>
-                } else {
-                    Arc::new(crate::providers::NullTelemetryBackend) as Arc<dyn TelemetryBackend>
-                },
-            );
+            let forward = if let Some(ref endpoint) = toml_config.telemetry.otlp_endpoint {
+                Arc::new(
+                    crate::providers::otlp_forwarding::OtlpForwardingBackend::new(
+                        endpoint.clone(),
+                        toml_config.telemetry.headers.clone(),
+                    ),
+                ) as Arc<dyn TelemetryBackend>
+            } else {
+                Arc::new(crate::providers::NullTelemetryBackend) as Arc<dyn TelemetryBackend>
+            };
+            let buffer = self
+                .log_buffer
+                .get_or_insert_with(|| Arc::new(crate::dev::LogBuffer::new()))
+                .clone();
+            self.telemetry_backend = Some(Arc::new(
+                crate::providers::recent_logs::RecentLogsBackend::new(forward, buffer),
+            ));
         }
 
         // --- Auth validator ---
@@ -423,14 +499,15 @@ impl AlienManagerBuilder {
                         reason: "Failed to load KV binding".to_string(),
                     })?
             } else {
+                // Only the manager opens this store, so it doesn't need
+                // cross-process coordination, and it works when the state
+                // directory is a network volume (EFS, NFS).
                 let kv_path = state_dir.join("commands_kv");
-                Arc::new(
-                    LocalKv::new(kv_path)
-                        .await
-                        .context(ErrorData::ServerInitFailed {
-                            reason: "Failed to create local KV store".to_string(),
-                        })?,
-                )
+                Arc::new(LocalKv::single_process(kv_path).await.context(
+                    ErrorData::ServerInitFailed {
+                        reason: "Failed to create local KV store".to_string(),
+                    },
+                )?)
             };
 
             // -- Commands storage: from TOML config or local filesystem --
@@ -558,8 +635,30 @@ impl AlienManagerBuilder {
                 }
             }
 
-            // Add local/primary registry as catch-all fallback.
-            if let Some(ref primary) = bindings_provider {
+            // Primary registry: stores images for pull-delivered platforms
+            // (Kubernetes, Machines, Local). `[artifact-registry.default]`
+            // selects a cloud registry for it; otherwise the embedded registry
+            // started above is used.
+            let default_registry = match &toml_config.artifact_registry.default {
+                None | Some(alien_core::ArtifactRegistryBinding::Local(_)) => None,
+                Some(binding) => Some(default_registry_provider(binding).await?),
+            };
+            if let Some(default_provider) = default_registry {
+                let ar = default_provider
+                    .load_artifact_registry("artifacts")
+                    .await
+                    .context(ErrorData::ServerInitFailed {
+                        reason: "Failed to load [artifact-registry.default] registry".to_string(),
+                    })?;
+                let prefix = ar.upstream_repository_prefix();
+                info!(prefix = %prefix, "Registered default artifact registry route");
+                routes.push(crate::routes::registry_proxy::RegistryRoute {
+                    prefix,
+                    platform: Platform::Local,
+                    provider: default_provider,
+                    binding_name: "artifacts".to_string(),
+                });
+            } else if let Some(ref primary) = bindings_provider {
                 if let Ok(ar) = primary.load_artifact_registry("artifact-registry").await {
                     let prefix = ar.upstream_repository_prefix();
                     info!(prefix = %prefix, "Registered local artifact registry route (fallback)");
@@ -650,6 +749,11 @@ impl AlienManagerBuilder {
             self.platform_routes,
             self.dev_status_tx,
             self.import_registry,
+            self.tunnels,
+            self.charts,
+            self.release_channels,
+            self.bundle_signing_key,
+            self.bundle_sources,
         )
         .await
     }
@@ -683,6 +787,45 @@ fn storage_binding_platform(
     }
 }
 
+/// Build the bindings provider for a cloud `[artifact-registry.default]`
+/// registry, with credentials from the manager's environment.
+#[cfg(feature = "sqlite")]
+async fn default_registry_provider(
+    binding: &alien_core::ArtifactRegistryBinding,
+) -> crate::error::Result<std::sync::Arc<dyn alien_bindings::BindingsProviderApi>> {
+    use alien_client_config::ClientConfigExt;
+    use alien_core::{ArtifactRegistryBinding, Platform};
+    use alien_error::{Context, IntoAlienError};
+
+    let platform = match binding {
+        ArtifactRegistryBinding::Ecr(_) => Platform::Aws,
+        ArtifactRegistryBinding::Gar(_) => Platform::Gcp,
+        ArtifactRegistryBinding::Acr(_) => Platform::Azure,
+        ArtifactRegistryBinding::Local(_) => Platform::Local,
+    };
+    let binding_json =
+        serde_json::to_value(binding)
+            .into_alien_error()
+            .context(ErrorData::ServerInitFailed {
+                reason: "Failed to serialize [artifact-registry.default] binding".to_string(),
+            })?;
+    let config = alien_core::ClientConfig::from_std_env(platform)
+        .await
+        .context(ErrorData::ServerInitFailed {
+            reason: format!(
+                "[artifact-registry.default] uses a {platform} registry but {platform} credentials are not available"
+            ),
+        })?;
+    let provider = alien_bindings::BindingsProvider::new(
+        config,
+        std::collections::HashMap::from([("artifacts".to_string(), binding_json)]),
+    )
+    .context(ErrorData::ServerInitFailed {
+        reason: "Failed to create [artifact-registry.default] bindings provider".to_string(),
+    })?;
+    Ok(std::sync::Arc::new(provider))
+}
+
 // ---------------------------------------------------------------------------
 // Finalization: shared assembly logic
 // ---------------------------------------------------------------------------
@@ -704,6 +847,11 @@ async fn finalize(
     platform_routes: Option<axum::Router<crate::routes::AppState>>,
     dev_status_tx: Option<tokio::sync::watch::Sender<()>>,
     import_registry_override: Option<Arc<alien_infra::ImporterRegistry>>,
+    tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
+    charts: Option<Arc<crate::routes::charts::ChartSettings>>,
+    release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
+    bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
+    bundle_sources: Option<Arc<dyn crate::traits::BundleSourceResolver>>,
 ) -> crate::error::Result<AlienManager> {
     use alien_commands::server::CommandServer;
 
@@ -743,6 +891,12 @@ async fn finalize(
         // [`AlienManagerBuilder::import_registry`].
         import_registry: import_registry_override
             .unwrap_or_else(|| Arc::new(alien_infra::ImporterRegistry::built_in())),
+        tunnels,
+        charts,
+        release_channels,
+        bundle_signing_key,
+        bundle_sources,
+        log_buffer: log_buffer.clone(),
     };
 
     // --- Router ---

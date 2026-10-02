@@ -9,7 +9,7 @@
 
 use super::observed_release::{observed_application, single_observed_version};
 use crate::db::{Approval, ApprovalStatus};
-use crate::OperatorState;
+use crate::{OperatorConfig, OperatorState};
 use alien_core::{
     sync::{
         OperatorCapabilityReport, OperatorCapabilityState, OperatorImageReport, SyncInput,
@@ -23,7 +23,7 @@ use chrono::Utc;
 use reqwest::Client;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 /// Run the sync loop
@@ -225,22 +225,24 @@ async fn sync_with_manager(
         ),
         None => None,
     };
-    let dynamic_reports = if state.config.platform == Platform::Kubernetes {
-        match super::dynamic_containers::reconcile_saved(state, &deployment_id).await {
-            Ok(reports) => reports,
-            Err(error) => {
-                error!(error = %error, "Dynamic container reconciliation failed");
-                None
+    let dynamic_reports =
+        if dynamic_containers_capability(&state.config).state == OperatorCapabilityState::Granted {
+            match super::dynamic_containers::reconcile_saved(state, &deployment_id).await {
+                Ok(reports) => reports,
+                Err(error) => {
+                    error!(error = %error, "Dynamic container reconciliation failed");
+                    None
+                }
             }
-        }
-    } else {
-        None
-    };
+        } else {
+            None
+        };
 
     let sync_request = SyncRequest {
         deployment_id: deployment_id.clone(),
         session: sync_session.clone(),
         supports_execution_claims: true,
+        supports_tunnels: true,
         execution_claim,
         current_state: Some(deployment_state),
         heartbeats,
@@ -342,6 +344,22 @@ async fn sync_with_manager(
         }
     }
 
+    // The manager advertises its tunnel endpoint on every sync; an absent URL
+    // (older manager, or tunnels disabled) stops the tunnel loop from dialing.
+    if let Err(e) = state
+        .db
+        .set_tunnel_url(sync_response.tunnel_url.as_deref())
+        .await
+    {
+        error!(error = %e, "Failed to persist tunnel_url");
+    }
+
+    if let Some(image) = sync_response.target_operator_image.as_deref() {
+        if let Err(e) = crate::self_update::apply(state, image).await {
+            warn!(error = %e, image, "Operator self-update failed; will retry on the next sync");
+        }
+    }
+
     // Persist the target bundle set so a restart doesn't lose it for a full
     // extra tick — the sync_bundles() call above (built from THIS response,
     // used on the NEXT request) reads it back via get_target_operations_bundle_set.
@@ -386,62 +404,75 @@ async fn sync_with_manager(
 
     if has_update {
         if let Some(target_deployment) = durable_target {
-            let now = Utc::now().to_rfc3339();
-
-            // Get current deployment state (or create default)
-            let mut deployment_state =
-                state.db.get_deployment_state().await?.unwrap_or_else(|| {
-                    alien_core::DeploymentState {
-                        platform: state.config.platform,
-                        status: alien_core::DeploymentStatus::Pending,
-                        current_release: None,
-                        target_release: None,
-                        stack_state: None,
-                        error: None,
-                        environment_info: None,
-                        runtime_metadata: None,
-                        retry_requested: false,
-                        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
-                    }
-                });
-
-            // Update target_release in state
-            accept_target_release(
-                &mut deployment_state,
-                target_deployment.release_info.clone(),
-            );
-
-            // Save state and config
-            state.db.set_deployment_state(&deployment_state).await?;
-            state
-                .db
-                .set_deployment_config(&target_deployment.config)
-                .await?;
-
-            // Handle deployment approval if required
-            if state.config.requires_deployment_approval() {
-                let apr_id = format!("apr_{}", Uuid::new_v4().simple());
-                let approval = Approval {
-                    id: apr_id.clone(),
-                    release_info: Some(target_deployment.release_info.clone()),
-                    deployment_config: target_deployment.config.clone(),
-                    status: ApprovalStatus::Pending,
-                    reason: None,
-                    created_at: now,
-                    decided_at: None,
-                    decided_by: None,
-                };
-                state.db.create_approval(&approval).await?;
-                info!(
-                    approval_id = %apr_id,
-                    release_id = %target_deployment.release_info.release_id.as_deref().unwrap_or_default(),
-                    "Created approval for new target release"
-                );
-            }
+            accept_target(state, &target_deployment).await?;
         }
     }
 
     Ok(has_update || state_hydrated)
+}
+
+/// Make `target_deployment` the Operator's target: record the release as the
+/// target release, store its configuration, and open an approval when
+/// updates need one. Sync and air-gapped bundles both deliver targets here.
+pub(crate) async fn accept_target(
+    state: &OperatorState,
+    target_deployment: &alien_core::sync::TargetDeployment,
+) -> crate::error::Result<()> {
+    let now = Utc::now().to_rfc3339();
+
+    // Get current deployment state (or create default)
+    let mut deployment_state =
+        state
+            .db
+            .get_deployment_state()
+            .await?
+            .unwrap_or_else(|| alien_core::DeploymentState {
+                platform: state.config.platform,
+                status: alien_core::DeploymentStatus::Pending,
+                current_release: None,
+                target_release: None,
+                stack_state: None,
+                error: None,
+                environment_info: None,
+                runtime_metadata: None,
+                retry_requested: false,
+                protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            });
+
+    // Update target_release in state
+    accept_target_release(
+        &mut deployment_state,
+        target_deployment.release_info.clone(),
+    );
+
+    // Save state and config
+    state.db.set_deployment_state(&deployment_state).await?;
+    state
+        .db
+        .set_deployment_config(&target_deployment.config)
+        .await?;
+
+    // Handle deployment approval if required
+    if state.config.requires_deployment_approval() {
+        let apr_id = format!("apr_{}", Uuid::new_v4().simple());
+        let approval = Approval {
+            id: apr_id.clone(),
+            release_info: Some(target_deployment.release_info.clone()),
+            deployment_config: target_deployment.config.clone(),
+            status: ApprovalStatus::Pending,
+            reason: None,
+            created_at: now,
+            decided_at: None,
+            decided_by: None,
+        };
+        state.db.create_approval(&approval).await?;
+        info!(
+            approval_id = %apr_id,
+            release_id = %target_deployment.release_info.release_id.as_deref().unwrap_or_default(),
+            "Created approval for new target release"
+        );
+    }
+    Ok(())
 }
 
 fn accept_target_release(
@@ -526,16 +557,7 @@ fn report_operator_capabilities(
             .map(|namespace| format!("namespace {namespace}")),
     });
 
-    capabilities.push(OperatorCapabilityReport {
-        key: "dynamic-containers-v1".to_string(),
-        state: if state.config.platform == Platform::Kubernetes && state.config.namespace.is_some()
-        {
-            OperatorCapabilityState::Granted
-        } else {
-            OperatorCapabilityState::Unavailable
-        },
-        detail: None,
-    });
+    capabilities.push(dynamic_containers_capability(&state.config));
 
     capabilities.push(OperatorCapabilityReport {
         key: "cloud-observe".to_string(),
@@ -561,6 +583,24 @@ fn report_operator_capabilities(
     });
 
     capabilities
+}
+
+/// Granted only when the chart bound the dynamic container Role: the manager
+/// sends container targets to Operators that report this, so a namespace-only
+/// install without that access must not claim it.
+fn dynamic_containers_capability(config: &OperatorConfig) -> OperatorCapabilityReport {
+    let granted = config.platform == Platform::Kubernetes
+        && config.namespace.is_some()
+        && config.dynamic_containers;
+    OperatorCapabilityReport {
+        key: "dynamic-containers-v1".to_string(),
+        state: if granted {
+            OperatorCapabilityState::Granted
+        } else {
+            OperatorCapabilityState::Unavailable
+        },
+        detail: None,
+    }
 }
 
 fn operation_command_address_capability(
@@ -669,7 +709,8 @@ mod tests {
 
     use super::{
         accept_target_release, apply_manager_control_state, create_authenticated_client,
-        is_uninitialized_deployment_state, operation_command_address_capability, sync_with_manager,
+        dynamic_containers_capability, is_uninitialized_deployment_state,
+        operation_command_address_capability, sync_with_manager,
     };
     use crate::{db::OperatorDb, OperatorConfig, OperatorState, SyncConfig};
 
@@ -1058,6 +1099,42 @@ mod tests {
         let capability = operation_command_address_capability(false);
         assert_eq!(capability.key, "operations.command-address-v1");
         assert_eq!(capability.state, OperatorCapabilityState::Unavailable);
+    }
+
+    #[test]
+    fn claims_dynamic_containers_only_when_the_chart_bound_their_role() {
+        let config = |platform: Platform, namespace: Option<&str>, dynamic_containers: bool| {
+            OperatorConfig::builder()
+                .platform(platform)
+                .maybe_namespace(namespace.map(str::to_string))
+                .dynamic_containers(dynamic_containers)
+                .data_dir("unused")
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build()
+        };
+        let state = |config: OperatorConfig| {
+            let capability = dynamic_containers_capability(&config);
+            assert_eq!(capability.key, "dynamic-containers-v1");
+            capability.state
+        };
+
+        assert_eq!(
+            state(config(Platform::Kubernetes, Some("customer"), true)),
+            OperatorCapabilityState::Granted
+        );
+        // A namespace install without the Role must not receive container targets.
+        assert_eq!(
+            state(config(Platform::Kubernetes, Some("customer"), false)),
+            OperatorCapabilityState::Unavailable
+        );
+        assert_eq!(
+            state(config(Platform::Kubernetes, None, true)),
+            OperatorCapabilityState::Unavailable
+        );
+        assert_eq!(
+            state(config(Platform::Aws, Some("customer"), true)),
+            OperatorCapabilityState::Unavailable
+        );
     }
 
     #[test]

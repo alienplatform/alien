@@ -2,6 +2,7 @@
 
 pub mod bindings;
 pub mod build_config;
+pub mod charts;
 pub mod commands;
 pub mod credentials;
 pub mod deployment_groups;
@@ -9,6 +10,9 @@ pub mod deployments;
 pub mod health;
 pub mod image_repositories;
 pub mod install;
+pub mod logs;
+pub mod manager_info;
+pub mod operator_image;
 pub mod platforms;
 pub mod registry_proxy;
 pub mod releases;
@@ -16,13 +20,16 @@ pub mod stack;
 pub mod sync;
 pub mod telemetry;
 pub mod tokens;
+pub mod tunnel;
 pub mod vault;
 pub mod whoami;
 
 // Public so embedders (e.g. alien-managerx route handlers) can fetch a
 // validated `Subject` the same way as OSS handlers, instead of pulling the
 // raw bearer + workspace headers themselves.
+pub mod airgap;
 pub mod auth;
+pub mod channels;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -78,6 +85,20 @@ pub struct AppState {
     /// [`alien_infra::ImporterRegistry::built_in`], so the per-request path
     /// is a `Arc` clone and a hash-map lookup.
     pub import_registry: Arc<alien_infra::ImporterRegistry>,
+    /// Open tunnel connections. `None` when tunnels are not enabled; the
+    /// tunnel routes are mounted only when this is `Some`.
+    pub tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
+    /// Chart settings; `Some` serves Helm charts at `/v2/charts/...`.
+    pub charts: Option<Arc<charts::ChartSettings>>,
+    /// Release channels; `None` sends every release to every deployment.
+    pub release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
+    /// Signs air-gapped bundles. `None` when this manager doesn't sign them.
+    pub bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
+    /// Where bundles' charts and Operator images come from, for managers
+    /// that don't serve charts themselves.
+    pub bundle_sources: Option<Arc<dyn crate::traits::BundleSourceResolver>>,
+    /// Recent deployment logs kept by the manager (see `providers::recent_logs`).
+    pub log_buffer: Arc<crate::dev::LogBuffer>,
 }
 
 impl HasCommandServer for AppState {
@@ -162,6 +183,10 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         .route("/health", get(health::health))
         // Identity
         .merge(whoami::router())
+        .merge(manager_info::router())
+        .merge(logs::router())
+        .merge(airgap::router())
+        .merge(channels::router())
         // Deployments
         .merge(deployments::router())
         // Releases
@@ -200,6 +225,9 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
     }
     if options.include_initialize {
         router = router.merge(sync::initialize_router());
+    }
+    if state.tunnels.is_some() {
+        router = router.merge(tunnel::router());
     }
 
     router.with_state(state)

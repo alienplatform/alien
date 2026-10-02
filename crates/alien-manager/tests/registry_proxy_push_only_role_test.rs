@@ -198,6 +198,7 @@ async fn a_push_only_credential_pushes_but_cannot_pull_or_cross_projects() {
             CreateDeploymentGroupParams {
                 name: "group".to_string(),
                 max_deployments: 10,
+                setup: Default::default(),
             },
         )
         .await

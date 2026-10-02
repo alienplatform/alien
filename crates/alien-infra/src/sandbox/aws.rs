@@ -158,7 +158,7 @@ impl AwsSandboxController {
             .get_aws_microvms_client(aws_config)
             .await?;
 
-        let image_name = format!("{}-{}", ctx.resource_prefix, config.id);
+        let image_name = sandbox_image_name(ctx.resource_prefix, &config.id);
         let tier = config
             .microvm_tier()
             .context(ErrorData::ResourceConfigInvalid {
@@ -172,22 +172,14 @@ impl AwsSandboxController {
         // a registry the build role can reach; the only image this call names is AWS's managed
         // base, and the build's connector is AWS's own — it must reach a registry, which the
         // session-time deny connector cannot.
-        let inputs = ImageBuildInputs {
-            description: format!("Sandbox {}", config.id),
-            base_image_arn: managed_base_image_arn(&aws_config.region),
-            build_role_arn,
-            code_artifact: MicrovmCodeArtifact {
-                uri: bundle_uri.clone(),
-            },
-            egress_network_connectors: vec![internet_egress_connector_arn(&aws_config.region)],
-            resources: vec![MicrovmImageResources {
-                minimum_memory_in_mib: tier.baseline_memory_mib,
-            }],
-            // Keyed on the bundle, not just the resource: a retry of the same release replays
-            // the prior success, while a new release's changed bundle asks for a real build
-            // rather than replaying the image built from the previous one.
-            client_token: build_client_token(&image_name, &bundle_uri),
-        };
+        let inputs = image_build_inputs(
+            &aws_config.region,
+            &config.id,
+            &image_name,
+            &build_role_arn,
+            &bundle_uri,
+            tier.baseline_memory_mib,
+        );
 
         // A create whose response never reached state leaves an image under this
         // account-unique name, and a second create would collide with it. Read first and adopt
@@ -578,6 +570,7 @@ impl AwsSandboxController {
                 image_build_inputs(
                     &aws_config.region,
                     &config.id,
+                    &sandbox_image_name(ctx.resource_prefix, &config.id),
                     &build_role_arn,
                     &desired_bundle,
                     tier.baseline_memory_mib,
@@ -943,6 +936,7 @@ fn image_tags(ctx: &ResourceControllerContext<'_>, resource_id: &str) -> BTreeMa
 fn image_build_inputs(
     region: &str,
     resource_id: &str,
+    image_name: &str,
     build_role_arn: &str,
     bundle_uri: &str,
     baseline_memory_mib: i64,
@@ -958,8 +952,18 @@ fn image_build_inputs(
         resources: vec![MicrovmImageResources {
             minimum_memory_in_mib: baseline_memory_mib,
         }],
-        client_token: build_client_token(resource_id, bundle_uri),
+        // Keyed on the account-unique image name and the bundle: a retry of the same release
+        // replays the prior success, a new release's bundle asks for a real build, and another
+        // deployment in the same account rolling the same bundle onto its own image never reuses
+        // this image's token.
+        client_token: build_client_token(image_name, bundle_uri),
     }
+}
+
+/// The MicroVM image's name, unique in the account because it carries the deployment's
+/// resource prefix.
+fn sandbox_image_name(resource_prefix: &str, resource_id: &str) -> String {
+    format!("{resource_prefix}-{resource_id}")
 }
 
 /// The bundle the declaration asks for, with the region token resolved.
@@ -1357,6 +1361,37 @@ mod tests {
         assert!(same_a.starts_with("p-agents-"));
     }
 
+    /// Every deployment's image has its own name, so two deployments in one account rolling
+    /// the same bundle must not send the same token: the API rejects a token reused with
+    /// different parameters. One deployment's create and roll of a bundle stay one build.
+    #[test]
+    fn the_roll_token_is_scoped_to_the_deployment_image() {
+        let bundle = "s3://b/sandbox-bundle/aaaa/bundle.zip";
+        let inputs = |prefix: &str| {
+            image_build_inputs(
+                "us-east-1",
+                "sandboxes",
+                &sandbox_image_name(prefix, "sandboxes"),
+                "arn:aws:iam::123456789012:role/build",
+                bundle,
+                2048,
+            )
+        };
+
+        let first = inputs("deployment-a").client_token;
+        let second = inputs("deployment-b").client_token;
+
+        assert_ne!(
+            first, second,
+            "two deployments rolling one bundle must send different tokens"
+        );
+        assert_eq!(
+            first,
+            build_client_token("deployment-a-sandboxes", bundle),
+            "a roll uses the same token as the create of that image and bundle"
+        );
+    }
+
     /// Two rolls inside one retention window must retire two versions, not overwrite the
     /// first: a version that leaves the record is a version nothing ever deletes.
     #[test]
@@ -1662,9 +1697,9 @@ mod tests {
             .expect_create_microvm_image()
             .withf(|request| {
                 request.name == "test-agents"
-                    // Token carries the bundle digest so a new release is a new logical create.
-                    && request.client_token.starts_with("test-agents-")
-                    && request.client_token != "test-agents"
+                    // Token carries the image name and the bundle, so a new release is a new
+                    // logical create and a roll of the same image and bundle sends the same one.
+                    && request.client_token == build_client_token("test-agents", BUNDLE_URI)
                     && request.build_role_arn == BUILD_ROLE_ARN
                     && request.code_artifact.uri == BUNDLE_URI
                     && request.base_image_arn
@@ -1770,7 +1805,9 @@ mod tests {
                         == vec![MicrovmImageResources {
                             minimum_memory_in_mib: 2048,
                         }]
-                    && request.client_token.starts_with("agents-")
+                    // Keyed on this deployment's image, as the create is, not the stack resource
+                    // id another deployment in the account shares.
+                    && request.client_token == build_client_token("test-agents", NEXT_BUNDLE)
                     // PUT semantics: a field left out is dropped, and this is the one that keeps
                     // sandbox contents out of the customer's logs.
                     && request.logging == Some(MicrovmImageLogging::Disabled {})
