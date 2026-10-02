@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alien_error::{Context, IntoAlienError};
-use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
-use hyper_util::server::conn::auto;
+use hyper::server::conn::http1;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::service::TowerToHyperService;
 use tokio::net::TcpListener;
 use tracing::{debug, info, warn};
@@ -143,18 +143,22 @@ impl AlienManager {
 /// 60s idle timeout so the balancer never reuses a connection the server has just closed.
 const INBOUND_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// Serve `router` on `listener`, closing connections that stay idle longer than
+/// Serve `router` on `listener` over HTTP/1, closing connections that stay idle longer than
 /// `idle_timeout`. `axum::serve` sets no timer, so it never closes an idle connection.
+///
+/// HTTP/1 only: every client of the manager (the load balancer, browsers, fetch, reqwest)
+/// speaks HTTP/1.1, and hyper's HTTP/1 header timeout covers a connection from its first byte,
+/// so a client that connects and sends nothing is closed too. Protocol auto-detection would
+/// wait for that first byte without any timeout.
 pub(crate) async fn serve(
     listener: TcpListener,
     router: axum::Router,
     idle_timeout: Duration,
 ) -> std::io::Result<()> {
-    let mut builder = auto::Builder::new(TokioExecutor::new());
-    // hyper only enforces the header read timeout once it has a timer; it also runs between
-    // requests on a keep-alive connection, which is what makes it an idle timeout.
+    let mut builder = http1::Builder::new();
+    // hyper only enforces the header read timeout once it has a timer. The timeout also runs
+    // between requests on a keep-alive connection, which is what makes it an idle timeout.
     builder
-        .http1()
         .timer(TokioTimer::new())
         .header_read_timeout(idle_timeout);
     let builder = Arc::new(builder);
@@ -172,8 +176,10 @@ pub(crate) async fn serve(
         let service = TowerToHyperService::new(router.clone());
         let builder = builder.clone();
         tokio::spawn(async move {
+            // `with_upgrades` keeps WebSocket upgrades (debug sessions) working.
             if let Err(error) = builder
-                .serve_connection_with_upgrades(TokioIo::new(stream), service)
+                .serve_connection(TokioIo::new(stream), service)
+                .with_upgrades()
                 .await
             {
                 debug!(%error, "Inbound connection ended with an error");
@@ -191,14 +197,32 @@ mod tests {
 
     const REQUEST: &[u8] = b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
 
+    /// Reads one complete HTTP/1.1 response (headers plus `content-length` body) so no bytes
+    /// of it are left behind to be mistaken for the next response or for a closed socket.
     async fn read_response(stream: &mut TcpStream) -> String {
-        let mut buf = vec![0u8; 4096];
-        let n = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf))
-            .await
-            .expect("response should arrive before the deadline")
-            .expect("read should succeed");
-        assert!(n > 0, "server closed the connection instead of responding");
-        String::from_utf8_lossy(&buf[..n]).into_owned()
+        let mut bytes = Vec::new();
+        let mut chunk = [0u8; 1024];
+        loop {
+            let n = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut chunk))
+                .await
+                .expect("response should arrive before the deadline")
+                .expect("read should succeed");
+            assert!(n > 0, "server closed the connection instead of responding");
+            bytes.extend_from_slice(&chunk[..n]);
+            let text = String::from_utf8_lossy(&bytes);
+            let Some(header_end) = text.find("\r\n\r\n") else {
+                continue;
+            };
+            let content_length: usize = text[..header_end]
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length: "))
+                .expect("response should carry content-length")
+                .parse()
+                .expect("content-length should be a number");
+            if bytes.len() >= header_end + 4 + content_length {
+                return text.into_owned();
+            }
+        }
     }
 
     #[tokio::test]
@@ -208,6 +232,19 @@ mod tests {
         let router = Router::new().route("/health", get(|| async { "ok" }));
         let idle_timeout = Duration::from_millis(300);
         tokio::spawn(serve(listener, router, idle_timeout));
+
+        // A connection that never sends a byte is closed too: the timeout covers the first
+        // request, not only the gaps between requests.
+        let mut silent = TcpStream::connect(addr).await.expect("connect");
+        let mut buf = [0u8; 16];
+        let closed = tokio::time::timeout(idle_timeout * 5, silent.read(&mut buf))
+            .await
+            .expect("server should close the silent connection within the timeout")
+            .expect("read should return EOF, not an error");
+        assert_eq!(
+            closed, 0,
+            "expected EOF from the server closing the silent connection"
+        );
 
         let mut stream = TcpStream::connect(addr).await.expect("connect");
 
