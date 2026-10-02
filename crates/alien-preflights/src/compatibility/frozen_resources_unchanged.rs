@@ -63,7 +63,7 @@ fn runtime_managed_frozen_change(
             )
             && profile_matches_catalog(
                 new_group,
-                installed_configurable_disk(old_group),
+                installed_disk(old_group),
                 requested_disk(new_stack, new_cluster, &new_group.group_id),
             )
         {
@@ -79,13 +79,30 @@ fn same_aws_architecture(old: Option<&str>, new: Option<&str>) -> bool {
         .is_some_and(|(old, new)| is_same_architecture_aws_machine(old, new))
 }
 
-/// The installed disk when it is configurable: the mutation sized it from the workload's request,
-/// so an unchanged request keeps it. `None` for a fixed or unrecorded disk, which records no request.
-fn installed_configurable_disk(group: &CapacityGroup) -> Option<u64> {
-    let spec = find_instance_type(Platform::Aws, group.instance_type.as_deref()?)?;
-    spec.has_configurable_ephemeral_storage()
-        .then(|| group.profile.as_ref().map(|p| p.ephemeral_storage_bytes))
-        .flatten()
+/// The installed group's disk.
+enum InstalledDisk {
+    /// Sized from the workload's request by the mutation, so an unchanged request keeps it.
+    Configurable(u64),
+    /// A fixed size: it records no request, but a request it met was at most this size.
+    Fixed(u64),
+    /// No profile recorded.
+    Unknown,
+}
+
+fn installed_disk(group: &CapacityGroup) -> InstalledDisk {
+    let spec = group
+        .instance_type
+        .as_deref()
+        .and_then(|name| find_instance_type(Platform::Aws, name));
+    match (spec, group.profile.as_ref()) {
+        (Some(spec), Some(profile)) if spec.has_configurable_ephemeral_storage() => {
+            InstalledDisk::Configurable(profile.ephemeral_storage_bytes)
+        }
+        (Some(spec), Some(_)) => {
+            InstalledDisk::Fixed(spec.to_machine_profile().ephemeral_storage_bytes)
+        }
+        _ => InstalledDisk::Unknown,
+    }
 }
 
 /// The largest ephemeral storage requested by the containers the compute mutation places on the
@@ -109,14 +126,15 @@ fn requested_disk(stack: &Stack, cluster: &ComputeCluster, group_id: &str) -> Op
         })
 }
 
-/// The profile must be one the compute mutation produces for this machine: a configurable disk
-/// kept at the installed size, or after a fixed or unrecorded disk the catalog disk grown to the
-/// containers' request; a fixed disk at the catalog's; nested virtualization only on a capable
-/// machine. Any other disk change needs setup. An explicit cluster whose release declares the
-/// disk moving off a fixed disk is refused, since the declared size is gone after the mutation.
+/// The profile must be one the compute mutation produces for this machine with the workload's
+/// disk request unchanged: a configurable disk kept at the installed size; off a fixed disk, the
+/// catalog disk grown to the containers' request, no larger than the installed disk; with no
+/// recorded profile, the catalog disk. A fixed disk stays at the catalog's, and nested
+/// virtualization needs a capable machine. Any other disk change needs setup; an explicit cluster
+/// whose release declares the disk is refused off a fixed disk, since the mutation drops it.
 fn profile_matches_catalog(
     group: &CapacityGroup,
-    installed_disk: Option<u64>,
+    installed: InstalledDisk,
     requested: Option<u64>,
 ) -> bool {
     let (Some(spec), Some(profile)) = (
@@ -135,13 +153,17 @@ fn profile_matches_catalog(
             && max_configurable_ephemeral_storage_bytes(Platform::Aws)
                 .is_some_and(|max| disk <= max);
         within_limits
-            && match installed_disk {
-                Some(installed) => disk == installed,
-                None => requested.is_some_and(|r| {
-                    disk == spec
-                        .to_machine_profile_for_storage(r)
-                        .ephemeral_storage_bytes
-                }),
+            && match installed {
+                InstalledDisk::Configurable(installed) => disk == installed,
+                InstalledDisk::Fixed(installed) => {
+                    disk <= installed
+                        && requested.is_some_and(|r| {
+                            disk == spec
+                                .to_machine_profile_for_storage(r)
+                                .ephemeral_storage_bytes
+                        })
+                }
+                InstalledDisk::Unknown => disk == catalog.ephemeral_storage_bytes,
             }
     } else {
         profile.ephemeral_storage_bytes == catalog.ephemeral_storage_bytes
@@ -904,6 +926,10 @@ mod tests {
         assert!(
             !check(with_disk(500 * GIB), Some("40Gi")).await,
             "more than requested"
+        );
+        assert!(
+            !check(with_disk(2048 * GIB), Some("2Ti")).await,
+            "a request the installed disk never met is a storage change"
         );
     }
 
