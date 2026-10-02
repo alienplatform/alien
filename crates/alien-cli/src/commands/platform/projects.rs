@@ -3,7 +3,8 @@ use crate::commands::release::{auto_build_settings_for_platform, manager_proxy_p
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::get_current_dir;
-use crate::output::print_json;
+use crate::interaction::{ConfirmationMode, InteractionMode};
+use crate::output::{print_json, prompt_confirm};
 use crate::ui::{command, dim_label, make_table, print_table, success_line};
 use alien_core::{
     Platform, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
@@ -203,6 +204,20 @@ pub async fn project_task(args: ProjectArgs, ctx: ExecutionMode) -> Result<()> {
             },
         )?;
     }
+    // Confirm before authentication: workspace setup can prompt and save a default workspace,
+    // which a declined deletion must not do.
+    if let ProjectCmd::Delete { project, yes } = &args.cmd {
+        let confirmed = confirm_project_deletion(
+            project,
+            *yes,
+            InteractionMode::current(args.json),
+            prompt_confirm,
+        )?;
+        if !confirmed {
+            println!("{}", dim_label("Deletion cancelled."));
+            return Ok(());
+        }
+    }
     let http = ctx.auth_http().await?;
     let workspace_name = ctx
         .resolve_workspace_query_with_bootstrap(!args.json)
@@ -213,18 +228,7 @@ pub async fn project_task(args: ProjectArgs, ctx: ExecutionMode) -> Result<()> {
             create_project_task(&http, workspace_name.as_deref(), &name, args.json).await?
         }
         ProjectCmd::Ls => list_projects_task(&http, workspace_name.as_deref(), args.json).await?,
-        ProjectCmd::Delete { project, yes } => {
-            let confirmation = crate::interaction::InteractionMode::current(args.json)
-                .confirmation_mode(
-                    yes,
-                    "Project deletion requires a real terminal. Re-run with `--yes`.",
-                )?;
-            if matches!(confirmation, crate::interaction::ConfirmationMode::Prompt)
-                && !crate::output::prompt_confirm(&format!("Delete project '{project}'?"), false)?
-            {
-                println!("{}", dim_label("Deletion cancelled."));
-                return Ok(());
-            }
+        ProjectCmd::Delete { project, .. } => {
             delete_project_task(&http, workspace_name.as_deref(), &project, args.json).await?
         }
         ProjectCmd::Get { project } => {
@@ -1069,6 +1073,23 @@ async fn create_project_task(
     Ok(())
 }
 
+/// Whether `alien projects delete` may go ahead. `--yes` skips the prompt; without it, a
+/// non-interactive run (`--json` or no terminal) is refused rather than deleting unasked.
+fn confirm_project_deletion(
+    project: &str,
+    yes: bool,
+    interaction: InteractionMode,
+    prompt: impl FnOnce(&str, bool) -> Result<bool>,
+) -> Result<bool> {
+    match interaction.confirmation_mode(
+        yes,
+        "Project deletion requires a real terminal. Re-run with `--yes`.",
+    )? {
+        ConfirmationMode::Skip => Ok(true),
+        ConfirmationMode::Prompt => prompt(&format!("Delete project '{project}'?"), false),
+    }
+}
+
 async fn delete_project_task(
     http: &crate::auth::AuthHttp,
     workspace: Option<&str>,
@@ -1155,6 +1176,8 @@ async fn list_projects_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{extract::Query, http::StatusCode, routing::delete, Json, Router};
+    use std::collections::HashMap;
 
     fn sandbox_options(image: Option<&str>, lifetime: Option<NonZeroU64>) -> Result<()> {
         source_options(image, None, None, lifetime)
@@ -1190,13 +1213,53 @@ mod tests {
         )
     }
 
+    /// `--yes` deletes without asking; an interactive run asks and honours the answer; a
+    /// `--json` or terminal-less run without `--yes` is refused without prompting.
+    #[test]
+    fn project_deletion_requires_confirmation() {
+        let never_prompt = |_: &str, _: bool| -> Result<bool> { panic!("must not prompt") };
+
+        for interaction in [
+            InteractionMode::new(false, true),
+            InteractionMode::new(true, true),
+            InteractionMode::new(false, false),
+        ] {
+            assert!(confirm_project_deletion("sample", true, interaction, never_prompt).unwrap());
+        }
+
+        for interaction in [
+            InteractionMode::new(true, true),
+            InteractionMode::new(false, false),
+        ] {
+            let error = confirm_project_deletion("sample", false, interaction, never_prompt)
+                .expect_err("a non-interactive deletion needs --yes");
+            assert!(
+                error.to_string().contains("Re-run with `--yes`"),
+                "{error:?}"
+            );
+        }
+
+        for answer in [true, false] {
+            let mut asked = None;
+            let confirmed = confirm_project_deletion(
+                "sample",
+                false,
+                InteractionMode::new(false, true),
+                |question, default_yes| {
+                    asked = Some((question.to_string(), default_yes));
+                    Ok(answer)
+                },
+            )
+            .unwrap();
+            assert_eq!(confirmed, answer);
+            assert_eq!(asked, Some(("Delete project 'sample'?".to_string(), false)));
+        }
+    }
+
     /// The platform's refusal comes back to the user, and a deletion is a DELETE of the
     /// project in the workspace.
     #[tokio::test]
     async fn delete_project_reports_the_platforms_refusal() {
-        use axum::{extract::Query, http::StatusCode, routing::delete, Json, Router};
-        use std::collections::HashMap;
-
         let app = Router::new().route(
             "/v1/projects/{project}",
             delete(
