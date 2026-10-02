@@ -465,7 +465,6 @@ fn platform_onboard_deployment_setup_config(
     );
 
     Ok(types::DeploymentSetupConfigInput {
-        validated_release_selection: None,
         metadata: Some(types::DeploymentSetupMetadata(metadata)),
         public_subdomain,
         validated_release_selection: None,

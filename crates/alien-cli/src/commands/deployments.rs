@@ -20,11 +20,11 @@ use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use alien_manager_api::SdkResultExtReadingBody as _;
 use alien_platform_api::types::{
     CreateDeploymentTokenId, CreateDeploymentTokenRequest, CreateDeploymentTokenWorkspace,
-    CreateDeploymentWorkspace, DeploymentDetailResponse, DeploymentListItemResponse,
-    DeploymentUpdateOperationStatus, DeploymentUpdateOperationSummaryInner, GetDeploymentId,
-    GetDeploymentWorkspace, ListDeploymentsIncludeItem, NewDeploymentRequest,
-    PinDeploymentReleaseId, PinDeploymentReleaseWorkspace, PinReleaseRequest,
-    PinReleaseRequestReleaseId,
+    CreateDeploymentWorkspace, DeploymentDetailResponse, DeploymentDetailResponseUpdateState,
+    DeploymentListItemResponse, DeploymentUpdateOperationStatus,
+    DeploymentUpdateOperationSummaryInner, GetDeploymentId, GetDeploymentWorkspace,
+    ListDeploymentsIncludeItem, NewDeploymentRequest, PinDeploymentReleaseId,
+    PinDeploymentReleaseWorkspace, PinReleaseRequest, PinReleaseRequestReleaseId,
 };
 use alien_platform_api::SdkResultExt as _;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -2731,16 +2731,14 @@ mod tests {
             .expect("valid operation")
     }
 
-    fn update_operation(
+    fn redeploy_operation(
         id: &str,
         status: DeploymentUpdateOperationStatus,
     ) -> DeploymentUpdateOperationSummaryInner {
         DeploymentUpdateOperationSummaryInner::builder()
             .id(id)
             .status(status)
-            .reasons(vec![
-                alien_platform_api::types::DeploymentUpdateReason::Redeploy,
-            ])
+            .reasons(vec![DeploymentUpdateReason::Redeploy])
             .changed_keys(Vec::<String>::new())
             .requested_at(chrono::Utc::now())
             .target_release_id(format!("rel_{}", "a".repeat(28)))
@@ -3115,10 +3113,10 @@ mod tests {
             json: true,
         };
         let mut observations = std::collections::VecDeque::from([
-            update_operation(&operation_id, DeploymentUpdateOperationStatus::Applying),
-            update_operation(&operation_id, DeploymentUpdateOperationStatus::Succeeded),
+            redeploy_operation(&operation_id, DeploymentUpdateOperationStatus::Applying),
+            redeploy_operation(&operation_id, DeploymentUpdateOperationStatus::Succeeded),
         ]);
-        let initial = update_operation(&operation_id, DeploymentUpdateOperationStatus::Queued);
+        let initial = redeploy_operation(&operation_id, DeploymentUpdateOperationStatus::Queued);
 
         let (completed, _) = await_update_operation(initial, options, || {
             std::future::ready(Ok(observations
@@ -3144,12 +3142,12 @@ mod tests {
             interval: Duration::from_millis(1),
             json: true,
         };
-        let initial = update_operation(&operation_id, DeploymentUpdateOperationStatus::Queued);
+        let initial = redeploy_operation(&operation_id, DeploymentUpdateOperationStatus::Queued);
         let started = Instant::now();
 
         let error = await_update_operation(initial, options, || async {
             tokio::time::sleep(Duration::from_secs(5)).await;
-            Ok(update_operation(
+            Ok(redeploy_operation(
                 &operation_id,
                 DeploymentUpdateOperationStatus::Succeeded,
             ))
