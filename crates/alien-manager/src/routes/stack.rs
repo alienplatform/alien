@@ -181,6 +181,13 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     };
     let stack_inputs = source_stack.inputs.clone();
+    // Generated secrets are developer-owned and never setup parameters, so a
+    // setup caller must not be able to set or replace one.
+    if let Err(e) =
+        crate::generated_inputs::reject_generated_input_values(&stack_inputs, &req.input_values)
+    {
+        return e.into_response();
+    }
 
     // A gated resource renders behind its input in the setup template, so its
     // absence from the delivered resource ids IS the deployer's answer,
@@ -267,9 +274,8 @@ pub async fn stack_import(
                 return ErrorData::forbidden("Cannot update imported deployment in this group")
                     .into_response();
             }
-            // A setup artifact never carries a generated secret (it is not a
-            // deployer input), and this write replaces the stored map, so keep
-            // the value the deployment already holds.
+            // This write replaces the stored map and the request never carries
+            // a generated secret, so keep the value the deployment holds.
             crate::generated_inputs::carry_stored_generated_input_values(
                 &stack_inputs,
                 req.platform,
