@@ -1657,6 +1657,10 @@ fn shared_bind_mount_user(_bind_mounts: &[BindMount]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_build::toolchain::{
+        docker::DockerToolchain, Toolchain, ToolchainContext, WorkloadKind,
+    };
+    use alien_core::BinaryTarget;
 
     /// Run with DOCKER_HOST pointing at a disposable daemon, on both image stores.
     #[tokio::test]
@@ -1716,6 +1720,51 @@ mod tests {
             );
             previous = Some(loaded);
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an isolated Docker daemon and OCI-capable Buildx builder"]
+    async fn dockerfile_archive_runs_with_its_original_command() {
+        let root = tempfile::tempdir().unwrap();
+        let build_dir = root.path().join("build");
+        std::fs::create_dir(&build_dir).unwrap();
+        std::fs::write(
+            root.path().join("Dockerfile"),
+            "FROM alpine:3.20\nRUN printf app-v2 > /sentinel\nCMD [\"cat\", \"/sentinel\"]\n",
+        )
+        .unwrap();
+        let target = BinaryTarget::linux_container_target();
+        DockerToolchain {
+            dockerfile: None,
+            build_args: None,
+            target: None,
+        }
+        .build(&ToolchainContext {
+            src_dir: root.path().to_path_buf(),
+            build_dir: build_dir.clone(),
+            cache_store: None,
+            cache_prefix: "test".to_string(),
+            build_target: target.clone(),
+            runtime_platform_name: "local".to_string(),
+            debug_mode: false,
+            pull_base_images: false,
+            workload: WorkloadKind::Container,
+        })
+        .await
+        .expect("build Dockerfile through the actual toolchain");
+        let archive = build_dir.join(format!("{}.oci.tar", target.runtime_platform_id()));
+        let manager = LocalContainerManager::new(root.path().join("state")).unwrap();
+        let loaded = manager
+            .load_oci_tarball_into_docker(&archive, "dockerfile-test")
+            .await
+            .expect("load generated archive");
+        let output = tokio::process::Command::new("docker")
+            .args(["run", "--rm", "--network", "none", &loaded])
+            .output()
+            .await
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"app-v2");
     }
 
     fn test_bind_mount(shared_with_host_workloads: bool) -> BindMount {
