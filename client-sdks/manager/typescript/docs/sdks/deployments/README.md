@@ -13,10 +13,18 @@ that proxy to an upstream API can use the subject's `bearer_token` for
 passthrough; single-tenant impls ignore it. See the trait doc on
 [`DeploymentStore`] for the full convention.
 * [getDeployment](#getdeployment)
+* [signDeploymentBundle](#signdeploymentbundle)
+* [getDeploymentBundleSources](#getdeploymentbundlesources)
+* [setDeploymentChannel](#setdeploymentchannel)
 * [deleteDeployment](#deletedeployment)
 * [getDeploymentInfo](#getdeploymentinfo)
+* [getDeploymentLogs](#getdeploymentlogs)
+* [setDeploymentPin](#setdeploymentpin)
 * [redeploy](#redeploy)
 * [retryDeployment](#retrydeployment)
+* [getDeploymentRouting](#getdeploymentrouting)
+* [importDeploymentStatus](#importdeploymentstatus)
+* [getDeploymentTarget](#getdeploymenttarget)
 
 ## listDeployments
 
@@ -238,6 +246,239 @@ run();
 | ------------------------------- | ------------------------------- | ------------------------------- |
 | errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
 
+## signDeploymentBundle
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="sign_deployment_bundle" method="post" path="/v1/deployments/{id}/bundle-signature" -->
+```typescript
+import { AlienManager } from "@alienplatform/manager-api";
+
+const alienManager = new AlienManager({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const result = await alienManager.deployments.signDeploymentBundle({
+    id: "<id>",
+    bundleSignatureRequest: {
+      manifest: "<value>",
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienManagerCore } from "@alienplatform/manager-api/core.js";
+import { deploymentsSignDeploymentBundle } from "@alienplatform/manager-api/funcs/deploymentsSignDeploymentBundle.js";
+
+// Use `AlienManagerCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alienManager = new AlienManagerCore({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsSignDeploymentBundle(alienManager, {
+    id: "<id>",
+    bundleSignatureRequest: {
+      manifest: "<value>",
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsSignDeploymentBundle failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.SignDeploymentBundleRequest](../../models/operations/signdeploymentbundlerequest.md)                                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.BundleSignatureResponse](../../models/bundlesignatureresponse.md)\>**
+
+### Errors
+
+| Error Type                      | Status Code                     | Content Type                    |
+| ------------------------------- | ------------------------------- | ------------------------------- |
+| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+
+## getDeploymentBundleSources
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="get_deployment_bundle_sources" method="get" path="/v1/deployments/{id}/bundle-sources" -->
+```typescript
+import { AlienManager } from "@alienplatform/manager-api";
+
+const alienManager = new AlienManager({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const result = await alienManager.deployments.getDeploymentBundleSources({
+    id: "<id>",
+    releaseId: "<id>",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienManagerCore } from "@alienplatform/manager-api/core.js";
+import { deploymentsGetDeploymentBundleSources } from "@alienplatform/manager-api/funcs/deploymentsGetDeploymentBundleSources.js";
+
+// Use `AlienManagerCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alienManager = new AlienManagerCore({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsGetDeploymentBundleSources(alienManager, {
+    id: "<id>",
+    releaseId: "<id>",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsGetDeploymentBundleSources failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetDeploymentBundleSourcesRequest](../../models/operations/getdeploymentbundlesourcesrequest.md)                                                                   | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.BundleSources](../../models/bundlesources.md)\>**
+
+### Errors
+
+| Error Type                      | Status Code                     | Content Type                    |
+| ------------------------------- | ------------------------------- | ------------------------------- |
+| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+
+## setDeploymentChannel
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="set_deployment_channel" method="put" path="/v1/deployments/{id}/channel" -->
+```typescript
+import { AlienManager } from "@alienplatform/manager-api";
+
+const alienManager = new AlienManager({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const result = await alienManager.deployments.setDeploymentChannel({
+    id: "<id>",
+    setDeploymentChannelRequest: {
+      channel: "<value>",
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienManagerCore } from "@alienplatform/manager-api/core.js";
+import { deploymentsSetDeploymentChannel } from "@alienplatform/manager-api/funcs/deploymentsSetDeploymentChannel.js";
+
+// Use `AlienManagerCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alienManager = new AlienManagerCore({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsSetDeploymentChannel(alienManager, {
+    id: "<id>",
+    setDeploymentChannelRequest: {
+      channel: "<value>",
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsSetDeploymentChannel failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.SetDeploymentChannelRequest](../../models/operations/setdeploymentchannelrequest.md)                                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.DeploymentRoutingResponse](../../models/deploymentroutingresponse.md)\>**
+
+### Errors
+
+| Error Type                      | Status Code                     | Content Type                    |
+| ------------------------------- | ------------------------------- | ------------------------------- |
+| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+
 ## deleteDeployment
 
 ### Example Usage
@@ -390,6 +631,154 @@ run();
 | ------------------------------- | ------------------------------- | ------------------------------- |
 | errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
 
+## getDeploymentLogs
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="get_deployment_logs" method="get" path="/v1/deployments/{id}/logs" -->
+```typescript
+import { AlienManager } from "@alienplatform/manager-api";
+
+const alienManager = new AlienManager({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const result = await alienManager.deployments.getDeploymentLogs({
+    id: "<id>",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienManagerCore } from "@alienplatform/manager-api/core.js";
+import { deploymentsGetDeploymentLogs } from "@alienplatform/manager-api/funcs/deploymentsGetDeploymentLogs.js";
+
+// Use `AlienManagerCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alienManager = new AlienManagerCore({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsGetDeploymentLogs(alienManager, {
+    id: "<id>",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsGetDeploymentLogs failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetDeploymentLogsRequest](../../models/operations/getdeploymentlogsrequest.md)                                                                                     | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.RecentLogsResponse](../../models/recentlogsresponse.md)\>**
+
+### Errors
+
+| Error Type                      | Status Code                     | Content Type                    |
+| ------------------------------- | ------------------------------- | ------------------------------- |
+| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+
+## setDeploymentPin
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="set_deployment_pin" method="put" path="/v1/deployments/{id}/pin" -->
+```typescript
+import { AlienManager } from "@alienplatform/manager-api";
+
+const alienManager = new AlienManager({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const result = await alienManager.deployments.setDeploymentPin({
+    id: "<id>",
+    setDeploymentPinRequest: {},
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienManagerCore } from "@alienplatform/manager-api/core.js";
+import { deploymentsSetDeploymentPin } from "@alienplatform/manager-api/funcs/deploymentsSetDeploymentPin.js";
+
+// Use `AlienManagerCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alienManager = new AlienManagerCore({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsSetDeploymentPin(alienManager, {
+    id: "<id>",
+    setDeploymentPinRequest: {},
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsSetDeploymentPin failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.SetDeploymentPinRequest](../../models/operations/setdeploymentpinrequest.md)                                                                                       | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.DeploymentRoutingResponse](../../models/deploymentroutingresponse.md)\>**
+
+### Errors
+
+| Error Type                      | Status Code                     | Content Type                    |
+| ------------------------------- | ------------------------------- | ------------------------------- |
+| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+
 ## redeploy
 
 ### Example Usage
@@ -529,6 +918,231 @@ run();
 ### Response
 
 **Promise\<void\>**
+
+### Errors
+
+| Error Type                      | Status Code                     | Content Type                    |
+| ------------------------------- | ------------------------------- | ------------------------------- |
+| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+
+## getDeploymentRouting
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="get_deployment_routing" method="get" path="/v1/deployments/{id}/routing" -->
+```typescript
+import { AlienManager } from "@alienplatform/manager-api";
+
+const alienManager = new AlienManager({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const result = await alienManager.deployments.getDeploymentRouting({
+    id: "<id>",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienManagerCore } from "@alienplatform/manager-api/core.js";
+import { deploymentsGetDeploymentRouting } from "@alienplatform/manager-api/funcs/deploymentsGetDeploymentRouting.js";
+
+// Use `AlienManagerCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alienManager = new AlienManagerCore({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsGetDeploymentRouting(alienManager, {
+    id: "<id>",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsGetDeploymentRouting failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetDeploymentRoutingRequest](../../models/operations/getdeploymentroutingrequest.md)                                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.DeploymentRoutingResponse](../../models/deploymentroutingresponse.md)\>**
+
+### Errors
+
+| Error Type                      | Status Code                     | Content Type                    |
+| ------------------------------- | ------------------------------- | ------------------------------- |
+| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+
+## importDeploymentStatus
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="import_deployment_status" method="post" path="/v1/deployments/{id}/status-report" -->
+```typescript
+import { AlienManager } from "@alienplatform/manager-api";
+
+const alienManager = new AlienManager({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const result = await alienManager.deployments.importDeploymentStatus({
+    id: "<id>",
+    statusReport: {
+      state: {},
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienManagerCore } from "@alienplatform/manager-api/core.js";
+import { deploymentsImportDeploymentStatus } from "@alienplatform/manager-api/funcs/deploymentsImportDeploymentStatus.js";
+
+// Use `AlienManagerCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alienManager = new AlienManagerCore({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsImportDeploymentStatus(alienManager, {
+    id: "<id>",
+    statusReport: {
+      state: {},
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsImportDeploymentStatus failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.ImportDeploymentStatusRequest](../../models/operations/importdeploymentstatusrequest.md)                                                                           | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.StatusReportResponse](../../models/statusreportresponse.md)\>**
+
+### Errors
+
+| Error Type                      | Status Code                     | Content Type                    |
+| ------------------------------- | ------------------------------- | ------------------------------- |
+| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+
+## getDeploymentTarget
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="get_deployment_target" method="get" path="/v1/deployments/{id}/target" -->
+```typescript
+import { AlienManager } from "@alienplatform/manager-api";
+
+const alienManager = new AlienManager({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const result = await alienManager.deployments.getDeploymentTarget({
+    id: "<id>",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienManagerCore } from "@alienplatform/manager-api/core.js";
+import { deploymentsGetDeploymentTarget } from "@alienplatform/manager-api/funcs/deploymentsGetDeploymentTarget.js";
+
+// Use `AlienManagerCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alienManager = new AlienManagerCore({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsGetDeploymentTarget(alienManager, {
+    id: "<id>",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsGetDeploymentTarget failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetDeploymentTargetRequest](../../models/operations/getdeploymenttargetrequest.md)                                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[any](../../models/.md)\>**
 
 ### Errors
 
