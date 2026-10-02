@@ -74,6 +74,8 @@ pub(crate) enum DeploymentGroups {
     CreatedAt,
     WorkspaceId,
     ProjectId,
+    /// JSON `DeploymentGroupSetup`; NULL means no setup values.
+    Setup,
 }
 
 #[derive(Iden, Clone, Copy)]
@@ -355,6 +357,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "ALTER TABLE commands ADD COLUMN target_resource_type TEXT",
         "ALTER TABLE deployments ADD COLUMN input_values TEXT",
         "ALTER TABLE deployments ADD COLUMN next_step_after TEXT",
+        "ALTER TABLE deployment_groups ADD COLUMN setup TEXT",
     ];
     for sql in alter_statements {
         if let Err(e) = conn.execute(sql, ()).await {
@@ -399,6 +402,26 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
     .await
     .into_alien_error()
     .map_err(|e| db_error(&format!("Recovered error cleanup failed: {}", e.message)))?;
+
+    // Release channels and each deployment's channel or pin.
+    let channel_statements: &[&str] = &[
+        "CREATE TABLE IF NOT EXISTS release_channels (
+            name TEXT PRIMARY KEY,
+            current_release_id TEXT,
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS deployment_channels (
+            deployment_id TEXT PRIMARY KEY,
+            channel TEXT NOT NULL,
+            pinned_release_id TEXT
+        )",
+    ];
+    for sql in channel_statements {
+        conn.execute(sql, ())
+            .await
+            .into_alien_error()
+            .map_err(|e| db_error(&format!("Release channel tables failed: {}", e.message)))?;
+    }
 
     let post_index_statements: &[&str] = &[
         "CREATE INDEX IF NOT EXISTS idx_releases_project ON releases(workspace_id, project_id)",

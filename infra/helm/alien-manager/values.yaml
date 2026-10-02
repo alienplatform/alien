@@ -1,0 +1,108 @@
+# Public HTTPS URL of this manager. Deployments, the CLI and your backend
+# reach the manager here, and charts it serves point their Operators at it.
+baseUrl: ""
+
+image:
+  repository: ghcr.io/alienplatform/alien-manager
+  # Defaults to v<appVersion>.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# The admin API key. Leave existingSecret empty to generate one on first
+# install; it is kept across upgrades. Read it with:
+#   kubectl get secret <release> -o jsonpath='{.data.admin-token}' | base64 -d
+adminToken:
+  existingSecret:
+    name: ""
+    key: admin-token
+
+# alien-manager.toml, as YAML. See https://alien.dev/docs/self-hosting/configuration
+# Example:
+#   telemetry:
+#     otlp-endpoint: https://otlp.example.com
+#     headers:
+#       Authorization: "Bearer ..."
+#   artifact-registry:
+#     default:
+#       service: ecr
+#       repositoryPrefix: my-app
+config: {}
+
+# Extra environment variables (e.g. cloud credentials, OTLP header secrets).
+env: []
+envFrom: []
+
+serviceAccount:
+  create: true
+  name: ""
+  # IRSA / Workload Identity annotations, e.g.
+  #   eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/alien-manager
+  annotations: {}
+  automountServiceAccountToken: false
+
+persistence:
+  # The manager keeps its SQLite database, embedded registry and keys here.
+  enabled: true
+  existingClaim: ""
+  storageClassName: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 20Gi
+  annotations: {}
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  # Large image layers and long-lived tunnel connections pass through the
+  # manager; raise body size and timeouts on your ingress controller, e.g.
+  #   nginx.ingress.kubernetes.io/proxy-body-size: "0"
+  #   nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+  hosts:
+    - host: manager.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    memory: 1Gi
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  # Set volume ownership once; re-applying it on every start would loosen
+  # the permissions of the manager's key files, which it refuses to use.
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""

@@ -3,14 +3,29 @@
  */
 
 import * as z from "zod/v4";
+import {
+  EnvironmentVariable,
+  EnvironmentVariable$Outbound,
+  EnvironmentVariable$outboundSchema,
+} from "./environmentvariable.js";
 
 export type CreateDeploymentGroupRequest = {
+  /**
+   * Environment variables applied to each deployment the group creates.
+   */
+  environmentVariables?: Array<EnvironmentVariable> | undefined;
+  /**
+   * Stack input values applied to each deployment the group creates.
+   */
+  inputValues?: { [k: string]: any } | undefined;
   maxDeployments?: number | undefined;
   name: string;
 };
 
 /** @internal */
 export type CreateDeploymentGroupRequest$Outbound = {
+  environmentVariables?: Array<EnvironmentVariable$Outbound> | undefined;
+  inputValues?: { [k: string]: any } | undefined;
   maxDeployments?: number | undefined;
   name: string;
 };
@@ -20,6 +35,8 @@ export const CreateDeploymentGroupRequest$outboundSchema: z.ZodType<
   CreateDeploymentGroupRequest$Outbound,
   CreateDeploymentGroupRequest
 > = z.object({
+  environmentVariables: z.array(EnvironmentVariable$outboundSchema).optional(),
+  inputValues: z.record(z.string(), z.any()).optional(),
   maxDeployments: z.int().optional(),
   name: z.string(),
 });

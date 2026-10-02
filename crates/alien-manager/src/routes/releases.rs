@@ -60,6 +60,10 @@ pub struct CreateReleaseRequest {
     /// `unknown field "project", expected "projectId"`.
     #[serde(alias = "project")]
     pub project_id: String,
+    /// Channel the release advances; `production` when absent. Deployments
+    /// following the channel roll out to it.
+    #[serde(default)]
+    pub channel: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -241,6 +245,29 @@ async fn create_release(
 
     tracing::info!(project_id = %req.project_id, "Received create release request");
 
+    let channel = req
+        .channel
+        .clone()
+        .unwrap_or_else(|| crate::traits::DEFAULT_CHANNEL.to_string());
+    if !super::channels::valid_channel_name(&channel) {
+        return ErrorData::bad_request(format!("Invalid channel name '{channel}'")).into_response();
+    }
+    if let Some(channels) = &state.release_channels {
+        match channels.get_channel(&channel).await {
+            Ok(None) if channel != crate::traits::DEFAULT_CHANNEL => {
+                return ErrorData::bad_request(format!(
+                    "No channel named '{channel}'; create it with `alien releases create-channel {channel}`"
+                ))
+                .into_response()
+            }
+            Ok(_) => {}
+            Err(e) => return e.into_response(),
+        }
+    } else if channel != crate::traits::DEFAULT_CHANNEL {
+        return ErrorData::bad_request("This manager doesn't support release channels")
+            .into_response();
+    }
+
     // Parse all platform stacks from request
     let stacks = match parse_stacks_from_request(&req.stack) {
         Ok(s) => s,
@@ -277,13 +304,12 @@ async fn create_release(
         }
     };
 
-    // Set desired_release_id on eligible deployments
-    if let Err(e) = state
-        .deployment_store
-        .set_desired_release(&subject, &release.id, None)
-        .await
+    // Advance the release's channel and roll it out to the deployments
+    // following it (every deployment on a manager without channels).
+    if let Err(e) =
+        super::channels::route_new_release(&state, &subject, &release.id, &channel).await
     {
-        tracing::warn!(error = %e, "Failed to set desired release on deployments");
+        return e.into_response();
     }
 
     let response = match record_to_response(&release) {

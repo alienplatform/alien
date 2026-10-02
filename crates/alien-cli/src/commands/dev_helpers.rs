@@ -471,6 +471,7 @@ pub async fn build_and_post_release_simple(
             // dev mode is single-project; "default" is the canonical
             // sentinel and is required by the wire schema.
             project_id: "default".to_string(),
+            channel: None,
         })
         .send()
         .await
@@ -705,6 +706,42 @@ pub async fn prepare_dev_session_deployment(
     }
 
     create_initial_deployment(deployment_name, port, environment_variables, HashMap::new()).await
+}
+
+/// `alien dev destroy`: delete a local deployment by name and wait until it's gone. Dev
+/// deployments live only in the dev manager, never in the tracker `alien destroy` reads.
+pub async fn destroy_local_deployment(port: u16, deployment_name: &str, force: bool) -> Result<()> {
+    let client = local_dev_client(port);
+    let existing = find_named_local_deployment(&client, deployment_name)
+        .await?
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "name".to_string(),
+                message: format!(
+                    "No local deployment is named '{deployment_name}'. List them with \
+                     `alien dev deployments ls`."
+                ),
+            })
+        })?;
+
+    let action = if force {
+        alien_manager_api::types::DeleteDeploymentAction::Forget
+    } else {
+        alien_manager_api::types::DeleteDeploymentAction::Cleanup
+    };
+    client
+        .delete_deployment()
+        .id(&existing.id)
+        .body(alien_manager_api::types::DeleteDeploymentRequest { action })
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("Failed to delete local deployment '{deployment_name}'"),
+            url: None,
+        })?;
+
+    wait_for_local_deployment_absent(port, deployment_name).await
 }
 
 async fn find_named_local_deployment(
@@ -1030,7 +1067,16 @@ fn parse_deployment_status(status: &str) -> Result<DeploymentStatus> {
 mod tests {
     use super::*;
     use alien_core::ResourceLifecycle;
-    use std::fs;
+    use axum::{
+        extract::{Path as AxumPath, State},
+        http::StatusCode,
+        routing::{get, post},
+        Json, Router,
+    };
+    use std::{
+        fs,
+        sync::{Arc, Mutex},
+    };
     use tempfile::TempDir;
 
     fn worker_with_image(image: String) -> Worker {
@@ -1038,6 +1084,105 @@ mod tests {
             .permissions("execution".to_string())
             .code(WorkerCode::Image { image })
             .build()
+    }
+
+    /// The dev manager as `alien dev destroy` sees it: one failed deployment named `api`, which
+    /// stays listed as `deleting` for one poll after the delete is accepted (cleanup runs
+    /// asynchronously), then disappears.
+    #[derive(Default)]
+    struct DestroyManagerState {
+        deleted: Vec<(String, serde_json::Value)>,
+        lists_after_delete: usize,
+    }
+
+    type SharedDestroyManager = Arc<Mutex<DestroyManagerState>>;
+
+    async fn destroy_manager_list(
+        State(manager): State<SharedDestroyManager>,
+    ) -> Json<serde_json::Value> {
+        let mut manager = manager.lock().unwrap();
+        // Deletable until the delete is accepted, then `deleting` for one poll, then gone.
+        let status = if manager.deleted.is_empty() {
+            Some("provisioning-failed")
+        } else {
+            manager.lists_after_delete += 1;
+            (manager.lists_after_delete == 1).then_some("deleting")
+        };
+        let items = if let Some(status) = status {
+            serde_json::json!([{
+                "id": "dep_1",
+                "name": "api",
+                "platform": "local",
+                "status": status,
+                "deploymentGroupId": "dg_1",
+                "deploymentProtocolVersion": 1,
+                "projectId": "default",
+                "workspaceId": "default",
+                "retryRequested": false,
+                "createdAt": "2026-01-01T00:00:00Z",
+            }])
+        } else {
+            serde_json::json!([])
+        };
+        Json(serde_json::json!({ "items": items }))
+    }
+
+    async fn destroy_manager_delete(
+        State(manager): State<SharedDestroyManager>,
+        AxumPath(id): AxumPath<String>,
+        Json(body): Json<serde_json::Value>,
+    ) -> (StatusCode, Json<serde_json::Value>) {
+        manager.lock().unwrap().deleted.push((id, body));
+        // The manager answers a delete with 202 Accepted and tears down in the background.
+        (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({
+                "action": "cleanup",
+                "message": "Deployment deletion accepted"
+            })),
+        )
+    }
+
+    /// `alien dev destroy` finds the deployment by name on the dev manager, asks for a cleanup
+    /// delete, and returns only once the deployment is gone from the list. A name the manager
+    /// doesn't know is an error.
+    #[tokio::test]
+    async fn destroy_local_deployment_deletes_by_name_and_waits() {
+        let manager: SharedDestroyManager = Arc::default();
+        let app = Router::new()
+            .route("/v1/deployments", get(destroy_manager_list))
+            .route("/v1/deployments/{id}/delete", post(destroy_manager_delete))
+            .with_state(manager.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        destroy_local_deployment(port, "api", false)
+            .await
+            .expect("the named deployment is deleted");
+        {
+            let manager = manager.lock().unwrap();
+            assert_eq!(
+                manager.deleted,
+                vec![(
+                    "dep_1".to_string(),
+                    serde_json::json!({ "action": "cleanup" })
+                )]
+            );
+            // One poll still saw the deployment while cleanup ran; the command kept waiting
+            // until a second poll saw it gone.
+            assert_eq!(manager.lists_after_delete, 2);
+        }
+
+        let error = destroy_local_deployment(port, "missing", false)
+            .await
+            .expect_err("an unknown name is refused");
+        assert!(
+            error
+                .message
+                .contains("No local deployment is named 'missing'"),
+            "{error:?}"
+        );
     }
 
     /// `alien dev deploy --input` reaches the dev manager with the create request; a rerun

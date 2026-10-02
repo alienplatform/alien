@@ -23,7 +23,7 @@ use chrono::Utc;
 use reqwest::Client;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 /// Run the sync loop
@@ -242,6 +242,7 @@ async fn sync_with_manager(
         deployment_id: deployment_id.clone(),
         session: sync_session.clone(),
         supports_execution_claims: true,
+        supports_tunnels: true,
         execution_claim,
         current_state: Some(deployment_state),
         heartbeats,
@@ -343,6 +344,22 @@ async fn sync_with_manager(
         }
     }
 
+    // The manager advertises its tunnel endpoint on every sync; an absent URL
+    // (older manager, or tunnels disabled) stops the tunnel loop from dialing.
+    if let Err(e) = state
+        .db
+        .set_tunnel_url(sync_response.tunnel_url.as_deref())
+        .await
+    {
+        error!(error = %e, "Failed to persist tunnel_url");
+    }
+
+    if let Some(image) = sync_response.target_operator_image.as_deref() {
+        if let Err(e) = crate::self_update::apply(state, image).await {
+            warn!(error = %e, image, "Operator self-update failed; will retry on the next sync");
+        }
+    }
+
     // Persist the target bundle set so a restart doesn't lose it for a full
     // extra tick — the sync_bundles() call above (built from THIS response,
     // used on the NEXT request) reads it back via get_target_operations_bundle_set.
@@ -387,62 +404,75 @@ async fn sync_with_manager(
 
     if has_update {
         if let Some(target_deployment) = durable_target {
-            let now = Utc::now().to_rfc3339();
-
-            // Get current deployment state (or create default)
-            let mut deployment_state =
-                state.db.get_deployment_state().await?.unwrap_or_else(|| {
-                    alien_core::DeploymentState {
-                        platform: state.config.platform,
-                        status: alien_core::DeploymentStatus::Pending,
-                        current_release: None,
-                        target_release: None,
-                        stack_state: None,
-                        error: None,
-                        environment_info: None,
-                        runtime_metadata: None,
-                        retry_requested: false,
-                        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
-                    }
-                });
-
-            // Update target_release in state
-            accept_target_release(
-                &mut deployment_state,
-                target_deployment.release_info.clone(),
-            );
-
-            // Save state and config
-            state.db.set_deployment_state(&deployment_state).await?;
-            state
-                .db
-                .set_deployment_config(&target_deployment.config)
-                .await?;
-
-            // Handle deployment approval if required
-            if state.config.requires_deployment_approval() {
-                let apr_id = format!("apr_{}", Uuid::new_v4().simple());
-                let approval = Approval {
-                    id: apr_id.clone(),
-                    release_info: Some(target_deployment.release_info.clone()),
-                    deployment_config: target_deployment.config.clone(),
-                    status: ApprovalStatus::Pending,
-                    reason: None,
-                    created_at: now,
-                    decided_at: None,
-                    decided_by: None,
-                };
-                state.db.create_approval(&approval).await?;
-                info!(
-                    approval_id = %apr_id,
-                    release_id = %target_deployment.release_info.release_id.as_deref().unwrap_or_default(),
-                    "Created approval for new target release"
-                );
-            }
+            accept_target(state, &target_deployment).await?;
         }
     }
 
     Ok(has_update || state_hydrated)
+}
+
+/// Make `target_deployment` the Operator's target: record the release as the
+/// target release, store its configuration, and open an approval when
+/// updates need one. Sync and air-gapped bundles both deliver targets here.
+pub(crate) async fn accept_target(
+    state: &OperatorState,
+    target_deployment: &alien_core::sync::TargetDeployment,
+) -> crate::error::Result<()> {
+    let now = Utc::now().to_rfc3339();
+
+    // Get current deployment state (or create default)
+    let mut deployment_state =
+        state
+            .db
+            .get_deployment_state()
+            .await?
+            .unwrap_or_else(|| alien_core::DeploymentState {
+                platform: state.config.platform,
+                status: alien_core::DeploymentStatus::Pending,
+                current_release: None,
+                target_release: None,
+                stack_state: None,
+                error: None,
+                environment_info: None,
+                runtime_metadata: None,
+                retry_requested: false,
+                protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            });
+
+    // Update target_release in state
+    accept_target_release(
+        &mut deployment_state,
+        target_deployment.release_info.clone(),
+    );
+
+    // Save state and config
+    state.db.set_deployment_state(&deployment_state).await?;
+    state
+        .db
+        .set_deployment_config(&target_deployment.config)
+        .await?;
+
+    // Handle deployment approval if required
+    if state.config.requires_deployment_approval() {
+        let apr_id = format!("apr_{}", Uuid::new_v4().simple());
+        let approval = Approval {
+            id: apr_id.clone(),
+            release_info: Some(target_deployment.release_info.clone()),
+            deployment_config: target_deployment.config.clone(),
+            status: ApprovalStatus::Pending,
+            reason: None,
+            created_at: now,
+            decided_at: None,
+            decided_by: None,
+        };
+        state.db.create_approval(&approval).await?;
+        info!(
+            approval_id = %apr_id,
+            release_id = %target_deployment.release_info.release_id.as_deref().unwrap_or_default(),
+            "Created approval for new target release"
+        );
+    }
+    Ok(())
 }
 
 fn accept_target_release(

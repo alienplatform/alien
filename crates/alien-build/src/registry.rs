@@ -151,10 +151,17 @@ fn parse(image: &str) -> Result<Reference> {
 
 fn is_missing_manifest(error: &OciDistributionError) -> bool {
     match error {
-        OciDistributionError::RegistryError { envelope, .. } => envelope
-            .errors
-            .iter()
-            .any(|error| error.code == OciErrorCode::ManifestUnknown),
+        // Some registries, including the one Alien embeds, answer every 404
+        // with BLOB_UNKNOWN; on a manifest lookup it can only mean the
+        // manifest isn't there.
+        OciDistributionError::RegistryError { envelope, .. } => {
+            envelope.errors.iter().any(|error| {
+                matches!(
+                    error.code,
+                    OciErrorCode::ManifestUnknown | OciErrorCode::BlobUnknown
+                )
+            })
+        }
         OciDistributionError::ServerError { code, .. } => *code == 404,
         OciDistributionError::ImageManifestNotFoundError(_) => true,
         _ => false,
@@ -169,6 +176,7 @@ fn has_manifests_field(manifest: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use container_registry::ContainerRegistry;
     use httpmock::prelude::*;
     use oci_client::client::ClientProtocol;
     use oci_client::secrets::RegistryAuth;
@@ -271,6 +279,22 @@ mod tests {
         )
         .await
         .expect("a missing tag is an answer, not a failure");
+        assert_eq!(found, None);
+    }
+
+    #[tokio::test]
+    async fn a_tag_missing_from_the_embedded_registry_is_absent() {
+        // What `alien release` asks before reusing a cached push against a
+        // manager whose registry was reset.
+        let registry = ContainerRegistry::builder()
+            .build_for_testing()
+            .run_in_background();
+        let found = manifest_digest(
+            &format!("{}/artifacts/default:api-gone", registry.bound_addr()),
+            &options(),
+        )
+        .await
+        .expect("a missing tag is not a lookup failure");
         assert_eq!(found, None);
     }
 

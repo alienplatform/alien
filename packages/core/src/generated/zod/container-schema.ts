@@ -9,6 +9,7 @@ import { ContainerCodeSchema } from "./container-code-schema.js";
 import { ContainerGpuSpecSchema } from "./container-gpu-spec-schema.js";
 import { ContainerPortSchema } from "./container-port-schema.js";
 import { ContainerSecuritySchema } from "./container-security-schema.js";
+import { ContainerTunnelSchema } from "./container-tunnel-schema.js";
 import { HealthCheckSchema } from "./health-check-schema.js";
 import { KubernetesHttpProbeSchema } from "./kubernetes-http-probe-schema.js";
 import { KubernetesSecretMountSchema } from "./kubernetes-secret-mount-schema.js";
@@ -75,7 +76,10 @@ get "security"(){
                 return z.union([ContainerSecuritySchema, z.null()]).optional()
               },
 "stateful": z.optional(z.boolean().describe("Whether container is stateful (gets stable ordinals, optional persistent volumes)")),
-"stopGracePeriodSeconds": z.int().min(1).max(86400).describe("Grace period in seconds for stopping replicas during updates, drains, and deletes.\n\nWhen omitted, the runtime backend applies its default. Valid values are\n1 second through 24 hours.").nullish()
+"stopGracePeriodSeconds": z.int().min(1).max(86400).describe("Grace period in seconds for stopping replicas during updates, drains, and deletes.\n\nWhen omitted, the runtime backend applies its default. Valid values are\n1 second through 24 hours.").nullish(),
+get "tunnel"(){
+                return z.union([ContainerTunnelSchema, z.null()]).optional()
+              }
     }).describe("Container resource for running long-running container workloads.\n\nA Container defines a deployable unit that runs on a ComputeCluster.\nThe managed container backend handles scheduling replicas across machines,\nautoscaling based on various metrics, and service discovery.\n\n## Example\n\n```rust\nuse alien_core::{Container, ContainerCode, ResourceSpec, ContainerAutoscaling, PublicEndpoint, ExposeProtocol};\n\nlet container = Container::new(\"api\".to_string())\n    .cluster(\"compute\".to_string())\n    .code(ContainerCode::Image {\n        image: \"myapp:latest\".to_string(),\n    })\n    .cpu(ResourceSpec { min: \"0.5\".to_string(), desired: \"1\".to_string() })\n    .memory(ResourceSpec { min: \"512Mi\".to_string(), desired: \"1Gi\".to_string() })\n    .port(8080)\n    .public_endpoint(PublicEndpoint {\n        name: \"api\".to_string(),\n        port: 8080,\n        protocol: ExposeProtocol::Http,\n        host_label: None,\n        wildcard_subdomains: false,\n    })\n    .autoscaling(ContainerAutoscaling {\n        min: 2,\n        desired: 3,\n        max: 10,\n        target_cpu_percent: Some(70.0),\n        target_memory_percent: None,\n        target_http_in_flight_per_replica: Some(100),\n        max_http_p95_latency_ms: None,\n    })\n    .permissions(\"container-execution\".to_string())\n    .build();\n```")
 
 export type Container = z.infer<typeof ContainerSchema>

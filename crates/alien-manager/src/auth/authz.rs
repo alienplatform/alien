@@ -36,6 +36,16 @@ pub trait Authz: Send + Sync {
     fn can_create_release(&self, subject: &Subject, project_id: &str) -> bool;
     fn can_read_release(&self, subject: &Subject, release: &ReleaseRecord) -> bool;
     fn can_export_release(&self, subject: &Subject, release: &ReleaseRecord) -> bool;
+    /// Create, delete, promote to, and assign deployments to release
+    /// channels. Denied unless an implementation decides otherwise, like
+    /// every capability added after the trait shipped.
+    fn can_manage_release_channels(&self, _subject: &Subject) -> bool {
+        false
+    }
+    /// List release channels.
+    fn can_read_release_channels(&self, _subject: &Subject) -> bool {
+        false
+    }
 
     // -- Deployments -------------------------------------------------------
     fn can_create_deployment(&self, subject: &Subject, ctx: DeploymentCreateCtx<'_>) -> bool;
@@ -124,4 +134,11 @@ pub trait Authz: Send + Sync {
     /// structural "is this repo in this deployment's stack" check done by the
     /// handler.
     fn can_act_on_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
+
+    /// Whether `subject` may send requests into the deployment through the
+    /// tunnel. Defaults to the command-dispatch rule: both run caller-chosen
+    /// requests against code inside the deployment.
+    fn can_call_tunnel(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool {
+        self.can_dispatch_command(subject, deployment)
+    }
 }

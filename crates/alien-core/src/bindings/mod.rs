@@ -239,9 +239,9 @@ mod tests {
 
     #[test]
     fn test_serialize_binding_for_template() {
-        let binding = StorageBinding::S3(S3StorageBinding {
-            bucket_name: BindingValue::expression(json!({"Ref": "MyBucket"})),
-        });
+        let binding = StorageBinding::S3(S3StorageBinding::bucket(BindingValue::expression(
+            json!({"Ref": "MyBucket"}),
+        )));
 
         let env_vars = serialize_binding_for_template("TEST", &binding).unwrap();
 
