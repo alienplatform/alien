@@ -870,11 +870,32 @@ pub const MAX_BATCH_SIZE: usize = 10;
 /// - Consistent across all platforms
 pub const LEASE_SECONDS: u64 = 30;
 
+/// Outcome for one input message, in the same order as the batch inputs.
+/// Unknown delivery may have reached the queue: retrying can produce duplicates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum QueueSendResult {
+    /// The provider confirmed acceptance.
+    Sent,
+    /// The message was rejected without being accepted.
+    Rejected { code: String, message: String },
+    /// Acceptance could not be established (for example a network timeout).
+    Unknown { code: String, message: String },
+}
+
 /// A trait for queue bindings providing minimal, portable queue operations.
 #[async_trait]
 pub trait Queue: Binding {
     /// Send a message to the specified queue
     async fn send(&self, queue: &str, message: MessagePayload) -> Result<()>;
+
+    /// Send a batch using provider-native batching. Returns one outcome per input.
+    /// An outer error means no messages were attempted. No automatic retries.
+    async fn send_batch(
+        &self,
+        queue: &str,
+        messages: Vec<MessagePayload>,
+    ) -> Result<Vec<QueueSendResult>>;
 
     /// Receive up to `max_messages` (1..=10) from the specified queue
     async fn receive(&self, queue: &str, max_messages: usize) -> Result<Vec<QueueMessage>>;

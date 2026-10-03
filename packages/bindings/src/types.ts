@@ -225,8 +225,18 @@ export interface QueueMessage {
   attempt: number
 }
 
+/** One outcome per input. Retrying unknown delivery can produce duplicates. */
+export type QueueSendResult =
+  | { status: "sent" }
+  | { status: "rejected"; code: string; message: string }
+  | { status: "unknown"; code: string; message: string }
+
 /** A resolved queue binding. */
 export interface Queue {
+  /** Send JSON messages using native batching. Results retain input order. */
+  sendBatch(messages: unknown[]): Promise<QueueSendResult[]>
+  /** Send raw text messages using native batching. */
+  sendBatchText(messages: string[]): Promise<QueueSendResult[]>
   /** Send a JSON message (the object is serialized with `JSON.stringify`). */
   send(message: unknown): Promise<void>
   /** Send a raw text message. */

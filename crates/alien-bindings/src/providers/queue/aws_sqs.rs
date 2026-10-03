@@ -1,7 +1,10 @@
+use super::{batch_end, encode_batch};
 use crate::error::{ErrorData, Result};
+use crate::traits::QueueSendResult;
 use crate::traits::{
     Binding, MessagePayload, Queue, QueueMessage, MAX_BATCH_SIZE, MAX_MESSAGE_BYTES,
 };
+use alien_aws_clients::sqs::SendMessageBatchEntry;
 use alien_aws_clients::sqs::{
     DeleteMessageRequest, Message, ReceiveMessageRequest, SendMessageRequest, SqsApi, SqsClient,
 };
@@ -71,6 +74,73 @@ impl Queue for AwsSqsQueue {
                     reason: "Failed to send message".to_string(),
                 })
             })
+    }
+
+    async fn send_batch(
+        &self,
+        _queue: &str,
+        messages: Vec<MessagePayload>,
+    ) -> Result<Vec<QueueSendResult>> {
+        let (entries, mut results) = encode_batch(messages)?;
+        let mut start = 0;
+        while start < entries.len() {
+            let end = batch_end(&entries, start, 10, 256 * 1024);
+            let chunk = &entries[start..end];
+            let request = chunk
+                .iter()
+                .map(|(index, body)| SendMessageBatchEntry {
+                    id: index.to_string(),
+                    message_body: body.clone(),
+                })
+                .collect();
+            match self
+                .client
+                .send_message_batch(&self.queue_url, request)
+                .await
+            {
+                Ok(response) => {
+                    let response = response.send_message_batch_result;
+                    for (index, _) in chunk {
+                        let id = index.to_string();
+                        let successes = response
+                            .successful
+                            .iter()
+                            .filter(|entry| entry.id == id)
+                            .count();
+                        let failures = response
+                            .failed
+                            .iter()
+                            .filter(|entry| entry.id == id)
+                            .collect::<Vec<_>>();
+                        results[*index] = match (successes, failures.as_slice()) {
+                            (1, []) => QueueSendResult::Sent,
+                            (0, [failure]) => QueueSendResult::Rejected {
+                                code: failure.code.clone(),
+                                message: failure
+                                    .message
+                                    .clone()
+                                    .unwrap_or_else(|| "SQS rejected the message".to_string()),
+                            },
+                            _ => QueueSendResult::Unknown {
+                                code: "QUEUE_BATCH_RESPONSE_INVALID".to_string(),
+                                message: "SQS returned missing or duplicate entry outcomes"
+                                    .to_string(),
+                            },
+                        };
+                    }
+                }
+                Err(error) => {
+                    for (index, _) in chunk {
+                        results[*index] = QueueSendResult::Unknown {
+                            code: error.code.clone(),
+                            message: error.to_string(),
+                        };
+                    }
+                }
+            }
+            start = end;
+        }
+        Ok(results)
     }
 
     async fn receive(&self, _queue: &str, max_messages: usize) -> Result<Vec<QueueMessage>> {

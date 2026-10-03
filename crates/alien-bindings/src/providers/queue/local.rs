@@ -327,6 +327,30 @@ impl Queue for LocalQueue {
             .await
     }
 
+    async fn send_batch(
+        &self,
+        queue: &str,
+        messages: Vec<MessagePayload>,
+    ) -> Result<Vec<crate::traits::QueueSendResult>> {
+        let (_, mut results) = super::encode_batch(messages.clone())?;
+        for (index, message) in messages.into_iter().enumerate() {
+            if matches!(
+                results[index],
+                crate::traits::QueueSendResult::Rejected { .. }
+            ) {
+                continue;
+            }
+            results[index] = match self.send(queue, message).await {
+                Ok(()) => crate::traits::QueueSendResult::Sent,
+                Err(error) => crate::traits::QueueSendResult::Unknown {
+                    code: error.code.clone(),
+                    message: error.to_string(),
+                },
+            };
+        }
+        Ok(results)
+    }
+
     async fn receive(&self, _queue: &str, max_messages: usize) -> Result<Vec<QueueMessage>> {
         if max_messages == 0 || max_messages > MAX_BATCH_SIZE {
             return Err(AlienError::new(ErrorData::BindingSetupFailed {
@@ -480,6 +504,46 @@ mod tests {
             .await
             .expect("Failed to create LocalQueue");
         (queue, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn batch_preserves_payloads_and_reports_each_rejection() {
+        use crate::traits::QueueSendResult;
+        let (queue, _temp_dir) = create_test_queue().await;
+        let results = queue
+            .send_batch(
+                "q",
+                vec![
+                    MessagePayload::Json(serde_json::json!({"order": 1})),
+                    MessagePayload::Text("x".repeat(MAX_MESSAGE_BYTES + 1)),
+                    MessagePayload::Text("plain".to_string()),
+                ],
+            )
+            .await
+            .expect("batch");
+        assert!(matches!(
+            results.as_slice(),
+            [
+                QueueSendResult::Sent,
+                QueueSendResult::Rejected { .. },
+                QueueSendResult::Sent
+            ]
+        ));
+        let received = queue.receive("q", 10).await.expect("receive");
+        assert_eq!(received.len(), 2);
+        assert!(
+            matches!(&received[0].payload, MessagePayload::Json(value) if value == &serde_json::json!({"order": 1}))
+        );
+        assert!(matches!(&received[1].payload, MessagePayload::Text(value) if value == "plain"));
+        for message in received {
+            queue.ack("q", &message.receipt_handle).await.expect("ack");
+        }
+        assert!(queue.receive("q", 10).await.expect("empty").is_empty());
+        assert!(queue
+            .send_batch("q", vec![])
+            .await
+            .expect("empty batch")
+            .is_empty());
     }
 
     #[tokio::test]

@@ -449,6 +449,18 @@ impl Queue for RefreshingQueue {
         self.resolver.queue().await?.send(queue, message).await
     }
 
+    async fn send_batch(
+        &self,
+        queue: &str,
+        messages: Vec<MessagePayload>,
+    ) -> Result<Vec<crate::traits::QueueSendResult>> {
+        self.resolver
+            .queue()
+            .await?
+            .send_batch(queue, messages)
+            .await
+    }
+
     async fn receive(&self, queue: &str, max_messages: usize) -> Result<Vec<QueueMessage>> {
         self.resolver
             .queue()

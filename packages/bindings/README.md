@@ -199,3 +199,23 @@ release version, injects the exact-version `optionalDependencies` into this
 package's published manifest, and publishes the platform packages before the
 wrapper. Pinning the exact version is what guarantees a published wrapper only
 ever loads the matching-version platform addon.
+
+### Queue batches
+
+`queue("events").sendBatch([{ order: 1 }, { order: 2 }])` sends JSON messages;
+`sendBatchText(["first", "second"])` sends text. Python exposes `send_batch` and
+`send_batch_text` on the queue handle. Rust exposes `Queue::send_batch` and
+`BoundQueue::send_batch`.
+
+Each returns one outcome per input in input order: `sent` means the provider
+confirmed acceptance, `rejected` includes a code and message for a definite
+rejection, and `unknown` includes a code and message when delivery could not be
+established. Retrying unknown outcomes can produce duplicates. There are no
+automatic retries or transaction guarantees across a batch. An exception before
+outcomes are returned means no sends were attempted.
+
+Messages must contain 1–65,536 UTF-8 bytes after serialization. Requests are
+chunked using SQS SendMessageBatch (up to ten entries and 256KiB), Pub/Sub publish,
+and Service Bus HTTP batch send. Service Bus also counts JSON envelope/escaping
+against the 256KiB batch limit, so heavily escaped text may be rejected. Empty input
+returns an empty result. Existing scoped publisher permissions cover batching.
