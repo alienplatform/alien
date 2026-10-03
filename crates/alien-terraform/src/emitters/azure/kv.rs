@@ -9,8 +9,7 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
-        downcast, emit_remote_bindings_role_definitions, permission_context,
-        remote_bindings_role_label, required_label,
+        downcast, permission_context, remote_bindings_role_label, required_label,
     },
     expr,
 };
@@ -163,7 +162,6 @@ fn emit_remote_access(
         .context(ErrorData::GenericError {
             message: "Generate remote KV table grants".to_string(),
         })?;
-    emit_remote_bindings_role_definitions(fragment, permission_set)?;
     for (index, binding) in plan.bindings.iter().enumerate() {
         let role_id = match &binding.role_definition {
             AzureRoleDefinitionRef::Predefined { role_definition_id } => {

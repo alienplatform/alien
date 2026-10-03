@@ -750,3 +750,31 @@ fn role_inline_policy_documents<'a>(
     );
     documents
 }
+
+#[test]
+fn aws_remote_kv_setup_passes_cloudformation_validation() {
+    let mut stack = Stack::new("acme-cache".to_string())
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_remote_access(
+            Kv::new("cache".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_remote_access(
+            Kv::new("sessions".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    for id in ["cache", "sessions"] {
+        stack.resources.get_mut(id).unwrap().dependencies =
+            vec![ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access")];
+    }
+    render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "remote KV setup",
+    );
+}
