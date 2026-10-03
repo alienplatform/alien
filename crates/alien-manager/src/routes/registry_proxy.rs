@@ -732,6 +732,11 @@ async fn proxy_pull(
         Ok(oci) => oci,
         Err(refused) => return refused,
     };
+    // Capability credentials pull nothing, charts and the Operator image
+    // included, so they are refused before the pull is routed.
+    if let Err(refused) = refuse_capability_pull(&subject) {
+        return refused;
+    }
     if oci_path_str.starts_with(super::charts::CHART_NAMESPACE) {
         return super::charts::serve(&state, &subject, &method, oci_path_str).await;
     }
@@ -1248,8 +1253,9 @@ fn require_push_auth(state: &AppState, subject: &Subject, repo_name: &str) -> Re
     }
 }
 
-/// A project-scoped capability shares the scope whose pulls skip repo validation below, so it is
-/// refused before that match.
+/// Credentials that exist to provision or push images pull nothing. A project-scoped capability
+/// shares the scope whose pulls skip repo validation, so it is refused before that match, and
+/// before charts and the Operator image are routed.
 fn refuse_capability_pull(subject: &Subject) -> Result<(), Response> {
     if subject.role == Role::ImageRepositoryProvisioner {
         return Err(oci_error(

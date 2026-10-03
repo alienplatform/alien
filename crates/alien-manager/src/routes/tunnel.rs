@@ -66,7 +66,12 @@ fn registry(state: &AppState) -> &Arc<TunnelRegistry> {
 // Operator side
 // ---------------------------------------------------------------------------
 
-/// Accept a tunnel connection from an operator (deployment token required).
+/// Accept a tunnel connection from a deployment's Operator.
+///
+/// Whoever holds the connection receives every request sent through the
+/// deployment's tunnels, so it takes the deployment's own token with the role
+/// that may sync it. A deployment-scoped token with another role (a viewer,
+/// a telemetry writer, a binding resolver) is refused.
 async fn connect(State(state): State<AppState>, mut request: Request) -> Response {
     let subject = match auth::require_auth(&state, request.headers()).await {
         Ok(subject) => subject,
@@ -79,6 +84,19 @@ async fn connect(State(state): State<AppState>, mut request: Request) -> Respons
                 .into_response()
         }
     };
+    let deployment = match state
+        .deployment_store
+        .get_deployment(&subject, &deployment_id)
+        .await
+    {
+        Ok(Some(deployment)) => deployment,
+        Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
+        Err(e) => return e.into_response(),
+    };
+    if !state.authz.can_sync_deployment(&subject, &deployment) {
+        return ErrorData::forbidden("Only the deployment's Operator can open its tunnel")
+            .into_response();
+    }
 
     let headers = request.headers();
     let header_has = |name: HeaderName, needle: &str| {
