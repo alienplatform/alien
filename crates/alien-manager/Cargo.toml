@@ -119,6 +119,7 @@ futures = { workspace = true }
 fs2 = { workspace = true }
 
 [dev-dependencies]
+alien-tunnel = { workspace = true, features = ["manager", "operator"] }
 alien-commands = { workspace = true, features = ["test-utils"] }
 alien-infra = { workspace = true, features = ["test-utils"] }
 mockall = { workspace = true }
