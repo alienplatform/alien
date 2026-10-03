@@ -58,6 +58,16 @@ pub fn is_deployer_secret_input(input: &StackInputDefinition) -> bool {
         && input.provided_by.contains(&StackInputProvider::Deployer)
 }
 
+/// Why a setup path refuses a value for the deployer secret `name` (its label
+/// or id), with what to do instead.
+pub fn deployer_secret_value_refusal(name: &str) -> String {
+    format!(
+        "'{name}' is a deployer secret: its value goes into your own secret store and never \
+         through Alien. Do not pass it here; write it into the deployment's secrets vault \
+         instead (the deployment status shows the secret's name and the command that writes it)."
+    )
+}
+
 /// A deployer secret input whose value lives in the customer's secret store.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeployerSecretSlot<'a> {

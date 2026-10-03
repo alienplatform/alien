@@ -2,7 +2,10 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::{can_prompt, print_json, prompt_text};
 use crate::ui::{accent, command, contextual_heading, dim_label, success_line, FixedSteps};
-use alien_core::{Platform, Stack, StackInputDefinition, StackInputKind, StackInputProvider};
+use alien_core::{
+    is_deployer_secret_input, Platform, Stack, StackInputDefinition, StackInputKind,
+    StackInputProvider,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Parser, ValueEnum};
 use sha2::{Digest, Sha256};
@@ -791,7 +794,12 @@ fn collect_stack_input_values(
         }
     }
 
-    for input in inputs.iter().filter(|input| input.required) {
+    // A secret the deployer may also provide is optional here: without a
+    // developer value, the deployer writes it into their own secret store.
+    for input in inputs
+        .iter()
+        .filter(|input| input.required && !is_deployer_secret_input(input))
+    {
         if !raw_values.contains_key(&input.id) {
             if json || !can_prompt() {
                 return Err(AlienError::new(ErrorData::ValidationError {
@@ -943,7 +951,7 @@ fn validate_string_stack_input(input: &StackInputDefinition, value: &str) -> Res
 fn print_required_developer_inputs(inputs: &[StackInputDefinition]) {
     let required = inputs
         .iter()
-        .filter(|input| input.required)
+        .filter(|input| input.required && !is_deployer_secret_input(input))
         .collect::<Vec<_>>();
     if required.is_empty() {
         return;
@@ -1879,6 +1887,28 @@ mod tests {
         .expect("typed values should parse");
 
         assert_eq!(values.len(), 3);
+    }
+
+    #[test]
+    fn a_secret_the_deployer_may_provide_is_optional_for_the_developer() {
+        let mut shared = input("apiKey", StackInputKind::Secret, true);
+        shared.provided_by = vec![StackInputProvider::Developer, StackInputProvider::Deployer];
+
+        let values =
+            collect_stack_input_values(&[shared.clone()], &[], &[], &[Platform::Aws], true)
+                .expect("the deployer writes it into their secret store instead");
+        assert!(values.is_empty());
+
+        // A developer value still takes today's path.
+        let values = collect_stack_input_values(
+            &[shared],
+            &[],
+            &["apiKey=developer-value".to_string()],
+            &[Platform::Aws],
+            true,
+        )
+        .expect("developer value");
+        assert_eq!(values.len(), 1);
     }
 
     #[test]

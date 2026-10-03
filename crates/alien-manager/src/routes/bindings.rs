@@ -1050,6 +1050,7 @@ fn deployment_status_allows_remote_bindings(status: Option<DeploymentStatus>) ->
             | DeploymentStatus::InitialSetupFailed
             | DeploymentStatus::Provisioning
             | DeploymentStatus::WaitingForMachines
+            | DeploymentStatus::WaitingForSecrets
             | DeploymentStatus::ProvisioningFailed
             | DeploymentStatus::DeletePending
             | DeploymentStatus::Deleting
