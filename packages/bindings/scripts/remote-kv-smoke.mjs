@@ -37,7 +37,9 @@ try {
   assert.equal(await workloadValue(), null)
   assert.equal(await cache.setJson(key, { renewed: true }, { ifVersion: null }), true)
   assert.deepEqual(await workloadValue(), { renewed: true })
-  console.log("Remote TS KV: 32KB write, workload read, conditional write, TTL and expired-row takeover passed")
+  console.log(
+    "Remote TS KV: 32KB write, workload read, conditional write, TTL and expired-row takeover passed",
+  )
 } finally {
   await cache.delete(key)
 }
