@@ -151,6 +151,10 @@ function fakeRemoteAddon() {
 
     storage = resolveStorage
 
+    async queue(): Promise<RawQueueHandle> {
+      throw new Error("unused")
+    }
+
     kv = resolveKv
 
     key = resolveKey

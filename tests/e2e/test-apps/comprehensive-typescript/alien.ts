@@ -97,7 +97,7 @@ let stackBuilder = new alien.Stack("alien-ts-stack")
   .add(vault, "frozen")
   .add(kv, "frozen", { remoteAccess: supportsRemoteStorage })
   .add(queue, "frozen")
-  .add(eventsQueue, "frozen")
+  .add(eventsQueue, "frozen", { remoteAccess: supportsRemoteStorage })
   .add(ai, "frozen")
 if (postgres) {
   stackBuilder = stackBuilder.add(postgres, "live")

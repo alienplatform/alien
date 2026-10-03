@@ -196,6 +196,14 @@ impl RemoteBindingsHandle {
         Ok(RemoteStorageHandle::new(storage, name))
     }
 
+    /// Resolve a queue with send-only cloud permissions.
+    #[napi]
+    pub async fn queue(&self, name: String) -> napi::Result<QueueHandle> {
+        Ok(QueueHandle::new(
+            self.inner.queue(&name).await.map_err(map_alien_error)?,
+        ))
+    }
+
     /// Resolve the key-value binding named `name`.
     #[napi]
     pub async fn kv(&self, name: String) -> napi::Result<KvHandle> {

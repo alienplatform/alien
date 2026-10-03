@@ -138,6 +138,15 @@ impl RemoteBindingsHandle {
         })
     }
 
+    fn queue<'py>(&self, py: Python<'py>, name: String) -> PyResult<Bound<'py, PyAny>> {
+        let bindings = self.inner.clone();
+        future_into_py(py, async move {
+            Ok(QueueHandle {
+                inner: bindings.queue(&name).await.map_err(map_alien_error)?,
+            })
+        })
+    }
+
     fn kv<'py>(&self, py: Python<'py>, name: String) -> PyResult<Bound<'py, PyAny>> {
         let bindings = self.inner.clone();
         future_into_py(py, async move {

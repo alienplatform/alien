@@ -1312,3 +1312,55 @@ fn remote_kv_requires_running_frozen_table_and_matching_platform() {
     }
     assert!(remote_kv_binding(&deployment, "missing").is_err());
 }
+
+#[test]
+fn remote_queue_requires_running_frozen_queue_and_matching_platform() {
+    let binding = serde_json::json!({
+        "service": "sqs", "queueUrl": "https://sqs.us-east-1.amazonaws.com/123456789012/events"
+    });
+    let state = stack_state_with_resource(
+        Queue::RESOURCE_TYPE.as_ref(),
+        Some(ResourceLifecycle::Frozen),
+        ResourceStatus::Running,
+        Some(binding),
+    );
+    let mut deployment = deployment(state);
+    match remote_queue_binding(&deployment, "files").expect("resolve enabled table") {
+        RemoteQueueBinding::Aws(binding) => {
+            assert!(binding.queue_url.ends_with("/events"));
+        }
+        _ => panic!("expected SQS"),
+    }
+    deployment.platform = Platform::Gcp;
+    assert!(remote_queue_binding(&deployment, "files").is_err());
+    deployment.platform = Platform::Aws;
+    for (lifecycle, status, params) in [
+        (Some(ResourceLifecycle::Live), ResourceStatus::Running, true),
+        (
+            Some(ResourceLifecycle::Frozen),
+            ResourceStatus::Updating,
+            true,
+        ),
+        (
+            Some(ResourceLifecycle::Frozen),
+            ResourceStatus::Running,
+            false,
+        ),
+    ] {
+        let mut invalid = deployment.clone();
+        let resource = invalid
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .get_mut("files")
+            .unwrap();
+        resource.lifecycle = lifecycle;
+        resource.status = status;
+        if !params {
+            resource.remote_binding_params = None;
+        }
+        assert!(remote_queue_binding(&invalid, "files").is_err());
+    }
+    assert!(remote_queue_binding(&deployment, "missing").is_err());
+}

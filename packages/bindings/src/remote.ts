@@ -3,11 +3,12 @@ import { unwrapNapiError } from "./errors.js"
 import {
   createRemoteKeyFactory,
   createRemoteKvFactory,
+  createRemoteQueueFactory,
   createRemoteSandboxFactory,
   createRemoteStorageFactory,
 } from "./factories.js"
 import { loadAddon } from "./loader.js"
-import type { Key, Kv, RemoteStorage, Sandbox } from "./types.js"
+import type { Key, Kv, RemoteQueue, RemoteStorage, Sandbox } from "./types.js"
 
 const aiBindingSchema = z.discriminatedUnion("service", [
   z.object({ service: z.literal("bedrock"), region: z.string().min(1) }),
@@ -64,6 +65,7 @@ export interface RemoteCustomerBindingsOptions {
 /** Remote bindings for an existing deployment. */
 export class Bindings {
   readonly #storage: (name: string) => RemoteStorage
+  readonly #queue: (name: string) => RemoteQueue
   readonly #kv: (name: string) => Kv
   readonly #key: (name: string) => Key
   readonly #ai: () => Promise<RemoteAiLease>
@@ -71,12 +73,14 @@ export class Bindings {
 
   private constructor(
     storage: (name: string) => RemoteStorage,
+    queue: (name: string) => RemoteQueue,
     kv: (name: string) => Kv,
     key: (name: string) => Key,
     ai: () => Promise<RemoteAiLease>,
     sandbox: (name: string) => Sandbox,
   ) {
     this.#storage = storage
+    this.#queue = queue
     this.#kv = kv
     this.#key = key
     this.#ai = ai
@@ -119,6 +123,7 @@ export class Bindings {
   ): Bindings {
     return new Bindings(
       createRemoteStorageFactory(bindings),
+      createRemoteQueueFactory(bindings),
       createRemoteKvFactory(bindings),
       createRemoteKeyFactory(bindings),
       async () => {
@@ -140,6 +145,11 @@ export class Bindings {
   /** Resolve a remote Storage binding by resource name. */
   storage(name: string): RemoteStorage {
     return this.#storage(name)
+  }
+
+  /** Resolve a queue for sending messages into the customer's cloud. */
+  queue(name: string): RemoteQueue {
+    return this.#queue(name)
   }
 
   /** Resolve a remote KV binding by resource name. */

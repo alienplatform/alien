@@ -4,6 +4,8 @@
 //! short-lived, deployment-scoped manager capability. Binding topology and
 //! short-lived cloud credentials come from that manager's resource resolver.
 
+use crate::traits::Queue;
+use crate::BoundQueue;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -18,8 +20,8 @@ use tracing::debug;
 use crate::error::{ErrorData, Result};
 use crate::provider::BindingsProvider;
 use crate::refreshing::{
-    KeyProviderApi, KvProviderApi, RefreshingKey, RefreshingKv, RefreshingStorage,
-    StorageProviderApi,
+    KeyProviderApi, KvProviderApi, QueueProviderApi, RefreshingKey, RefreshingKv, RefreshingQueue,
+    RefreshingStorage, StorageProviderApi,
 };
 use crate::traits::{BindingsProviderApi, Key, Kv, Sandbox, Storage};
 
@@ -210,6 +212,13 @@ impl RemoteBindingsProvider {
 impl StorageProviderApi for RemoteBindingsProvider {
     async fn load_storage(&self, binding_name: &str) -> Result<Arc<dyn Storage>> {
         self.resolver(binding_name).await.storage().await
+    }
+}
+
+#[async_trait]
+impl QueueProviderApi for RemoteBindingsProvider {
+    async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>> {
+        self.resolver(binding_name).await.queue().await
     }
 }
 
@@ -446,6 +455,19 @@ impl RemoteBindings {
         )))
     }
 
+    /// Loads a remote queue with send-only cloud permissions and refreshed credentials.
+    pub async fn queue(&self, resource_id: &str) -> Result<BoundQueue> {
+        let provider = self
+            .source
+            .provider(RemoteBindingCapability::Storage)
+            .await?;
+        provider.load_queue(resource_id).await?;
+        Ok(BoundQueue::new(
+            Arc::new(RefreshingQueue::new(provider, resource_id.to_string())),
+            resource_id,
+        ))
+    }
+
     /// Loads a KV binding and keeps its short-lived credential lease fresh.
     ///
     /// Resolved through Storage, for the reason given on `key`.
@@ -531,6 +553,28 @@ enum ResolvedRemoteBinding {
         binding: alien_core::GcsStorageBinding,
         #[serde(rename = "clientConfig")]
         client_config: Box<alien_core::GcpClientConfig>,
+        #[serde(rename = "expiresAt")]
+        expires_at: DateTime<Utc>,
+    },
+    Sqs {
+        binding: alien_core::SqsQueueBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: Box<alien_core::AwsClientConfig>,
+        #[serde(rename = "expiresAt")]
+        expires_at: DateTime<Utc>,
+    },
+    Pubsub {
+        binding: alien_core::PubSubQueueBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: Box<alien_core::GcpClientConfig>,
+        #[serde(rename = "expiresAt")]
+        expires_at: DateTime<Utc>,
+    },
+    #[serde(rename = "servicebus")]
+    Servicebus {
+        binding: alien_core::ServiceBusQueueBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: Box<alien_core::AzureClientConfig>,
         #[serde(rename = "expiresAt")]
         expires_at: DateTime<Utc>,
     },
@@ -749,6 +793,42 @@ impl ResolvedRemoteBinding {
                 (
                     alien_core::ClientConfig::Gcp(client_config),
                     serialize_remote_binding(alien_core::StorageBinding::Gcs(binding))?,
+                    expires_at,
+                )
+            }
+            Self::Sqs {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                validate_aws_remote_client_config(&client_config, expires_at)?;
+                (
+                    alien_core::ClientConfig::Aws(client_config),
+                    serialize_remote_binding(alien_core::QueueBinding::Sqs(binding))?,
+                    expires_at,
+                )
+            }
+            Self::Pubsub {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                validate_gcp_remote_client_config(&client_config)?;
+                (
+                    alien_core::ClientConfig::Gcp(client_config),
+                    serialize_remote_binding(alien_core::QueueBinding::Pubsub(binding))?,
+                    expires_at,
+                )
+            }
+            Self::Servicebus {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                validate_azure_remote_client_config(&client_config)?;
+                (
+                    alien_core::ClientConfig::Azure(client_config),
+                    serialize_remote_binding(alien_core::QueueBinding::Servicebus(binding))?,
                     expires_at,
                 )
             }
@@ -1053,6 +1133,7 @@ struct RemoteStorageResolver {
 
 #[derive(Clone, Copy)]
 enum RequestedBindingKind {
+    Queue,
     Storage,
     Kv,
     Key,
@@ -1073,6 +1154,14 @@ impl RemoteStorageResolver {
     async fn storage(&self) -> Result<Arc<dyn Storage>> {
         BindingsProviderApi::load_storage(
             &*self.provider(RequestedBindingKind::Storage).await?,
+            &self.resource_id,
+        )
+        .await
+    }
+
+    async fn queue(&self) -> Result<Arc<dyn Queue>> {
+        BindingsProviderApi::load_queue(
+            &*self.provider(RequestedBindingKind::Queue).await?,
             &self.resource_id,
         )
         .await
@@ -1201,6 +1290,9 @@ impl RemoteStorageResolver {
         match requested_kind {
             RequestedBindingKind::Storage => {
                 BindingsProviderApi::load_storage(&*provider, &self.resource_id).await?;
+            }
+            RequestedBindingKind::Queue => {
+                BindingsProviderApi::load_queue(&*provider, &self.resource_id).await?;
             }
             RequestedBindingKind::Kv => {
                 BindingsProviderApi::load_kv(&*provider, &self.resource_id).await?;

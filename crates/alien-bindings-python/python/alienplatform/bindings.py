@@ -233,8 +233,8 @@ def _kv_entry(value: Any) -> KvEntry:
 
 
 class Queue:
-    def __init__(self, name: str) -> None:
-        self._handle = _LazyHandle[Any]("queue", name)
+    def __init__(self, name: str, *, _bindings: object | None = None) -> None:
+        self._handle = _LazyHandle[Any]("queue", name, bindings=_bindings)
 
     @translate_errors
     async def send_batch(self, messages: list[Any]) -> list[dict[str, str]]:
@@ -637,6 +637,25 @@ def sandbox(name: str) -> Sandbox:
     return Sandbox(name)
 
 
+class RemoteQueue:
+    """Send-only remote queue; provider operations remain in the Rust core."""
+
+    def __init__(self, name: str, bindings: object) -> None:
+        self._queue = Queue(name, _bindings=bindings)
+
+    async def send(self, message: Any) -> None:
+        await self._queue.send(message)
+
+    async def send_text(self, message: str) -> None:
+        await self._queue.send_text(message)
+
+    async def send_batch(self, messages: list[Any]) -> list[dict[str, str]]:
+        return await self._queue.send_batch(messages)
+
+    async def send_batch_text(self, messages: list[str]) -> list[dict[str, str]]:
+        return await self._queue.send_batch_text(messages)
+
+
 class Bindings:
     """Remote customer bindings backed by the shared Rust SDK."""
 
@@ -665,3 +684,6 @@ class Bindings:
 
     def kv(self, name: str) -> Kv:
         return Kv(name, _bindings=self._handle)
+
+    def queue(self, name: str) -> RemoteQueue:
+        return RemoteQueue(name, self._handle)

@@ -372,6 +372,7 @@ function staticMethodsOf(name: string): string[] {
 const remoteBindingsMembers: Record<keyof RawRemoteBindingsHandle, true> = {
   ai: true,
   kv: true,
+  queue: true,
   key: true,
   sandbox: true,
   storage: true,
