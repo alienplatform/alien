@@ -46,8 +46,10 @@
     ],
     "azure": [
       {
+        // Key Vault Reader lists secret metadata (existence, enabled, expiry)
+        // without values; deployer secret checks need it.
         "grant": {
-          "predefinedRoles": ["Reader"]
+          "predefinedRoles": ["Reader", "Key Vault Reader"]
         },
         "binding": {
           "stack": {

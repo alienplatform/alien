@@ -61,8 +61,18 @@ impl StackMutation for SecretsVaultMutation {
                     || config.monitoring.is_some())
         });
 
+        // Vault-native deployer secrets live in this vault: the deployer
+        // writes them there, and workloads read them from it.
+        let deployer_secrets_need_vault = stack.inputs.iter().any(|input| {
+            alien_core::is_deployer_secret_input(input)
+                && input.platforms.as_ref().is_none_or(|platforms| {
+                    platforms.is_empty() || platforms.contains(&stack_state.platform)
+                })
+        });
+
         explicitly_configured
             || worker_needs_vault
+            || deployer_secrets_need_vault
             || azure_setup_needs_vault(stack, stack_state, config)
     }
 
@@ -366,8 +376,8 @@ mod tests {
     use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
     use alien_core::{
         Container, ContainerCode, EnvironmentVariablesSnapshot, ExternalBindings, Platform,
-        ResourceEntry, ResourceLifecycle, ResourceSpec, StackSettings, StackState, Worker,
-        WorkerCode,
+        ResourceEntry, ResourceLifecycle, ResourceSpec, StackInputDefinition, StackInputKind,
+        StackInputProvider, StackSettings, StackState, Worker, WorkerCode,
     };
     use indexmap::IndexMap;
 
@@ -810,6 +820,44 @@ mod tests {
         let mutation = SecretsVaultMutation;
 
         assert!(!mutation.should_run(&stack, &stack_state, &config));
+    }
+
+    #[test]
+    fn deployer_secret_inputs_need_the_secrets_vault_on_their_platforms() {
+        let mut stack = compute_cluster_stack();
+        let stack_state = StackState::new(Platform::Gcp);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        assert!(!SecretsVaultMutation.should_run(&stack, &stack_state, &config));
+
+        let mut input = StackInputDefinition {
+            id: "databasePassword".to_string(),
+            kind: StackInputKind::Secret,
+            provided_by: vec![StackInputProvider::Deployer],
+            required: true,
+            label: "Database password".to_string(),
+            description: String::new(),
+            placeholder: None,
+            default: None,
+            platforms: None,
+            validation: None,
+            env: Vec::new(),
+        };
+        stack.inputs = vec![input.clone()];
+        assert!(SecretsVaultMutation.should_run(&stack, &stack_state, &config));
+
+        input.platforms = Some(vec![Platform::Aws]);
+        stack.inputs = vec![input.clone()];
+        assert!(!SecretsVaultMutation.should_run(&stack, &stack_state, &config));
+
+        input.platforms = None;
+        input.provided_by = vec![StackInputProvider::Developer];
+        stack.inputs = vec![input];
+        assert!(!SecretsVaultMutation.should_run(&stack, &stack_state, &config));
     }
 
     #[tokio::test]
