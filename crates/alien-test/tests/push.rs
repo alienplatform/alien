@@ -74,6 +74,15 @@ async fn push_aws_comprehensive_ts(ctx: &mut AwsPushTypeScript) {
         .expect("command checks failed");
 }
 
+/// Focused live-cloud proof without unrelated binding and command checks.
+#[test_context(AwsPushTypeScript)]
+#[tokio::test]
+async fn push_aws_remote_kv(ctx: &mut AwsPushTypeScript) {
+    common::remote_bindings::check_remote_kv_ts(&ctx.ctx.deployment, ctx.ctx.platform)
+        .await
+        .expect("remote TypeScript KV checks failed");
+}
+
 // ---------------------------------------------------------------------------
 // GCP
 // ---------------------------------------------------------------------------
