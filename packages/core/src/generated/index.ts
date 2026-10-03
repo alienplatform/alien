@@ -389,6 +389,7 @@ export type { SandboxHeartbeatStatus } from "./zod/sandbox-heartbeat-status-sche
 export type { SandboxLifecyclePolicy } from "./zod/sandbox-lifecycle-policy-schema.js";
 export type { SandboxLimits } from "./zod/sandbox-limits-schema.js";
 export type { SandboxOutputs } from "./zod/sandbox-outputs-schema.js";
+export type { SandboxPrivilegedSupervisor } from "./zod/sandbox-privileged-supervisor-schema.js";
 export type { Sandbox } from "./zod/sandbox-schema.js";
 export type { ScheduledEvent } from "./zod/scheduled-event-schema.js";
 export type { ServiceAccountHeartbeatData } from "./zod/service-account-heartbeat-data-schema.js";
@@ -834,6 +835,7 @@ export { SandboxHeartbeatStatusSchema } from "./zod/sandbox-heartbeat-status-sch
 export { SandboxLifecyclePolicySchema } from "./zod/sandbox-lifecycle-policy-schema.js";
 export { SandboxLimitsSchema } from "./zod/sandbox-limits-schema.js";
 export { SandboxOutputsSchema } from "./zod/sandbox-outputs-schema.js";
+export { SandboxPrivilegedSupervisorSchema } from "./zod/sandbox-privileged-supervisor-schema.js";
 export { SandboxSchema } from "./zod/sandbox-schema.js";
 export { ScheduledEventSchema } from "./zod/scheduled-event-schema.js";
 export { ServiceAccountHeartbeatDataSchema } from "./zod/service-account-heartbeat-data-schema.js";

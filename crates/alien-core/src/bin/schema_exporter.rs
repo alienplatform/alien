@@ -125,6 +125,7 @@ use utoipa::OpenApi;
     SandboxLimits,
     SandboxEgress,
     SandboxLifecyclePolicy,
+    SandboxPrivilegedSupervisor,
     SandboxCapabilities,
     SandboxCapability,
     Email,

@@ -61,6 +61,12 @@ pub(crate) struct RetiredVersion {
 /// AWS Sandbox controller.
 #[controller]
 pub struct AwsSandboxController {
+    /// Startup security contract of the active version (empty for legacy images).
+    #[serde(default)]
+    pub(crate) supervisor_environment: BTreeMap<String, String>,
+    /// Startup security contract promoted only after a successful build.
+    #[serde(default)]
+    pub(crate) pending_supervisor_environment: BTreeMap<String, String>,
     /// MicroVM image backing this sandbox's sessions; the ARN, which every call accepts.
     pub(crate) image_identifier: Option<String>,
     /// Image ARN, published in outputs so the binding can address it.
@@ -179,7 +185,8 @@ impl AwsSandboxController {
             &build_role_arn,
             &bundle_uri,
             tier.baseline_memory_mib,
-        );
+        )
+        .with_supervisor(config);
 
         // A create whose response never reached state leaves an image under this
         // account-unique name, and a second create would collide with it. Read first and adopt
@@ -278,6 +285,7 @@ impl AwsSandboxController {
         self.image_arn = Some(image_arn);
         self.pending_version = Some(image_version);
         self.pending_bundle_uri = Some(bundle_uri);
+        self.pending_supervisor_environment = config.supervisor_environment();
         self.region = Some(aws_config.region.clone());
 
         info!(sandbox_id = %config.id, image = %image_name, "MicroVM image build started");
@@ -490,7 +498,9 @@ impl AwsSandboxController {
         let aws_config = ctx.get_aws_config()?;
         let desired_bundle = desired_bundle_uri(&config, &aws_config.region)?;
 
-        if self.bundle_uri.as_deref() == Some(desired_bundle.as_str()) {
+        if self.bundle_uri.as_deref() == Some(desired_bundle.as_str())
+            && self.supervisor_environment == config.supervisor_environment()
+        {
             info!(sandbox_id = %config.id, "Updated AWS sandbox configuration");
             return Ok(HandlerAction::Continue {
                 state: Ready,
@@ -575,6 +585,8 @@ impl AwsSandboxController {
                     &desired_bundle,
                     tier.baseline_memory_mib,
                 )
+                .with_supervisor(config)
+                .for_roll(self.active_version.as_deref())
                 .update_request(),
             )
             .await
@@ -594,6 +606,7 @@ impl AwsSandboxController {
         // ACTIVE, so the binding keeps naming the bundle sessions can actually start from.
         self.pending_version = Some(image_version);
         self.pending_bundle_uri = Some(desired_bundle);
+        self.pending_supervisor_environment = config.supervisor_environment();
         if let Some(arn) = rolled.image_arn {
             self.image_arn = Some(arn);
         }
@@ -840,6 +853,7 @@ impl AwsSandboxController {
         }
         if let Some(bundle) = self.pending_bundle_uri.take() {
             self.bundle_uri = Some(bundle);
+            self.supervisor_environment = std::mem::take(&mut self.pending_supervisor_environment);
         }
     }
 
@@ -957,6 +971,8 @@ fn image_build_inputs(
         // deployment in the same account rolling the same bundle onto its own image never reuses
         // this image's token.
         client_token: build_client_token(image_name, bundle_uri),
+        environment: agent_environment(),
+        additional_os_capabilities: vec![],
     }
 }
 
@@ -1002,9 +1018,28 @@ struct ImageBuildInputs {
     egress_network_connectors: Vec<String>,
     resources: Vec<MicrovmImageResources>,
     client_token: String,
+    environment: BTreeMap<String, String>,
+    additional_os_capabilities: Vec<String>,
 }
 
 impl ImageBuildInputs {
+    fn with_supervisor(mut self, sandbox: &Sandbox) -> Self {
+        self.environment.extend(sandbox.supervisor_environment());
+        if sandbox.privileged_supervisor.is_some() {
+            self.additional_os_capabilities = vec!["ALL".to_string()];
+            // Fold the complete policy into the token without truncating away its digest.
+            let digest =
+                Sha256::digest(format!("{}{:?}", self.client_token, self.environment).as_bytes());
+            self.client_token = format!("agent-{:x}", digest)[..64].to_string();
+        }
+        self
+    }
+
+    fn for_roll(mut self, previous_version: Option<&str>) -> Self {
+        self.client_token = roll_client_token(&self.client_token, previous_version);
+        self
+    }
+
     fn create_request(
         self,
         name: String,
@@ -1025,7 +1060,8 @@ impl ImageBuildInputs {
             }])
             .resources(self.resources)
             .hooks(agent_hooks())
-            .environment_variables(agent_environment())
+            .environment_variables(self.environment)
+            .additional_os_capabilities(self.additional_os_capabilities)
             // The deployed `sandbox/provision` grant conditions `CreateMicrovmImage` on the
             // stack tag and `managed-by: runtime` arriving as request tags; without them the
             // call is denied by a policy that is already installed.
@@ -1050,7 +1086,8 @@ impl ImageBuildInputs {
             }])
             .resources(self.resources)
             .hooks(agent_hooks())
-            .environment_variables(agent_environment())
+            .environment_variables(self.environment)
+            .additional_os_capabilities(self.additional_os_capabilities)
             .client_token(self.client_token)
             .build()
     }
@@ -1067,6 +1104,11 @@ fn build_client_token(image_name: &str, bundle_uri: &str) -> String {
         .chars()
         .take(image_name.len() + 1 + 16)
         .collect()
+}
+
+fn roll_client_token(token: &str, previous_version: Option<&str>) -> String {
+    let digest = Sha256::digest(format!("{token}:{previous_version:?}").as_bytes());
+    format!("roll-{:x}", digest)[..64].to_string()
 }
 
 /// The pre-create probe has no ARN to adopt yet, and the API answers a bare name with a 400
@@ -1807,7 +1849,7 @@ mod tests {
                         }]
                     // Keyed on this deployment's image, as the create is, not the stack resource
                     // id another deployment in the account shares.
-                    && request.client_token == build_client_token("test-agents", NEXT_BUNDLE)
+                    && request.client_token == roll_client_token(&build_client_token("test-agents", NEXT_BUNDLE), Some("1.0"))
                     // PUT semantics: a field left out is dropped, and this is the one that keeps
                     // sandbox contents out of the customer's logs.
                     && request.logging == Some(MicrovmImageLogging::Disabled {})
@@ -2015,6 +2057,55 @@ mod tests {
                 .active_version
                 .as_deref(),
             Some("1.0")
+        );
+    }
+
+    #[tokio::test]
+    async fn changing_supervisor_policy_rolls_the_same_bundle_with_an_internal_capability_grant() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_update_microvm_image()
+            .withf(|identifier, request| {
+                identifier == IMAGE_ARN
+                    && request.code_artifact.uri == BUNDLE_URI
+                    && request.additional_os_capabilities == vec!["ALL"]
+                    && request
+                        .environment_variables
+                        .get("ALIEN_SANDBOX_EXEC_UID")
+                        .map(String::as_str)
+                        == Some("60001")
+                    && request
+                        .environment_variables
+                        .get("ALIEN_SANDBOX_EGRESS")
+                        .map(String::as_str)
+                        == Some("{\"mode\":\"deny\"}")
+            })
+            .times(1)
+            .returning(|_, _| {
+                Ok(UpdateMicrovmImageResponse {
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    image_version: Some("2.0".to_string()),
+                    name: None,
+                    state: Some("UPDATING".to_string()),
+                })
+            });
+        let mut controller = ready_controller();
+        controller.bundle_uri = Some(BUNDLE_URI.to_string());
+        let mut executor = executor(controller, client).await;
+        let mut desired = sandbox();
+        desired.privileged_supervisor =
+            Some(alien_core::SandboxPrivilegedSupervisor { command_uid: 60001 });
+        executor.update(desired).expect("transition to update");
+        executor.step().await.expect("updating_sandbox");
+        executor.step().await.expect("updating_image");
+        let controller = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        assert_eq!(controller.pending_version.as_deref(), Some("2.0"));
+        assert_eq!(controller.active_version.as_deref(), Some("1.0"));
+        assert!(
+            controller.supervisor_environment.is_empty(),
+            "the serving security contract is retained until activation"
         );
     }
 
