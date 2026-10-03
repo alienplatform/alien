@@ -42,6 +42,21 @@ export interface StringInputOptions extends CommonInputOptions<string> {
   format?: string
 }
 
+/**
+ * Options for `alien.secret()`.
+ *
+ * A secret the deployer provides is vault-native: the deployer writes it into
+ * their own cloud's secret store (AWS SSM Parameter Store, GCP Secret Manager,
+ * Azure Key Vault, a Kubernetes Secret, or `alien dev vault set` locally),
+ * under a name Alien derives from the stack and the input id. Alien shows where
+ * it goes and reports whether it is present, but never reads or receives the
+ * value. Its `env` mappings still set `process.env` when the workload starts,
+ * and a missing required secret keeps the workload from starting.
+ *
+ * When the developer may also provide it, a developer value keeps the regular
+ * path. The validation options apply only to developer values, because Alien
+ * never sees a deployer's.
+ */
 export interface SecretInputOptions extends Omit<CommonInputOptions<string>, "default"> {
   minLength?: number
   maxLength?: number
