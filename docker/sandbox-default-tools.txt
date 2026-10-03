@@ -2,6 +2,7 @@
 # Regenerate with UPDATE_SANDBOX_AGENT_DOCKERFILE=1 in front of that command.
 #
 # One command per tool the default sandbox base ships; each prints a version and exits zero.
+iptables-nft --version
 node --version
 npm --version
 rg --version

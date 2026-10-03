@@ -61,6 +61,15 @@ async fn main() -> Result<()> {
             ))?;
         #[cfg(target_os = "linux")]
         {
+            alien_sandbox_agent::privilege::prepare_identity(
+                state.exec_identity,
+                &state.session_root,
+            )
+            .into_alien_error()
+            .context(failed(
+                "prepare declared command identity",
+                "cannot write the image's passwd/group entries".to_string(),
+            ))?;
             alien_sandbox_agent::egress::install(&policy)?;
             alien_sandbox_agent::privilege::restrict_supervisor()
                 .into_alien_error()

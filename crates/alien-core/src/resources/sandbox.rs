@@ -153,8 +153,10 @@ pub enum SandboxEgress {
     Allow,
     /// Outbound access only to the listed hostnames.
     ///
-    /// Azure alone expresses it: its egress proxy matches on host pattern. The others filter by
-    /// CIDR or carry a single switch, and both would approximate the list rather than keep it.
+    /// Azure matches host patterns. With `privilegedSupervisor`, AWS resolves the names at
+    /// startup, pins their public IPv4 addresses in /etc/hosts, and filters by those addresses.
+    /// Other services sharing an allowed address are reachable; addresses remain pinned for the
+    /// session lifetime. Backends without either enforcement path refuse this mode.
     #[serde(rename_all = "camelCase")]
     AllowDomains {
         /// Hostnames the sandbox may reach
@@ -640,6 +642,27 @@ impl Sandbox {
                     reason: "must be a non-root Linux uid other than the invalid uid sentinel"
                         .to_string(),
                 }));
+            }
+            if let SandboxEgress::AllowDomains { domains } = &self.egress {
+                for domain in domains {
+                    let hostname = domain.strip_suffix('.').unwrap_or(domain);
+                    if hostname.len() > 253
+                        || !hostname.split('.').all(|label| {
+                            !label.is_empty()
+                                && label.len() <= 63
+                                && label
+                                    .bytes()
+                                    .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+                                && !label.starts_with('-')
+                                && !label.ends_with('-')
+                        })
+                    {
+                        return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                            resource_id: self.id.clone(), field: "egress.domains".to_string(), value: domain.clone(),
+                            reason: "privileged supervisor allowlists require exact DNS hostnames; wildcards are unsupported".to_string(),
+                        }));
+                    }
+                }
             }
             capabilities.domain_egress_rules = true;
         }
