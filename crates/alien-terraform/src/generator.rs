@@ -3976,7 +3976,7 @@ fn readme_md(
         // approver looking for it.
         let scaffolding = if live_sandboxes
             .iter()
-            .any(|sandbox| !matches!(sandbox.egress, SandboxEgress::Allow))
+            .any(|sandbox| !matches!(sandbox.cloud_egress(), SandboxEgress::Allow))
         {
             "build scaffolding — the build role, egress connector, operator role, and security \
              group —"

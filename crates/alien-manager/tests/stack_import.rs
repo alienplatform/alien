@@ -1997,3 +1997,243 @@ async fn a_state_write_back_without_the_answer_map_does_not_erase_the_record() {
         "body = {json:#}"
     );
 }
+
+fn stack_with_storage_and_generated_secret(resource_id: &str) -> Stack {
+    Stack::new("imported".to_string())
+        .add(
+            Storage::new(resource_id.to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .inputs(vec![alien_core::StackInputDefinition {
+            id: "databasePassword".to_string(),
+            kind: alien_core::StackInputKind::Secret,
+            provided_by: vec![alien_core::StackInputProvider::Developer],
+            required: true,
+            label: "Database password".to_string(),
+            description: "Password the app uses for its database.".to_string(),
+            placeholder: None,
+            default: None,
+            platforms: None,
+            validation: None,
+            generate: Some(alien_core::StackInputGenerate { length: 48 }),
+            env: vec![],
+        }])
+        .build()
+}
+
+/// A generated secret is created by the first registration and survives a
+/// re-registration whose setup artifact (which never carries it) replaces the
+/// stored input values.
+#[tokio::test]
+async fn a_generated_secret_is_created_once_and_kept_across_reimport() {
+    let stack = stack_with_storage_and_generated_secret("assets");
+    let fixture = make_fixture(Some(stack.clone())).await;
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+
+    let (s1, j1) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(s1, StatusCode::CREATED, "body = {:#}", j1);
+    let first: StackImportResponse = serde_json::from_value(j1).unwrap();
+    let imported = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &first.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    let generated = imported.input_values["databasePassword"]
+        .as_str()
+        .expect("the generated value is stored as a string")
+        .to_string();
+    assert_eq!(generated.len(), 48);
+    assert!(generated.bytes().all(|byte| byte.is_ascii_alphanumeric()));
+
+    fixture
+        .deployment_store
+        .reconcile(
+            &alien_manager::auth::Subject::system(),
+            ReconcileData {
+                deployment_id: imported.id,
+                session: "test-reconcile".to_string(),
+                execution_claim: None,
+                state: DeploymentState {
+                    status: DeploymentStatus::Running,
+                    platform: imported.platform,
+                    current_release: Some(ReleaseInfo {
+                        release_id: fixture.release_id.clone(),
+                        version: None,
+                        description: None,
+                        stack,
+                    }),
+                    target_release: None,
+                    stack_state: imported.stack_state,
+                    error: None,
+                    environment_info: imported.environment_info,
+                    runtime_metadata: imported.runtime_metadata,
+                    retry_requested: false,
+                    protocol_version: imported.deployment_protocol_version,
+                },
+                update_heartbeat: false,
+                suggested_delay_ms: None,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                capabilities: vec![],
+                operator_version: None,
+                operations_report: None,
+            },
+        )
+        .await
+        .expect("deployment should reach a stable state before re-import");
+
+    let mut body = body;
+    body.resources[0].import_data = serde_json::to_value(AwsStorageImportData {
+        bucket_name: "acme-imports-v2".to_string(),
+        bucket_arn: "arn:aws:s3:::acme-imports-v2".to_string(),
+    })
+    .unwrap();
+    let (s2, j2) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(s2, StatusCode::OK, "body = {:#}", j2);
+
+    let reimported = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &first.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    assert_eq!(
+        reimported.status, "update-pending",
+        "the re-import was applied"
+    );
+    assert_eq!(
+        reimported.input_values["databasePassword"], generated,
+        "re-registration must not rotate the generated secret"
+    );
+}
+
+/// A generated secret belongs to the developer; a setup registration that
+/// tries to set one is refused before anything is created.
+#[tokio::test]
+async fn setup_cannot_set_a_generated_secret() {
+    let fixture = make_fixture(Some(stack_with_storage_and_generated_secret("assets"))).await;
+    let mut body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    body.input_values = HashMap::from([(
+        "databasePassword".to_string(),
+        serde_json::json!("chosen-by-setup-caller-0123456789"),
+    )]);
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {:#}", json);
+    assert!(
+        json.to_string().contains(
+            "Stack input 'databasePassword' is generated by Alien and cannot be set by setup"
+        ),
+        "body = {:#}",
+        json
+    );
+    let existing = fixture
+        .deployment_store
+        .get_deployment_by_name(
+            &alien_manager::auth::Subject::system(),
+            &fixture.deployment_group_id,
+            "acme-prod",
+        )
+        .await
+        .unwrap();
+    assert!(existing.is_none(), "nothing is created");
+}
+
+async fn post_initialize(
+    fixture: &Fixture,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let router = alien_manager::routes::sync::initialize_router().with_state(fixture.state.clone());
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/initialize")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", fixture.dg_token),
+        )
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+/// A deployment an agent registers with its group token starts on the active
+/// release and gets the generated secret from that release's stack.
+#[tokio::test]
+async fn initialize_generates_the_secret_from_the_starting_release() {
+    let fixture = make_fixture(Some(stack_with_storage_and_generated_secret("assets"))).await;
+
+    let (status, json) = post_initialize(
+        &fixture,
+        serde_json::json!({
+            "name": "edge-agent",
+            "platform": "aws",
+            "initialDesiredRelease": "active",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+
+    let deployment = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            json["deploymentId"].as_str().expect("deployment id"),
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    assert_eq!(deployment.desired_release_id, fixture.release_id);
+    let generated = deployment.input_values["databasePassword"]
+        .as_str()
+        .expect("the generated value is stored as a string");
+    assert_eq!(generated.len(), 48);
+    assert!(generated.bytes().all(|byte| byte.is_ascii_alphanumeric()));
+}
+
+/// Install values come from the deployer, who may not choose a generated
+/// secret; initialize refuses them before creating anything.
+#[tokio::test]
+async fn initialize_refuses_a_deployer_value_for_a_generated_secret() {
+    let fixture = make_fixture(Some(stack_with_storage_and_generated_secret("assets"))).await;
+
+    let (status, json) = post_initialize(
+        &fixture,
+        serde_json::json!({
+            "name": "edge-agent",
+            "platform": "aws",
+            "initialDesiredRelease": "none",
+            "inputValues": { "databasePassword": "chosen-by-deployer-0123456789" },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
+    assert!(
+        json.to_string()
+            .contains("Stack input 'databasePassword' is generated by Alien"),
+        "body = {json:#}"
+    );
+    let existing = fixture
+        .deployment_store
+        .get_deployment_by_name(
+            &alien_manager::auth::Subject::system(),
+            &fixture.deployment_group_id,
+            "edge-agent",
+        )
+        .await
+        .unwrap();
+    assert!(existing.is_none(), "nothing is created");
+}

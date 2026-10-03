@@ -324,7 +324,8 @@ pub async fn handle_updating(
     // not be deleted by an ordinary update. Keep their installed definitions
     // in the execution target while allowing explicitly runtime-managed frozen
     // resources (ComputeCluster capacity and, on AWS, a same-architecture machine
-    // type) to reconcile changed configuration through their management controller.
+    // type) to reconcile changed configuration through their management
+    // controller.
     if let Some(installed_stack) = runtime_metadata.prepared_stack.as_ref() {
         for (resource_id, entry) in installed_stack.resources() {
             if entry.lifecycle == ResourceLifecycle::Frozen

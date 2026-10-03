@@ -8664,6 +8664,7 @@ infrastructureExistingSecret: customer-bindings
                     min_items: None,
                     max_items: None,
                 }),
+                generate: None,
                 env: Vec::new(),
             }])
             .build();
