@@ -797,9 +797,9 @@ fn collect_stack_input_values(
     // Alien generates a value for generated inputs when none is passed. A
     // secret the deployer may also provide is optional here: without a
     // developer value, the deployer writes it into their own secret store.
-    for input in inputs.iter().filter(|input| {
-        input.required && !input.is_generated() && !is_deployer_secret_input(input)
-    })
+    for input in inputs
+        .iter()
+        .filter(|input| input.required && !input.is_generated() && !is_deployer_secret_input(input))
     {
         if !raw_values.contains_key(&input.id) {
             if json || !can_prompt() {
@@ -952,9 +952,7 @@ fn validate_string_stack_input(input: &StackInputDefinition, value: &str) -> Res
 fn print_required_developer_inputs(inputs: &[StackInputDefinition]) {
     let required = inputs
         .iter()
-        .filter(|input| {
-            input.required && !input.is_generated() && !is_deployer_secret_input(input)
-        })
+        .filter(|input| input.required && !input.is_generated() && !is_deployer_secret_input(input))
         .collect::<Vec<_>>();
     if required.is_empty() {
         return;
