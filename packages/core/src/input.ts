@@ -152,6 +152,15 @@ export function getStackInputDefinitions(
   return [...(value as StackInputCollection)[stackInputDefinitionsSymbol]]
 }
 
+/**
+ * Whether the deployer may provide this secret input, which makes it
+ * vault-native: its value lives only in the deployer's own secret store. When
+ * the developer may also provide it, a developer value keeps the regular path.
+ */
+export function isDeployerSecretInput(input: StackInputDefinition): boolean {
+  return input.kind === "secret" && input.providedBy.includes("deployer")
+}
+
 function defineInput<TValue extends StackInputValue>(
   kind: StackInputKind,
   options: CommonInputOptions<TValue>,
