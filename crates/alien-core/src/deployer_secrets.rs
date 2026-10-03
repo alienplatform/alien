@@ -19,9 +19,6 @@ use crate::{
     VaultBinding,
 };
 
-/// Id of the vault deployer secrets live in.
-pub const DEPLOYER_SECRETS_VAULT_ID: &str = "secrets";
-
 /// Prefix of every vault key that holds a deployer secret, so these keys
 /// never collide with the env-var-named keys Alien syncs itself.
 pub const DEPLOYER_SECRET_KEY_PREFIX: &str = "input-";
@@ -257,7 +254,7 @@ pub fn deployer_secret_location(
 }
 
 fn concrete(value: &BindingValue<String>, field: &str) -> crate::Result<String> {
-    value.clone().into_value(DEPLOYER_SECRETS_VAULT_ID, field)
+    value.clone().into_value(crate::SECRETS_VAULT_ID, field)
 }
 
 /// Whether a deployer secret slot holds a usable value. Alien learns this from
@@ -313,6 +310,67 @@ impl DeployerSecretReport {
             },
         }
     }
+}
+
+/// Env var that carries a natively projected workload's
+/// [`DeployerSecretEnv`] list to its hosting controller, which resolves each
+/// entry before the process starts (a `secretKeyRef` on Kubernetes, a vault
+/// read on the local platform). It holds names only, never values.
+pub const ENV_ALIEN_DEPLOYER_SECRETS: &str = "ALIEN_DEPLOYER_SECRETS";
+
+/// An environment variable a workload reads from a vault-native deployer
+/// secret when it starts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeployerSecretEnv {
+    /// Environment variable name.
+    pub name: String,
+    /// Key in the `secrets` vault.
+    pub vault_key: String,
+    /// Full name in the secret store (the Kubernetes Secret on Kubernetes).
+    pub secret_name: String,
+    /// The input's label, for the "missing: <label>" a failed start reports.
+    pub label: String,
+    /// Whether the workload must not start without it.
+    pub required: bool,
+}
+
+/// The environment variables workloads read from vault-native deployer
+/// secrets, each with the resources its mapping targets (`None` = all).
+///
+/// A slot is read from the vault once Alien has a report for it, unless the
+/// deployment still stores a value from before slots were vault-native and the
+/// slot is not filled yet: that value keeps today's path until then.
+pub fn deployer_secret_environment(
+    inputs: &[StackInputDefinition],
+    values: &HashMap<String, serde_json::Value>,
+    platform: Platform,
+    reports: &[DeployerSecretReport],
+) -> Vec<(DeployerSecretEnv, Option<Vec<String>>)> {
+    deployer_secret_slots(inputs, values, platform)
+        .into_iter()
+        .filter_map(|slot| {
+            let report = reports
+                .iter()
+                .find(|report| report.input_id == slot.input.id)?;
+            (!slot.has_stored_value || report.status == DeployerSecretStatus::Present)
+                .then_some((slot, report))
+        })
+        .flat_map(|(slot, report)| {
+            slot.input.env.iter().map(move |mapping| {
+                (
+                    DeployerSecretEnv {
+                        name: mapping.name.clone(),
+                        vault_key: slot.vault_key.clone(),
+                        secret_name: report.location.name.clone(),
+                        label: slot.input.label.clone(),
+                        required: slot.input.required,
+                    },
+                    mapping.target_resources.clone(),
+                )
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -482,5 +540,79 @@ mod tests {
         report.required = true;
         report.status = DeployerSecretStatus::Present;
         assert!(!report.blocks_start());
+    }
+
+    fn report(input_id: &str, status: DeployerSecretStatus) -> DeployerSecretReport {
+        DeployerSecretReport {
+            input_id: input_id.to_string(),
+            label: "Database password".to_string(),
+            required: true,
+            status,
+            message: None,
+            location: DeployerSecretLocation {
+                store: DeployerSecretStore::AwsParameterStore,
+                name: "stack-secrets-input-database-password".to_string(),
+                console_url: None,
+                cli_command: String::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn a_slot_is_read_from_the_vault_once_it_is_reported() {
+        let inputs = vec![secret(
+            "databasePassword",
+            vec![StackInputProvider::Deployer],
+        )];
+        let no_values = HashMap::new();
+
+        assert!(deployer_secret_environment(&inputs, &no_values, Platform::Aws, &[]).is_empty());
+
+        let env = deployer_secret_environment(
+            &inputs,
+            &no_values,
+            Platform::Aws,
+            &[report("databasePassword", DeployerSecretStatus::Missing)],
+        );
+        assert_eq!(env.len(), 1);
+        let (variable, targets) = &env[0];
+        assert_eq!(variable.name, "DATABASE_PASSWORD");
+        assert_eq!(variable.vault_key, "input-database-password");
+        assert_eq!(
+            variable.secret_name,
+            "stack-secrets-input-database-password"
+        );
+        assert!(variable.required);
+        assert_eq!(targets, &None);
+    }
+
+    #[test]
+    fn a_stored_value_keeps_today_s_path_until_the_slot_is_filled() {
+        let inputs = vec![secret(
+            "databasePassword",
+            vec![StackInputProvider::Deployer],
+        )];
+        let stored = HashMap::from([(
+            "databasePassword".to_string(),
+            serde_json::json!("from-before"),
+        )]);
+
+        assert!(deployer_secret_environment(
+            &inputs,
+            &stored,
+            Platform::Aws,
+            &[report("databasePassword", DeployerSecretStatus::Missing)],
+        )
+        .is_empty());
+        assert_eq!(
+            deployer_secret_environment(
+                &inputs,
+                &stored,
+                Platform::Aws,
+                &[report("databasePassword", DeployerSecretStatus::Present)],
+            )
+            .len(),
+            1
+        );
     }
 }

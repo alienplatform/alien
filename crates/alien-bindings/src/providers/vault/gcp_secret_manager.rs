@@ -102,9 +102,13 @@ impl crate::traits::Vault for GcpSecretManagerVault {
                 self.full_secret_name(secret_name)
             ))
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to access secret version '{}'", secret_resource),
-                resource_id: None,
+            .map_err(|error| {
+                super::secret_read_error(
+                    error,
+                    &self.vault_prefix,
+                    secret_name,
+                    format!("Failed to access secret version '{}'", secret_resource),
+                )
             })?;
 
         // Extract the payload from the response

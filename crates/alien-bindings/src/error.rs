@@ -476,6 +476,21 @@ pub enum ErrorData {
         response_json: String,
     },
 
+    /// The vault holds no secret by this name.
+    #[error(
+        code = "VAULT_SECRET_NOT_FOUND",
+        message = "Secret '{secret_name}' not found in vault '{vault}'",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    VaultSecretNotFound {
+        /// Vault the secret was read from (prefix, name or URL).
+        vault: String,
+        /// Secret name in the vault's own namespace.
+        secret_name: String,
+    },
+
     /// Cloud platform API error.
     #[error(
         code = "CLOUD_PLATFORM_ERROR",

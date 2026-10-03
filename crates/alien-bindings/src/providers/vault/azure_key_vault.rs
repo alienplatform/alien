@@ -98,12 +98,16 @@ impl crate::traits::Vault for AzureKeyVault {
             .client
             .get_secret(self.vault_base_url.clone(), sanitized, None)
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to get secret '{}' from vault '{}'",
-                    secret_name, self.vault_base_url
-                ),
-                resource_id: None,
+            .map_err(|error| {
+                super::secret_read_error(
+                    error,
+                    &self.vault_base_url,
+                    secret_name,
+                    format!(
+                        "Failed to get secret '{}' from vault '{}'",
+                        secret_name, self.vault_base_url
+                    ),
+                )
             })?;
 
         response.value.ok_or_else(|| {

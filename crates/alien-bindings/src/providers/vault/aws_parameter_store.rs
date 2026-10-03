@@ -44,14 +44,14 @@ impl crate::traits::Vault for AwsParameterStoreVault {
             .with_decryption(true)
             .build();
 
-        let response =
-            self.client
-                .get_parameter(request)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to get parameter '{}'", full_name),
-                    resource_id: None,
-                })?;
+        let response = self.client.get_parameter(request).await.map_err(|error| {
+            super::secret_read_error(
+                error,
+                &self.vault_prefix,
+                secret_name,
+                format!("Failed to get parameter '{full_name}'"),
+            )
+        })?;
 
         let parameter = response.parameter.ok_or_else(|| {
             alien_error::AlienError::new(ErrorData::CloudPlatformError {

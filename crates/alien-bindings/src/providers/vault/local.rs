@@ -127,12 +127,9 @@ impl crate::traits::Vault for LocalVault {
         let secrets = self.load_secrets().await?;
 
         secrets.get(secret_name).cloned().ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Secret '{}' not found in vault '{}'",
-                    secret_name, self.vault_name
-                ),
-                resource_id: None,
+            AlienError::new(ErrorData::VaultSecretNotFound {
+                vault: self.vault_name.clone(),
+                secret_name: secret_name.to_string(),
             })
         })
     }
