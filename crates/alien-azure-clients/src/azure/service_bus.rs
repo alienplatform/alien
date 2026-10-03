@@ -207,6 +207,14 @@ pub trait ServiceBusManagementApi: Send + Sync + std::fmt::Debug {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait ServiceBusDataPlaneApi: Send + Sync + std::fmt::Debug {
+    /// Send a JSON batch using the Service Bus HTTP batch protocol.
+    async fn send_message_batch(
+        &self,
+        namespace_name: String,
+        queue_name: String,
+        bodies: Vec<String>,
+    ) -> Result<()>;
+
     /// Send a message to a Service Bus queue
     async fn send_message(
         &self,
@@ -775,6 +783,56 @@ impl AzureServiceBusDataPlaneClient {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
+    async fn send_message_batch(
+        &self,
+        namespace_name: String,
+        queue_name: String,
+        bodies: Vec<String>,
+    ) -> Result<()> {
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://servicebus.azure.net/.default")
+            .await?;
+        let url =
+            self.build_data_plane_url(&namespace_name, &format!("/{queue_name}/messages"), None)?;
+        let messages = bodies
+            .into_iter()
+            .map(|body| serde_json::json!({ "Body": body }))
+            .collect::<Vec<_>>();
+        let response = self
+            .client
+            .post(url.clone())
+            .bearer_auth(token)
+            .header("Content-Type", "application/vnd.microsoft.servicebus.json")
+            .header("x-ms-retrypolicy", "NoRetry")
+            .json(&messages)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                message: "Service Bus batch send".to_string(),
+            })?;
+        let status = response.status();
+        if status != reqwest::StatusCode::CREATED {
+            let body =
+                response
+                    .text()
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::HttpRequestFailed {
+                        message: "Read Service Bus batch response".to_string(),
+                    })?;
+            return Err(AlienError::new(ErrorData::HttpResponseError {
+                message: format!("Service Bus batch send returned {status}"),
+                url: url.to_string(),
+                http_status: status.as_u16(),
+                http_request_text: None,
+                http_response_text: Some(body),
+            }));
+        }
+        Ok(())
+    }
+
     /// Send a message to a Service Bus queue
     async fn send_message(
         &self,
@@ -1250,5 +1308,52 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use crate::azure::{AzureClientConfig, AzureClientConfigExt, ServiceOverrides};
+    use httpmock::{Method::POST, MockServer};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn batch_wire_format_and_failure_are_single_attempt() {
+        let server = MockServer::start_async().await;
+        let config = AzureClientConfig::mock().with_service_overrides(ServiceOverrides {
+            endpoints: HashMap::from([("servicebus".to_string(), server.base_url())]),
+        });
+        let client =
+            AzureServiceBusDataPlaneClient::new(Client::new(), AzureTokenCache::new(config));
+        let bodies = vec!["plain".to_string(), "quoted \"value\"\nline".to_string()];
+        let success = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/events/messages")
+                    .header("content-type", "application/vnd.microsoft.servicebus.json")
+                    .header("x-ms-retrypolicy", "NoRetry")
+                    .header("authorization", "Bearer mock_access_token_for_testing")
+                    .json_body(json!([{"Body": bodies[0]}, {"Body": bodies[1]}]));
+                then.status(201);
+            })
+            .await;
+        client
+            .send_message_batch("test".into(), "events".into(), bodies)
+            .await
+            .unwrap();
+        success.assert_hits_async(1).await;
+        let failure = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/unavailable/messages");
+                then.status(503).body("unavailable");
+            })
+            .await;
+        assert!(client
+            .send_message_batch("test".into(), "unavailable".into(), vec!["payload".into()])
+            .await
+            .is_err());
+        failure.assert_hits_async(1).await;
     }
 }
