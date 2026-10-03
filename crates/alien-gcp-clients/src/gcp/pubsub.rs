@@ -276,7 +276,7 @@ impl PubSubApi for PubSubClient {
         let path = format!("projects/{}/topics/{}:publish", self.project_id, topic_id);
 
         self.base
-            .execute_request(Method::POST, &path, None, Some(request), &topic_id)
+            .execute_request_once(Method::POST, &path, None, Some(request), &topic_id)
             .await
     }
 

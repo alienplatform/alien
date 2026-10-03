@@ -1,5 +1,6 @@
-use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
+use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsRequestSigner, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
+use alien_client_core::request_utils::RequestBuilderExt;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::ContextError;
@@ -141,8 +142,16 @@ impl SqsClient {
             .content_sha256(&form_body)
             .body(form_body.clone());
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await;
+        // A batch may have been accepted even if the response is lost. Never
+        // retry it inside the transport; callers receive an unknown outcome.
+        let result = if operation == "SendMessageBatch" {
+            builder
+                .sign_aws_request(&self.sign_config())?
+                .send_xml()
+                .await
+        } else {
+            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await
+        };
 
         Self::map_result(result, operation, resource, Some(&form_body))
     }
@@ -869,6 +878,41 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::{AwsClientConfig, AwsCredentials, AwsServiceOverrides};
+    use httpmock::{Method::POST, MockServer};
+
+    #[tokio::test]
+    async fn batch_send_does_not_retry_an_ambiguous_failure() {
+        let server = MockServer::start_async().await;
+        let credentials = AwsCredentialProvider::from_config_sync(AwsClientConfig {
+            account_id: "123456789012".into(),
+            region: "us-east-1".into(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "test-access".into(),
+                secret_access_key: "test-secret".into(),
+                session_token: None,
+            },
+            service_overrides: Some(AwsServiceOverrides {
+                endpoints: HashMap::from([("sqs".into(), server.base_url())]),
+            }),
+        });
+        let client = SqsClient::new(Client::new(), credentials);
+        let failure = server.mock_async(|when, then| {
+            when.method(POST).body_contains("Action=SendMessageBatch").body_contains("SendMessageBatchRequestEntry.1.MessageBody=payload");
+            then.status(503).body("<ErrorResponse><Error><Code>ServiceUnavailable</Code><Message>unavailable</Message></Error></ErrorResponse>");
+        }).await;
+        assert!(client
+            .send_message_batch(
+                "https://example.test/events",
+                vec![SendMessageBatchEntry {
+                    id: "0".into(),
+                    message_body: "payload".into()
+                }]
+            )
+            .await
+            .is_err());
+        failure.assert_hits_async(1).await;
+    }
 
     #[test]
     fn receive_message_decodes_repeated_sqs_system_attributes() {

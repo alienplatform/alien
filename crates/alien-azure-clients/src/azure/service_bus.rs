@@ -1310,3 +1310,50 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use crate::azure::{AzureClientConfig, AzureClientConfigExt, ServiceOverrides};
+    use httpmock::{Method::POST, MockServer};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn batch_wire_format_and_failure_are_single_attempt() {
+        let server = MockServer::start_async().await;
+        let config = AzureClientConfig::mock().with_service_overrides(ServiceOverrides {
+            endpoints: HashMap::from([("servicebus".to_string(), server.base_url())]),
+        });
+        let client =
+            AzureServiceBusDataPlaneClient::new(Client::new(), AzureTokenCache::new(config));
+        let bodies = vec!["plain".to_string(), "quoted \"value\"\nline".to_string()];
+        let success = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/events/messages")
+                    .header("content-type", "application/vnd.microsoft.servicebus.json")
+                    .header("x-ms-retrypolicy", "NoRetry")
+                    .header("authorization", "Bearer mock_access_token_for_testing")
+                    .json_body(json!([{"Body": bodies[0]}, {"Body": bodies[1]}]));
+                then.status(201);
+            })
+            .await;
+        client
+            .send_message_batch("test".into(), "events".into(), bodies)
+            .await
+            .unwrap();
+        success.assert_hits_async(1).await;
+        let failure = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/unavailable/messages");
+                then.status(503).body("unavailable");
+            })
+            .await;
+        assert!(client
+            .send_message_batch("test".into(), "unavailable".into(), vec!["payload".into()])
+            .await
+            .is_err());
+        failure.assert_hits_async(1).await;
+    }
+}
