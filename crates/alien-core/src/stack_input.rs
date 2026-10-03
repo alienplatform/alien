@@ -333,6 +333,7 @@ mod environment_tests {
             description: id.to_string(),
             placeholder: None,
             default: None,
+            generate: None,
             platforms: None,
             validation: None,
             env: vec![StackInputEnvironmentMapping {
