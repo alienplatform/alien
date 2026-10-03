@@ -115,6 +115,12 @@ pub struct RuntimeMetadata {
     /// teardown removes exactly what is recorded here.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub setup_scaffolding: BTreeMap<String, SetupScaffolding>,
+
+    /// Whether each vault-native deployer secret is in the customer's secret
+    /// store, with where it goes. Checked from metadata only; no value is ever
+    /// read or recorded here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deployer_secrets: Vec<crate::DeployerSecretReport>,
 }
 
 /// Cloud objects a direct setup created so a runtime-owned resource can run.

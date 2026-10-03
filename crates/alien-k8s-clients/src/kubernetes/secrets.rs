@@ -5,7 +5,9 @@ use alien_error::{Context, IntoAlienError};
 use reqwest::Method;
 
 use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use k8s_openapi::List;
+use serde::Deserialize;
 
 use async_trait::async_trait;
 #[cfg(feature = "test-utils")]
@@ -16,6 +18,8 @@ use mockall::automock;
 pub trait SecretsApi: Send + Sync + std::fmt::Debug {
     async fn create_secret(&self, namespace: &str, secret: &Secret) -> Result<Secret>;
     async fn get_secret(&self, namespace: &str, name: &str) -> Result<Secret>;
+    /// A Secret's object metadata, without its data.
+    async fn get_secret_metadata(&self, namespace: &str, name: &str) -> Result<ObjectMeta>;
     async fn list_secrets(
         &self,
         namespace: &str,
@@ -63,6 +67,29 @@ impl KubernetesClient {
         let builder = self.client().request(Method::GET, &url);
 
         sign_send_json(builder, &self.auth_config()).await
+    }
+
+    /// Get a secret's object metadata without its data. The API server answers
+    /// with a `PartialObjectMetadata`, so the secret's values never leave it.
+    pub async fn get_secret_metadata(&self, namespace: &str, name: &str) -> Result<ObjectMeta> {
+        #[derive(Deserialize)]
+        struct PartialObjectMetadata {
+            metadata: ObjectMeta,
+        }
+
+        let url = format!(
+            "{}/api/v1/namespaces/{}/secrets/{}",
+            self.get_base_url(),
+            urlencoding::encode(namespace),
+            urlencoding::encode(name)
+        );
+        let builder = self.client().request(Method::GET, &url).header(
+            "Accept",
+            "application/json;as=PartialObjectMetadata;g=meta.k8s.io;v=v1",
+        );
+
+        let partial: PartialObjectMetadata = sign_send_json(builder, &self.auth_config()).await?;
+        Ok(partial.metadata)
     }
 
     /// List secrets in the specified namespace with optional selectors
@@ -152,6 +179,10 @@ impl SecretsApi for KubernetesClient {
 
     async fn get_secret(&self, namespace: &str, name: &str) -> Result<Secret> {
         self.get_secret(namespace, name).await
+    }
+
+    async fn get_secret_metadata(&self, namespace: &str, name: &str) -> Result<ObjectMeta> {
+        self.get_secret_metadata(namespace, name).await
     }
 
     async fn list_secrets(

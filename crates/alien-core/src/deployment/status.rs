@@ -17,6 +17,9 @@ pub enum DeploymentStatus {
     InitialSetupFailed,
     Provisioning,
     WaitingForMachines,
+    /// A required deployer secret is missing or invalid in the customer's
+    /// secret store; workloads wait until it is written.
+    WaitingForSecrets,
     ProvisioningFailed,
     Running,
     RefreshFailed,

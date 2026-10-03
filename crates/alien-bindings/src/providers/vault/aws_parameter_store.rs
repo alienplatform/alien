@@ -1,5 +1,9 @@
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::ssm::{GetParameterRequest, PutParameterRequest, SsmApi, SsmClient};
+use crate::traits::SecretPresence;
+use alien_aws_clients::ssm::{
+    DescribeParametersRequest, GetParameterRequest, ParameterStringFilter, PutParameterRequest,
+    SsmApi, SsmClient,
+};
 use alien_error::{Context, ContextError};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -22,7 +26,7 @@ impl AwsParameterStoreVault {
 
     /// Generate the full parameter name with vault prefix.
     fn full_parameter_name(&self, secret_name: &str) -> String {
-        format!("{}-{}", self.vault_prefix, secret_name)
+        alien_core::vault_naming::parameter_store_parameter_name(&self.vault_prefix, secret_name)
     }
 }
 
@@ -62,6 +66,41 @@ impl crate::traits::Vault for AwsParameterStoreVault {
                 resource_id: None,
             })
         })
+    }
+
+    /// Looks the parameter up with `DescribeParameters`, which returns metadata
+    /// only, and requires a `SecureString`: a plain `String` parameter would
+    /// keep the secret unencrypted.
+    async fn secret_presence(&self, secret_name: &str) -> Result<SecretPresence> {
+        let full_name = self.full_parameter_name(secret_name);
+
+        let request = DescribeParametersRequest::builder()
+            .parameter_filters(vec![ParameterStringFilter::builder()
+                .key("Name".to_string())
+                .option("Equals".to_string())
+                .values(vec![full_name.clone()])
+                .build()])
+            .build();
+
+        let response = self.client.describe_parameters(request).await.context(
+            ErrorData::CloudPlatformError {
+                message: format!("Failed to describe parameter '{full_name}'"),
+                resource_id: None,
+            },
+        )?;
+
+        let Some(parameter) = response.parameters.unwrap_or_default().into_iter().next() else {
+            return Ok(SecretPresence::Missing);
+        };
+        match parameter.parameter_type.as_deref() {
+            Some("SecureString") => Ok(SecretPresence::Present),
+            other => Ok(SecretPresence::Invalid {
+                reason: format!(
+                    "parameter '{full_name}' is a {} parameter; it must be a SecureString",
+                    other.unwrap_or("untyped")
+                ),
+            }),
+        }
     }
 
     /// Set a secret value using SecureString parameters.

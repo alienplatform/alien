@@ -1,4 +1,5 @@
 use crate::error::{ErrorData, Result};
+use crate::traits::SecretPresence;
 use alien_azure_clients::keyvault::{AzureKeyVaultSecretsClient, KeyVaultSecretsApi};
 use alien_azure_clients::models::secrets::SecretSetParameters;
 use alien_error::{Context, ContextError};
@@ -24,7 +25,7 @@ impl AzureKeyVault {
     /// Azure Key Vault secret names only allow alphanumerics and hyphens.
     /// Convert underscores to hyphens for compatibility.
     fn sanitize_secret_name(name: &str) -> String {
-        name.replace('_', "-")
+        alien_core::vault_naming::key_vault_secret_name(name)
     }
 }
 
@@ -33,6 +34,63 @@ impl crate::traits::Binding for AzureKeyVault {}
 
 #[async_trait]
 impl crate::traits::Vault for AzureKeyVault {
+    /// Lists the secret's versions, which carry attributes but no values. An
+    /// unversioned read returns the newest version, so that one must be
+    /// enabled and inside its activation window.
+    async fn secret_presence(&self, secret_name: &str) -> Result<SecretPresence> {
+        let sanitized = Self::sanitize_secret_name(secret_name);
+
+        let versions = match self
+            .client
+            .list_secret_versions(self.vault_base_url.clone(), sanitized.clone())
+            .await
+        {
+            Ok(versions) => versions,
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                return Ok(SecretPresence::Missing);
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to list versions of secret '{}' in vault '{}'",
+                        sanitized, self.vault_base_url
+                    ),
+                    resource_id: None,
+                }))
+            }
+        };
+
+        let newest = versions
+            .value
+            .iter()
+            .filter_map(|item| item.attributes.as_ref())
+            .max_by_key(|attributes| attributes.created.unwrap_or_default());
+        let Some(attributes) = newest else {
+            return Ok(SecretPresence::Missing);
+        };
+        let now = chrono::Utc::now().timestamp();
+        let reason = if attributes.enabled == Some(false) {
+            Some("is disabled")
+        } else if attributes.exp.is_some_and(|expires| expires <= now) {
+            Some("has expired")
+        } else if attributes.nbf.is_some_and(|not_before| not_before > now) {
+            Some("is not active yet")
+        } else {
+            None
+        };
+        Ok(match reason {
+            Some(reason) => SecretPresence::Invalid {
+                reason: format!("the newest version of secret '{sanitized}' {reason}"),
+            },
+            None => SecretPresence::Present,
+        })
+    }
+
     /// Get a secret value by name
     async fn get_secret(&self, secret_name: &str) -> Result<String> {
         let sanitized = Self::sanitize_secret_name(secret_name);

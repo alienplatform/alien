@@ -528,6 +528,14 @@ impl Vault for RefreshingVault {
         self.resolver.vault().await?.get_secret(secret_name).await
     }
 
+    async fn secret_presence(&self, secret_name: &str) -> Result<crate::traits::SecretPresence> {
+        self.resolver
+            .vault()
+            .await?
+            .secret_presence(secret_name)
+            .await
+    }
+
     async fn set_secret(&self, secret_name: &str, value: &str) -> Result<()> {
         self.resolver
             .vault()
