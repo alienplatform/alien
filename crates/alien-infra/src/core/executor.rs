@@ -292,6 +292,12 @@ mod controller_platform_tests {
     }
 }
 
+/// Whether a failed delete step means the resource is gone or out of reach of these
+/// credentials, so retrying cannot help.
+///
+/// Such an error ends the whole resource as `Deleted` and the delete steps after it never
+/// run. A handler that has more cleanup ahead of it must therefore treat a not-found or
+/// access-denied answer it expects as success and continue, instead of returning it.
 fn is_best_effort_delete_error(err: &AlienError<ErrorData>) -> bool {
     is_best_effort_delete_code(&err.code, err.http_status_code)
         || err
