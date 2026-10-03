@@ -2,8 +2,8 @@ use crate::error::Result;
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::instance_catalog::is_same_architecture_aws_machine;
 use alien_core::{
-    CapacityGroup, ComputeCluster, Platform, Resource, ResourceLifecycle, Sandbox, SandboxCode,
-    Stack,
+    CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Platform,
+    Resource, ResourceLifecycle, Sandbox, SandboxCode, Stack,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -51,13 +51,42 @@ fn runtime_managed_frozen_change(platform: Platform, old: &Resource, new: &Resou
         old_group.max_size = new_group.max_size;
         old_group.scale_policy = new_group.scale_policy.clone();
         if let Some((old_machine, new_machine)) = machine_change(old_group, new_group) {
-            if runtime_machine_change(platform, old_machine, new_machine) {
+            if runtime_machine_change(platform, old_machine, new_machine)
+                && validated_machine_profile(platform, new_group)
+            {
                 old_group.instance_type = new_group.instance_type.clone();
                 old_group.profile = new_group.profile.clone();
             }
         }
     }
     normalized == *new_cluster
+}
+
+fn validated_machine_profile(platform: Platform, group: &CapacityGroup) -> bool {
+    let scale = group.scale_policy.clone().unwrap_or_else(|| {
+        CapacityGroupScalePolicy::from_selected_bounds(group.min_size, group.max_size)
+    });
+    let selection = match scale {
+        CapacityGroupScalePolicy::Fixed { .. } => ComputePoolSelection::Fixed {
+            machines: group.min_size,
+            machine: group.instance_type.clone(),
+            failure_domains: None,
+        },
+        CapacityGroupScalePolicy::Autoscale { .. } => ComputePoolSelection::Autoscale {
+            min: group.min_size,
+            max: group.max_size,
+            machine: group.instance_type.clone(),
+            failure_domains: None,
+        },
+    };
+    let mut materialized = group.clone();
+    crate::mutations::compute_cluster::materialize_selected_group(
+        &mut materialized,
+        platform,
+        &selection,
+    )
+    .is_ok()
+        && materialized.profile == group.profile
 }
 
 fn machine_change<'a>(
@@ -595,6 +624,39 @@ mod tests {
     async fn aws_machine_change_within_one_architecture_is_runtime_manageable() {
         let result = machine_change(Platform::Aws, "m8i.4xlarge").await;
         assert!(result.success, "{:?}", result.errors);
+    }
+
+    #[tokio::test]
+    async fn declared_machine_change_rejects_inconsistent_profile_and_nested_virtualization() {
+        let old = compute_cluster(2);
+        let mut changed = compute_cluster(2);
+        changed.capacity_groups[0].instance_type = Some("m7i.4xlarge".into());
+        changed.capacity_groups[0].profile =
+            alien_core::instance_catalog::find_instance_type(Platform::Aws, "m8i.8xlarge")
+                .map(|spec| spec.to_machine_profile());
+        let check = FrozenResourcesUnchangedCheck {
+            platform: Platform::Aws,
+        };
+        assert!(
+            !check
+                .check(&compute_stack(old.clone()), &compute_stack(changed.clone()))
+                .await
+                .unwrap()
+                .success
+        );
+        changed.capacity_groups[0].profile =
+            alien_core::instance_catalog::find_instance_type(Platform::Aws, "m7i.4xlarge")
+                .map(|spec| spec.to_machine_profile());
+        changed.capacity_groups[0].nested_virtualization = Some(true);
+        let mut old_nested = old;
+        old_nested.capacity_groups[0].nested_virtualization = Some(true);
+        assert!(
+            !check
+                .check(&compute_stack(old_nested), &compute_stack(changed))
+                .await
+                .unwrap()
+                .success
+        );
     }
 
     #[tokio::test]

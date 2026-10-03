@@ -10,9 +10,9 @@ use crate::StackMutation;
 use alien_core::{
     compute_planner::{capacity_group_requirements, validate_compute_pool_selection},
     instance_catalog::{self, WorkloadRequirements},
-    CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, Container, Daemon, DeploymentConfig,
-    MachineProfile, Network, Platform, ResourceEntry, ResourceLifecycle, ResourceRef, Stack,
-    StackState,
+    CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Container,
+    Daemon, DeploymentConfig, MachineProfile, Network, Platform, ResourceEntry, ResourceLifecycle,
+    ResourceRef, Stack, StackState,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -53,16 +53,14 @@ impl StackMutation for ComputeClusterMutation {
         let daemon_cluster_ids =
             referenced_daemon_clusters_for_platform(stack, stack_state.platform);
         let has_daemon_cluster_ref = !daemon_cluster_ids.is_empty();
+        if !has_containers && !has_daemon_cluster_ref {
+            return false;
+        }
+
         let has_cluster = stack
             .resources
             .values()
             .any(|entry| entry.config.resource_type().as_ref() == "compute-cluster");
-
-        // Explicit cloud clusters also need selection validation and profile
-        // derivation, even when no workload currently references them.
-        if !has_containers && !has_daemon_cluster_ref && !has_cluster {
-            return false;
-        }
 
         if !has_cluster {
             return true;
@@ -643,6 +641,16 @@ fn materialize_group(
                 ),
             })
         })?;
+    materialize_selected_group(group, platform, selection)
+}
+
+/// Use the same validation and profile derivation for declared machine changes
+/// as for deployment compute selections.
+pub(crate) fn materialize_selected_group(
+    group: &mut CapacityGroup,
+    platform: Platform,
+    selection: &ComputePoolSelection,
+) -> Result<()> {
     selection.validate().map_err(|message| {
         AlienError::new(crate::error::ErrorData::StackMutationFailed {
             mutation_name: "ComputeClusterMutation".to_string(),
@@ -1344,8 +1352,8 @@ mod tests {
         assert!(!mutation.should_run(&result, &stack_state, &config));
     }
 
-    #[tokio::test]
-    async fn explicit_domain_pool_does_not_materialize_unrelated_persisted_aggregate_pool() {
+    #[test]
+    fn explicit_domain_pool_does_not_materialize_unrelated_persisted_aggregate_pool() {
         let capacity_group = |group_id: &str| CapacityGroup {
             group_id: group_id.to_string(),
             instance_type: Some("m7i.large".to_string()),
@@ -1420,10 +1428,8 @@ mod tests {
             .external_bindings(ExternalBindings::default())
             .build();
 
-        assert!(ComputeClusterMutation.should_run(&stack, &stack_state, &config));
         let materialized = ComputeClusterMutation
-            .mutate(stack, &stack_state, &config)
-            .await
+            .materialize_capacity_groups(stack, &stack_state, &config)
             .expect("mixed aggregate and domain-aware pools should materialize independently");
         let cluster = materialized.resources["compute"]
             .config
