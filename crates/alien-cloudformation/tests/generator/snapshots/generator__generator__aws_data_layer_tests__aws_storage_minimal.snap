@@ -108,6 +108,7 @@ Resources:
         Value: data
       - Key: resource-type
         Value: storage
+      AbacStatus: Enabled
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
   DataBucketPolicy:
