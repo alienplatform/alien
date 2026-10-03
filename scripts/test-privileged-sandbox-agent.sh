@@ -74,6 +74,15 @@ assert terminal['code']==28,(out,terminal)
 out,terminal=execute(['/usr/bin/python3','-c','import socket; socket.socket(socket.AF_INET6,socket.SOCK_STREAM)'])
 assert terminal['code']!=0 and 'Operation not permitted' in out,(out,terminal)
 
+# Commands cannot forge ACK packets or change TCP state to bypass the SYN boundary.
+for program in [
+    'import socket; socket.socket(socket.AF_INET,socket.SOCK_RAW,socket.IPPROTO_TCP)',
+    'import socket; socket.socket(socket.AF_PACKET,socket.SOCK_RAW)',
+    'import socket; s=socket.socket(); s.setsockopt(socket.IPPROTO_TCP,19,1)',
+]:
+    out,terminal=execute(['/usr/bin/python3','-c',program])
+    assert terminal['code']!=0 and 'Operation not permitted' in out,(out,terminal)
+
 # DNS must be denied before the loopback exception; ordinary loopback traffic must work.
 def echo(sock):
     while True:
