@@ -37,8 +37,8 @@ prepare command-owned files, drop identities, and cancel commands.
 `deny` grants commands no routed egress or DNS. `allowDomains` resolves the declared
 names before starting commands, pins public IPv4 addresses in `/etc/hosts`, and
 permits traffic only to those addresses. Commands cannot send DNS queries, including
-to a loopback resolver. The addresses stay pinned for the session lifetime; restart
-to refresh them. This is an IP allowlist: other hostnames or services sharing an
+to a loopback resolver. AWS snapshots these addresses into the image version. Rebuild and redeploy the
+image to refresh them; restarting or resuming a session retains the pinned addresses. This is an IP allowlist: other hostnames or services sharing an
 allowed IP are reachable. Wildcards and IPv6-only destinations are unsupported.
 `allow` permits public IPv4 egress and the configured DNS resolvers, while denying
 private/link-local destinations. Loopback services and replies to inbound agent or
