@@ -10,9 +10,9 @@ use crate::StackMutation;
 use alien_core::{
     compute_planner::{capacity_group_requirements, validate_compute_pool_selection},
     instance_catalog::{self, WorkloadRequirements},
-    CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, Container, Daemon, DeploymentConfig,
-    MachineProfile, Network, Platform, ResourceEntry, ResourceLifecycle, ResourceRef, Stack,
-    StackState,
+    CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Container,
+    Daemon, DeploymentConfig, MachineProfile, Network, Platform, ResourceEntry, ResourceLifecycle,
+    ResourceRef, Stack, StackState,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -641,6 +641,16 @@ fn materialize_group(
                 ),
             })
         })?;
+    materialize_selected_group(group, platform, selection)
+}
+
+/// Use the same validation and profile derivation for declared machine changes
+/// as for deployment compute selections.
+pub(crate) fn materialize_selected_group(
+    group: &mut CapacityGroup,
+    platform: Platform,
+    selection: &ComputePoolSelection,
+) -> Result<()> {
     selection.validate().map_err(|message| {
         AlienError::new(crate::error::ErrorData::StackMutationFailed {
             mutation_name: "ComputeClusterMutation".to_string(),
