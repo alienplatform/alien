@@ -8,11 +8,18 @@
 use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::azure::helpers::{downcast, required_label},
+    emitters::azure::helpers::{
+        downcast, emit_remote_bindings_role_definitions, permission_context,
+        remote_bindings_role_label, required_label,
+    },
     expr,
 };
-use alien_core::{import::EmitContext, AzureStorageAccount, ErrorData, Kv, Result};
-use alien_error::AlienError;
+use alien_core::{import::EmitContext, AzureStorageAccount, ErrorData, Kv, RemoteBindings, Result};
+use alien_error::{AlienError, Context};
+use alien_permissions::{
+    generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
+    BindingTarget,
+};
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -39,6 +46,7 @@ impl TfEmitter for AzureKvEmitter {
         );
         fragment.resource_blocks.push(table);
 
+        emit_remote_access(ctx, &mut fragment, label, &parent_label)?;
         Ok(fragment)
     }
 
@@ -113,4 +121,88 @@ fn table_name_expr(kv_id: &str) -> Expression {
         "substr(lower(replace(\"kv${{local.resource_prefix}}{}\", \"/[^A-Za-z0-9]/\", \"\")), 0, 63)",
         kv_id
     ))
+}
+
+fn emit_remote_access(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    label: &str,
+    parent_label: &str,
+) -> Result<()> {
+    let Some(definition) = alien_core::remote_bindings::remote_binding_for_entry(ctx.resource)
+    else {
+        return Ok(());
+    };
+    let access_label = ctx
+        .stack
+        .resources()
+        .find_map(|(id, entry)| {
+            (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
+                .then(|| ctx.name_for(id))
+                .flatten()
+        })
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: "Remote KV requires its setup-owned access identity".to_string(),
+            })
+        })?;
+    let permission_set = alien_permissions::get_permission_set(definition.permission_set)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "Remote KV permission set {} is not registered",
+                    definition.permission_set
+                ),
+            })
+        })?;
+    let context = permission_context(label)
+        .with_resource_name(format!("${{azurerm_storage_table.{label}.name}}"))
+        .with_storage_account_name(format!("${{azurerm_storage_account.{parent_label}.name}}"));
+    let plan = AzureRuntimePermissionsGenerator::new()
+        .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+        .context(ErrorData::GenericError {
+            message: "Generate remote KV table grants".to_string(),
+        })?;
+    emit_remote_bindings_role_definitions(fragment, permission_set)?;
+    for (index, binding) in plan.bindings.iter().enumerate() {
+        let role_id = match &binding.role_definition {
+            AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+                expr::template(role_definition_id.clone())
+            }
+            AzureRoleDefinitionRef::Custom { key } => {
+                let role_index = plan
+                    .custom_roles
+                    .iter()
+                    .position(|role| &role.key == key)
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::GenericError {
+                            message: "Missing remote KV custom role".to_string(),
+                        })
+                    })?;
+                let role_label = remote_bindings_role_label(&binding.role_name, role_index);
+                expr::traversal([
+                    "azurerm_role_definition",
+                    role_label.as_str(),
+                    "role_definition_resource_id",
+                ])
+            }
+        };
+        fragment.resource_blocks.push(resource_block(
+            "azurerm_role_assignment",
+            &format!("{label}_access_{index}"),
+            [
+                attr("scope", expr::template(binding.scope.clone())),
+                attr("role_definition_id", role_id),
+                attr(
+                    "principal_id",
+                    expr::traversal([
+                        "azurerm_user_assigned_identity",
+                        access_label,
+                        "principal_id",
+                    ]),
+                ),
+            ],
+        ));
+    }
+    Ok(())
 }

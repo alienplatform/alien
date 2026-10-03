@@ -8,6 +8,7 @@
 
 mod generator {
     pub mod helpers;
+    pub mod remote_kv_tests;
 
     pub mod aws_compute_tests;
     pub mod aws_data_layer_tests;
