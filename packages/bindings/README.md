@@ -219,3 +219,23 @@ chunked using SQS SendMessageBatch (up to ten entries and 256KiB), Pub/Sub publi
 and Service Bus HTTP batch send. Service Bus also counts JSON envelope/escaping
 against the 256KiB batch limit, so heavily escaped text may be rejected. Empty input
 returns an empty result. Existing scoped publisher permissions cover batching.
+
+### Remote queues
+
+Publish a Frozen queue with `remoteAccess: true`, apply its updated setup, and
+resolve it from a backend:
+
+```ts
+const bindings = await Bindings.forRemoteCustomer({ project, externalId, token })
+const events = bindings.queue("events")
+await events.send({ order: 1 })
+const results = await events.sendBatch([{ order: 2 }, { order: 3 }])
+```
+
+Python uses `await Bindings.for_remote_customer(...)`, then
+`bindings.queue("events").send(...)` or `.send_batch(...)`. Both languages use the
+Rust provider implementations. TypeScript and Python remote queue handles expose only sending;
+cloud permissions also deny receiving, acknowledging, and purging. Credentials
+refresh before operations as their leases expire. SQS, Pub/Sub, and Service Bus
+use resource-scoped publisher grants. Batch results have the same partial-failure
+semantics as local queue handles.

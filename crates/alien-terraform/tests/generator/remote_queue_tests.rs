@@ -1,6 +1,7 @@
 use super::helpers::{assert_terraform_valid, render};
 use alien_core::{
-    AzureServiceBusNamespace, Queue, RemoteBindings, ResourceLifecycle, ResourceRef, Stack, StackSettings,
+    AzureServiceBusNamespace, Queue, RemoteBindings, ResourceLifecycle, ResourceRef, Stack,
+    StackSettings,
 };
 use alien_terraform::TerraformTarget;
 

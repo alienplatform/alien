@@ -104,7 +104,7 @@ mod tests {
     use super::*;
     use crate::auth::{RemoteBindingCapability, SubjectKind};
 
-    const ALL_KINDS: [RemoteBindingKind; 5] = [
+    const ALL_KINDS: [RemoteBindingKind; 6] = [
         RemoteBindingKind::Storage,
         RemoteBindingKind::Kv,
         RemoteBindingKind::Queue,

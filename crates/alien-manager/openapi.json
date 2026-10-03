@@ -16503,6 +16503,22 @@
         },
         "additionalProperties": false
       },
+      "RemotePubsubQueueBinding": {
+        "type": "object",
+        "description": "Concrete send-only queue topology returned to remote clients.",
+        "required": [
+          "topic",
+          "subscription"
+        ],
+        "properties": {
+          "subscription": {
+            "type": "string"
+          },
+          "topic": {
+            "type": "string"
+          }
+        }
+      },
       "RemoteS3StorageBinding": {
         "type": "object",
         "description": "Concrete S3 topology returned to remote clients.",
@@ -16516,6 +16532,34 @@
           }
         },
         "additionalProperties": false
+      },
+      "RemoteServiceBusQueueBinding": {
+        "type": "object",
+        "description": "Concrete send-only queue topology returned to remote clients.",
+        "required": [
+          "namespace",
+          "queueName"
+        ],
+        "properties": {
+          "namespace": {
+            "type": "string"
+          },
+          "queueName": {
+            "type": "string"
+          }
+        }
+      },
+      "RemoteSqsQueueBinding": {
+        "type": "object",
+        "description": "Concrete send-only queue topology returned to remote clients.",
+        "required": [
+          "queueUrl"
+        ],
+        "properties": {
+          "queueUrl": {
+            "type": "string"
+          }
+        }
       },
       "RemoteStackManagementHeartbeatData": {
         "oneOf": [
@@ -16833,6 +16877,87 @@
                 "type": "string",
                 "enum": [
                   "gcs"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Send-only Sqs queue and a short-lived credential lease.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteSqsQueueBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAwsClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "sqs"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Send-only Pubsub queue and a short-lived credential lease.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemotePubsubQueueBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteGcpClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "pubsub"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Send-only Servicebus queue and a short-lived credential lease.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteServiceBusQueueBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAzureClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "servicebus"
                 ]
               }
             }
