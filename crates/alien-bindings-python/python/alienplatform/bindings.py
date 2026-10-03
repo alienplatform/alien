@@ -248,17 +248,6 @@ class Queue:
         return json.loads(await (await self._handle.get()).send_batch_text(messages))
 
     @translate_errors
-    async def send_batch(self, messages: list[Any]) -> list[dict[str, str]]:
-        """Return one outcome per input. Unknown delivery may duplicate on retry."""
-        values = [json.dumps(message, separators=(",", ":")) for message in messages]
-        return json.loads(await (await self._handle.get()).send_batch_json(values))
-
-    @translate_errors
-    async def send_batch_text(self, messages: list[str]) -> list[dict[str, str]]:
-        """Send raw text messages using the provider's batch operation."""
-        return json.loads(await (await self._handle.get()).send_batch_text(messages))
-
-    @translate_errors
     async def send(self, message: Any) -> None:
         await (await self._handle.get()).send_json(json.dumps(message, separators=(",", ":")))
 
