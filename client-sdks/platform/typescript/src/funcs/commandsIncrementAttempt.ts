@@ -169,7 +169,7 @@ async function $do(
   >(
     M.json(200, models.IncrementCommandAttemptResponse$inboundSchema),
     M.jsonErr(404, errors.APIError$inboundSchema),
-    M.jsonErr(500, errors.APIError$inboundSchema),
+    M.jsonErr([500, 503], errors.APIError$inboundSchema),
     M.fail("4XX"),
     M.fail("5XX"),
   )(response, req, { extraFields: responseFields });

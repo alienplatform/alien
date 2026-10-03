@@ -51,7 +51,7 @@ export type CreateCommandRequest = {
    */
   requestSizeBytes?: number | undefined;
   /**
-   * Opaque operation result contract forwarded by a manager and persisted before dispatch
+   * Opaque operation result contract with an optional accessRequestId binding, forwarded by a manager and persisted atomically before dispatch
    */
   operationResultContract?: any | null | undefined;
 };

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { APIError } from "../typescript/esm/models/errors/apierror.js";
 import { HTTPClient } from "../typescript/esm/lib/http.js";
 import { Alien } from "../typescript/esm/sdk/sdk.js";
 import { OperationsPermissionDiff$inboundSchema } from "../typescript/esm/models/index.js";
@@ -271,3 +272,42 @@ test("Events.get still rejects malformed rotation events", async () => {
     name: "ResponseValidationError",
   });
 });
+
+const commandId = "cmd_2sxjXxvOYct7IohT3ukliAzfmpqr";
+for (const [operation, request] of [
+  ["resolveTarget", { deploymentId, command: "reindex" }],
+  ["get", { id: commandId }],
+  ["update", { id: commandId, updateCommandRequest: { state: "DISPATCHED" } }],
+  ["dispatch", { id: commandId, dispatchCommandRequest: { dispatchedAt: new Date() } }],
+  ["complete", { id: commandId, completeCommandRequest: { state: "SUCCEEDED", completedAt: new Date() } }],
+  ["incrementAttempt", { id: commandId }],
+]) {
+  test(`Commands.${operation} preserves a structured 503 API error`, async () => {
+    let requests = 0;
+    const body = {
+      code: "SERVICE_UNAVAILABLE",
+      message: "The API cannot serve the request right now.",
+      retryable: true,
+      internal: false,
+      httpStatusCode: 503,
+      requestId: "00000000-0000-4000-8000-000000000000",
+    };
+    const sdk = client(async () => {
+      requests++;
+      return Response.json(body, { status: 503 });
+    });
+    await assert.rejects(
+      sdk.commands[operation](request, { retries: { strategy: "none" } }),
+      error => {
+        assert.ok(error instanceof APIError);
+        assert.equal(error.code, body.code);
+        assert.equal(error.message, body.message);
+        assert.equal(error.retryable, body.retryable);
+        assert.equal(error.httpStatusCode, body.httpStatusCode);
+        assert.equal(error.requestId, body.requestId);
+        return true;
+      },
+    );
+    assert.equal(requests, 1);
+  });
+}
