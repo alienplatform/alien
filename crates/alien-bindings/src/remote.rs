@@ -864,7 +864,8 @@ impl ResolvedRemoteBinding {
             }
             Self::Bedrock { .. } | Self::Vertex { .. } | Self::Foundry { .. } => {
                 return Err(AlienError::new(ErrorData::RemoteAccessFailed {
-                    operation: "use an AI lease as a Storage, KV, Key or Sandbox binding".to_string(),
+                    operation: "use an AI lease as a Storage, KV, Key or Sandbox binding"
+                        .to_string(),
                 }));
             }
             #[cfg(test)]

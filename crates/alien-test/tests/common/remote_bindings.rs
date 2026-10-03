@@ -1190,3 +1190,32 @@ async fn verify_deleted(
 
     Ok(())
 }
+
+/// Exercise the native TypeScript SDK against this deployment's real KV table.
+pub async fn check_remote_kv_ts(
+    deployment: &TestDeployment,
+    platform: Platform,
+) -> anyhow::Result<()> {
+    let discovery = DiscoveryServer::start(deployment, platform).await?;
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/bindings/scripts/remote-kv-smoke.mjs");
+    let output = tokio::process::Command::new("node")
+        .arg(script)
+        .env("ALIEN_DEPLOYMENT_ID", &deployment.id)
+        .env("ALIEN_API_KEY", &deployment.token)
+        .env("ALIEN_API_URL", &discovery.url)
+        .env(
+            "ALIEN_WORKLOAD_URL",
+            deployment.url.as_deref().context("workload URL")?,
+        )
+        .output()
+        .await
+        .context("run TypeScript remote KV smoke")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "remote KV smoke failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    info!("{}", String::from_utf8_lossy(&output.stdout));
+    Ok(())
+}

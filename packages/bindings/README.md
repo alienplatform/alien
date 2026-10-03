@@ -67,6 +67,29 @@ for that Remote Bindings identity only after it validates the named resource, so
 Alien token and all returned provider credentials must be treated as backend
 secrets.
 
+## Remote KV
+
+A trusted backend can read and write a customer's KV resource using the same
+short-lived credential leases as remote Storage:
+
+```ts
+const bindings = await Bindings.forRemoteCustomer({ project, externalId, token })
+await bindings.kv("check-cache").setJson("status", { ready: true }, { ttl: 86400 })
+```
+
+Enable `remoteAccess` on the KV resource and apply the updated setup first.
+The resource must be Running and Frozen. AWS grants entry operations on the
+selected DynamoDB table; Azure grants entity operations on the selected table.
+Firestore IAM cannot isolate collections in the shared default database, so its
+remote identity can access documents throughout the project. Enable it only
+when that scope is appropriate.
+
+Remote KV uses the same read, write, conditional-write, scan, and logical TTL
+behavior as workload KV. Raw values are limited to 408,576 bytes on DynamoDB,
+783,360 bytes on Firestore (base64 encoding plus document metadata needs room),
+and 24,576 bytes on Azure and local storage. DynamoDB reserves 1 KiB of its
+400 KiB item limit for keys and metadata. Use object Storage for larger values.
+
 ## Linked containers
 
 The same factories are re-exported by `@alienplatform/sdk` for Worker apps.

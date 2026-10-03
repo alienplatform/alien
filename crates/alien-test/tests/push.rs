@@ -66,6 +66,9 @@ async fn push_aws_comprehensive_ts(ctx: &mut AwsPushTypeScript) {
     )
     .await
     .expect("binding checks failed");
+    common::remote_bindings::check_remote_kv_ts(&ctx.ctx.deployment, ctx.ctx.platform)
+        .await
+        .expect("remote TypeScript KV checks failed");
     common::commands::check_commands(&ctx.ctx.deployment)
         .await
         .expect("command checks failed");

@@ -7,7 +7,8 @@
 use alien_core::{
     Ai, AiBinding, AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials,
     BindingValue, ClientConfig, DeploymentStatus, GcpClientConfig, GcpCredentials, Key, KeyBinding,
-    Kv, KvBinding, Platform, ResourceLifecycle, ResourceStatus, Sandbox, SandboxBinding, Storage, StorageBinding,
+    Kv, KvBinding, Platform, ResourceLifecycle, ResourceStatus, Sandbox, SandboxBinding, Storage,
+    StorageBinding,
 };
 use alien_error::{Context, ContextError, IntoAlienError};
 use axum::{

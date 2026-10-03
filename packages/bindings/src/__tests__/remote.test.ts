@@ -53,6 +53,15 @@ function fakeRemoteAddon() {
       Buffer.concat([plaintext, Buffer.from(context?.tenant ?? "")]),
     decrypt: async ciphertext => ciphertext,
   }
+  const kvPut = vi.fn<RawKvHandle["put"]>(async () => true)
+  const remoteKv: RawKvHandle = {
+    get: async key => ({ key, value: Buffer.from('{"ready":true}'), version: "v1" }),
+    put: kvPut,
+    delete: async () => true,
+    exists: async () => true,
+    scan: async () => ({ items: [] }),
+  }
+  const resolveKv = vi.fn<RawRemoteBindingsHandle["kv"]>(async () => remoteKv)
   const resolveKey = vi.fn<(name: string) => Promise<RawKeyHandle>>(async () => key)
   const instance = (sandboxId: string | null | undefined) => ({
     sandboxId: sandboxId ?? "generated",
@@ -142,6 +151,8 @@ function fakeRemoteAddon() {
 
     storage = resolveStorage
 
+    kv = resolveKv
+
     key = resolveKey
 
     sandbox = resolveSandbox
@@ -175,6 +186,8 @@ function fakeRemoteAddon() {
     head,
     put,
     resolveKey,
+    resolveKv,
+    kvPut,
     resolveSandbox,
     terminate,
     resolveAi,
@@ -208,7 +221,7 @@ describe("Bindings.forRemoteCustomer", () => {
 })
 
 describe("Bindings.forRemoteDeployment", () => {
-  it("forwards discovery arguments and exposes only remote Storage", async () => {
+  it("forwards discovery arguments and limits the remote surface", async () => {
     const fixture = fakeRemoteAddon()
     loadAddon.mockReturnValue(fixture.addon)
 
@@ -226,11 +239,37 @@ describe("Bindings.forRemoteDeployment", () => {
       "token_123",
       "https://api.example.com",
     )
-    expect("kv" in bindings).toBe(false)
+    expect("kv" in bindings).toBe(true)
     expect("queue" in bindings).toBe(false)
     expect("vault" in bindings).toBe(false)
     expect("key" in bindings).toBe(true)
     expect(Object.keys(storage).sort()).toEqual(["delete", "get", "head", "list", "put"])
+  })
+
+  it("resolves remote KV lazily and forwards JSON and TTL to Rust", async () => {
+    const fixture = fakeRemoteAddon()
+    loadAddon.mockReturnValue(fixture.addon)
+    const bindings = await Bindings.forRemoteCustomer({
+      project: "acme",
+      externalId: "customer_123",
+      token: "token_123",
+    })
+    const cache = bindings.kv("check-cache")
+    expect(fixture.resolveKv).not.toHaveBeenCalled()
+    expect(await cache.setJson("status", { ready: true }, { ttl: 86400 })).toBe(true)
+    expect(await cache.getJson("status")).toEqual({
+      key: "status",
+      value: { ready: true },
+      version: "v1",
+    })
+    expect(fixture.resolveKv).toHaveBeenCalledExactlyOnceWith("check-cache")
+    expect(fixture.kvPut).toHaveBeenCalledWith(
+      "status",
+      Buffer.from('{"ready":true}'),
+      86400,
+      null,
+      null,
+    )
   })
 
   it("resolves a typed remote Key and forwards bytes and context", async () => {

@@ -3,6 +3,7 @@
 from .bindings import (
     Ai,
     AiConnection,
+    Bindings,
     CommandFrame,
     CommandStream,
     Container,
@@ -40,6 +41,7 @@ from .errors import AlienError
 __all__ = [
     "Ai",
     "AiConnection",
+    "Bindings",
     "AlienError",
     "Container",
     "Key",

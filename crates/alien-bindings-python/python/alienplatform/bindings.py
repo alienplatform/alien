@@ -17,7 +17,8 @@ H = TypeVar("H")
 
 
 class _LazyHandle(Generic[H]):
-    def __init__(self, kind: str, name: str) -> None:
+    def __init__(self, kind: str, name: str, bindings: object | None = None) -> None:
+        self._bindings = bindings
         self._kind = kind
         self._name = name
         self._task: asyncio.Task[H] | None = None
@@ -26,7 +27,9 @@ class _LazyHandle(Generic[H]):
         if self._task is None:
 
             async def resolve() -> H:
-                bindings = _native.BindingsHandle()
+                bindings = (
+                    self._bindings if self._bindings is not None else _native.BindingsHandle()
+                )
                 return await getattr(bindings, self._kind)(self._name)
 
             self._task = asyncio.create_task(resolve())
@@ -174,8 +177,8 @@ class Key:
 
 
 class Kv:
-    def __init__(self, name: str) -> None:
-        self._handle = _LazyHandle[Any]("kv", name)
+    def __init__(self, name: str, *, _bindings: object | None = None) -> None:
+        self._handle = _LazyHandle[Any]("kv", name, _bindings)
 
     @translate_errors
     async def get(self, key: str) -> KvEntry | None:
@@ -621,3 +624,33 @@ def worker(name: str) -> Worker:
 
 def sandbox(name: str) -> Sandbox:
     return Sandbox(name)
+
+
+class Bindings:
+    """Remote customer bindings backed by the shared Rust SDK."""
+
+    def __init__(self, handle: object) -> None:
+        self._handle = handle
+
+    @classmethod
+    @translate_errors
+    async def for_remote_customer(
+        cls, *, project: str, external_id: str, token: str, api_base_url: str | None = None
+    ) -> Bindings:
+        return cls(
+            await _native.RemoteBindingsHandle.for_customer(
+                project, external_id, token, api_base_url
+            )
+        )
+
+    @classmethod
+    @translate_errors
+    async def for_remote_deployment(
+        cls, *, deployment_id: str, token: str, api_base_url: str | None = None
+    ) -> Bindings:
+        return cls(
+            await _native.RemoteBindingsHandle.for_deployment(deployment_id, token, api_base_url)
+        )
+
+    def kv(self, name: str) -> Kv:
+        return Kv(name, _bindings=self._handle)

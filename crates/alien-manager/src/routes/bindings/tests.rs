@@ -1259,3 +1259,56 @@ fn resolve_response_debug_redacts_binding_and_credentials() {
     assert!(!debug.contains("TOP_SECRET"));
     assert!(!debug.contains("SESSION_SECRET"));
 }
+
+#[test]
+fn remote_kv_requires_running_frozen_table_and_matching_platform() {
+    let binding = serde_json::json!({
+        "service": "dynamodb", "tableName": "acme-cache", "region": "us-east-1"
+    });
+    let state = stack_state_with_resource(
+        Kv::RESOURCE_TYPE.as_ref(),
+        Some(ResourceLifecycle::Frozen),
+        ResourceStatus::Running,
+        Some(binding),
+    );
+    let mut deployment = deployment(state);
+    match remote_kv_binding(&deployment, "files").expect("resolve enabled table") {
+        RemoteKvBinding::Aws(binding) => {
+            assert_eq!(binding.table_name, "acme-cache");
+            assert_eq!(binding.region, "us-east-1");
+        }
+        _ => panic!("expected DynamoDB"),
+    }
+    deployment.platform = Platform::Gcp;
+    assert!(remote_kv_binding(&deployment, "files").is_err());
+    deployment.platform = Platform::Aws;
+    for (lifecycle, status, params) in [
+        (Some(ResourceLifecycle::Live), ResourceStatus::Running, true),
+        (
+            Some(ResourceLifecycle::Frozen),
+            ResourceStatus::Updating,
+            true,
+        ),
+        (
+            Some(ResourceLifecycle::Frozen),
+            ResourceStatus::Running,
+            false,
+        ),
+    ] {
+        let mut invalid = deployment.clone();
+        let resource = invalid
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .get_mut("files")
+            .unwrap();
+        resource.lifecycle = lifecycle;
+        resource.status = status;
+        if !params {
+            resource.remote_binding_params = None;
+        }
+        assert!(remote_kv_binding(&invalid, "files").is_err());
+    }
+    assert!(remote_kv_binding(&deployment, "missing").is_err());
+}
