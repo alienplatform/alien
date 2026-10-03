@@ -4,10 +4,16 @@ import type {
   StackInputDefinition,
   StackInputEnvironmentMapping,
   StackInputEnvironmentVariableType,
+  StackInputGenerate,
   StackInputKind,
   StackInputProvider,
   StackInputValidation,
 } from "./generated/index.js"
+
+/** Shortest value Alien generates for a secret input. */
+export const STACK_INPUT_GENERATE_MIN_LENGTH = 16
+/** Longest value Alien generates for a secret input. */
+export const STACK_INPUT_GENERATE_MAX_LENGTH = 256
 
 const stackInputDraftSymbol = Symbol("alien.stackInputDraft")
 const stackInputDefinitionsSymbol = Symbol("alien.stackInputDefinitions")
@@ -47,6 +53,17 @@ export interface SecretInputOptions extends Omit<CommonInputOptions<string>, "de
   maxLength?: number
   pattern?: string
   format?: string
+  /**
+   * Let Alien generate the value: an alphanumeric string of `length`
+   * characters (16–256) from a cryptographically secure generator.
+   *
+   * It is generated once, when the deployment's input values are first
+   * resolved, and kept with the deployment's other input values, so updates
+   * and redeploys reuse it. A value the developer provides replaces it. A
+   * generated input must be `providedBy: "developer"` and is never asked of
+   * the deployer; it cannot be combined with `pattern` or `format`.
+   */
+  generate?: StackInputGenerate
 }
 
 export interface NumberInputOptions extends CommonInputOptions<number> {
@@ -85,6 +102,7 @@ interface StackInputDraft<TValue extends StackInputValue = StackInputValue> {
   readonly kind: StackInputKind
   readonly options: CommonInputOptions<TValue>
   readonly validation: StackInputValidation
+  readonly generate?: StackInputGenerate
 }
 
 export type StackInputSet<T extends Record<string, StackInputDraft>> = {
@@ -115,6 +133,7 @@ export function inputs<const T extends Record<string, StackInputDraft>>(
       default: toDefaultValue(draft.kind, draft.options.default),
       platforms: draft.options.platforms ? [...draft.options.platforms] : undefined,
       validation: Object.keys(draft.validation).length > 0 ? draft.validation : undefined,
+      generate: draft.generate ? { length: draft.generate.length } : undefined,
       env: normalizeEnv(draft.options.env),
     })
   }
@@ -141,12 +160,14 @@ function defineInput<TValue extends StackInputValue>(
   kind: StackInputKind,
   options: CommonInputOptions<TValue>,
   validation: StackInputValidation = {},
+  generate?: StackInputGenerate,
 ): StackInputDraft<TValue> {
   return {
     [stackInputDraftSymbol]: true,
     kind,
     options,
     validation,
+    generate,
   }
 }
 
@@ -160,12 +181,17 @@ function defineStringInput(options: StringInputOptions): StackInputDraft<string>
 }
 
 function defineSecretInput(options: SecretInputOptions): StackInputDraft<string> {
-  return defineInput("secret", options, {
-    minLength: options.minLength,
-    maxLength: options.maxLength,
-    pattern: options.pattern,
-    format: options.format,
-  })
+  return defineInput(
+    "secret",
+    options,
+    {
+      minLength: options.minLength,
+      maxLength: options.maxLength,
+      pattern: options.pattern,
+      format: options.format,
+    },
+    options.generate,
+  )
 }
 
 function defineNumberInput(options: NumberInputOptions): StackInputDraft<number> {
@@ -272,6 +298,10 @@ function validateDraft(id: string, draft: StackInputDraft): void {
 
   validateValidation(id, draft.kind, draft.validation)
 
+  if (draft.generate !== undefined) {
+    validateGenerate(id, draft)
+  }
+
   for (const mapping of normalizeEnv(draft.options.env)) {
     validateEnvName(id, mapping.name)
     if (mapping.targetResources?.length === 0) {
@@ -279,6 +309,53 @@ function validateDraft(id: string, draft: StackInputDraft): void {
         `Stack input '${id}' env mapping '${mapping.name}' cannot use an empty targetResources list`,
       )
     }
+  }
+}
+
+function validateGenerate(id: string, draft: StackInputDraft): void {
+  const length = draft.generate?.length
+
+  if (draft.kind !== "secret") {
+    throw new Error(`Stack input '${id}' generate is only supported on secret inputs`)
+  }
+
+  if (draft.options.default !== undefined) {
+    throw new Error(`Stack input '${id}' generate cannot be combined with a default`)
+  }
+
+  const providedBy = normalizeArray(draft.options.providedBy)
+  if (providedBy.length !== 1 || providedBy[0] !== "developer") {
+    throw new Error(
+      `Stack input '${id}' generated inputs must be providedBy "developer" only; Alien supplies the value, so the deployer is never asked for it`,
+    )
+  }
+
+  if (
+    length === undefined ||
+    !Number.isInteger(length) ||
+    length < STACK_INPUT_GENERATE_MIN_LENGTH ||
+    length > STACK_INPUT_GENERATE_MAX_LENGTH
+  ) {
+    throw new Error(
+      `Stack input '${id}' generate.length must be an integer between ${STACK_INPUT_GENERATE_MIN_LENGTH} and ${STACK_INPUT_GENERATE_MAX_LENGTH}`,
+    )
+  }
+
+  if (draft.validation.pattern !== undefined || draft.validation.format !== undefined) {
+    throw new Error(
+      `Stack input '${id}' generate cannot be combined with pattern or format; generated values are alphanumeric`,
+    )
+  }
+
+  const minLength = draft.validation.minLength ?? undefined
+  const maxLength = draft.validation.maxLength ?? undefined
+  if (
+    (minLength !== undefined && length < minLength) ||
+    (maxLength !== undefined && length > maxLength)
+  ) {
+    throw new Error(
+      `Stack input '${id}' generate.length ${length} is outside the input's minLength/maxLength`,
+    )
   }
 }
 

@@ -2536,6 +2536,26 @@ async fn initialize(
                 ids::generate_token(TokenType::Deployment.prefix());
             let dep_token = Some(raw_token.clone());
 
+            // The release a deployment created here starts on. Install values
+            // come from the deployer, who may not choose a generated secret:
+            // refuse them before anything is created.
+            let starting_release =
+                match super::channels::release_for_deployment(&state, &subject, None).await {
+                    Ok(release) => release,
+                    Err(e) => return e.into_response(),
+                };
+            if let Some(stack) = starting_release
+                .as_ref()
+                .and_then(|release| release.stacks.get(&platform))
+            {
+                if let Err(e) = crate::generated_inputs::reject_generated_input_values(
+                    &stack.inputs,
+                    &req.input_values,
+                ) {
+                    return e.into_response();
+                }
+            }
+
             // Developer-provided setup on the group applies to every deployment
             // it creates; values supplied by the deployer at install win.
             let group_setup = match state
@@ -2556,6 +2576,23 @@ async fn initialize(
             input_values.extend(req.input_values);
             let environment_variables = (!group_setup.environment_variables.is_empty())
                 .then_some(group_setup.environment_variables);
+
+            // Generated secret inputs get their value from the starting
+            // release's stack now, once, and keep it in the stored input
+            // values for every later update.
+            let initial_release = (req.initial_desired_release == InitialDesiredRelease::Active)
+                .then_some(starting_release)
+                .flatten();
+            if let Some(stack) = initial_release
+                .as_ref()
+                .and_then(|release| release.stacks.get(&platform))
+            {
+                crate::generated_inputs::generate_missing_input_values(
+                    &stack.inputs,
+                    platform,
+                    &mut input_values,
+                );
+            }
 
             let deployment = match state
                 .deployment_store
@@ -2583,17 +2620,16 @@ async fn initialize(
                 Err(e) => return e.into_response(),
             };
 
-            if req.initial_desired_release == InitialDesiredRelease::Active {
-                // Initialize is the agent's own bootstrap: keep the caller's
-                // subject for reads and writes so embedders can authorize
-                // against the agent's scope rather than a service credential.
-                if let Ok(Some(release)) =
-                    super::channels::release_for_deployment(&state, &subject, None).await
+            // Initialize is the agent's own bootstrap: keep the caller's
+            // subject for reads and writes so embedders can authorize
+            // against the agent's scope rather than a service credential.
+            if let Some(release) = &initial_release {
+                if let Err(e) = state
+                    .deployment_store
+                    .set_deployment_desired_release(&subject, &deployment.id, &release.id)
+                    .await
                 {
-                    let _ = state
-                        .deployment_store
-                        .set_deployment_desired_release(&subject, &deployment.id, &release.id)
-                        .await;
+                    return e.into_response();
                 }
             }
 
