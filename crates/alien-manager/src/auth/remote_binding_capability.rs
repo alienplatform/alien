@@ -14,6 +14,7 @@ pub fn grant_covers(grant: RemoteBindingGrant, kind: RemoteBindingKind) -> bool 
     match kind {
         RemoteBindingKind::Storage
         | RemoteBindingKind::Kv
+        | RemoteBindingKind::Queue
         | RemoteBindingKind::Key
         | RemoteBindingKind::Ai => grant == RemoteBindingGrant::Data,
         RemoteBindingKind::Sandbox => grant == RemoteBindingGrant::Sandbox,
@@ -27,6 +28,7 @@ pub fn write_authority_covers(kind: RemoteBindingKind) -> bool {
     match kind {
         RemoteBindingKind::Storage
         | RemoteBindingKind::Kv
+        | RemoteBindingKind::Queue
         | RemoteBindingKind::Key
         | RemoteBindingKind::Ai => true,
         RemoteBindingKind::Sandbox => false,
@@ -102,9 +104,10 @@ mod tests {
     use super::*;
     use crate::auth::{RemoteBindingCapability, SubjectKind};
 
-    const ALL_KINDS: [RemoteBindingKind; 5] = [
+    const ALL_KINDS: [RemoteBindingKind; 6] = [
         RemoteBindingKind::Storage,
         RemoteBindingKind::Kv,
+        RemoteBindingKind::Queue,
         RemoteBindingKind::Key,
         RemoteBindingKind::Ai,
         RemoteBindingKind::Sandbox,

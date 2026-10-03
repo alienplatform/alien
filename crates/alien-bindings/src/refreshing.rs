@@ -62,6 +62,22 @@ pub(super) trait KvProviderApi: Send + Sync + fmt::Debug {
     async fn load_kv(&self, binding_name: &str) -> Result<Arc<dyn Kv>>;
 }
 
+/// The smallest provider surface needed by a refreshable Queue handle.
+#[async_trait]
+pub(super) trait QueueProviderApi: Send + Sync + fmt::Debug {
+    async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>>;
+}
+
+#[async_trait]
+impl<T> QueueProviderApi for T
+where
+    T: BindingsProviderApi + Send + Sync + fmt::Debug,
+{
+    async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>> {
+        BindingsProviderApi::load_queue(self, binding_name).await
+    }
+}
+
 #[async_trait]
 impl<T> KvProviderApi for T
 where
@@ -104,10 +120,6 @@ impl Resolver {
             provider,
             binding_name,
         }
-    }
-
-    async fn queue(&self) -> Result<Arc<dyn Queue>> {
-        self.provider.load_queue(&self.binding_name).await
     }
 
     async fn vault(&self) -> Result<Arc<dyn Vault>> {
@@ -430,14 +442,22 @@ impl Kv for RefreshingKv {
 /// Queue handle that resolves a fresh-enough provider for every operation.
 #[derive(Debug)]
 pub(super) struct RefreshingQueue {
-    resolver: Resolver,
+    provider: Arc<dyn QueueProviderApi>,
+    binding_name: String,
 }
 
 impl RefreshingQueue {
-    pub(super) fn new(provider: Arc<dyn BindingsProviderApi>, binding_name: String) -> Self {
+    pub(super) fn new(provider: Arc<dyn QueueProviderApi>, binding_name: String) -> Self {
         Self {
-            resolver: Resolver::new(provider, binding_name),
+            provider,
+            binding_name,
         }
+    }
+}
+
+impl RefreshingQueue {
+    async fn current(&self) -> Result<Arc<dyn Queue>> {
+        self.provider.load_queue(&self.binding_name).await
     }
 }
 
@@ -446,35 +466,31 @@ impl Binding for RefreshingQueue {}
 #[async_trait]
 impl Queue for RefreshingQueue {
     async fn send(&self, queue: &str, message: MessagePayload) -> Result<()> {
-        self.resolver.queue().await?.send(queue, message).await
+        self.current().await?.send(queue, message).await
+    }
+
+    async fn send_batch(
+        &self,
+        queue: &str,
+        messages: Vec<MessagePayload>,
+    ) -> Result<Vec<crate::traits::QueueSendResult>> {
+        self.current().await?.send_batch(queue, messages).await
     }
 
     async fn receive(&self, queue: &str, max_messages: usize) -> Result<Vec<QueueMessage>> {
-        self.resolver
-            .queue()
-            .await?
-            .receive(queue, max_messages)
-            .await
+        self.current().await?.receive(queue, max_messages).await
     }
 
     async fn ack(&self, queue: &str, receipt_handle: &str) -> Result<()> {
-        self.resolver
-            .queue()
-            .await?
-            .ack(queue, receipt_handle)
-            .await
+        self.current().await?.ack(queue, receipt_handle).await
     }
 
     async fn nack(&self, queue: &str, receipt_handle: &str) -> Result<()> {
-        self.resolver
-            .queue()
-            .await?
-            .nack(queue, receipt_handle)
-            .await
+        self.current().await?.nack(queue, receipt_handle).await
     }
 
     async fn purge(&self, queue: &str) -> Result<()> {
-        self.resolver.queue().await?.purge(queue).await
+        self.current().await?.purge(queue).await
     }
 }
 

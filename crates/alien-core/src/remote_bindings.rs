@@ -6,6 +6,7 @@ use crate::{
 pub enum RemoteBindingKind {
     Storage,
     Kv,
+    Queue,
     Key,
     Ai,
     Sandbox,
@@ -37,6 +38,14 @@ const DEFINITIONS: &[RemoteBindingDefinition] = &[
             "azure_storage_account",
             "service_activation",
         ],
+        revision: 1,
+    },
+    RemoteBindingDefinition {
+        resource_type: "queue",
+        permission_set: "queue/publish",
+        kind: RemoteBindingKind::Queue,
+        description: "Send messages to this queue",
+        setup_support_resource_types: &["azure_resource_group", "azure_service_bus_namespace", "service_activation"],
         revision: 1,
     },
     RemoteBindingDefinition {

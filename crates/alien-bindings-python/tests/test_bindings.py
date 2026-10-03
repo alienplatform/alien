@@ -98,6 +98,23 @@ async def test_kv_queue_and_vault_real_local_providers(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_queue_batches_preserve_outcomes_and_payloads(tmp_path: Path) -> None:
+    bind("batch-jobs", {"service": "local-queue", "queuePath": str(tmp_path / "queue")})
+    jobs = queue("batch-jobs")
+    assert await jobs.send_batch([{"order": 1}]) == [{"status": "sent"}]
+    results = await jobs.send_batch_text(["plain", "x" * (64 * 1024 + 1), "last"])
+    assert [result["status"] for result in results] == ["sent", "rejected", "sent"]
+    messages = await jobs.receive(10)
+    assert [(message.payload_type, message.payload) for message in messages] == [
+        ("json", '{"order":1}'), ("text", "plain"), ("text", "last")
+    ]
+    for message in messages:
+        await jobs.ack(message.receipt_handle)
+    assert await jobs.receive() == []
+    assert await jobs.send_batch([]) == []
+
+
+@pytest.mark.asyncio
 async def test_postgres_helpers_and_container_discovery() -> None:
     bind(
         "database",

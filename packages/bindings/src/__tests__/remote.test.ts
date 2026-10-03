@@ -151,6 +151,10 @@ function fakeRemoteAddon() {
 
     storage = resolveStorage
 
+    async queue(): Promise<RawQueueHandle> {
+      throw new Error("unused")
+    }
+
     kv = resolveKv
 
     key = resolveKey
@@ -240,7 +244,9 @@ describe("Bindings.forRemoteDeployment", () => {
       "https://api.example.com",
     )
     expect("kv" in bindings).toBe(true)
-    expect("queue" in bindings).toBe(false)
+    expect("queue" in bindings).toBe(true)
+    expect("receive" in bindings.queue("events")).toBe(false)
+    expect("ack" in bindings.queue("events")).toBe(false)
     expect("vault" in bindings).toBe(false)
     expect("key" in bindings).toBe(true)
     expect(Object.keys(storage).sort()).toEqual(["delete", "get", "head", "list", "put"])

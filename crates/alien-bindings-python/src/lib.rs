@@ -138,6 +138,15 @@ impl RemoteBindingsHandle {
         })
     }
 
+    fn queue<'py>(&self, py: Python<'py>, name: String) -> PyResult<Bound<'py, PyAny>> {
+        let bindings = self.inner.clone();
+        future_into_py(py, async move {
+            Ok(QueueHandle {
+                inner: bindings.queue(&name).await.map_err(map_alien_error)?,
+            })
+        })
+    }
+
     fn kv<'py>(&self, py: Python<'py>, name: String) -> PyResult<Bound<'py, PyAny>> {
         let bindings = self.inner.clone();
         future_into_py(py, async move {
@@ -498,6 +507,43 @@ fn queue_message(message: alien_bindings::traits::QueueMessage) -> PyResult<Queu
 
 #[pymethods]
 impl QueueHandle {
+    fn send_batch_json<'py>(
+        &self,
+        py: Python<'py>,
+        values: Vec<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let messages = values
+            .into_iter()
+            .map(|value| {
+                serde_json::from_str(&value)
+                    .map(MessagePayload::Json)
+                    .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            let results = inner.send_batch(messages).await.map_err(map_alien_error)?;
+            serde_json::to_string(&results)
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
+        })
+    }
+
+    fn send_batch_text<'py>(
+        &self,
+        py: Python<'py>,
+        values: Vec<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            let results = inner
+                .send_batch(values.into_iter().map(MessagePayload::Text).collect())
+                .await
+                .map_err(map_alien_error)?;
+            serde_json::to_string(&results)
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
+        })
+    }
+
     fn send_json<'py>(&self, py: Python<'py>, value: String) -> PyResult<Bound<'py, PyAny>> {
         let value = serde_json::from_str(&value)
             .map_err(|error| PyValueError::new_err(error.to_string()))?;

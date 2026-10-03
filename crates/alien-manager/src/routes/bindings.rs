@@ -7,8 +7,8 @@
 use alien_core::{
     Ai, AiBinding, AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials,
     BindingValue, ClientConfig, DeploymentStatus, GcpClientConfig, GcpCredentials, Key, KeyBinding,
-    Kv, KvBinding, Platform, ResourceLifecycle, ResourceStatus, Sandbox, SandboxBinding, Storage,
-    StorageBinding,
+    Kv, KvBinding, Platform, Queue, QueueBinding, ResourceLifecycle, ResourceStatus, Sandbox,
+    SandboxBinding, Storage, StorageBinding,
 };
 use alien_error::{Context, ContextError, IntoAlienError};
 use axum::{
@@ -80,6 +80,30 @@ pub enum ResolveBindingResponse {
         binding: RemoteGcsStorageBinding,
         #[serde(rename = "clientConfig")]
         client_config: RemoteGcpClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+    /// Send-only Sqs queue and a short-lived credential lease.
+    Sqs {
+        binding: RemoteSqsQueueBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteAwsClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+    /// Send-only Pubsub queue and a short-lived credential lease.
+    Pubsub {
+        binding: RemotePubsubQueueBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteGcpClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+    /// Send-only Servicebus queue and a short-lived credential lease.
+    Servicebus {
+        binding: RemoteServiceBusQueueBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteAzureClientConfig,
         #[serde(rename = "expiresAt")]
         expires_at: String,
     },
@@ -326,6 +350,32 @@ pub struct RemoteAzureKeyVaultKeyBinding {
     pub key_id: String,
 }
 
+/// Concrete send-only queue topology returned to remote clients.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteSqsQueueBinding {
+    pub queue_url: String,
+}
+
+/// Concrete send-only queue topology returned to remote clients.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RemotePubsubQueueBinding {
+    pub topic: String,
+    pub subscription: String,
+}
+
+/// Concrete send-only queue topology returned to remote clients.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteServiceBusQueueBinding {
+    pub namespace: String,
+    pub queue_name: String,
+}
+
 /// Concrete DynamoDB KV topology returned to remote clients.
 #[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -499,6 +549,12 @@ pub enum RemoteStorageBinding {
     Gcs(RemoteGcsStorageBinding),
 }
 
+enum RemoteQueueBinding {
+    Aws(RemoteSqsQueueBinding),
+    Gcp(RemotePubsubQueueBinding),
+    Azure(RemoteServiceBusQueueBinding),
+}
+
 enum RemoteKvBinding {
     Aws(RemoteDynamodbKvBinding),
     Gcp(RemoteFirestoreKvBinding),
@@ -526,6 +582,7 @@ enum RemoteSandboxBinding {
 enum ResolvedRemoteBinding {
     Storage(RemoteStorageBinding),
     Kv(RemoteKvBinding),
+    Queue(RemoteQueueBinding),
     Key(RemoteKeyBinding),
     Ai(RemoteAiBinding),
     Sandbox(RemoteSandboxBinding),
@@ -536,6 +593,7 @@ impl ResolvedRemoteBinding {
         match self {
             Self::Storage(binding) => binding.credential_scope(),
             Self::Kv(binding) => binding.credential_scope(),
+            Self::Queue(binding) => binding.credential_scope(),
             Self::Key(binding) => binding.credential_scope(),
             Self::Ai(binding) => binding.credential_scope(),
             Self::Sandbox(binding) => binding.credential_scope(),
@@ -559,6 +617,16 @@ impl RemoteAiBinding {
             Self::Aws(_) => RemoteBindingCredentialScope::AwsAi,
             Self::Gcp(_) => RemoteBindingCredentialScope::GcpAi,
             Self::Azure(_) => RemoteBindingCredentialScope::AzureAi,
+        }
+    }
+}
+
+impl RemoteQueueBinding {
+    fn credential_scope(&self) -> RemoteBindingCredentialScope {
+        match self {
+            Self::Aws(_) => RemoteBindingCredentialScope::AwsSqs,
+            Self::Gcp(_) => RemoteBindingCredentialScope::GcpPubsub,
+            Self::Azure(_) => RemoteBindingCredentialScope::AzureServiceBus,
         }
     }
 }
@@ -725,6 +793,37 @@ impl ResolveBindingResponse {
             }
             _ => Err(ErrorData::internal(
                 "Remote Storage binding and materialized credential platforms do not match",
+            )),
+        }
+    }
+
+    fn from_queue_parts(
+        binding: RemoteQueueBinding,
+        lease: MaterializedCredentialLease,
+        expires_at: String,
+    ) -> Result<Self, alien_error::AlienError<ErrorData>> {
+        match (binding, lease.client_config) {
+            (RemoteQueueBinding::Aws(binding), ClientConfig::Aws(client_config)) => Ok(Self::Sqs {
+                binding,
+                client_config: (*client_config).try_into()?,
+                expires_at,
+            }),
+            (RemoteQueueBinding::Gcp(binding), ClientConfig::Gcp(client_config)) => {
+                Ok(Self::Pubsub {
+                    binding,
+                    client_config: (*client_config).try_into()?,
+                    expires_at,
+                })
+            }
+            (RemoteQueueBinding::Azure(binding), ClientConfig::Azure(client_config)) => {
+                Ok(Self::Servicebus {
+                    binding,
+                    client_config: (*client_config).try_into()?,
+                    expires_at,
+                })
+            }
+            _ => Err(ErrorData::internal(
+                "Remote Queue binding and materialized credential platforms do not match",
             )),
         }
     }
@@ -998,6 +1097,9 @@ async fn resolve_binding(
         alien_core::remote_bindings::RemoteBindingKind::Storage => {
             remote_storage_binding(&deployment, &resource_id).map(ResolvedRemoteBinding::Storage)
         }
+        alien_core::remote_bindings::RemoteBindingKind::Queue => {
+            remote_queue_binding(&deployment, &resource_id).map(ResolvedRemoteBinding::Queue)
+        }
         alien_core::remote_bindings::RemoteBindingKind::Kv => {
             remote_kv_binding(&deployment, &resource_id).map(ResolvedRemoteBinding::Kv)
         }
@@ -1046,6 +1148,9 @@ async fn resolve_binding(
     let response = match binding {
         ResolvedRemoteBinding::Storage(binding) => {
             ResolveBindingResponse::from_parts(binding, lease, expires_at.clone())
+        }
+        ResolvedRemoteBinding::Queue(binding) => {
+            ResolveBindingResponse::from_queue_parts(binding, lease, expires_at.clone())
         }
         ResolvedRemoteBinding::Kv(binding) => {
             ResolveBindingResponse::from_kv_parts(binding, lease, expires_at.clone())
@@ -1427,6 +1532,78 @@ fn remote_storage_binding(
         }
         _ => Err(ErrorData::bad_request(format!(
             "Storage resource '{resource_id}' binding does not match deployment platform '{}'",
+            deployment.platform
+        ))),
+    }
+}
+
+fn remote_queue_binding(
+    deployment: &DeploymentRecord,
+    resource_id: &str,
+) -> Result<RemoteQueueBinding, alien_error::AlienError<ErrorData>> {
+    if !matches!(
+        deployment.platform,
+        Platform::Aws | Platform::Gcp | Platform::Azure
+    ) {
+        return Err(ErrorData::bad_request(format!(
+            "Remote Queue is not supported for deployment platform '{}'",
+            deployment.platform
+        )));
+    }
+    let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
+        ErrorData::bad_request("Deployment has no stack state (not yet provisioned)")
+    })?;
+    let resource = stack_state.resource(resource_id).ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "Resource '{resource_id}' does not exist in stack state"
+        ))
+    })?;
+    if resource.resource_type != Queue::RESOURCE_TYPE.as_ref() {
+        return Err(ErrorData::bad_request(format!(
+            "Resource '{resource_id}' is not a queue"
+        )));
+    }
+    if resource.lifecycle != Some(ResourceLifecycle::Frozen) {
+        return Err(ErrorData::bad_request(format!(
+            "Queue resource '{resource_id}' is not Frozen"
+        )));
+    }
+    if resource.status != ResourceStatus::Running {
+        return Err(ErrorData::bad_request(format!(
+            "Queue resource '{resource_id}' is not running"
+        )));
+    }
+    let binding = resource.remote_binding_params.clone().ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "Queue resource '{resource_id}' is not enabled for remote access"
+        ))
+    })?;
+    let binding: QueueBinding =
+        serde_json::from_value(binding)
+            .into_alien_error()
+            .context(ErrorData::BadRequest {
+                reason: format!("Queue resource '{resource_id}' has an invalid remote binding"),
+            })?;
+    match (deployment.platform, binding) {
+        (Platform::Aws, QueueBinding::Sqs(binding)) => {
+            Ok(RemoteQueueBinding::Aws(RemoteSqsQueueBinding {
+                queue_url: concrete_binding_value(&binding.queue_url, "Queue queue_url")?,
+            }))
+        }
+        (Platform::Gcp, QueueBinding::Pubsub(binding)) => {
+            Ok(RemoteQueueBinding::Gcp(RemotePubsubQueueBinding {
+                topic: concrete_binding_value(&binding.topic, "Queue topic")?,
+                subscription: concrete_binding_value(&binding.subscription, "Queue subscription")?,
+            }))
+        }
+        (Platform::Azure, QueueBinding::Servicebus(binding)) => {
+            Ok(RemoteQueueBinding::Azure(RemoteServiceBusQueueBinding {
+                namespace: concrete_binding_value(&binding.namespace, "Queue namespace")?,
+                queue_name: concrete_binding_value(&binding.queue_name, "Queue queue_name")?,
+            }))
+        }
+        _ => Err(ErrorData::bad_request(format!(
+            "Queue resource '{resource_id}' binding does not match deployment platform '{}'",
             deployment.platform
         ))),
     }

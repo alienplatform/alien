@@ -199,3 +199,43 @@ release version, injects the exact-version `optionalDependencies` into this
 package's published manifest, and publishes the platform packages before the
 wrapper. Pinning the exact version is what guarantees a published wrapper only
 ever loads the matching-version platform addon.
+
+### Queue batches
+
+`queue("events").sendBatch([{ order: 1 }, { order: 2 }])` sends JSON messages;
+`sendBatchText(["first", "second"])` sends text. Python exposes `send_batch` and
+`send_batch_text` on the queue handle. Rust exposes `Queue::send_batch` and
+`BoundQueue::send_batch`.
+
+Each returns one outcome per input in input order: `sent` means the provider
+confirmed acceptance, `rejected` includes a code and message for a definite
+rejection, and `unknown` includes a code and message when delivery could not be
+established. Retrying unknown outcomes can produce duplicates. There are no
+automatic retries or transaction guarantees across a batch. An exception before
+outcomes are returned means no sends were attempted.
+
+Messages must contain 1–65,536 UTF-8 bytes after serialization. Requests are
+chunked using SQS SendMessageBatch (up to ten entries and 256KiB), Pub/Sub publish,
+and Service Bus HTTP batch send. Service Bus also counts JSON envelope/escaping
+against the 256KiB batch limit, so heavily escaped text may be rejected. Empty input
+returns an empty result. Existing scoped publisher permissions cover batching.
+
+### Remote queues
+
+Publish a Frozen queue with `remoteAccess: true`, apply its updated setup, and
+resolve it from a backend:
+
+```ts
+const bindings = await Bindings.forRemoteCustomer({ project, externalId, token })
+const events = bindings.queue("events")
+await events.send({ order: 1 })
+const results = await events.sendBatch([{ order: 2 }, { order: 3 }])
+```
+
+Python uses `await Bindings.for_remote_customer(...)`, then
+`bindings.queue("events").send(...)` or `.send_batch(...)`. Both languages use the
+Rust provider implementations. TypeScript and Python remote queue handles expose only sending;
+cloud permissions also deny receiving, acknowledging, and purging. Credentials
+refresh before operations as their leases expire. SQS, Pub/Sub, and Service Bus
+use resource-scoped publisher grants. Batch results have the same partial-failure
+semantics as local queue handles.

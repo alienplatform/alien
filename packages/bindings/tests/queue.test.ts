@@ -28,6 +28,26 @@ describe("queue (local turso-backed provider)", () => {
     cleanupTempDirs()
   })
 
+  it("batch sends retain payload types and individual rejections", async () => {
+    const q = freshQueue()
+    expect(await q.sendBatch([{ order: 1 }, { order: 2 }])).toEqual([
+      { status: "sent" },
+      { status: "sent" },
+    ])
+    const outcomes = await q.sendBatchText(["plain", "x".repeat(64 * 1024 + 1), "last"])
+    expect(outcomes.map(result => result.status)).toEqual(["sent", "rejected", "sent"])
+    const messages = await q.receive(10)
+    expect(messages.map(message => [message.payloadType, message.payload])).toEqual([
+      ["json", '{"order":1}'],
+      ["json", '{"order":2}'],
+      ["text", "plain"],
+      ["text", "last"],
+    ])
+    for (const message of messages) await q.ack(message.receiptHandle)
+    expect(await q.receive(10)).toEqual([])
+    expect(await q.sendBatch([])).toEqual([])
+  })
+
   it("send(json) / receive() returns a typed json payload", async () => {
     const q = freshQueue()
     await q.send({ hello: "world", n: 1 })
