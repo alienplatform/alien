@@ -81,6 +81,14 @@ impl BoundQueue {
         self.inner.send(&self.name, message).await
     }
 
+    /// Send messages and return their individual outcomes in input order.
+    pub async fn send_batch(
+        &self,
+        messages: Vec<MessagePayload>,
+    ) -> Result<Vec<crate::traits::QueueSendResult>> {
+        self.inner.send_batch(&self.name, messages).await
+    }
+
     /// Receive up to `max_messages` messages from this queue.
     pub async fn receive(&self, max_messages: usize) -> Result<Vec<QueueMessage>> {
         self.inner.receive(&self.name, max_messages).await

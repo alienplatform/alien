@@ -74,6 +74,7 @@ export type {
   PresignedRequest,
   Queue,
   QueueMessage,
+  QueueSendResult,
   RemoteStorage,
   ResolvedSandbox,
   RunCommandOptions,
