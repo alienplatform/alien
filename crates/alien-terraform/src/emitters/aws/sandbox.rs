@@ -1161,7 +1161,7 @@ mod tests {
             "a snake_case hook property is refused: {hooks}"
         );
 
-        let variables = environment_variables(&Sandbox::default()).to_string();
+        let variables = environment_variables(&sandbox_with_lifecycle(None, None)).to_string();
         assert!(
             variables.contains("Key") && variables.contains("Value"),
             "{variables}"
