@@ -69,6 +69,13 @@ pub trait PubSubApi: Send + Sync + Debug {
     // Publishing operations
     async fn publish(&self, topic_id: String, request: PublishRequest) -> Result<PublishResponse>;
 
+    /// Publishes a batch without retrying ambiguous delivery.
+    async fn publish_once(
+        &self,
+        topic_id: String,
+        request: PublishRequest,
+    ) -> Result<PublishResponse>;
+
     // Subscription operations
     async fn create_subscription(
         &self,
@@ -273,6 +280,18 @@ impl PubSubApi for PubSubClient {
     /// Publishes messages to a topic.
     /// See: https://cloud.google.com/pubsub/docs/reference/rest/v1/projects.topics/publish
     async fn publish(&self, topic_id: String, request: PublishRequest) -> Result<PublishResponse> {
+        let path = format!("projects/{}/topics/{}:publish", self.project_id, topic_id);
+
+        self.base
+            .execute_request(Method::POST, &path, None, Some(request), &topic_id)
+            .await
+    }
+
+    async fn publish_once(
+        &self,
+        topic_id: String,
+        request: PublishRequest,
+    ) -> Result<PublishResponse> {
         let path = format!("projects/{}/topics/{}:publish", self.project_id, topic_id);
 
         self.base
