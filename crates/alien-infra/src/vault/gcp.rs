@@ -295,6 +295,9 @@ impl GcpVaultController {
             .with_project_name(gcp_config.project_id.clone())
             .with_region(gcp_config.region.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
+            .with_gcp_custom_role_namespace(ResourcePermissionsHelper::gcp_custom_role_namespace(
+                ctx,
+            ))
             .with_resource_name(vault_prefix.to_string());
         if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
             permission_context =

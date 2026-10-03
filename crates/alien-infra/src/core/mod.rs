@@ -38,6 +38,9 @@ pub use azure_permissions_helper::*;
 mod resource_permissions_helper;
 pub use resource_permissions_helper::*;
 
+mod gcp_custom_role_naming;
+pub use gcp_custom_role_naming::GcpCustomRoleNaming;
+
 use std::collections::BTreeMap;
 
 use alien_core::{

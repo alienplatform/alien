@@ -638,6 +638,7 @@ pub struct SingleControllerExecutorBuilder {
     client_config: Option<ClientConfig>,
     resource_lifecycle: ResourceLifecycle,
     initial_setup_authority: alien_core::InitialSetupAuthority,
+    resource_prefix: String,
 }
 
 impl SingleControllerExecutorBuilder {
@@ -664,7 +665,14 @@ impl SingleControllerExecutorBuilder {
             client_config: None,
             resource_lifecycle: ResourceLifecycle::Live,
             initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
+            resource_prefix: "test".to_string(),
         }
+    }
+
+    /// Sets the deployment's resource prefix. Defaults to `test`.
+    pub fn resource_prefix(mut self, resource_prefix: impl Into<String>) -> Self {
+        self.resource_prefix = resource_prefix.into();
+        self
     }
 
     /// Sets the authority the controller runs under. Direct setup's by default; an update or
@@ -1093,7 +1101,7 @@ impl SingleControllerExecutorBuilder {
         };
 
         // Set resource prefix in stack state
-        stack_state.resource_prefix = "test".to_string();
+        stack_state.resource_prefix = self.resource_prefix.clone();
 
         // Apply mutations only (skip compile-time checks) to process the stack
         let preflight_runner = PreflightRunner::new();
@@ -1224,7 +1232,7 @@ impl SingleControllerExecutorBuilder {
             service_provider: self
                 .service_provider
                 .unwrap_or_else(|| Arc::new(DefaultPlatformServiceProvider::default())),
-            resource_prefix: "test".to_string(),
+            resource_prefix: self.resource_prefix,
             last_heartbeats: Vec::new(),
             initial_setup_authority: self.initial_setup_authority,
         })

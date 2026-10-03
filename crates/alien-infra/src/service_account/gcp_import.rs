@@ -5,6 +5,7 @@ use alien_core::{
     Result, StackResourceState,
 };
 
+use crate::core::GcpCustomRoleNaming;
 use crate::import::ResourceImporter;
 use crate::import_helpers::make_imported_state;
 use crate::service_account::GcpServiceAccountController;
@@ -29,6 +30,7 @@ impl ResourceImporter for GcpServiceAccountImporter {
             state: GcpServiceAccountState::Ready,
             service_account_email: Some(data.service_account_email),
             service_account_unique_id: Some(data.service_account_unique_id),
+            custom_role_naming: Some(GcpCustomRoleNaming::HashedLongPrefix),
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)
