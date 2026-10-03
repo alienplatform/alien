@@ -51,6 +51,7 @@ impl GcpServiceAccountController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<ServiceAccount>()?;
+        let custom_role_naming = GcpCustomRoleNaming::for_deployment(ctx.state)?;
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
 
@@ -119,7 +120,7 @@ impl GcpServiceAccountController {
 
         self.service_account_email = Some(email);
         self.service_account_unique_id = Some(unique_id);
-        self.custom_role_naming = Some(GcpCustomRoleNaming::for_deployment(ctx.state));
+        self.custom_role_naming = Some(custom_role_naming);
 
         Ok(HandlerAction::Continue {
             state: BindingStackRoles,

@@ -59,6 +59,7 @@ impl GcpRemoteStackManagementController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
+        let custom_role_naming = GcpCustomRoleNaming::for_deployment(ctx.state)?;
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
 
@@ -127,7 +128,7 @@ impl GcpRemoteStackManagementController {
 
         self.service_account_email = Some(email);
         self.service_account_unique_id = Some(unique_id);
-        self.custom_role_naming = Some(GcpCustomRoleNaming::for_deployment(ctx.state));
+        self.custom_role_naming = Some(custom_role_naming);
 
         Ok(HandlerAction::Continue {
             state: BindingRole,
@@ -995,6 +996,34 @@ mod tests {
             assert!(
                 !deleted.contains(&role),
                 "deleting acme must keep acme-prod's role {role}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn deleting_a_deployment_keeps_roles_without_matching_ownership() {
+        let own = deployment_roles(&deployment_context("acme"), &["storage/data-read"]);
+        let mut unverified = deployment_roles(
+            &deployment_context("acme"),
+            &["worker/provision", "build/management"],
+        );
+        assert!(unverified.len() >= 2);
+        unverified[0].description = None;
+        for role in &mut unverified[1..] {
+            role.description = Some("Description edited outside setup".to_string());
+        }
+        let mut project_roles = own.clone();
+        project_roles.extend(unverified.clone());
+
+        let deleted =
+            delete_management_roles("acme", ready_management_controller("acme"), project_roles)
+                .await;
+
+        assert_eq!(deleted, role_names(&own));
+        for role in role_names(&unverified) {
+            assert!(
+                !deleted.contains(&role),
+                "ownership is unverified for {role}"
             );
         }
     }

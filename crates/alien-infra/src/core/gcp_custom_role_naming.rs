@@ -1,6 +1,7 @@
 //! How a GCP deployment's custom role IDs derive from its resource prefix.
 
-use alien_core::{RemoteStackManagement, ServiceAccount, StackState};
+use alien_core::{Platform, RemoteStackManagement, ServiceAccount, StackState};
+use alien_error::{Context, IntoAlienError};
 use alien_permissions::generators::{
     custom_role_namespace_for_prefix, legacy_custom_role_namespace_for_prefix,
 };
@@ -8,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::remote_stack_management::GcpRemoteStackManagementController;
 use crate::service_account::GcpServiceAccountController;
+use crate::{ErrorData, Result};
 
 /// The rule that turns a resource prefix into the namespace of a deployment's
 /// GCP custom role IDs (`role_<namespace>_<permission set>`).
@@ -40,48 +42,77 @@ impl GcpCustomRoleNaming {
     /// A GCP service account created before the rule was recorded means the
     /// deployment's roles were created with `TruncatedPrefix`; moving it to
     /// the new rule would bind its service accounts to roles that do not exist.
-    pub fn for_deployment(state: &StackState) -> Self {
+    /// Unreadable identity state must be reported before choosing role IDs.
+    pub fn for_deployment(state: &StackState) -> Result<Self> {
         let mut resource_ids: Vec<&String> = state.resources.keys().collect();
         resource_ids.sort();
 
         let mut created_before_recording = false;
+        let mut recorded_naming = None;
         for resource_id in resource_ids {
             let resource = &state.resources[resource_id];
+            if resource
+                .controller_platform
+                .is_some_and(|platform| platform != Platform::Gcp)
+            {
+                continue;
+            }
             let Some(internal_state) = &resource.internal_state else {
                 continue;
             };
             let identity = if resource.resource_type == ServiceAccount::RESOURCE_TYPE.as_ref() {
-                GcpServiceAccountController::deserialize(internal_state)
-                    .ok()
-                    .map(|c| (c.service_account_email, c.custom_role_naming))
+                let controller = GcpServiceAccountController::deserialize(internal_state)
+                    .into_alien_error()
+                    .context(ErrorData::ResourceStateSerializationFailed {
+                        resource_id: resource_id.clone(),
+                        message:
+                            "Cannot determine GCP custom role naming from service account state"
+                                .to_string(),
+                    })?;
+                (
+                    controller.service_account_email,
+                    controller.custom_role_naming,
+                )
             } else if resource.resource_type == RemoteStackManagement::RESOURCE_TYPE.as_ref() {
-                GcpRemoteStackManagementController::deserialize(internal_state)
-                    .ok()
-                    .map(|c| (c.service_account_email, c.custom_role_naming))
+                let controller = GcpRemoteStackManagementController::deserialize(internal_state)
+                    .into_alien_error()
+                    .context(ErrorData::ResourceStateSerializationFailed {
+                        resource_id: resource_id.clone(),
+                        message:
+                            "Cannot determine GCP custom role naming from management identity state"
+                                .to_string(),
+                    })?;
+                (
+                    controller.service_account_email,
+                    controller.custom_role_naming,
+                )
             } else {
-                None
+                continue;
             };
             match identity {
-                Some((_, Some(naming))) => return naming,
-                Some((Some(_), None)) => created_before_recording = true,
+                (_, Some(naming)) => {
+                    recorded_naming.get_or_insert(naming);
+                }
+                (Some(_), None) => created_before_recording = true,
                 _ => {}
             }
         }
 
-        if created_before_recording {
+        Ok(recorded_naming.unwrap_or(if created_before_recording {
             Self::TruncatedPrefix
         } else {
             Self::HashedLongPrefix
-        }
+        }))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use alien_core::{Platform, Resource, ResourceStatus, StackResourceState};
+    use alien_core::{Resource, ResourceStatus, StackResourceState};
 
     use super::*;
     use crate::core::serialize_controller;
+    use crate::service_account::AwsServiceAccountController;
 
     const LONG_PREFIX: &str = "customer-acme-prod-eu";
 
@@ -130,7 +161,8 @@ mod tests {
     fn new_deployment_hashes_long_prefixes() {
         let state = deployment(vec![("runtime-sa", service_account(None, None))]);
 
-        let naming = GcpCustomRoleNaming::for_deployment(&state);
+        let naming =
+            GcpCustomRoleNaming::for_deployment(&state).expect("identity state is readable");
 
         assert_eq!(naming, GcpCustomRoleNaming::HashedLongPrefix);
         assert_eq!(naming.namespace(LONG_PREFIX), "customer__2e6bb8cf");
@@ -143,7 +175,8 @@ mod tests {
             service_account_created_before_recording(),
         )]);
 
-        let naming = GcpCustomRoleNaming::for_deployment(&state);
+        let naming =
+            GcpCustomRoleNaming::for_deployment(&state).expect("identity state is readable");
 
         assert_eq!(naming, GcpCustomRoleNaming::TruncatedPrefix);
         assert_eq!(naming.namespace(LONG_PREFIX), "customer_acme_prod");
@@ -163,7 +196,86 @@ mod tests {
                 ),
             ]);
 
-            assert_eq!(GcpCustomRoleNaming::for_deployment(&state), recorded);
+            assert_eq!(
+                GcpCustomRoleNaming::for_deployment(&state).expect("identity state is readable"),
+                recorded
+            );
         }
+    }
+
+    #[test]
+    fn unreadable_service_account_state_does_not_select_a_new_namespace() {
+        let mut identity = service_account_created_before_recording();
+        identity.internal_state.as_mut().unwrap()["serviceAccountEmail"] = serde_json::json!(123);
+        let state = deployment(vec![("runtime-sa", identity)]);
+
+        let error = GcpCustomRoleNaming::for_deployment(&state)
+            .expect_err("unreadable identity state cannot establish role naming");
+
+        assert_eq!(error.code, "RESOURCE_STATE_SERIALIZATION_FAILED");
+        assert!(!error.retryable);
+        assert!(error.message.contains("runtime-sa"));
+        assert!(error.source.is_some());
+    }
+
+    #[test]
+    fn unreadable_management_identity_state_is_reported() {
+        let controller = GcpRemoteStackManagementController {
+            service_account_email: Some("management@p.iam.gserviceaccount.com".to_string()),
+            ..Default::default()
+        };
+        let mut identity = StackResourceState::new_pending(
+            RemoteStackManagement::RESOURCE_TYPE.to_string(),
+            Resource::new(RemoteStackManagement::new("management".to_string()).build()),
+            None,
+            vec![],
+        );
+        let mut internal_state = serialize_controller(&controller).unwrap();
+        internal_state["customRoleNaming"] = serde_json::json!("unknownNaming");
+        identity.internal_state = Some(internal_state);
+        let state = deployment(vec![("management", identity)]);
+
+        let error = GcpCustomRoleNaming::for_deployment(&state)
+            .expect_err("an unknown naming rule cannot be replaced with a default");
+
+        assert_eq!(error.code, "RESOURCE_STATE_SERIALIZATION_FAILED");
+        assert!(!error.retryable);
+        assert!(error.message.contains("management"));
+        assert!(error.source.is_some());
+    }
+
+    #[test]
+    fn recorded_naming_does_not_hide_another_unreadable_identity() {
+        let recorded = service_account(
+            Some("a@p.iam.gserviceaccount.com"),
+            Some(GcpCustomRoleNaming::HashedLongPrefix),
+        );
+        let mut unreadable = service_account_created_before_recording();
+        unreadable.internal_state.as_mut().unwrap()["serviceAccountEmail"] = serde_json::json!(123);
+        let state = deployment(vec![("a-recorded", recorded), ("z-unreadable", unreadable)]);
+
+        let error = GcpCustomRoleNaming::for_deployment(&state)
+            .expect_err("all existing identity states must be readable");
+
+        assert_eq!(error.code, "RESOURCE_STATE_SERIALIZATION_FAILED");
+        assert!(error.message.contains("z-unreadable"));
+    }
+
+    #[test]
+    fn identities_owned_by_other_platforms_do_not_determine_gcp_naming() {
+        let mut internal_state =
+            serialize_controller(&AwsServiceAccountController::default()).unwrap();
+        internal_state["state"] = serde_json::json!("creatingRole");
+        AwsServiceAccountController::deserialize(&internal_state)
+            .expect("the stored state is valid for its owning platform");
+        let mut identity = service_account(None, None);
+        identity.controller_platform = Some(Platform::Aws);
+        identity.internal_state = Some(internal_state);
+        let state = deployment(vec![("aws-identity", identity)]);
+
+        let naming = GcpCustomRoleNaming::for_deployment(&state)
+            .expect("another platform's controller state is not a GCP identity");
+
+        assert_eq!(naming, GcpCustomRoleNaming::HashedLongPrefix);
     }
 }

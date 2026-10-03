@@ -95,7 +95,7 @@ impl ResourcePermissionsHelper {
 
         let mut permission_context = PermissionContext::new()
             .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_gcp_custom_role_namespace(Self::gcp_custom_role_namespace(ctx))
+            .with_gcp_custom_role_namespace(Self::gcp_custom_role_namespace(ctx)?)
             .with_project_name(project_id)
             .with_region(region)
             .with_resource_name(Self::kubernetes_cluster_name_for_permissions(
@@ -453,14 +453,24 @@ impl ResourcePermissionsHelper {
                 })?;
 
             for role in response.roles {
-                let (Some(role_name), Some(description)) = (role.name, role.description) else {
+                let Some(role_name) = role.name else {
                     continue;
                 };
-                if role_name_prefixes
+                if !role_name_prefixes
                     .iter()
                     .any(|prefix| role_name.starts_with(prefix))
-                    && custom_role_description_names_prefix(&description, ctx.resource_prefix)
                 {
+                    continue;
+                }
+                let Some(description) = role.description else {
+                    warn!(
+                        role_name = %role_name,
+                        resource_prefix = %ctx.resource_prefix,
+                        "Skipping GCP custom role without a description; ownership cannot be verified"
+                    );
+                    continue;
+                };
+                if custom_role_description_names_prefix(&description, ctx.resource_prefix) {
                     role_names.push(role_name);
                 }
             }
@@ -897,7 +907,7 @@ impl ResourcePermissionsHelper {
             .with_project_name(gcp_config.project_id.clone())
             .with_region(gcp_config.region.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_gcp_custom_role_namespace(Self::gcp_custom_role_namespace(ctx));
+            .with_gcp_custom_role_namespace(Self::gcp_custom_role_namespace(ctx)?);
         if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
             permission_ctx = permission_ctx.with_deployment_name(deployment_name.to_string());
         }
@@ -908,8 +918,8 @@ impl ResourcePermissionsHelper {
     }
 
     /// Return the namespace of this deployment's GCP custom role IDs.
-    pub fn gcp_custom_role_namespace(ctx: &ResourceControllerContext<'_>) -> String {
-        GcpCustomRoleNaming::for_deployment(ctx.state).namespace(ctx.resource_prefix)
+    pub fn gcp_custom_role_namespace(ctx: &ResourceControllerContext<'_>) -> Result<String> {
+        Ok(GcpCustomRoleNaming::for_deployment(ctx.state)?.namespace(ctx.resource_prefix))
     }
 
     /// Process GCP permissions for a specific profile
