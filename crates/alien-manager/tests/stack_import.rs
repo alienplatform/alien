@@ -1809,6 +1809,59 @@ async fn an_import_whose_input_values_contradict_the_delivered_resources_is_refu
     );
 }
 
+/// A deployer secret lives only in the customer's own secret store, so an
+/// import that carries its value is refused before anything is recorded.
+#[tokio::test]
+async fn an_import_carrying_a_deployer_secret_value_is_refused() {
+    let mut stack = stack_with_storage("assets");
+    stack.inputs = vec![alien_core::StackInputDefinition {
+        id: "apiKey".to_string(),
+        kind: alien_core::StackInputKind::Secret,
+        provided_by: vec![alien_core::StackInputProvider::Deployer],
+        required: true,
+        label: "API key".to_string(),
+        description: "Written by the deployer into their own secret store.".to_string(),
+        placeholder: None,
+        default: None,
+        platforms: None,
+        validation: None,
+        env: Vec::new(),
+    }];
+    let fixture = make_fixture(Some(stack)).await;
+
+    let mut body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    body.input_values = HashMap::from([(
+        "apiKey".to_string(),
+        serde_json::Value::String("secret-value".to_string()),
+    )]);
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
+    let message = json
+        .get("message")
+        .and_then(|m| m.as_str())
+        .unwrap_or_default();
+    assert!(
+        message.contains("'API key' is a deployer secret"),
+        "body = {json:#}"
+    );
+    assert!(
+        !json.to_string().contains("secret-value"),
+        "body = {json:#}"
+    );
+    let deployments = fixture
+        .deployment_store
+        .list_deployments(&alien_manager::auth::Subject::system(), &Default::default())
+        .await
+        .expect("deployments list");
+    assert!(
+        deployments
+            .iter()
+            .all(|deployment| deployment.name != "acme-prod"),
+        "nothing is recorded"
+    );
+}
+
 /// An actor built before `persistedGateAnswers` existed round-trips state
 /// without the field, and the sync routes persist runtime metadata wholesale.
 /// The recorded answers must survive such a write — a decline especially,

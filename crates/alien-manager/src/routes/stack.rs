@@ -189,6 +189,20 @@ pub async fn stack_import(
     // values, which must not contradict what the template actually created:
     // a live resource sharing a frozen gate would otherwise follow the
     // contradicting value instead of the frozen answer.
+    // A deployer secret lives only in the customer's own secret store; the
+    // import never carries its value.
+    if let Some(input) = source_stack.inputs.iter().find(|input| {
+        alien_core::is_deployer_secret_input(input)
+            && req
+                .input_values
+                .get(&input.id)
+                .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+    }) {
+        return AlienError::new(ErrorData::BadRequest {
+            reason: alien_core::deployer_secret_value_refusal(&input.label),
+        })
+        .into_response();
+    }
     let delivered_resource_ids: std::collections::HashSet<String> = req
         .resources
         .iter()
