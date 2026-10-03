@@ -203,8 +203,10 @@ pub fn deployer_secret_location(
                         "https://console.cloud.google.com/security/secret-manager/create?project={project}"
                     )
                 }),
+                // Creates the secret the first time; every run adds the value
+                // as a new version, so the same command rotates it.
                 cli_command: format!(
-                    "printf '%s' '{placeholder}' | gcloud secrets create {name}{project_flag} --replication-policy=automatic --data-file=-"
+                    "(gcloud secrets describe {name}{project_flag} >/dev/null 2>&1 || gcloud secrets create {name}{project_flag} --replication-policy=automatic) && printf '%s' '{placeholder}' | gcloud secrets versions add {name}{project_flag} --data-file=-"
                 ),
                 name,
             }
