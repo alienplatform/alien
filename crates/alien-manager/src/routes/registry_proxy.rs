@@ -722,11 +722,6 @@ async fn proxy_pull(
         Err(e) => return oci_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", e.to_string()),
     };
 
-    // Capability credentials pull nothing, charts and the Operator image
-    // included, so they are refused before the pull is routed.
-    if let Err(refused) = refuse_capability_pull(&subject) {
-        return refused;
-    }
     if let Err(refused) = require_literal_oci_path(&path) {
         return refused;
     }
@@ -737,6 +732,11 @@ async fn proxy_pull(
         Ok(oci) => oci,
         Err(refused) => return refused,
     };
+    // Capability credentials pull nothing, charts and the Operator image
+    // included, so they are refused before the pull is routed.
+    if let Err(refused) = refuse_capability_pull(&subject) {
+        return refused;
+    }
     if oci_path_str.starts_with(super::charts::CHART_NAMESPACE) {
         return super::charts::serve(&state, &subject, &method, oci_path_str).await;
     }
