@@ -726,7 +726,7 @@ impl GcpServiceAccountController {
                 role_name
             )),
             service_account_unique_id: Some("123456789012345678901".to_string()),
-            custom_role_naming: None,
+            custom_role_naming: Some(GcpCustomRoleNaming::HashedLongPrefix),
             _internal_stay_count: None,
         }
     }
