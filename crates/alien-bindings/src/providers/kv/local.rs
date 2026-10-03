@@ -22,7 +22,7 @@
 //! See `crates/alien-bindings/FORMAT.md` for the on-disk `localkv.v2` contract.
 use crate::error::{ErrorData, Result};
 use crate::providers::local_store::{
-    as_blob, as_i64, as_opt_i64, as_text, opt_i64_value, query_all, LocalStore, StoreSpec,
+    as_blob, as_i64, as_opt_i64, as_text, opt_i64_value, query_all, LocalStore, Sharing, StoreSpec,
 };
 use crate::traits::{Binding, Kv, KvEntry, PutCondition, PutOptions, ScanResult};
 use alien_error::{AlienError, Context as _, IntoAlienError as _};
@@ -78,9 +78,19 @@ async fn delete_expired(conn: &Connection, operation: &str, key: &str, now: i64)
 }
 
 impl LocalKv {
+    /// Open a store that several processes may share.
     pub async fn new(data_dir: PathBuf) -> Result<Self> {
         Ok(Self {
-            store: LocalStore::open(data_dir, &KV_SPEC).await?,
+            store: LocalStore::open(data_dir, &KV_SPEC, Sharing::MultiProcess).await?,
+        })
+    }
+
+    /// Open a store only this process uses. Unlike [`LocalKv::new`], this
+    /// works on network filesystems such as NFS or EFS volumes, which cannot
+    /// coordinate a write-ahead log across processes.
+    pub async fn single_process(data_dir: PathBuf) -> Result<Self> {
+        Ok(Self {
+            store: LocalStore::open(data_dir, &KV_SPEC, Sharing::SingleProcess).await?,
         })
     }
 

@@ -137,6 +137,19 @@ fn record_to_subject(record: &crate::traits::token_store::TokenRecord, bearer: S
             // Unscoped deployment token shouldn't exist; fail closed.
             (Scope::Workspace, Role::DeploymentViewer)
         }
+        (TokenType::Tunnel, Some(group_id), _) => (
+            Scope::DeploymentGroup {
+                project_id: "default".to_string(),
+                deployment_group_id: group_id.to_string(),
+            },
+            Role::TunnelCaller,
+        ),
+        (TokenType::Tunnel, None, _) => (
+            Scope::Project {
+                project_id: "default".to_string(),
+            },
+            Role::TunnelCaller,
+        ),
     };
 
     Subject {

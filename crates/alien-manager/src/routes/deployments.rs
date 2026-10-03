@@ -491,17 +491,19 @@ async fn create_deployment(
         .into_response();
     }
 
-    // Auto-assign latest release if available
-    let latest_release = match state.release_store.get_latest_release(&subject).await {
-        Ok(release) => release,
-        Err(e) => return e.into_response(),
-    };
-    let desired_release_id = latest_release.as_ref().map(|release| release.id.clone());
+    // Start at the release the default channel points at (the latest
+    // release on a manager without channels).
+    let starting_release =
+        match super::channels::release_for_deployment(&state, &subject, None).await {
+            Ok(release) => release,
+            Err(e) => return e.into_response(),
+        };
+    let desired_release_id = starting_release.as_ref().map(|release| release.id.clone());
 
     // Generated secret inputs get their value now, once, and keep it in the
     // stored input values for every later update.
     let mut input_values = req.input_values;
-    if let Some(stack) = latest_release
+    if let Some(stack) = starting_release
         .as_ref()
         .and_then(|release| release.stacks.get(&req.platform))
     {
@@ -631,7 +633,30 @@ async fn list_deployments(
             ..
         } => Some(deployment_group_id.clone()),
         crate::auth::Scope::Workspace | crate::auth::Scope::Project { .. } => {
-            query.deployment_group_id.clone()
+            match query.deployment_group_id.as_deref() {
+                // Clients may pass a group name where an ID is expected, as the
+                // hosted API accepts; resolve it the same way.
+                Some(group) if !group.starts_with("dg_") => {
+                    match state
+                        .deployment_store
+                        .list_deployment_groups(&subject)
+                        .await
+                    {
+                        Ok(groups) => Some(
+                            groups
+                                .into_iter()
+                                .find(|dg| {
+                                    dg.name == group
+                                        && state.authz.can_read_deployment_group(&subject, dg)
+                                })
+                                .map(|dg| dg.id)
+                                .unwrap_or_else(|| group.to_string()),
+                        ),
+                        Err(e) => return e.into_response(),
+                    }
+                }
+                other => other.map(str::to_string),
+            }
         }
         crate::auth::Scope::Deployment { .. } => {
             return ErrorData::forbidden("Deployment tokens cannot list deployments")
@@ -675,12 +700,17 @@ async fn list_deployments(
         ..Default::default()
     };
 
-    let deployments = match state
+    // The store narrows by scope; authz decides per item, as for deployment
+    // groups, so capability tokens (e.g. tunnel callers) see nothing.
+    let deployments: Vec<_> = match state
         .deployment_store
         .list_deployments(&subject, &filter)
         .await
     {
-        Ok(d) => d,
+        Ok(d) => d
+            .into_iter()
+            .filter(|deployment| state.authz.can_read_deployment(&subject, deployment))
+            .collect(),
         Err(e) => return e.into_response(),
     };
 
@@ -1217,6 +1247,12 @@ mod tests {
                     .expect("empty registry routing table should initialize"),
             ),
             import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
+            tunnels: None,
+            charts: None,
+            release_channels: None,
+            bundle_signing_key: None,
+            bundle_sources: None,
+            log_buffer: std::sync::Arc::new(crate::dev::LogBuffer::new()),
         };
         let response = router()
             .with_state(state)
@@ -1252,6 +1288,7 @@ mod tests {
                     name: "local-dev".to_string(),
                     max_deployments: 100,
                     deployment_count: 1,
+                    setup: Default::default(),
                     created_at: Utc::now(),
                 }])
             });

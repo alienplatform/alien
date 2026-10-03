@@ -14,7 +14,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::{
     CreateReleaseRequest as ManagerCreateReleaseRequest, StackByPlatform as ManagerStackByPlatform,
 };
-use alien_manager_api::SdkResultExt;
+use alien_manager_api::SdkResultExtReadingBody as _;
 use alien_platform_api::types::GitMetadata;
 use clap::Parser;
 use dockdash::{ClientProtocol, RegistryAuth};
@@ -162,7 +162,7 @@ pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()
     if let Some(title) = args.title.as_deref() {
         if !ctx.is_platform() {
             return Err(AlienError::new(ErrorData::ConfigurationError {
-                message: "--title requires platform mode".to_string(),
+                message: "This manager doesn't store release titles; omit --title".to_string(),
             }));
         }
         #[cfg(feature = "platform")]
@@ -195,14 +195,9 @@ pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()
     }
 }
 
+#[cfg_attr(not(feature = "platform"), allow(unused_variables))]
 fn validate_release_channel(channel: &str, ctx: &ExecutionMode) -> Result<()> {
-    if !ctx.is_platform() && channel != "production" {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "channel".to_string(),
-            message: "Named release channels currently require platform mode.".to_string(),
-        }));
-    }
-
+    // A manager you run checks the name, and that the channel exists, itself.
     #[cfg(feature = "platform")]
     if ctx.is_platform() {
         parse_release_channel_name(channel)?;
@@ -485,6 +480,9 @@ async fn load_release_config(
     } else {
         None
     };
+    if let Some(manager) = &manager {
+        ensure_manager_channel(manager, &args.channel).await?;
+    }
 
     let git_metadata = if args.no_git {
         None
@@ -599,20 +597,32 @@ async fn release_task_core(
             // registry prefix (ECR, GAR, ACR, local Docker). In platform mode,
             // resolve_manager calls the platform API to get the per-project
             // repo name for this specific platform.
-            let push_settings = if let Some(ref image_repo) = args.image_repo {
-                create_manual_push_settings(&args, image_repo)?
-            } else {
-                let per_platform = ctx
-                    .resolve_manager(&project_link.project_id, platform_str)
-                    .await?;
-                build_proxy_push_settings(&per_platform, &platform).await?
-            };
+            let (push_settings, public_registry_host) =
+                if let Some(ref image_repo) = args.image_repo {
+                    (create_manual_push_settings(&args, image_repo)?, None)
+                } else {
+                    let per_platform = ctx
+                        .resolve_manager(&project_link.project_id, platform_str)
+                        .await?;
+                    build_proxy_push_settings(&per_platform, &platform).await?
+                };
 
-            push_stack_with_cache(built_stack, platform, &output_dir, &push_settings)
-                .await
-                .context(ErrorData::ReleaseFailed {
-                    message: format!("Failed to push images for {} platform", platform_str),
-                })?
+            let mut pushed =
+                push_stack_with_cache(built_stack, platform, &output_dir, &push_settings)
+                    .await
+                    .context(ErrorData::ReleaseFailed {
+                        message: format!("Failed to push images for {} platform", platform_str),
+                    })?;
+            if let Some(public_host) = public_registry_host {
+                let push_host = push_settings
+                    .repository
+                    .split('/')
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                retarget_stack_registry(&mut pushed, &push_host, &public_host);
+            }
+            pushed
         } else {
             built_stack
         };
@@ -659,6 +669,7 @@ async fn release_task_core(
             &project_link.project_id,
             stack_by_platform,
             sdk_git_metadata,
+            &args.channel,
         )
         .await?
     } else {
@@ -696,6 +707,35 @@ async fn release_task_core(
     Ok(release_id)
 }
 
+/// Fail before building when a manager you run has no such channel.
+/// `production` always exists: the first release creates it.
+async fn ensure_manager_channel(manager: &ManagerContext, channel: &str) -> Result<()> {
+    if channel == "production" {
+        return Ok(());
+    }
+    let channels = manager
+        .client
+        .list_manager_release_channels()
+        .send()
+        .await
+        .into_sdk_error_reading_body()
+        .await
+        .context(ErrorData::ApiRequestFailed {
+            message: "listing release channels".to_string(),
+            url: None,
+        })?
+        .into_inner();
+    if channels.items.iter().any(|item| item.name == channel) {
+        return Ok(());
+    }
+    Err(AlienError::new(ErrorData::ValidationError {
+        field: "channel".to_string(),
+        message: format!(
+            "No channel named '{channel}'. Create it with `alien releases create-channel {channel}`."
+        ),
+    }))
+}
+
 /// Create a release on the manager
 #[alien_event(AlienEvent::CreatingRelease {
     project: "release".to_string(),
@@ -705,6 +745,7 @@ async fn create_manager_release(
     project_id: &str,
     stack: ManagerStackByPlatform,
     git_metadata: Option<alien_manager_api::types::GitMetadata>,
+    channel: &str,
 ) -> Result<String> {
     info!("Creating release on manager...");
 
@@ -715,10 +756,12 @@ async fn create_manager_release(
             stack,
             git_metadata,
             project_id: project_id.to_string(),
+            channel: Some(channel.to_string()),
         })
         .send()
         .await
-        .into_sdk_error()
+        .into_sdk_error_reading_body()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to create release".to_string(),
             url: None,
@@ -845,8 +888,7 @@ async fn release_declare(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<Decl
 
     if ctx.is_standalone() || ctx.is_dev() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "Declaring a stackless release (--no-stack) requires platform mode."
-                .to_string(),
+            message: "This manager doesn't support stackless releases (--no-stack).".to_string(),
         }));
     }
 
@@ -1275,18 +1317,21 @@ fn create_manual_push_settings(args: &ReleaseArgs, image_repo: &str) -> Result<P
 /// The manager IS the container registry. Images are pushed to
 /// `{manager_url}/v2/{repo_name}/{name}:{tag}` using the caller's auth token.
 /// The proxy forwards to the upstream cloud registry transparently.
+/// Push settings for the manager's registry proxy, plus the registry host
+/// deployments pull from when the manager advertises one that differs from
+/// the address this CLI pushes through.
 async fn build_proxy_push_settings(
     manager: &ManagerContext,
     platform: &Platform,
-) -> Result<PushSettings> {
+) -> Result<(PushSettings, Option<String>)> {
     let manager_url = &manager.manager_url;
 
     // Repository name — the upstream repo prefix. The proxy forwards the OCI
     // path as-is, so this must match the upstream repository name.
     // First try the statically-known repository_name (from platform mode).
     // If not available, call the manager's build-config endpoint to discover it.
-    let repo_name = if let Some(ref name) = manager.repository_name {
-        name.clone()
+    let (repo_name, registry_host) = if let Some(ref name) = manager.repository_name {
+        (name.clone(), None)
     } else {
         // Standalone mode: call the manager's build-config endpoint directly
         // to discover the repository name for this platform.
@@ -1328,7 +1373,12 @@ async fn build_proxy_push_settings(
                     message: "Failed to parse build-config response".to_string(),
                 })?;
 
-        bc.get("repositoryName")
+        let registry_host = bc
+            .get("registryHost")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let repo_name = bc
+            .get("repositoryName")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .ok_or_else(|| {
@@ -1337,10 +1387,16 @@ async fn build_proxy_push_settings(
                               Use --image-repo to specify a container registry."
                         .to_string(),
                 })
-            })?
+            })?;
+        (repo_name, registry_host)
     };
 
-    manager_proxy_push_settings(manager_url, &repo_name, manager)
+    let settings = manager_proxy_push_settings(manager_url, &repo_name, manager)?;
+    let push_host = alien_core::image_rewrite::strip_url_scheme(manager_url).to_string();
+    Ok((
+        settings,
+        registry_host.filter(|public| *public != push_host),
+    ))
 }
 
 /// Push settings for `repository` on the manager's OCI proxy at `registry_host`, which forwards
@@ -1350,10 +1406,18 @@ pub(crate) fn manager_proxy_push_settings(
     repository: &str,
     manager: &ManagerContext,
 ) -> Result<PushSettings> {
+    // A manager served over plain HTTP (a trial install without a
+    // certificate) must be pushed to over HTTP, whatever its host name.
+    let plain_http = registry_host.starts_with("http://");
     // OCI clients address a registry as host:port, not as a URL.
     let registry_host = alien_core::image_rewrite::strip_url_scheme(registry_host);
     let (registry_host, protocol) =
         translate_registry_url_for_cli(registry_host, &Platform::Local)?;
+    let protocol = if plain_http {
+        ClientProtocol::Http
+    } else {
+        protocol
+    };
     let repository = format!("{registry_host}/{repository}");
 
     // OCI speaks Basic — the token rides in the password slot, the
@@ -1605,6 +1669,53 @@ fn parse_kubernetes_base_platform(
 /// `.alien[-target]/build/{platform}/{artifact}` paths before pushing. The
 /// artifact path may point at a different platform than the release currently
 /// being pushed when platforms share a built image.
+/// Point image references pushed through `push_host` at `public_host`, the
+/// address deployments pull from. The images are the same; only the registry
+/// host in the reference changes.
+fn retarget_stack_registry(stack: &mut Stack, push_host: &str, public_host: &str) {
+    let prefix = format!("{push_host}/");
+    let retarget = |image: &str| {
+        image
+            .strip_prefix(&prefix)
+            .map(|rest| format!("{public_host}/{rest}"))
+    };
+    for (_resource_id, entry) in stack.resources_mut() {
+        if let Some(worker) = entry.config.downcast_ref::<Worker>() {
+            if let WorkerCode::Image { image } = &worker.code {
+                if let Some(image) = retarget(image) {
+                    let mut updated = worker.clone();
+                    updated.code = WorkerCode::Image { image };
+                    entry.config = alien_core::Resource::new(updated);
+                }
+            }
+        } else if let Some(container) = entry.config.downcast_ref::<Container>() {
+            if let ContainerCode::Image { image } = &container.code {
+                if let Some(image) = retarget(image) {
+                    let mut updated = container.clone();
+                    updated.code = ContainerCode::Image { image };
+                    entry.config = alien_core::Resource::new(updated);
+                }
+            }
+        } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
+            if let DaemonCode::Image { image } = &daemon.code {
+                if let Some(image) = retarget(image) {
+                    let mut updated = daemon.clone();
+                    updated.code = DaemonCode::Image { image };
+                    entry.config = alien_core::Resource::new(updated);
+                }
+            }
+        } else if let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() {
+            if let SandboxCode::Image { image } = &sandbox.code {
+                if let Some(image) = retarget(image) {
+                    let mut updated = sandbox.clone();
+                    updated.code = SandboxCode::Image { image };
+                    entry.config = alien_core::Resource::new(updated);
+                }
+            }
+        }
+    }
+}
+
 fn rebase_prebuilt_stack_image_paths(stack: &mut Stack, output_dir: &Path) -> Result<()> {
     for (_resource_id, resource_entry) in stack.resources_mut() {
         if let Some(func) = resource_entry.config.downcast_ref::<Worker>() {
@@ -1777,6 +1888,7 @@ async fn push_stack_with_cache(
 ) -> alien_error::Result<Stack, alien_build::error::ErrorData> {
     let platform_str = platform.as_str();
     let mut push_cache = load_push_cache(output_dir, platform_str);
+    drop_images_missing_from_registry(&built_stack, &mut push_cache, push_settings).await;
     let pre_push_stack = built_stack.clone();
 
     let cache_hits = apply_push_cache(&mut built_stack, &push_cache, &push_settings.repository);
@@ -1803,6 +1915,39 @@ async fn push_stack_with_cache(
     }
 
     Ok(pushed)
+}
+
+/// Forget cached pushes this stack would reuse that the registry can't
+/// confirm it still has (a manager whose state was reset, a pruned
+/// repository), so they're pushed again instead of released as references to
+/// nothing. A lookup the registry refuses (a push-only token can't read
+/// manifests) also means pushing again: that is always correct, just slower.
+async fn drop_images_missing_from_registry(
+    stack: &Stack,
+    cache: &mut HashMap<String, String>,
+    push_settings: &PushSettings,
+) {
+    let mut reused = stack.clone();
+    if apply_push_cache(&mut reused, cache, &push_settings.repository) == 0 {
+        return;
+    }
+    let mut hits = HashMap::new();
+    collect_push_cache_entries(&reused, stack, &mut hits);
+    for (key, image) in hits {
+        match alien_build::registry::manifest_digest(&image, &push_settings.options).await {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                info!("   {image} is no longer in the registry; pushing it again");
+                cache.remove(&key);
+            }
+            Err(e) => {
+                info!(
+                    "   Couldn't confirm {image} is still in the registry ({e}); pushing it again"
+                );
+                cache.remove(&key);
+            }
+        }
+    }
 }
 
 /// Load the push cache for a platform. Returns an empty map on any error.

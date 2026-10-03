@@ -302,7 +302,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 400, 404, 409, 422       | application/json         |
+| errors.APIError          | 400, 403, 404, 409, 422  | application/json         |
 | errors.APIError          | 500, 503                 | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -634,7 +634,7 @@ run();
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 404, 409, 422            | application/json         |
-| errors.APIError          | 500                      | application/json         |
+| errors.APIError          | 500, 503                 | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## get
@@ -711,7 +711,7 @@ run();
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 404                      | application/json         |
-| errors.APIError          | 500, 502                 | application/json         |
+| errors.APIError          | 500, 502, 503            | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## update
@@ -788,7 +788,7 @@ run();
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 404                      | application/json         |
-| errors.APIError          | 500                      | application/json         |
+| errors.APIError          | 500, 503                 | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## dispatch
@@ -865,7 +865,7 @@ run();
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 404                      | application/json         |
-| errors.APIError          | 500                      | application/json         |
+| errors.APIError          | 500, 503                 | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## complete
@@ -942,7 +942,7 @@ run();
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 404                      | application/json         |
-| errors.APIError          | 500                      | application/json         |
+| errors.APIError          | 500, 503                 | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## incrementAttempt
@@ -1019,5 +1019,5 @@ run();
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 404                      | application/json         |
-| errors.APIError          | 500                      | application/json         |
+| errors.APIError          | 500, 503                 | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |

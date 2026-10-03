@@ -1101,6 +1101,7 @@ async fn create_release(
             stack: stack_by_platform_sdk,
             git_metadata: None,
             project_id: "default".to_string(),
+            channel: None,
         })
         .send()
         .await
@@ -1121,6 +1122,8 @@ async fn create_deployment_group_token(
                 &uuid::Uuid::new_v4().to_string()[..8]
             ),
             max_deployments: None,
+            environment_variables: Default::default(),
+            input_values: Default::default(),
         })
         .send()
         .await

@@ -33,6 +33,7 @@
 //! ```
 
 pub mod auth;
+pub mod bootstrap;
 pub mod commands;
 pub mod config;
 mod credential_materialization;

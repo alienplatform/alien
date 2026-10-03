@@ -1,0 +1,9 @@
+# A local Kubernetes cluster that stands in for your customers' clusters.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+containerdConfigPatches:
+  # Read per-registry settings from /etc/containerd/certs.d, where
+  # cluster.sh lets the nodes pull from two plain-HTTP registries.
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"

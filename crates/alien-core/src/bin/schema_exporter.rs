@@ -26,6 +26,7 @@ use utoipa::OpenApi;
     ContainerGpuSpec,
     ContainerAutoscaling,
     ContainerPort,
+    ContainerTunnel,
     ExposeProtocol,
     PublicEndpoint,
     WorkerPublicEndpoint,

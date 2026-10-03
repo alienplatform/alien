@@ -6,12 +6,230 @@ Release management
 
 ### Available Operations
 
+* [listManagerReleaseChannels](#listmanagerreleasechannels)
+* [createManagerReleaseChannel](#createmanagerreleasechannel)
+* [deleteManagerReleaseChannel](#deletemanagerreleasechannel)
 * [listReleases](#listreleases) - `GET /v1/releases` — Inbound: workspace / project bearer (or authenticated
 user). Outbound: caller bearer (passthrough). Returns only releases the
 caller may read.
 * [createRelease](#createrelease)
 * [getLatestRelease](#getlatestrelease)
 * [getRelease](#getrelease)
+* [promoteManagerRelease](#promotemanagerrelease)
+
+## listManagerReleaseChannels
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="list_manager_release_channels" method="get" path="/v1/release-channels" -->
+```typescript
+import { AlienManager } from "@alienplatform/manager-api";
+
+const alienManager = new AlienManager({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const result = await alienManager.releases.listManagerReleaseChannels();
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienManagerCore } from "@alienplatform/manager-api/core.js";
+import { releasesListManagerReleaseChannels } from "@alienplatform/manager-api/funcs/releasesListManagerReleaseChannels.js";
+
+// Use `AlienManagerCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alienManager = new AlienManagerCore({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const res = await releasesListManagerReleaseChannels(alienManager);
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("releasesListManagerReleaseChannels failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.ListReleaseChannelsResponse](../../models/listreleasechannelsresponse.md)\>**
+
+### Errors
+
+| Error Type                      | Status Code                     | Content Type                    |
+| ------------------------------- | ------------------------------- | ------------------------------- |
+| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+
+## createManagerReleaseChannel
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="create_manager_release_channel" method="post" path="/v1/release-channels" -->
+```typescript
+import { AlienManager } from "@alienplatform/manager-api";
+
+const alienManager = new AlienManager({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const result = await alienManager.releases.createManagerReleaseChannel({
+    name: "<value>",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienManagerCore } from "@alienplatform/manager-api/core.js";
+import { releasesCreateManagerReleaseChannel } from "@alienplatform/manager-api/funcs/releasesCreateManagerReleaseChannel.js";
+
+// Use `AlienManagerCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alienManager = new AlienManagerCore({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const res = await releasesCreateManagerReleaseChannel(alienManager, {
+    name: "<value>",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("releasesCreateManagerReleaseChannel failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [models.CreateReleaseChannelRequest](../../models/createreleasechannelrequest.md)                                                                                              | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.ReleaseChannelResponse](../../models/releasechannelresponse.md)\>**
+
+### Errors
+
+| Error Type                      | Status Code                     | Content Type                    |
+| ------------------------------- | ------------------------------- | ------------------------------- |
+| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+
+## deleteManagerReleaseChannel
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="delete_manager_release_channel" method="delete" path="/v1/release-channels/{name}" -->
+```typescript
+import { AlienManager } from "@alienplatform/manager-api";
+
+const alienManager = new AlienManager({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  await alienManager.releases.deleteManagerReleaseChannel({
+    name: "<value>",
+  });
+
+
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienManagerCore } from "@alienplatform/manager-api/core.js";
+import { releasesDeleteManagerReleaseChannel } from "@alienplatform/manager-api/funcs/releasesDeleteManagerReleaseChannel.js";
+
+// Use `AlienManagerCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alienManager = new AlienManagerCore({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const res = await releasesDeleteManagerReleaseChannel(alienManager, {
+    name: "<value>",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+
+  } else {
+    console.log("releasesDeleteManagerReleaseChannel failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.DeleteManagerReleaseChannelRequest](../../models/operations/deletemanagerreleasechannelrequest.md)                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<void\>**
+
+### Errors
+
+| Error Type                      | Status Code                     | Content Type                    |
+| ------------------------------- | ------------------------------- | ------------------------------- |
+| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
 
 ## listReleases
 
@@ -300,4 +518,83 @@ run();
 | Error Type                      | Status Code                     | Content Type                    |
 | ------------------------------- | ------------------------------- | ------------------------------- |
 | errors.AlienError               | 404                             | application/json                |
+| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+
+## promoteManagerRelease
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="promote_manager_release" method="post" path="/v1/releases/{id}/promote" -->
+```typescript
+import { AlienManager } from "@alienplatform/manager-api";
+
+const alienManager = new AlienManager({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const result = await alienManager.releases.promoteManagerRelease({
+    id: "<id>",
+    promoteReleaseRequest: {
+      channel: "<value>",
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienManagerCore } from "@alienplatform/manager-api/core.js";
+import { releasesPromoteManagerRelease } from "@alienplatform/manager-api/funcs/releasesPromoteManagerRelease.js";
+
+// Use `AlienManagerCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alienManager = new AlienManagerCore({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const res = await releasesPromoteManagerRelease(alienManager, {
+    id: "<id>",
+    promoteReleaseRequest: {
+      channel: "<value>",
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("releasesPromoteManagerRelease failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.PromoteManagerReleaseRequest](../../models/operations/promotemanagerreleaserequest.md)                                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.ReleaseChannelResponse](../../models/releasechannelresponse.md)\>**
+
+### Errors
+
+| Error Type                      | Status Code                     | Content Type                    |
+| ------------------------------- | ------------------------------- | ------------------------------- |
 | errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |

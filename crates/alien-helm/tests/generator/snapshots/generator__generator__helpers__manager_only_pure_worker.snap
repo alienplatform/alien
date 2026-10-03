@@ -35,6 +35,14 @@ runtime:
     repository: registry.example.com/deployment/operator
     tag: latest
     pullPolicy: IfNotPresent
+    # Pull the Operator image with management.token (for an image served by
+    # the manager this chart connects to).
+    pullWithManagementToken: false
+    # Follow the Operator image the manager targets, so upgrades need no helm
+    # upgrade. Kubernetes keeps the running pod until the new one is ready.
+    selfUpdate: true
+  # Pull secrets for the Operator and for the application's workloads (added
+  # to their ServiceAccounts), for images in a registry that needs credentials.
   imagePullSecrets: []
   podLabels: {}
   podAnnotations: {}
@@ -157,6 +165,21 @@ heartbeat:
   collection:
     nodes:
       enabled: true
+
+airgapped:
+  # No connection to the manager: targets arrive in bundles installed with
+  # `alien-deploy sync`, which also carries state and telemetry back. Needs
+  # management.deploymentId from the bundle.
+  enabled: false
+  # Public key (ed25519:...) bundles must be signed with. Set by the first
+  # `alien-deploy sync --trusted-key`, and checked on every later one.
+  bundleSigningKey: ""
+
+tunnel:
+  # Serve requests the control plane sends through the manager to the stack's
+  # declared tunnel endpoints, over the Operator's outbound connection.
+  # false closes the tunnel; nothing else changes.
+  enabled: true
 
 clusterBootstrap:
   metricsServer:
@@ -291,7 +314,9 @@ ephemeralStorage:
           "properties": {
             "repository": { "type": "string", "minLength": 1 },
             "tag": { "type": "string", "minLength": 1 },
-            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
+            "pullWithManagementToken": { "type": "boolean" },
+            "selfUpdate": { "type": "boolean" }
           }
         },
         "imagePullSecrets": {
@@ -584,6 +609,21 @@ ephemeralStorage:
             "tenantId": { "type": "string" }
           }
         }
+      }
+    },
+    "airgapped": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "bundleSigningKey": { "type": "string" }
+      }
+    },
+    "tunnel": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" }
       }
     },
     "heartbeat": {
@@ -880,8 +920,11 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- default "encryption-key" .Values.runtime.encryption.existingSecret.key -}}
 {{- end -}}
 
+{{- /* Cluster-scoped: the namespace hash keeps installs of the same chart in
+different namespaces of one cluster from colliding. */ -}}
 {{- define "deployment.heartbeatNodeClusterRoleName" -}}
-{{- printf "%s-heartbeat-nodes" (include "deployment.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- $suffix := printf "heartbeat-nodes-%s" (sha256sum .Release.Namespace | trunc 8) -}}
+{{- printf "%s-%s" (include "deployment.fullname" . | trunc (int (sub 62 (len $suffix))) | trimSuffix "-") $suffix -}}
 {{- end -}}
 
 === templates/_runtime-identity.tpl ===
@@ -1001,6 +1044,10 @@ metadata:
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+{{- with $.Values.runtime.imagePullSecrets }}
+imagePullSecrets:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
 ---
 {{- end }}
 
@@ -1188,6 +1235,21 @@ stringData:
   {{- end }}
 {{- end }}
 
+=== templates/registry-secret.yaml ===
+{{- if and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+{{- $registry := first (splitList "/" .Values.runtime.image.repository) }}
+{{- $auth := printf "%s:%s" (default "deployment" .Values.management.name) .Values.management.token | b64enc }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "deployment.fullname" . }}-registry
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: {{ dict "auths" (dict $registry (dict "auth" $auth)) | toJson | b64enc }}
+{{- end }}
+
 === templates/configmap.yaml ===
 {{- $defaultStackSettings := dict "deploymentModel" "pull" "updates" .Values.management.updates "telemetry" .Values.management.telemetry "heartbeats" .Values.management.healthChecks -}}
 {{- $stackSettings := deepCopy (default $defaultStackSettings .Values.stackSettings) -}}
@@ -1256,9 +1318,15 @@ spec:
       automountServiceAccountToken: {{ .Values.runtime.automountServiceAccountToken }}
       securityContext:
         {{- toYaml .Values.runtime.security.podSecurityContext | nindent 8 }}
-      {{- with .Values.runtime.imagePullSecrets }}
+      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+      {{- if or .Values.runtime.imagePullSecrets $pullWithToken }}
       imagePullSecrets:
+        {{- with .Values.runtime.imagePullSecrets }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $pullWithToken }}
+        - name: {{ include "deployment.fullname" . }}-registry
+        {{- end }}
       {{- end }}
       {{- with .Values.runtime.scheduling.nodeSelector }}
       nodeSelector:
@@ -1321,8 +1389,18 @@ spec:
             - name: AZURE_REGION
               value: {{ .Values.basePlatformConfig.azure.location | quote }}
             {{- end }}
+            {{- if dig "enabled" false (default dict .Values.airgapped) }}
+            {{- if not .Values.management.deploymentId }}
+              {{- fail "airgapped.enabled needs management.deploymentId (from the bundle)" }}
+            {{- end }}
+            - name: AIRGAP_TARGET_SECRET
+              value: {{ printf "%s-airgap-target" (include "deployment.fullname" .) | quote }}
+            - name: AIRGAP_STATUS_SECRET
+              value: {{ printf "%s-airgap-status" (include "deployment.fullname" .) | quote }}
+            {{- else }}
             - name: SYNC_URL
               value: {{ include "deployment.managementUrl" . | quote }}
+            {{- end }}
             - name: OPERATOR_NAME
               value: {{ .Values.management.name | quote }}
             - name: OPERATOR_RESOURCE_PREFIX
@@ -1349,8 +1427,10 @@ spec:
               value: "helm"
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
+            {{- if not (dig "enabled" false (default dict .Values.airgapped)) }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token
+            {{- end }}
             - name: OPERATOR_ENCRYPTION_KEY_FILE
               value: /etc/deployment/secrets/encryption-key
             - name: STACK_SETTINGS_FILE
@@ -1367,6 +1447,12 @@ spec:
             {{- end }}
             - name: SYNC_INTERVAL
               value: "30"
+            - name: TUNNEL_ENABLED
+              value: {{ dig "enabled" true (default dict .Values.tunnel) | quote }}
+            {{- if dig "selfUpdate" true .Values.runtime.image }}
+            - name: OPERATOR_SELF_UPDATE_DEPLOYMENT
+              value: {{ include "deployment.fullname" . | quote }}
+            {{- end }}
             - name: OTLP_PORT
               value: {{ .Values.runtime.api.port | quote }}
             - name: OTLP_HOST
@@ -1852,6 +1938,10 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -2071,6 +2161,10 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
