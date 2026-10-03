@@ -142,7 +142,11 @@ pub fn install(policy: &SandboxEgress) -> Result<()> {
         rules
             .push_str("-A OUTPUT -p udp --dport 53 -j DROP\n-A OUTPUT -p tcp --dport 53 -j DROP\n");
     }
-    rules.push_str("-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n");
+    // AWS's ingress path bypasses conntrack on INPUT. Kernel TCP replies carry ACK;
+    // new outbound connections start with SYN without ACK and still need an allowlist
+    // rule. Commands have no NET_RAW capability to forge packets or NET_ADMIN to use
+    // TCP repair. Do not grant arbitrary egress based on a source/listening port.
+    rules.push_str("-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -p tcp --tcp-flags ACK ACK -j ACCEPT\n-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n");
     // Restricted policies need no DNS after startup pinning. The guest kernel lacks the
     // iptables owner match, so never create a resolver exception shared with commands.
     if matches!(policy, SandboxEgress::Allow) {
