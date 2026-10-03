@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use axum::body::{to_bytes, Body};
@@ -35,10 +36,11 @@ use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
 };
 use alien_manager::traits::{
-    AuthValidator, CreateDeploymentGroupParams, CreateImportedDeploymentParams,
-    CredentialResolver, DeploymentRecord, DeploymentStore, ReleaseStore, TokenStore,
+    AuthValidator, CreateDeploymentGroupParams, CreateImportedDeploymentParams, CredentialResolver,
+    DeploymentRecord, DeploymentStore, ReleaseStore, TokenStore,
 };
 use alien_tunnel::manager::TunnelRegistry;
+use alien_tunnel::operator::{self, TunnelClientConfig, TunnelTargets};
 
 /// Hands out the subject registered for each bearer token, the way an
 /// embedder's validator does.
@@ -88,8 +90,8 @@ fn token(role: Role) -> String {
 
 /// A manager with tunnels on, one deployment, and a token for every role
 /// below: deployment-scoped for the tunnel roles, project-scoped for the
-/// pull roles.
-async fn state() -> AppState {
+/// pull roles. Returns the state and the deployment's ID.
+async fn state() -> (AppState, String) {
     let tmp = tempfile::tempdir().unwrap();
     let db = Arc::new(
         SqliteDatabase::new(&tmp.path().join("manager.db").to_string_lossy())
@@ -174,7 +176,7 @@ async fn state() -> AppState {
     let command_registry: Arc<dyn CommandRegistry> = Arc::new(InMemoryCommandRegistry::default());
     std::mem::forget(tmp);
 
-    AppState {
+    let state = AppState {
         deployment_store,
         release_store,
         token_store,
@@ -207,10 +209,11 @@ async fn state() -> AppState {
         bundle_signing_key: None,
         bundle_sources: None,
         log_buffer: Arc::new(alien_manager::LogBuffer::new()),
-    }
+    };
+    (state, deployment.id)
 }
 
-/// Open a tunnel connection as the Operator does, and return the status.
+/// Ask to open a tunnel connection with a role's token, and return the status.
 async fn connect(state: &AppState, role: Role) -> StatusCode {
     let request = Request::builder()
         .uri(alien_tunnel::CONNECT_PATH)
@@ -249,13 +252,35 @@ async fn pull(state: &AppState, role: Role, path: &str) -> (StatusCode, String) 
 
 #[tokio::test]
 async fn only_the_operator_can_hold_a_deployments_tunnel() {
-    let state = state().await;
+    let (state, deployment_id) = state().await;
+    let registry = state.tunnels.clone().expect("tunnels are on");
 
-    assert_eq!(
-        connect(&state, Role::DeploymentManager).await,
-        StatusCode::SWITCHING_PROTOCOLS,
-        "the deployment's Operator opens its tunnel"
-    );
+    // The Operator's real tunnel client, dialing the manager's real route
+    // over TCP, gets a working connection for its deployment.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let manager_addr = listener.local_addr().unwrap();
+    let router = alien_manager::routes::tunnel::router().with_state(state.clone());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let operator = tokio::spawn(operator::run(
+        TunnelClientConfig {
+            manager_url: format!("http://{manager_addr}").parse().unwrap(),
+            token: token(Role::DeploymentManager),
+            connections: 1,
+        },
+        TunnelTargets::new(),
+    ));
+    let mut waited = Duration::ZERO;
+    while registry.connection_count(&deployment_id) == 0 {
+        assert!(
+            waited < Duration::from_secs(10),
+            "the Operator's tunnel never connected"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        waited += Duration::from_millis(50);
+    }
+    operator.abort();
+
+    // Any other role for the same deployment is refused before the upgrade.
     for role in [
         Role::DeploymentViewer,
         Role::DeploymentTelemetryWriter,
@@ -271,17 +296,28 @@ async fn only_the_operator_can_hold_a_deployments_tunnel() {
 
 #[tokio::test]
 async fn capability_credentials_cannot_pull_charts_or_the_operator_image() {
-    let state = state().await;
+    let (state, _) = state().await;
 
-    for path in ["charts/files/manifests/0.1.0", "alien-operator/manifests/v1"] {
+    for path in [
+        "charts/files/manifests/0.1.0",
+        "alien-operator/manifests/v1",
+    ] {
         for role in [Role::ImageRepositoryProvisioner, Role::SandboxImagePusher] {
             let (status, body) = pull(&state, role, path).await;
-            assert_eq!(status, StatusCode::FORBIDDEN, "{role:?} pulling {path}: {body}");
+            assert_eq!(
+                status,
+                StatusCode::FORBIDDEN,
+                "{role:?} pulling {path}: {body}"
+            );
             assert!(body.contains("DENIED"), "{role:?} pulling {path}: {body}");
         }
         // This manager serves no charts or Operator image, so a role that may
         // pull gets past the role check and finds nothing there.
         let (status, body) = pull(&state, Role::ProjectDeveloper, path).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "developer pulling {path}: {body}");
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "developer pulling {path}: {body}"
+        );
     }
 }
