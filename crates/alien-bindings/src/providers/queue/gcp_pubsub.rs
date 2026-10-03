@@ -117,7 +117,7 @@ impl Queue for GcpPubSubQueue {
                     })
                     .collect(),
             };
-            let result = self.client.publish(self.topic.clone(), request).await;
+            let result = self.client.publish_once(self.topic.clone(), request).await;
             for (index, _) in chunk {
                 results[*index] = match &result {
                     Ok(response) if response.message_ids.len() == chunk.len() => {
