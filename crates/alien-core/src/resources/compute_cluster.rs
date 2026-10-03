@@ -8,7 +8,7 @@
 //! - Launch templates/instance configurations
 
 use crate::error::{ErrorData, Result};
-use crate::instance_catalog::Architecture;
+use crate::instance_catalog::{is_same_architecture_aws_machine, Architecture};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef};
 use crate::ResourceType;
 use alien_error::AlienError;
@@ -184,8 +184,8 @@ pub struct CapacityGroup {
 /// ## Architecture
 ///
 /// - **Setup** creates cloud resources: ASGs/MIGs/VMSSs, IAM roles, security groups
-/// - **Alien** manages allowed fleet operations: machine count and runtime
-///   machine image rollout
+/// - **Alien** manages allowed fleet operations: machine count, runtime
+///   machine image rollout and, on AWS, the machine type within one CPU architecture
 /// - A node agent runs on each machine from the selected runtime image channel
 ///
 /// ## Example
@@ -380,18 +380,22 @@ impl ResourceDefinition for ComputeCluster {
                 .iter()
                 .find(|g| g.group_id == new_group.group_id)
             {
-                // Instance type is immutable for existing groups
-                if existing_group.instance_type.is_some()
-                    && new_group.instance_type.is_some()
-                    && existing_group.instance_type != new_group.instance_type
-                {
-                    return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
-                        resource_id: self.id.clone(),
-                        reason: format!(
-                            "instance type for capacity group '{}' is immutable",
-                            new_group.group_id
-                        ),
-                    }));
+                // The controller rolls the fleet onto another machine of the same architecture;
+                // the stack's images may not run on any other machine. Preflights also limit
+                // this to AWS, which this check can't see.
+                if let (Some(old), Some(new)) = (
+                    existing_group.instance_type.as_deref(),
+                    new_group.instance_type.as_deref(),
+                ) {
+                    if old != new && !is_same_architecture_aws_machine(old, new) {
+                        return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                            resource_id: self.id.clone(),
+                            reason: format!(
+                                "capacity group '{}' can't change machine from '{old}' to '{new}': only an AWS machine of the same CPU architecture can replace it",
+                                new_group.group_id
+                            ),
+                        }));
+                    }
                 }
             }
         }
@@ -564,6 +568,36 @@ mod tests {
         // Scale changes should be allowed
         let result = cluster1.validate_update(&cluster2);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn machine_changes_stay_within_one_aws_architecture() {
+        let cluster = |machine: &str| {
+            ComputeCluster::new("compute".to_string())
+                .capacity_group(CapacityGroup {
+                    group_id: "general".to_string(),
+                    instance_type: Some(machine.to_string()),
+                    profile: None,
+                    min_size: 1,
+                    max_size: 5,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                })
+                .build()
+        };
+        cluster("t4g.small")
+            .validate_update(&cluster("t4g.medium"))
+            .expect("arm64 to arm64");
+        for (old, new) in [
+            ("t4g.small", "m7i.large"),
+            ("t4g.small", "t4g.unknown"),
+            ("n2-standard-2", "n2-standard-4"),
+        ] {
+            let error = cluster(old)
+                .validate_update(&cluster(new))
+                .expect_err("needs setup");
+            assert_eq!(error.code, "INVALID_RESOURCE_UPDATE", "{old} -> {new}");
+        }
     }
 
     #[test]
