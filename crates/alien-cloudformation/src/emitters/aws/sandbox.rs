@@ -612,11 +612,17 @@ fn environment_variables(sandbox: &Sandbox) -> CfExpression {
         ("ALIEN_SANDBOX_EXEC_GID", AWS_MICROVM.exec_uid.to_string()),
     ];
 
-    let mut pairs: std::collections::BTreeMap<String, String> = pairs
+    let mut pairs: Vec<(String, String)> = pairs
         .into_iter()
         .map(|(key, value)| (key.to_string(), value))
         .collect();
-    pairs.extend(sandbox.supervisor_environment());
+    let mut overrides = sandbox.supervisor_environment();
+    for (key, value) in &mut pairs {
+        if let Some(replacement) = overrides.remove(key) {
+            *value = replacement;
+        }
+    }
+    pairs.extend(overrides);
     CfExpression::list(pairs.into_iter().map(|(key, value)| {
         CfExpression::object([
             ("Key", CfExpression::from(key.as_str())),
