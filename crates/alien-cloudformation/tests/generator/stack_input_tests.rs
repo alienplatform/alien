@@ -109,6 +109,7 @@ fn deployer_secret_input(provided_by: Vec<StackInputProvider>) -> StackInputDefi
         default: None,
         platforms: None,
         validation: None,
+        generate: None,
         env: vec![StackInputEnvironmentMapping {
             name: "TAILSCALE_AUTH_KEY".to_string(),
             target_resources: None,

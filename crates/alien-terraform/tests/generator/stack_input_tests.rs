@@ -77,6 +77,7 @@ fn deployer_secret_stack(provided_by: Vec<StackInputProvider>) -> Stack {
             default: None,
             platforms: None,
             validation: None,
+            generate: None,
             env: vec![StackInputEnvironmentMapping {
                 name: "API_KEY".to_string(),
                 target_resources: None,

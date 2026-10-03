@@ -8799,6 +8799,7 @@ infrastructureExistingSecret: customer-bindings
             default: None,
             platforms: None,
             validation: None,
+            generate: None,
             env: Vec::new(),
         };
         let stack = Stack::new("input-stack".to_string())
