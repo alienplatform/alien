@@ -77,7 +77,9 @@ impl DeploymentsArgs {
             DeploymentsCmd::Create { format, .. } if format == "json"
         ) || matches!(
             &self.cmd,
-            DeploymentsCmd::Ls { json: true, .. }
+            DeploymentsCmd::Stop(LocalRuntimeArgs { json: true, .. })
+                | DeploymentsCmd::Resume(LocalRuntimeArgs { json: true, .. })
+                | DeploymentsCmd::Ls { json: true, .. }
                 | DeploymentsCmd::Get { json: true, .. }
                 | DeploymentsCmd::Resources { json: true, .. }
                 | DeploymentsCmd::Events { json: true, .. }
@@ -91,8 +93,25 @@ impl DeploymentsArgs {
     }
 }
 
+/// Storage-preserving local runtime lifecycle arguments.
+#[derive(Parser, Debug, Clone)]
+pub struct LocalRuntimeArgs {
+    /// Deployment ID or deployment-group/name.
+    pub id: String,
+    /// Emit machine-readable output.
+    #[arg(long)]
+    pub json: bool,
+    /// Maximum seconds to wait for the runtime operation.
+    #[arg(long, default_value = "120")]
+    pub timeout: NonZeroU64,
+}
+
 #[derive(Subcommand, Debug, Clone)]
 pub enum DeploymentsCmd {
+    /// Stop local deployment processes while retaining metadata and persistent data.
+    Stop(LocalRuntimeArgs),
+    /// Resume a stopped local deployment.
+    Resume(LocalRuntimeArgs),
     /// Create a new deployment
     Create {
         /// Deployment display name
@@ -314,6 +333,8 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
     }
 
     match args.cmd {
+        DeploymentsCmd::Stop(args) => local_runtime_task(args, ctx, false).await,
+        DeploymentsCmd::Resume(args) => local_runtime_task(args, ctx, true).await,
         // Platform mode lists canonical platform records; local modes list manager records.
         DeploymentsCmd::Ls { project, json } => {
             #[cfg(feature = "platform")]
@@ -2854,5 +2875,77 @@ mod tests {
         assert_eq!(key, "LOG_LEVEL");
         assert_eq!(value, "info");
         assert_eq!(patterns, vec!["api-*"]);
+    }
+}
+
+/// Request a local lifecycle operation and wait for its observed completion.
+pub async fn local_runtime_task(
+    args: LocalRuntimeArgs,
+    ctx: ExecutionMode,
+    running: bool,
+) -> Result<()> {
+    ctx.ensure_ready().await?;
+    let manager = resolve_manager_client(&ctx, None, !args.json).await?;
+    let deployment = resolve_deployment_reference(&manager, &args.id).await?;
+    let response = if running {
+        manager
+            .resume_local_deployment()
+            .id(&deployment.id)
+            .send()
+            .await
+    } else {
+        manager
+            .stop_local_deployment()
+            .id(&deployment.id)
+            .send()
+            .await
+    };
+    response
+        .into_sdk_error_reading_body()
+        .await
+        .context(ErrorData::ApiRequestFailed {
+            message: "requesting local runtime state".to_string(),
+            url: None,
+        })?;
+    let deadline = Instant::now() + Duration::from_secs(args.timeout.get());
+    loop {
+        let status = manager
+            .local_runtime_status()
+            .id(&deployment.id)
+            .send()
+            .await
+            .into_sdk_error_reading_body()
+            .await
+            .context(ErrorData::ApiRequestFailed {
+                message: "reading local runtime state".to_string(),
+                url: None,
+            })?
+            .into_inner();
+        if status.desired_running != running {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "runtime".to_string(),
+                message: "A newer lifecycle request superseded this operation".to_string(),
+            }));
+        }
+        if !status.pending && status.observed_running == running {
+            if args.json {
+                return print_json(&status);
+            }
+            println!(
+                "{}",
+                success_line(if running {
+                    "Deployment resumed."
+                } else {
+                    "Deployment stopped. Metadata and persistent data retained."
+                })
+            );
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "timeout".to_string(), message: "Local runtime operation is still pending; inspect manager logs and retry the command".to_string(),
+            }));
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }

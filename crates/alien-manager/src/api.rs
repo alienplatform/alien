@@ -33,6 +33,9 @@ impl Modify for BearerSecurity {
         license(name = "FSL-1.1-Apache-2.0")
     ),
     paths(
+        crate::routes::deployments::stop_local_deployment,
+        crate::routes::deployments::resume_local_deployment,
+        crate::routes::deployments::local_runtime_status,
         // Health
         crate::routes::health::health,
         // Identity

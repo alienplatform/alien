@@ -1211,6 +1211,37 @@
         }
       }
     },
+    "/v1/deployments/{id}/resume": {
+      "post": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "resume_local_deployment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Local deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Resume requested",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalRuntimeStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/deployments/{id}/retry": {
       "post": {
         "tags": [
@@ -1280,6 +1311,37 @@
         ]
       }
     },
+    "/v1/deployments/{id}/runtime": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "local_runtime_status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Local deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Local runtime state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalRuntimeStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/deployments/{id}/status-report": {
       "post": {
         "tags": [
@@ -1324,6 +1386,37 @@
             "bearer": []
           }
         ]
+      }
+    },
+    "/v1/deployments/{id}/stop": {
+      "post": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "stop_local_deployment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Local deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Stop requested",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalRuntimeStatus"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/v1/deployments/{id}/target": {
@@ -12044,6 +12137,27 @@
           "name": {
             "type": "string",
             "nullable": true
+          }
+        }
+      },
+      "LocalRuntimeStatus": {
+        "type": "object",
+        "required": [
+          "desiredRunning",
+          "observedRunning"
+        ],
+        "properties": {
+          "desiredRunning": {
+            "type": "boolean",
+            "description": "Whether processes should be running."
+          },
+          "observedRunning": {
+            "type": "boolean",
+            "description": "Whether the last completed lifecycle operation left processes running."
+          },
+          "pending": {
+            "type": "boolean",
+            "description": "Whether the requested lifecycle operation still needs to complete."
           }
         }
       },

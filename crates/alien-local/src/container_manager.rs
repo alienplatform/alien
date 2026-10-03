@@ -613,9 +613,7 @@ impl LocalContainerManager {
             .await
     }
 
-    /// `docker load` an OCI tarball and return a reference the daemon can
-    /// `create` from, re-tagging by image ID when the containerd image store
-    /// registered only the tar's literal annotation name.
+    /// Load an OCI archive and return its immutable image identity.
     async fn load_oci_tarball_into_docker(
         &self,
         tarball_path: &Path,
@@ -627,10 +625,28 @@ impl LocalContainerManager {
             "Loading OCI image from local tarball"
         );
 
+        let archive_path = tarball_path.to_path_buf();
+        let archive = tokio::task::spawn_blocking(move || {
+            crate::image_archive::prepare_load_archive(&archive_path)
+        })
+        .await
+        .into_alien_error()
+        .context(ErrorData::DockerContainerError {
+            container: container_id.to_string(),
+            operation: "read_image_identity".to_string(),
+            reason: "Image archive reader failed".to_string(),
+        })?
+        .into_alien_error()
+        .context(ErrorData::DockerContainerError {
+            container: container_id.to_string(),
+            operation: "read_image_identity".to_string(),
+            reason: "Cannot identify the single image in the OCI archive".to_string(),
+        })?;
+
         // Use `docker load` instead of `import_image` to preserve CMD/ENTRYPOINT
         // docker import is for filesystem tarballs, docker load is for OCI image tarballs
         let output = tokio::process::Command::new("docker")
-            .args(&["load", "-i", &tarball_path.to_string_lossy()])
+            .args(["load", "-i", &archive.file.path().to_string_lossy()])
             .output()
             .await
             .into_alien_error()
@@ -649,113 +665,32 @@ impl LocalContainerManager {
             }));
         }
 
-        // Parse output to extract image tag
-        // docker load output format: "Loaded image: <tag>" or "Loaded image ID: sha256:..."
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let loaded_image = stdout
-            .lines()
-            .find_map(|line| {
-                let trimmed = line.trim();
-                if trimmed.starts_with("Loaded image:") {
-                    Some(
-                        trimmed
-                            .trim_start_matches("Loaded image:")
-                            .trim()
-                            .to_string(),
-                    )
-                } else if trimmed.starts_with("Loaded image ID:") {
-                    Some(
-                        trimmed
-                            .trim_start_matches("Loaded image ID:")
-                            .trim()
-                            .to_string(),
-                    )
-                } else {
-                    None
+        // Classic Docker identifies images by config digest; the containerd store
+        // uses the manifest digest. Never resolve a mutable annotation or tag: an
+        // existing normalized alias can still refer to a previous load's content.
+        for image_id in &archive.image_ids {
+            match self.docker.inspect_image(image_id).await {
+                Ok(_) => return Ok(image_id.clone()),
+                Err(bollard::errors::Error::DockerResponseServerError {
+                    status_code: 404, ..
+                }) => continue,
+                Err(error) => {
+                    return Err(error).into_alien_error().context(
+                        ErrorData::DockerContainerError {
+                            container: container_id.to_string(),
+                            operation: "inspect_loaded_image".to_string(),
+                            reason: format!("Failed to inspect loaded image {image_id}"),
+                        },
+                    );
                 }
-            })
-            .unwrap_or_else(|| {
-                // Fallback: generate a tag
-                format!("alien-local/{}:latest", container_id)
-            });
-
-        info!(
-            image_tag = %loaded_image,
-            container_id = %container_id,
-            tarball = %tarball_path.display(),
-            "Successfully loaded OCI image with docker load"
-        );
-
-        // With Docker's containerd image store, `docker load` registers the
-        // image under the tar's literal `io.containerd.image.name` annotation
-        // (e.g. `worker:tag`), while every docker CLI/API lookup normalizes
-        // the reference to `docker.io/library/worker:tag` — a name the load
-        // did NOT register, so `create` fails with "No such image" even
-        // though the content is present. Re-tagging by image ID registers
-        // the normalized reference. Uses the same bollard client `create`
-        // will use (a CLI `docker tag` could target a different daemon via
-        // the active docker context). On the classic image store the initial
-        // inspect succeeds and nothing else runs.
-        if self.docker.inspect_image(&loaded_image).await.is_err() {
-            let images = self
-                .docker
-                .list_images(None::<bollard::image::ListImagesOptions<String>>)
-                .await
-                .into_alien_error()
-                .context(ErrorData::DockerContainerError {
-                    container: container_id.to_string(),
-                    operation: "list_images".to_string(),
-                    reason: "Failed to list images to locate the loaded OCI image".to_string(),
-                })?;
-            // Compare with the `docker.io/library/` default-registry prefix
-            // stripped from both sides: depending on the image store, the
-            // daemon may report the tag in literal or normalized form.
-            let normalize = |t: &str| {
-                t.strip_prefix("docker.io/library/")
-                    .unwrap_or(t)
-                    .to_string()
-            };
-            let wanted = normalize(&loaded_image);
-            let image_id = images
-                .iter()
-                .find(|img| img.repo_tags.iter().any(|t| normalize(t) == wanted))
-                .map(|img| img.id.clone())
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::DockerContainerError {
-                        container: container_id.to_string(),
-                        operation: "resolve_loaded_image".to_string(),
-                        reason: format!(
-                            "docker load reported image '{}' but the daemon can neither \
-                             inspect it nor list it — the load did not register usable content",
-                            loaded_image
-                        ),
-                    })
-                })?;
-            let (repo, tag) = loaded_image.rsplit_once(':').ok_or_else(|| {
-                AlienError::new(ErrorData::DockerContainerError {
-                    container: container_id.to_string(),
-                    operation: "resolve_loaded_image".to_string(),
-                    reason: format!("Loaded image reference '{}' has no tag", loaded_image),
-                })
-            })?;
-            self.docker
-                .tag_image(
-                    &image_id,
-                    Some(bollard::image::TagImageOptions { repo, tag }),
-                )
-                .await
-                .into_alien_error()
-                .context(ErrorData::DockerContainerError {
-                    container: container_id.to_string(),
-                    operation: "tag_image".to_string(),
-                    reason: format!(
-                        "Failed to tag loaded image {} as {}",
-                        image_id, loaded_image
-                    ),
-                })?;
+            }
         }
-
-        Ok(loaded_image)
+        Err(AlienError::new(ErrorData::DockerContainerError {
+            container: container_id.to_string(),
+            operation: "resolve_loaded_image".to_string(),
+            reason: "Docker loaded the archive but its exact image identity is unavailable"
+                .to_string(),
+        }))
     }
 
     /// Make a registry image available to the daemon and return a reference
@@ -1132,16 +1067,10 @@ impl LocalContainerManager {
                 // On Linux: maps to host gateway IP
                 // On Mac/Windows: Docker Desktop provides this automatically, but explicit is fine
                 extra_hosts: Some(vec!["host.docker.internal:host-gateway".to_string()]),
-                // Restart exited containers like every managed platform does.
-                // Without this a container that races its peers at startup —
-                // e.g. nginx resolving an upstream before that service joined
-                // the network — stays Exited forever, while in production it
-                // would self-heal. ALWAYS (not ON_FAILURE) matches the
-                // Kubernetes Deployment default and also covers entrypoints
-                // that exit 0 on failure; Docker applies exponential backoff
-                // between restarts, and a manual stop/rm still sticks.
+                // Recover from process exits, but preserve an explicit stop across
+                // daemon restarts. An explicit start enables crash recovery again.
                 restart_policy: Some(bollard::models::RestartPolicy {
-                    name: Some(bollard::models::RestartPolicyNameEnum::ALWAYS),
+                    name: Some(bollard::models::RestartPolicyNameEnum::UNLESS_STOPPED),
                     maximum_retry_count: None,
                 }),
                 ..Default::default()
@@ -1234,19 +1163,70 @@ impl LocalContainerManager {
         })
     }
 
+    /// Resume an existing container without replacing its filesystem or configuration.
+    pub async fn resume_container(&self, container_id: &str) -> Result<()> {
+        let docker_name = format!("alien-{container_id}");
+        match self
+            .docker
+            .start_container(&docker_name, None::<StartContainerOptions<String>>)
+            .await
+        {
+            Ok(())
+            | Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 304, ..
+            }) => Ok(()),
+            Err(error) => Err(error)
+                .into_alien_error()
+                .context(ErrorData::DockerContainerError {
+                    container: container_id.to_string(),
+                    operation: "resume".to_string(),
+                    reason: "Failed to start the existing container".to_string(),
+                }),
+        }
+    }
+
     /// Stops a container.
     pub async fn stop_container(&self, container_id: &str) -> Result<()> {
         let docker_name = format!("alien-{}", container_id);
 
         self.docker
-            .stop_container(&docker_name, Some(StopContainerOptions { t: 10 }))
+            .update_container(
+                &docker_name,
+                bollard::container::UpdateContainerOptions::<String> {
+                    restart_policy: Some(bollard::models::RestartPolicy {
+                        name: Some(bollard::models::RestartPolicyNameEnum::UNLESS_STOPPED),
+                        maximum_retry_count: None,
+                    }),
+                    ..Default::default()
+                },
+            )
             .await
             .into_alien_error()
             .context(ErrorData::DockerContainerError {
                 container: container_id.to_string(),
                 operation: "stop".to_string(),
-                reason: "Failed to stop Docker container".to_string(),
+                reason: "Failed to preserve stop across daemon restart".to_string(),
             })?;
+
+        match self
+            .docker
+            .stop_container(&docker_name, Some(StopContainerOptions { t: 10 }))
+            .await
+        {
+            Ok(())
+            | Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 304, ..
+            }) => {}
+            Err(error) => {
+                return Err(error)
+                    .into_alien_error()
+                    .context(ErrorData::DockerContainerError {
+                        container: container_id.to_string(),
+                        operation: "stop".to_string(),
+                        reason: "Failed to stop Docker container".to_string(),
+                    })
+            }
+        }
 
         debug!(container_id = %container_id, "Container stopped");
         Ok(())
@@ -1613,21 +1593,21 @@ impl LocalContainerManager {
             if !metadata_file.exists() {
                 continue;
             }
-            match std::fs::read_to_string(&metadata_file) {
-                Ok(json) => match serde_json::from_str::<ContainerMetadata>(&json) {
-                    Ok(metadata) => metadata_list.push(metadata),
-                    Err(error) => warn!(
-                        path = %metadata_file.display(),
-                        error = %error,
-                        "Failed to parse container metadata"
-                    ),
-                },
-                Err(error) => warn!(
-                    path = %metadata_file.display(),
-                    error = %error,
-                    "Failed to read container metadata"
-                ),
-            }
+            let json = std::fs::read_to_string(&metadata_file)
+                .into_alien_error()
+                .context(ErrorData::LocalDirectoryError {
+                    path: metadata_file.display().to_string(),
+                    operation: "read metadata".to_string(),
+                    reason: "Cannot safely enumerate local containers".to_string(),
+                })?;
+            let metadata = serde_json::from_str::<ContainerMetadata>(&json)
+                .into_alien_error()
+                .context(ErrorData::LocalDirectoryError {
+                    path: metadata_file.display().to_string(),
+                    operation: "parse metadata".to_string(),
+                    reason: "Cannot safely enumerate local containers".to_string(),
+                })?;
+            metadata_list.push(metadata);
         }
         Ok(metadata_list)
     }
@@ -1714,6 +1694,124 @@ fn shared_bind_mount_user(_bind_mounts: &[BindMount]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_build::toolchain::{
+        docker::DockerToolchain, Toolchain, ToolchainContext, WorkloadKind,
+    };
+    use alien_core::BinaryTarget;
+
+    /// Run with DOCKER_HOST pointing at a disposable daemon, on both image stores.
+    #[tokio::test]
+    #[ignore = "requires Docker and registry access"]
+    async fn mutable_archive_load_runs_the_new_content() {
+        let state = tempfile::tempdir().expect("state directory");
+        let manager =
+            LocalContainerManager::new(state.path().to_path_buf()).expect("container manager");
+        let tag = format!("alien-load-test-{}:latest", std::process::id());
+        let mut previous = None;
+        for version in ["app-v1", "app-v2", "app-v1"] {
+            let archive = state.path().join(format!("{version}.tar"));
+            let layer = dockdash::Layer::builder()
+                .expect("layer builder")
+                .data("/sentinel", version.as_bytes(), Some(0o644))
+                .expect("sentinel layer")
+                .build()
+                .await
+                .expect("zstd layer");
+            let (image, _) = dockdash::Image::builder()
+                .from("alpine:3.20")
+                .layer(layer)
+                .cmd(vec!["cat".to_string(), "/sentinel".to_string()])
+                .output_name_and_tag(&tag)
+                .output_to(archive.clone())
+                .build()
+                .await
+                .expect("build image archive");
+            let loaded = manager
+                .load_oci_tarball_into_docker(&archive, "load-test")
+                .await
+                .expect("load exact image");
+            assert!(crate::image_archive::prepare_load_archive(image.path())
+                .expect("archive identities")
+                .image_ids
+                .contains(&loaded));
+            if let Some(previous) = previous {
+                assert_ne!(loaded, previous, "mutable tag must advance to new content");
+            }
+            // Seed the normalized alias, recreating the stale-alias condition on
+            // the next containerd load. The loader must not trust this name.
+            let output = tokio::process::Command::new("docker")
+                .args(["tag", &loaded, &tag])
+                .output()
+                .await
+                .expect("tag image");
+            assert!(output.status.success(), "{:?}", output);
+            let output = tokio::process::Command::new("docker")
+                .args(["run", "--rm", "--network", "none", &loaded])
+                .output()
+                .await
+                .expect("run exact loaded image");
+            assert!(output.status.success(), "{:?}", output);
+            assert_eq!(
+                String::from_utf8(output.stdout).expect("output").trim(),
+                version
+            );
+            previous = Some(loaded);
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an isolated Docker daemon and OCI-capable Buildx builder"]
+    async fn dockerfile_archive_runs_with_its_original_command() {
+        let root = tempfile::tempdir().unwrap();
+        let build_dir = root.path().join("build");
+        std::fs::create_dir(&build_dir).unwrap();
+        std::fs::write(
+            root.path().join("Dockerfile"),
+            "FROM alpine:3.20\nRUN printf app-v2 > /sentinel\nCMD [\"cat\", \"/sentinel\"]\n",
+        )
+        .unwrap();
+        let target = BinaryTarget::linux_container_target();
+        DockerToolchain {
+            dockerfile: None,
+            build_args: None,
+            target: None,
+        }
+        .build(&ToolchainContext {
+            src_dir: root.path().to_path_buf(),
+            build_dir: build_dir.clone(),
+            cache_store: None,
+            cache_prefix: "test".to_string(),
+            build_target: target.clone(),
+            runtime_platform_name: "local".to_string(),
+            debug_mode: false,
+            pull_base_images: false,
+            workload: WorkloadKind::Container,
+        })
+        .await
+        .expect("build Dockerfile through the actual toolchain");
+        let archive = build_dir.join(format!("{}.oci.tar", target.runtime_platform_id()));
+        let manager = LocalContainerManager::new(root.path().join("state")).unwrap();
+        let loaded = manager
+            .load_oci_tarball_into_docker(&archive, "dockerfile-test")
+            .await
+            .expect("load generated archive");
+        let output = tokio::process::Command::new("docker")
+            .args(["run", "--rm", "--network", "none", &loaded])
+            .output()
+            .await
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"app-v2");
+    }
+
+    #[test]
+    fn corrupt_container_metadata_prevents_partial_lifecycle_operations() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("containers/app");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("metadata.json"), b"{invalid").unwrap();
+        assert!(LocalContainerManager::load_metadata_from_disk(root.path()).is_err());
+    }
 
     fn test_bind_mount(shared_with_host_workloads: bool) -> BindMount {
         BindMount {

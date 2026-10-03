@@ -124,6 +124,8 @@ mod impl_ {
                 tokio::select! {
                     _ = shutdown_rx.recv() => {
                         info!("Artifact registry manager shutting down");
+                        // Drop listeners while retaining metadata and registry data.
+                        registries.lock().await.clear();
                         break;
                     }
                     _ = interval.tick() => {

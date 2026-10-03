@@ -58,7 +58,7 @@ pub use commands::{commands_task, commands_task_dev, CommandsArgs};
 pub use customers::{customers_task, CustomersArgs};
 pub use debug::{debug_task, debug_task_dev, DebugArgs};
 pub use deploy::{deploy_task, validate_deploy_config, DeployArgs};
-pub use deployments::{deployments_task, DeploymentsArgs};
+pub use deployments::{deployments_task, local_runtime_task, DeploymentsArgs, LocalRuntimeArgs};
 pub use destroy::{destroy_task, DestroyArgs};
 pub use dev_helpers::{
     build_and_post_release_simple, build_dev_status, build_embedded_dev_manager,

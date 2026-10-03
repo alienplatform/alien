@@ -89,3 +89,5 @@ pub use sandbox_route::SandboxRoute;
 pub use storage_manager::LocalStorageManager;
 pub use vault_manager::LocalVaultManager;
 pub use worker_manager::{LocalWorkerManager, RuntimeOnlyBindingRef};
+
+mod image_archive;

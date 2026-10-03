@@ -381,10 +381,32 @@ impl DeploymentLoop {
     ) {
         let deployment_id = deployment.id.clone();
 
-        // Always release the lock when we are done, even on error.
-        let result = self
-            .process_deployment_inner(deployment, execution_claim.clone(), session, options)
-            .await;
+        // Local runtime shutdown can outlast a lease while workers drain.
+        // Keep ownership through runtime control as well as the normal runner.
+        let local = deployment.platform == Platform::Local;
+        let transport = ManagerTransport::new(
+            self.deployment_store.clone(),
+            self.server_bindings.bindings_provider.clone(),
+            self.server_bindings.target_bindings_providers.clone(),
+            deployment.project_id.clone(),
+            session.to_string(),
+            execution_claim.clone(),
+        );
+        let operation =
+            self.process_deployment_inner(deployment, execution_claim.clone(), session, options);
+        let result = if local {
+            alien_deployment::runner::run_with_lease_renewal(&deployment_id, &transport, async {
+                operation
+                    .await
+                    .context(alien_deployment::ErrorData::DeploymentError {
+                        message: "Apply local deployment runtime state".to_string(),
+                    })
+            })
+            .await
+            .map_err(|error| error.into_generic())
+        } else {
+            operation.await
+        };
 
         if let Err(e) = &result {
             error!(
@@ -432,9 +454,94 @@ impl DeploymentLoop {
             return Ok(());
         }
 
+        let mut runtime_control = if deployment.platform == Platform::Local {
+            crate::local_runtime::read(self.server_bindings.kv.as_ref(), &deployment_id).await?
+        } else {
+            None
+        };
+        if matches!(
+            deployment.status.as_str(),
+            "delete-pending" | "deleting" | "delete-failed"
+        ) {
+            if runtime_control.is_some() {
+                self.server_bindings
+                    .kv
+                    .delete(&crate::local_runtime::key(&deployment_id), None)
+                    .await
+                    .context(GenericError {
+                        message: "Clear runtime state for deletion".to_string(),
+                    })?;
+                runtime_control = None;
+            }
+        }
+        if let Some((control, version)) = &runtime_control {
+            let state_dir = self.config.state_dir.as_ref().ok_or_else(|| {
+                AlienError::new(GenericError {
+                    message: "Local runtime lifecycle requires a state directory".to_string(),
+                })
+            })?;
+            if !control.desired_running {
+                if control.pending || control.observed_running {
+                    // This method owns the deployment lease. No controller can
+                    // race this shutdown or recreate a process while it runs.
+                    let existing = self
+                        .local_bindings_cache
+                        .lock()
+                        .expect("local bindings cache poisoned")
+                        .get(&deployment_id)
+                        .cloned();
+                    let provider = match existing {
+                        Some(provider) => Some(provider),
+                        None if control.observed_running => {
+                            Some(get_or_create_local_bindings_provider(
+                                &self.local_bindings_cache,
+                                state_dir,
+                                &deployment_id,
+                            )?)
+                        }
+                        None => None,
+                    };
+                    if let Some(provider) = provider {
+                        provider.shutdown_for_stop().await.context(GenericError {
+                            message: "Stop local deployment processes".to_string(),
+                        })?;
+                        self.local_bindings_cache
+                            .lock()
+                            .expect("local bindings cache poisoned")
+                            .remove(&deployment_id);
+                    }
+                    self.set_local_containers_running(state_dir, &deployment_id, false)
+                        .await?;
+                    let stopped = crate::local_runtime::LocalRuntimeStatus {
+                        desired_running: false,
+                        observed_running: false,
+                        pending: false,
+                    };
+                    crate::local_runtime::write(
+                        self.server_bindings.kv.as_ref(),
+                        &deployment_id,
+                        &stopped,
+                        Some(version.clone()),
+                    )
+                    .await?;
+                }
+                return Ok(());
+            }
+            if control.pending || !control.observed_running {
+                self.set_local_containers_running(state_dir, &deployment_id, true)
+                    .await?;
+            }
+        }
+        let resuming = runtime_control.as_ref().is_some_and(|(control, _)| {
+            control.desired_running && (control.pending || !control.observed_running)
+        });
+
         let status = parse_status(&deployment.status);
 
-        if options.require_heartbeats_enabled && !stack_settings.heartbeats.is_enabled() {
+        if options.require_heartbeats_enabled
+            && !stack_settings.heartbeats.is_enabled()
+            && !resuming
+        {
             debug!(
                 deployment_id = %deployment_id,
                 "Skipping heartbeat because heartbeats are disabled for this deployment"
@@ -874,6 +981,18 @@ impl DeploymentLoop {
             }
         }
 
+        if resuming && runner_result.is_ok() && state.status == DeploymentStatus::Running {
+            if let Some((_, version)) = runtime_control {
+                crate::local_runtime::write(
+                    self.server_bindings.kv.as_ref(),
+                    &deployment_id,
+                    &crate::local_runtime::LocalRuntimeStatus::default(),
+                    Some(version),
+                )
+                .await?;
+            }
+        }
+
         // 9. Notify dev-mode watchers of state change.
         if let Some(ref tx) = self.dev_status_tx {
             let _ = tx.send(());
@@ -881,6 +1000,34 @@ impl DeploymentLoop {
 
         // Propagate step loop errors to the caller (which logs and releases the lock).
         runner_result.map(|_| ()).map_err(|e| e.into_generic())
+    }
+
+    async fn set_local_containers_running(
+        &self,
+        state_dir: &Path,
+        id: &str,
+        running: bool,
+    ) -> Result<(), AlienError> {
+        let directory = state_dir.join(id);
+        if !directory.join("containers").exists() {
+            return Ok(());
+        }
+        let manager = alien_local::LocalContainerManager::new(directory).context(GenericError {
+            message: "Open local containers for lifecycle operation".to_string(),
+        })?;
+        for container in manager.load_metadata().await.context(GenericError {
+            message: "Read local container metadata".to_string(),
+        })? {
+            let result = if running {
+                manager.resume_container(&container.container_id).await
+            } else {
+                manager.stop_container(&container.container_id).await
+            };
+            result.context(GenericError {
+                message: "Apply local container runtime state".to_string(),
+            })?;
+        }
+        Ok(())
     }
 
     async fn checkpoint_without_step(

@@ -285,6 +285,9 @@ pub fn router() -> Router<AppState> {
         .route("/v1/deployments/{id}/delete", post(delete_deployment))
         .route("/v1/deployments/{id}/info", get(get_deployment_info))
         .route("/v1/deployments/{id}/retry", post(retry_deployment))
+        .route("/v1/deployments/{id}/stop", post(stop_local_deployment))
+        .route("/v1/deployments/{id}/resume", post(resume_local_deployment))
+        .route("/v1/deployments/{id}/runtime", get(local_runtime_status))
         .route("/v1/deployments/{id}/redeploy", post(redeploy))
 }
 
@@ -1364,4 +1367,105 @@ mod tests {
             .to_string()
             .contains("must use deploymentModel 'push'"));
     }
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post, path = "/v1/deployments/{id}/stop", tag = "deployments",
+    params(("id" = String, Path, description = "Local deployment ID")),
+    responses((status = 202, description = "Stop requested", body = crate::local_runtime::LocalRuntimeStatus))
+))]
+pub(crate) async fn stop_local_deployment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    local_runtime_operation(state, headers, id, Some(false)).await
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post, path = "/v1/deployments/{id}/resume", tag = "deployments",
+    params(("id" = String, Path, description = "Local deployment ID")),
+    responses((status = 202, description = "Resume requested", body = crate::local_runtime::LocalRuntimeStatus))
+))]
+pub(crate) async fn resume_local_deployment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    local_runtime_operation(state, headers, id, Some(true)).await
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get, path = "/v1/deployments/{id}/runtime", tag = "deployments",
+    params(("id" = String, Path, description = "Local deployment ID")),
+    responses((status = 200, description = "Local runtime state", body = crate::local_runtime::LocalRuntimeStatus))
+))]
+pub(crate) async fn local_runtime_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    local_runtime_operation(state, headers, id, None).await
+}
+
+async fn local_runtime_operation(
+    state: AppState,
+    headers: HeaderMap,
+    id: String,
+    running: Option<bool>,
+) -> Response {
+    let subject = match auth::require_auth(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(error) => return error.into_response(),
+    };
+    let deployment = match state.deployment_store.get_deployment(&subject, &id).await {
+        Ok(Some(deployment)) => deployment,
+        Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
+        Err(error) => return error.into_response(),
+    };
+    if !state.authz.can_update_deployment(&subject, &deployment) {
+        return ErrorData::forbidden("Cannot manage deployment runtime").into_response();
+    }
+    if deployment.platform != Platform::Local
+        || deployment
+            .stack_settings
+            .as_ref()
+            .is_none_or(|settings| settings.deployment_model != DeploymentModel::Push)
+    {
+        return ErrorData::bad_request("Stop and resume require a local push deployment")
+            .into_response();
+    }
+    if running.is_some() && !matches!(deployment.status.as_str(), "running" | "refresh-failed") {
+        return ErrorData::bad_request(
+            "Wait for deployment to finish before stopping or resuming it",
+        )
+        .into_response();
+    }
+    if running.is_some()
+        && deployment.stack_state.as_ref().is_some_and(|stack| {
+            stack.resources.values().any(|resource| {
+                resource.resource_type == alien_core::Sandbox::RESOURCE_TYPE.as_ref()
+            })
+        })
+    {
+        return ErrorData::bad_request(
+            "Stop and resume are not supported for deployments with sandbox sessions",
+        )
+        .into_response();
+    }
+    let mut control = match crate::local_runtime::read(state.kv.as_ref(), &id).await {
+        Ok(value) => value.map(|(control, _)| control).unwrap_or_default(),
+        Err(error) => return error.into_response(),
+    };
+    if let Some(running) = running {
+        control.desired_running = running;
+        control.pending = true;
+        if let Err(error) =
+            crate::local_runtime::write(state.kv.as_ref(), &id, &control, None).await
+        {
+            return error.into_response();
+        }
+        return (StatusCode::ACCEPTED, Json(control)).into_response();
+    }
+    Json(control).into_response()
 }

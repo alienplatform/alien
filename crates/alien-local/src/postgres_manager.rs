@@ -140,7 +140,9 @@ impl LocalPostgresManager {
             loop {
                 tokio::select! {
                     _ = shutdown_rx.recv() => {
-                        monitor.stop_all().await;
+                        if let Err(error) = monitor.stop_all().await {
+                            warn!(?error, "Failed to stop local Postgres on shutdown");
+                        }
                         break;
                     }
                     _ = interval.tick() => {
@@ -539,14 +541,20 @@ impl LocalPostgresManager {
         }
     }
 
-    async fn stop_all(&self) {
-        let mut runtimes = self.runtimes.lock().await;
-        for (id, postgres) in runtimes.iter_mut() {
-            if let Err(error) = postgres.stop().await {
-                warn!(postgres_id = %id, ?error, "Failed to stop local Postgres on shutdown");
-            }
+    pub(crate) async fn stop_all(&self) -> Result<()> {
+        let ids = self
+            .runtimes
+            .lock()
+            .await
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for id in ids {
+            // Keep failed stops tracked so an explicit lifecycle operation can
+            // return the failure and a later request can retry it safely.
+            self.stop_postgres(&id).await?;
         }
-        runtimes.clear();
+        Ok(())
     }
 }
 
