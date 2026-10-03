@@ -130,6 +130,16 @@ export class Stack {
     return this
   }
 
+  /**
+   * Let deployments of this stack run operations. Deployments without an
+   * Operator then get an operations worker and its permission profile.
+   * @returns The Stack builder instance.
+   */
+  public enableOperations(): this {
+    this._config.operationsEnabled = true
+    return this
+  }
+
   /** Approve exact OCI image repositories for containers created after installation. */
   public dynamicContainerRepositories(repositories: string[]): this {
     if (

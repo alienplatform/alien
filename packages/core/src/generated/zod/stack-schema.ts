@@ -19,6 +19,7 @@ export const StackSchema = z.object({
 get "inputs"(){
                 return z.array(StackInputDefinitionSchema.describe("Stack input definition serialized into a release stack.")).describe("Input definitions required before setup or deployment can proceed.").optional()
               },
+"operationsEnabled": z.optional(z.boolean().describe("Whether deployments of this stack run operations. Deployments without an\nOperator get an operations worker and its permission profile only when set.")),
 get "permissions"(){
                 return PermissionsConfigSchema.describe("Combined permissions configuration that contains both profiles and management").optional()
               },

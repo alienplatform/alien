@@ -1906,7 +1906,7 @@ impl GcpWorkerController {
             name: Some(subscription_name.clone()),
             topic: Some(topic_full_name.clone()),
             push_config: Some(push_config),
-            ack_deadline_seconds: Some(cfg.timeout_seconds as i32),
+            ack_deadline_seconds: Some(pubsub_ack_deadline_seconds(cfg.timeout_seconds)),
             retain_acked_messages: Some(false),
             message_retention_duration: None,
             labels: Some(std::collections::HashMap::from([
@@ -5096,7 +5096,7 @@ impl GcpWorkerController {
             name: Some(subscription_name.clone()),
             topic: Some(topic_full_name.clone()),
             push_config: Some(push_config),
-            ack_deadline_seconds: Some(worker_config.timeout_seconds as i32),
+            ack_deadline_seconds: Some(pubsub_ack_deadline_seconds(worker_config.timeout_seconds)),
             retain_acked_messages: Some(false),
             message_retention_duration: None,
             labels: Some(std::collections::HashMap::from([
@@ -5449,7 +5449,7 @@ impl GcpWorkerController {
             name: Some(subscription_name.clone()),
             topic: Some(topic_full_name.clone()),
             push_config: Some(push_config),
-            ack_deadline_seconds: Some(worker_config.timeout_seconds as i32),
+            ack_deadline_seconds: Some(pubsub_ack_deadline_seconds(worker_config.timeout_seconds)),
             retain_acked_messages: Some(false),
             message_retention_duration: None,
             labels: Some(std::collections::HashMap::from([
@@ -5664,6 +5664,13 @@ impl GcpWorkerController {
             _internal_stay_count: None,
         }
     }
+}
+
+/// Pub/Sub accepts acknowledgement deadlines of 10 to 600 seconds. A command
+/// is handled inside the push request, so the deadline follows the worker's
+/// timeout up to that ceiling, as the Terraform emitter does.
+fn pubsub_ack_deadline_seconds(timeout_seconds: u32) -> i32 {
+    timeout_seconds.clamp(10, 600) as i32
 }
 
 #[cfg(test)]

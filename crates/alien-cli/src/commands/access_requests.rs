@@ -1,9 +1,9 @@
 //! CLI commands for access requests — a complete, non-Slack path to REQUEST
 //! time-boxed operation and/or remote-debugging access. Approval always
-//! happens on the customer's side, in-cluster via `kubectl patch` on the
-//! grant custom resource (or the operator's own reporting loop) — there is
-//! deliberately no CLI or dashboard action that approves a request; Alien is
-//! never the approver.
+//! happens on the customer's side: on Kubernetes in-cluster via `kubectl
+//! patch` on the grant custom resource, elsewhere by a workspace member other
+//! than the requester. There is deliberately no CLI action that approves a
+//! request.
 
 use std::fmt::Display;
 use std::time::Duration;
@@ -36,8 +36,9 @@ remote-debugging session for kubectl, aws, gcloud, or az. Combine --operation an
 --debug-tool to request both on the same row; approving, denying, expiring, or revoking
 the request applies to both at once.
 
-Approval always happens on the customer's side (in-cluster, via kubectl or the
-operator's own reporting loop) — there is no command here that approves a request.
+Approval always happens on the customer's side: in-cluster with kubectl on Kubernetes,
+otherwise by a workspace member other than the requester. There is no command here that
+approves a request.
 
 Revoking a request withdraws the grant immediately: operations still waiting to be
 dispatched fail, open debug sessions stop, and the request can no longer be approved.
@@ -363,7 +364,7 @@ async fn create_task(
             "commands": created.commands,
             "debugGrant": created.debug_grant,
             "approvedUntil": created.approved_until,
-            "kubectlApprove": kubectl_approve,
+            "kubectlApprove": kubectl_approve.kubectl_command(),
         }))?;
     } else {
         println!("Access request created: {}", created.id);
@@ -392,8 +393,8 @@ async fn create_task(
         println!();
         println!("Review it:  alien access-requests get {}", created.id);
         println!(
-            "Approval happens on your side — share the request with whoever approves access \
-             in-cluster, then run: alien access-requests wait {}",
+            "Approval happens on the customer's side — share the request with whoever approves \
+             access, then run: alien access-requests wait {}",
             created.id
         );
     }
@@ -403,19 +404,19 @@ async fn create_task(
 /// Poll `GET /access-requests/{id}/coordinates` for up to ~15s (a few of the
 /// operator's ~5s materialization cycles) so `create` can hand back the
 /// customer's approve command immediately, instead of requiring a separate
-/// `get` call. Returns `None` if it's still not ready after the deadline —
-/// the operator may simply be slower than usual (`get`/`wait` remain the
-/// fallback).
+/// `get` call. Returns right away when the deployment has no in-cluster
+/// approval, and without a command if the operator is slower than usual
+/// (`get`/`wait` remain the fallback).
 async fn poll_for_kubectl_approve(
     sdk_client: &alien_platform_api::Client,
     workspace: &str,
     id: &str,
-) -> Result<Option<String>> {
+) -> Result<ApprovalInstructions> {
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
     loop {
-        let kubectl_approve = fetch_kubectl_approve(sdk_client, workspace, id).await?;
-        if kubectl_approve.is_some() || std::time::Instant::now() >= deadline {
-            return Ok(kubectl_approve);
+        let instructions = fetch_approval_instructions(sdk_client, workspace, id).await?;
+        if instructions.is_final() || std::time::Instant::now() >= deadline {
+            return Ok(instructions);
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
@@ -476,7 +477,7 @@ async fn get_task(
         if request.status == alien_platform_api::types::AccessRequestStatus::Queued {
             poll_for_kubectl_approve(sdk_client, workspace, id).await?
         } else {
-            fetch_kubectl_approve(sdk_client, workspace, id).await?
+            fetch_approval_instructions(sdk_client, workspace, id).await?
         };
 
     if json {
@@ -491,7 +492,7 @@ async fn get_task(
             "commands": request.commands,
             "debugGrant": request.debug_grant,
             "approvedUntil": request.approved_until,
-            "kubectlApprove": kubectl_approve,
+            "kubectlApprove": kubectl_approve.kubectl_command(),
             "agentSessionId": request.agent_session_id,
             "createdAt": request.created_at,
             "queuedBy": request.queued_by,
@@ -624,16 +625,54 @@ fn print_revoked_by(
     }
 }
 
-/// Fetch the customer's `kubectl patch` approve command via `GET
-/// /access-requests/{id}/coordinates` — `None` until the operator has
-/// materialized the grant CR in-cluster and reported its namespace/CRD
-/// coordinates back (i.e. before `queued`, or briefly after, before the
-/// operator's next ~5s pull).
-pub(crate) async fn fetch_kubectl_approve(
+/// How the customer approves a request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ApprovalInstructions {
+    /// In-cluster with kubectl. The command is `None` until the operator has
+    /// materialized the grant and reported its coordinates.
+    Kubectl(Option<String>),
+    /// No in-cluster approval: a workspace member approves in the dashboard or Slack.
+    Elsewhere,
+}
+
+impl ApprovalInstructions {
+    /// Whether polling can stop: there is a command, or there will never be one.
+    pub(crate) fn is_final(&self) -> bool {
+        !matches!(self, ApprovalInstructions::Kubectl(None))
+    }
+
+    pub(crate) fn kubectl_command(&self) -> Option<&str> {
+        match self {
+            ApprovalInstructions::Kubectl(command) => command.as_deref(),
+            ApprovalInstructions::Elsewhere => None,
+        }
+    }
+
+    /// One-time message for a waiting caller, once there is something to say.
+    pub(crate) fn waiting_message(&self) -> Option<String> {
+        match self {
+            ApprovalInstructions::Kubectl(Some(command)) => {
+                Some(format!("Run this in-cluster to approve:\n  {command}"))
+            }
+            ApprovalInstructions::Kubectl(None) => None,
+            ApprovalInstructions::Elsewhere => Some(ELSEWHERE_APPROVAL.to_string()),
+        }
+    }
+}
+
+const ELSEWHERE_APPROVAL: &str = "A workspace member other than the requester approves this \
+     request in the Alien dashboard (Access requests) or in Slack.";
+
+/// Fetch how the customer approves this request via `GET
+/// /access-requests/{id}/coordinates`. For in-cluster approval, the
+/// `kubectl patch` command is `None` until the operator has materialized the
+/// grant CR and reported its namespace/CRD coordinates back (before `queued`,
+/// or briefly after, before the operator's next ~5s pull).
+pub(crate) async fn fetch_approval_instructions(
     sdk_client: &alien_platform_api::Client,
     workspace: &str,
     id: &str,
-) -> Result<Option<String>> {
+) -> Result<ApprovalInstructions> {
     let coordinates = sdk_client
         .get_access_request_coordinates()
         .id(id)
@@ -646,11 +685,23 @@ pub(crate) async fn fetch_kubectl_approve(
             url: None,
         })?
         .into_inner();
-    Ok(coordinates.kubectl_approve)
+    let in_cluster = coordinates
+        .approval_channels
+        .contains(&alien_platform_api::types::AccessRequestApprovalChannel::Kubectl);
+    Ok(if in_cluster {
+        ApprovalInstructions::Kubectl(coordinates.kubectl_approve)
+    } else {
+        ApprovalInstructions::Elsewhere
+    })
 }
 
-fn print_kubectl_approve(kubectl_approve: &Option<String>, status: AccessRequestStatus) {
-    match (kubectl_approve, status) {
+fn print_kubectl_approve(instructions: &ApprovalInstructions, status: AccessRequestStatus) {
+    if *instructions == ApprovalInstructions::Elsewhere && status == AccessRequestStatus::Queued {
+        println!();
+        println!("{}", dim_label(ELSEWHERE_APPROVAL));
+        return;
+    }
+    match (instructions.kubectl_command(), status) {
         (Some(command), _) => {
             println!();
             println!("{}", dim_label("Run this in-cluster to approve:"));
@@ -665,9 +716,9 @@ fn print_kubectl_approve(kubectl_approve: &Option<String>, status: AccessRequest
             println!(
                 "{}",
                 dim_label(
-                    "Queued — waiting for the operator to materialize the grant CR \
-                     (usually within a few seconds). Run this command again shortly \
-                     for the approve command."
+                    "Queued — waiting for the customer's approval. On Kubernetes, the \
+                     approve command appears once the operator materializes the grant CR \
+                     (usually within a few seconds); run this command again shortly."
                 )
             );
         }
@@ -704,10 +755,9 @@ async fn wait_task(
             .into_inner();
 
         if !json && !printed_kubectl_approve {
-            let kubectl_approve = fetch_kubectl_approve(sdk_client, workspace, id).await?;
-            if let Some(command) = &kubectl_approve {
-                println!("{}", dim_label("Run this in-cluster to approve:"));
-                println!("  {command}");
+            let instructions = fetch_approval_instructions(sdk_client, workspace, id).await?;
+            if let Some(message) = instructions.waiting_message() {
+                println!("{}", dim_label(&message));
                 println!();
                 printed_kubectl_approve = true;
             }
@@ -800,10 +850,9 @@ pub(crate) async fn wait_for_approval(
             .into_inner();
 
         if !printed_kubectl_approve {
-            let kubectl_approve = fetch_kubectl_approve(sdk_client, workspace, id).await?;
-            if let Some(command) = &kubectl_approve {
-                eprintln!("{}", dim_label("Run this in-cluster to approve:"));
-                eprintln!("  {command}");
+            let instructions = fetch_approval_instructions(sdk_client, workspace, id).await?;
+            if let Some(message) = instructions.waiting_message() {
+                eprintln!("{}", dim_label(&message));
                 printed_kubectl_approve = true;
             }
         }
@@ -1138,5 +1187,34 @@ mod tests {
             rendered.contains("revoking access request 'ar_123'"),
             "{rendered}"
         );
+    }
+}
+
+#[cfg(test)]
+mod approval_instructions_tests {
+    use super::ApprovalInstructions;
+
+    #[test]
+    fn push_deployments_stop_waiting_for_a_kubectl_command() {
+        let elsewhere = ApprovalInstructions::Elsewhere;
+        assert!(elsewhere.is_final());
+        assert_eq!(elsewhere.kubectl_command(), None);
+        assert!(elsewhere
+            .waiting_message()
+            .is_some_and(|message| message.contains("dashboard")));
+    }
+
+    #[test]
+    fn kubernetes_waits_until_the_operator_reports_the_command() {
+        let pending = ApprovalInstructions::Kubectl(None);
+        assert!(!pending.is_final());
+        assert_eq!(pending.waiting_message(), None);
+
+        let ready = ApprovalInstructions::Kubectl(Some("kubectl patch x".to_string()));
+        assert!(ready.is_final());
+        assert_eq!(ready.kubectl_command(), Some("kubectl patch x"));
+        assert!(ready
+            .waiting_message()
+            .is_some_and(|message| message.contains("kubectl patch x")));
     }
 }

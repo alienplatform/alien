@@ -1392,6 +1392,7 @@ mod tests {
     ) -> DeploymentRecord {
         let now = Utc::now();
         DeploymentRecord {
+            supplied_stacks: None,
             id: "dep_test".to_string(),
             workspace_id: "default".to_string(),
             project_id: "default".to_string(),

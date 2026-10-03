@@ -414,7 +414,7 @@ async fn request_access_then_reinvoke(
     // as `docker pull` writing progress to stderr and the final digest to
     // stdout.
     eprintln!(
-        "Access requested: {}\nWaiting for the customer to approve it in-cluster...",
+        "Access requested: {}\nWaiting for the customer to approve it...",
         created.id
     );
 
@@ -435,14 +435,14 @@ async fn request_access_then_reinvoke(
             .into_inner();
 
         if !printed_kubectl_approve {
-            let kubectl_approve = crate::commands::access_requests::fetch_kubectl_approve(
+            let kubectl_approve = crate::commands::access_requests::fetch_approval_instructions(
                 sdk_client,
                 workspace,
                 created.id.as_str(),
             )
             .await?;
-            if let Some(command) = &kubectl_approve {
-                eprintln!("Run this in-cluster to approve:\n  {command}\n");
+            if let Some(message) = kubectl_approve.waiting_message() {
+                eprintln!("{message}\n");
                 printed_kubectl_approve = true;
             }
         }

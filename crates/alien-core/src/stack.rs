@@ -94,6 +94,11 @@ pub struct Stack {
     #[builder(field)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dynamic_container_image_resources: Vec<String>,
+    /// Whether deployments of this stack run operations. Deployments without an
+    /// Operator get an operations worker and its permission profile only when set.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub operations_enabled: bool,
 }
 
 impl Stack {
@@ -323,6 +328,12 @@ impl StackBuilder {
     /// Sets stack input definitions.
     pub fn inputs(mut self, inputs: Vec<StackInputDefinition>) -> Self {
         self.inputs = inputs;
+        self
+    }
+
+    /// Lets deployments of this stack run operations.
+    pub fn enable_operations(mut self) -> Self {
+        self.operations_enabled = true;
         self
     }
 

@@ -117,6 +117,7 @@ fn deployment(stack_state: StackState) -> DeploymentRecord {
 
 fn deployment_on_platform(stack_state: StackState, platform: Platform) -> DeploymentRecord {
     DeploymentRecord {
+        supplied_stacks: None,
         id: "deployment".to_string(),
         workspace_id: "default".to_string(),
         project_id: "default".to_string(),

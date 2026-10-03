@@ -1399,6 +1399,7 @@ mod tests {
 
     fn gcp_deployment_record(id: &str, status: &str, project_number: &str) -> DeploymentRecord {
         DeploymentRecord {
+            supplied_stacks: None,
             id: id.to_string(),
             workspace_id: "default".to_string(),
             project_id: "default".to_string(),

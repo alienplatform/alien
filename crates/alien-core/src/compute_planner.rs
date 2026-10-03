@@ -751,6 +751,7 @@ mod tests {
             inputs: vec![],
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations_enabled: false,
         }
     }
 
@@ -1104,6 +1105,7 @@ mod tests {
             inputs: vec![],
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations_enabled: false,
         };
 
         let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");
