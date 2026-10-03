@@ -13,6 +13,7 @@ use alien_core::{
     access_request_crd::AccessRequestCrdNames,
     branded_tag_key,
     import::EmitContext,
+    is_deployer_secret_input,
     sync::{OperatorImageReport, OperatorImageSource},
     AzureResourceGroupOutputs, Container, ContainerCode, Daemon, DaemonCode, ErrorData,
     KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
@@ -330,6 +331,16 @@ fn generate_helm_chart_internal(
 
     if let Some((remote_operator, image_identity)) = remote_operator {
         add_remote_operator_files(&mut files, remote_operator, image_identity)?;
+    }
+
+    if let Some(notes) = deployer_secret_notes_tpl(stack) {
+        files
+            .entry("templates/NOTES.txt".to_string())
+            .and_modify(|existing| {
+                existing.push('\n');
+                existing.push_str(&notes);
+            })
+            .or_insert(notes);
     }
 
     // Per-resource extra templates contributed by emitters.
@@ -1405,6 +1416,51 @@ spec:
 {{- end }}
 "#
     .to_string()
+}
+
+/// Install notes naming the Kubernetes Secret each deployer secret goes into.
+/// The Secret name carries the deployment's resource prefix, which the chart
+/// does not know, so the notes give the vault key and point to the deployment
+/// status for the full name.
+fn deployer_secret_notes_tpl(stack: &Stack) -> Option<String> {
+    let inputs: Vec<_> = stack
+        .inputs()
+        .iter()
+        .filter(|input| {
+            is_deployer_secret_input(input)
+                && input
+                    .platforms
+                    .as_ref()
+                    .is_none_or(|platforms| platforms.contains(&Platform::Kubernetes))
+        })
+        .collect();
+    if inputs.is_empty() {
+        return None;
+    }
+    let mut notes = String::from(
+        "This release reads these secrets from Kubernetes Secrets you create in namespace \
+         {{ .Release.Namespace }}. They are not Helm values: their values never pass through \
+         Helm or the deployment's control plane.\n",
+    );
+    for input in inputs {
+        notes.push_str(&format!(
+            "  - {} ({}): secrets vault key {}\n",
+            input.label,
+            if input.required {
+                "required; workloads that read it wait until it exists"
+            } else {
+                "optional"
+            },
+            alien_core::deployer_secret_vault_key(&input.id),
+        ));
+    }
+    notes.push_str(&format!(
+        "The deployment status shows each Secret's name. Create one with:\n  kubectl create \
+         secret generic <name> --namespace {{{{ .Release.Namespace }}}} --from-literal={}='{}'\n",
+        alien_core::vault_naming::KUBERNETES_SECRET_VALUE_KEY,
+        alien_core::DEPLOYER_SECRET_VALUE_PLACEHOLDER,
+    ));
+    Some(notes)
 }
 
 fn remote_operator_removal_notes_tpl() -> String {
@@ -5120,6 +5176,9 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
 }
 "##;
 
+    // Deployer secrets are Kubernetes Secrets the deployer creates in the
+    // namespace; with `additionalProperties: false`, a value for one in Helm
+    // values is refused.
     let deployer_inputs = stack
         .inputs()
         .iter()
@@ -5127,9 +5186,10 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             input
                 .provided_by
                 .contains(&alien_core::StackInputProvider::Deployer)
+                && !is_deployer_secret_input(input)
         })
         .collect::<Vec<_>>();
-    if deployer_inputs.is_empty() {
+    if deployer_inputs.is_empty() && !stack.inputs().iter().any(is_deployer_secret_input) {
         return Ok(base.to_string());
     }
 
@@ -8723,6 +8783,74 @@ infrastructureExistingSecret: customer-bindings
                 rendered.stderr
             );
         }
+    }
+
+    #[test]
+    fn deployer_secrets_are_kubernetes_secrets_not_helm_values() {
+        let secret = |id: &str, label: &str, required: bool| alien_core::StackInputDefinition {
+            id: id.to_string(),
+            kind: alien_core::StackInputKind::Secret,
+            provided_by: vec![alien_core::StackInputProvider::Deployer],
+            required,
+            label: label.to_string(),
+            description: String::new(),
+            placeholder: None,
+            default: None,
+            platforms: None,
+            validation: None,
+            env: Vec::new(),
+        };
+        let stack = Stack::new("input-stack".to_string())
+            .inputs(vec![
+                secret("databasePassword", "Database password", true),
+                secret("licenseKey", "License key", false),
+            ])
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "input-stack".to_string(),
+            },
+        )
+        .expect("chart");
+        crate::test_utils::helm_lint(&chart.files).assert_ok("lint chart defaults");
+
+        // A required deployer secret is not a required Helm value: the
+        // bootstrap installs without it.
+        let values = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: null\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+        crate::test_utils::helm_template(&chart.files, Some(values))
+            .assert_ok("install without deployer secret values");
+        let rendered = crate::test_utils::helm_render_notes(&chart.files, values, "shop", "apps");
+        rendered.assert_ok("install notes");
+        let notes = &rendered.stdout;
+        assert!(notes.contains("namespace apps"), "{notes}");
+        assert!(
+            notes.contains("Database password (required; workloads that read it wait until it exists): secrets vault key input-database-password"),
+            "{notes}"
+        );
+        assert!(
+            notes.contains("License key (optional): secrets vault key input-license-key"),
+            "{notes}"
+        );
+        assert!(
+            notes.contains("kubectl create secret generic <name> --namespace apps --from-literal=value='<VALUE>'"),
+            "{notes}"
+        );
+
+        // Helm values cannot carry the value.
+        let with_value = format!("{values}inputValues:\n  databasePassword: hunter2\n");
+        let rendered = crate::test_utils::helm_template(&chart.files, Some(&with_value));
+        assert!(!rendered.is_ok(), "Helm accepted a deployer secret value");
+        assert!(
+            rendered
+                .stderr
+                .contains("values don't meet the specifications"),
+            "{}",
+            rendered.stderr
+        );
     }
 
     #[test]
