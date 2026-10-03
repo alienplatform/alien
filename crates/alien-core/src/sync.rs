@@ -260,6 +260,11 @@ pub struct SyncRequest {
     /// Signals that this Operator persists and echoes execution claims.
     #[serde(default)]
     pub supports_execution_claims: bool,
+    /// Signals that this Operator understands container tunnels. Older
+    /// Operators reject stacks that declare one, so the manager leaves
+    /// tunnels out of their targets.
+    #[serde(default)]
+    pub supports_tunnels: bool,
     /// Exact update claim returned by the previous sync response.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_claim: Option<SyncExecutionClaim>,
@@ -453,6 +458,14 @@ pub struct SyncResponse {
     /// not support this protocol; Some(empty) means remove owned containers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_dynamic_containers: Option<Vec<TargetDynamicContainer>>,
+    /// Base URL the Operator opens tunnel connections to. None means the
+    /// manager does not accept tunnels, so the Operator never dials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tunnel_url: Option<String>,
+    /// Operator image the manager wants this Operator to run. Operators that
+    /// manage their own workload update to it; None means no opinion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_operator_image: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -482,6 +495,7 @@ mod tests {
             deployment_id: "dep_abc123".to_string(),
             session: "operator-test".to_string(),
             supports_execution_claims: true,
+            supports_tunnels: true,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
@@ -527,6 +541,8 @@ mod tests {
             commands_url: None,
             target_operations_bundle_set: None,
             target_dynamic_containers: None,
+            tunnel_url: None,
+            target_operator_image: None,
         };
         let json = serde_json::to_value(&resp).unwrap();
         // target is None → should be omitted
@@ -544,6 +560,8 @@ mod tests {
             commands_url: None,
             target_operations_bundle_set: None,
             target_dynamic_containers: None,
+            tunnel_url: None,
+            target_operator_image: None,
         };
         let serialized = serde_json::to_string(&resp).unwrap();
         let deserialized: SyncResponse = serde_json::from_str(&serialized).unwrap();
@@ -638,6 +656,8 @@ mod tests {
             commands_url: None,
             target_operations_bundle_set: None,
             target_dynamic_containers: None,
+            tunnel_url: None,
+            target_operator_image: None,
         };
 
         let serialized = serde_json::to_string(&resp).unwrap();
@@ -687,6 +707,7 @@ mod tests {
             deployment_id: "dep_1".to_string(),
             session: String::new(),
             supports_execution_claims: false,
+            supports_tunnels: false,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
@@ -716,6 +737,7 @@ mod tests {
             deployment_id: "dep_1".to_string(),
             session: String::new(),
             supports_execution_claims: false,
+            supports_tunnels: false,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
@@ -792,6 +814,7 @@ mod tests {
             deployment_id: "dep_1".to_string(),
             session: String::new(),
             supports_execution_claims: false,
+            supports_tunnels: false,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
@@ -854,6 +877,8 @@ mod tests {
                 }],
             }),
             target_dynamic_containers: None,
+            tunnel_url: None,
+            target_operator_image: None,
         };
 
         let json = serde_json::to_value(&resp).unwrap();
@@ -892,6 +917,8 @@ mod tests {
             commands_url: None,
             target_operations_bundle_set: None,
             target_dynamic_containers: Some(vec![]),
+            tunnel_url: None,
+            target_operator_image: None,
         };
         let json = serde_json::to_value(&empty_target).unwrap();
         assert_eq!(json["targetDynamicContainers"], serde_json::json!([]));

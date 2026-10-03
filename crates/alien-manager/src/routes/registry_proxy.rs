@@ -115,8 +115,23 @@ impl RegistryRoutingTable {
         self.route_for_platform(platform).map(|r| r.prefix.as_str())
     }
 
+    /// Route that stores images for `platform`.
+    ///
+    /// Cloud platforms use their own registry (ECR, GAR, ACR) when one is
+    /// configured. Pull-delivered platforms (Kubernetes, Machines) have no
+    /// registry of their own: their images live in the primary registry (the
+    /// route registered as `Platform::Local`) and nodes pull them through this
+    /// manager with the deployment's token.
     pub fn route_for_platform(&self, platform: Platform) -> Option<&RegistryRoute> {
-        self.routes.iter().find(|r| r.platform == platform)
+        if let Some(route) = self.routes.iter().find(|r| r.platform == platform) {
+            return Some(route);
+        }
+        match platform {
+            Platform::Kubernetes | Platform::Machines => {
+                self.routes.iter().find(|r| r.platform == Platform::Local)
+            }
+            _ => None,
+        }
     }
 
     /// Return the list of explicitly configured (non-fallback) platforms.
@@ -710,10 +725,25 @@ async fn proxy_pull(
     if let Err(refused) = require_literal_oci_path(&path) {
         return refused;
     }
-    let oci = match parse_oci_path(path.trim_start_matches('/')) {
+    // Every pull passes the same name and reference validation before it
+    // is routed, including charts and the Operator image.
+    let oci_path_str = path.trim_start_matches('/');
+    let oci = match parse_oci_path(oci_path_str) {
         Ok(oci) => oci,
         Err(refused) => return refused,
     };
+    // Capability credentials pull nothing, charts and the Operator image
+    // included, so they are refused before the pull is routed.
+    if let Err(refused) = refuse_capability_pull(&subject) {
+        return refused;
+    }
+    if oci_path_str.starts_with(super::charts::CHART_NAMESPACE) {
+        return super::charts::serve(&state, &subject, &method, oci_path_str).await;
+    }
+    if oci.repo == super::operator_image::OPERATOR_REPOSITORY {
+        return super::operator_image::serve(&state, &subject, &method, oci_path_str, &headers)
+            .await;
+    }
     if let Err(e) = validate_pull_access(&state, &subject, &oci.repo).await {
         return e;
     }
@@ -1223,8 +1253,9 @@ fn require_push_auth(state: &AppState, subject: &Subject, repo_name: &str) -> Re
     }
 }
 
-/// A project-scoped capability shares the scope whose pulls skip repo validation below, so it is
-/// refused before that match.
+/// Credentials that exist to provision or push images pull nothing. A project-scoped capability
+/// shares the scope whose pulls skip repo validation, so it is refused before that match, and
+/// before charts and the Operator image are routed.
 fn refuse_capability_pull(subject: &Subject) -> Result<(), Response> {
     if subject.role == Role::ImageRepositoryProvisioner {
         return Err(oci_error(

@@ -1,6 +1,5 @@
 #[cfg(feature = "platform")]
 pub mod access_requests;
-#[cfg(feature = "platform")]
 pub mod api_keys;
 pub mod build;
 pub mod commands;
@@ -17,13 +16,16 @@ mod event_display;
 pub mod examples;
 pub mod init;
 pub mod logs;
+pub mod logs_manager;
 pub mod onboard;
 #[cfg(feature = "platform")]
 pub mod packages;
 pub mod release;
+pub mod release_channels_manager;
 pub mod releases;
 pub mod render;
 pub mod status;
+pub mod tokens;
 pub mod upgrade;
 #[cfg(feature = "platform")]
 pub mod usage;
@@ -60,11 +62,12 @@ pub use deployments::{deployments_task, DeploymentsArgs};
 pub use destroy::{destroy_task, DestroyArgs};
 pub use dev_helpers::{
     build_and_post_release_simple, build_dev_status, build_embedded_dev_manager,
-    create_initial_deployment, ensure_server_running, ensure_server_running_for_dev_session,
-    ensure_server_running_with_env, fetch_all_dev_deployment_live_states,
-    fetch_dev_deployment_live_state, prepare_dev_session_deployment, start_embedded_dev_manager,
-    wait_for_dev_deployment_ready, wait_for_dev_deployment_ready_with_progress, write_dev_status,
-    CliEnvVar, DevDeploymentLiveState, DevDeploymentSnapshot,
+    create_initial_deployment, destroy_local_deployment, ensure_server_running,
+    ensure_server_running_for_dev_session, ensure_server_running_with_env,
+    fetch_all_dev_deployment_live_states, fetch_dev_deployment_live_state,
+    prepare_dev_session_deployment, start_embedded_dev_manager, wait_for_dev_deployment_ready,
+    wait_for_dev_deployment_ready_with_progress, write_dev_status, CliEnvVar,
+    DevDeploymentLiveState, DevDeploymentSnapshot,
 };
 #[cfg(feature = "platform")]
 pub use examples::{examples_task, ExamplesArgs};
@@ -78,6 +81,7 @@ pub use release::{release_command, ReleaseArgs};
 pub use releases::{releases_task, ReleasesArgs};
 pub use render::{render_task, RenderArgs};
 pub use status::{status_task, StatusArgs};
+pub use tokens::{tokens_task, TokensArgs};
 pub use upgrade::{upgrade_task, UpgradeArgs};
 #[cfg(feature = "platform")]
 pub use usage::{usage_task, UsageArgs};

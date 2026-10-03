@@ -327,6 +327,7 @@ impl CloudProxyTest {
                 CreateDeploymentGroupParams {
                     name: "cloud-proxy-test".to_string(),
                     max_deployments: 100,
+                    setup: Default::default(),
                 },
             )
             .await

@@ -30,6 +30,7 @@ pub mod loops;
 pub mod otlp_server;
 pub mod pod_logs;
 pub mod readiness_server;
+pub mod self_update;
 
 pub use alien_core::{DeploymentState, DeploymentStatus, Platform, ReleaseInfo};
 pub use config::{OperatorConfig, SyncConfig};
@@ -245,11 +246,6 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
                     .to_string(),
             }));
         }
-        if config.is_airgapped() {
-            return Err(AlienError::new(error::ErrorData::ConfigurationError {
-                message: "Pod log collection requires a configured telemetry forwarder".to_string(),
-            }));
-        }
     }
 
     // Local runtimes are real child processes owned by LocalBindingsProvider.
@@ -305,6 +301,12 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
     let otlp_db = db.clone();
     let otlp_namespace = config.namespace.clone();
     let otlp_collector_token = config.collector_token.clone();
+    // Air-gapped: telemetry stays buffered and leaves with `alien-deploy
+    // sync`, which reads this token from the status Secret.
+    let airgap_export_token = config
+        .is_airgapped()
+        .then(|| uuid::Uuid::new_v4().simple().to_string());
+    let otlp_export_token = airgap_export_token.clone();
     let sandbox_broker = sandbox_broker_router(
         &config,
         db.clone(),
@@ -319,6 +321,7 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
             otlp_db,
             otlp_namespace,
             otlp_collector_token,
+            otlp_export_token,
             sandbox_broker,
             otlp_cancel,
         )
@@ -376,6 +379,42 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
     } else {
         warn!("Running in airgapped mode - sync loop disabled");
         None
+    };
+
+    // Tunnel loop: serves requests from the manager for the stack's declared
+    // tunnel endpoints over outbound connections. Idle unless the manager
+    // advertises a tunnel URL and the stack declares endpoints.
+    let tunnel_handle = if !config.is_airgapped() && matches!(config.platform, Platform::Kubernetes)
+    {
+        Some(tokio::spawn({
+            let state = state.clone();
+            async move {
+                loops::tunnel::run_tunnel_loop(state).await;
+            }
+        }))
+    } else {
+        None
+    };
+
+    // Air-gapped: targets arrive in bundles, state leaves in status exports.
+    let airgap_handle = match (&config.airgap_target_secret, config.is_airgapped()) {
+        (Some(secret), true) => Some(tokio::spawn({
+            let state = state.clone();
+            let secret = secret.clone();
+            async move { loops::airgap::run_airgap_target_loop(state, secret).await }
+        })),
+        _ => None,
+    };
+    let airgap_status_handle = match (&config.airgap_status_secret, config.is_airgapped()) {
+        (Some(secret), true) => Some(tokio::spawn({
+            let state = state.clone();
+            let secret = secret.clone();
+            let export_token = airgap_export_token
+                .clone()
+                .expect("air-gapped Operators have an export token");
+            async move { loops::airgap::run_airgap_status_loop(state, secret, export_token).await }
+        })),
+        _ => None,
     };
 
     let telemetry_handle = if !config.is_airgapped() {
@@ -546,6 +585,27 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
                 std::future::pending::<()>().await;
             }
         } => Ok(loop_exit(&cancel, "telemetry")),
+        _ = async {
+            if let Some(h) = tunnel_handle {
+                h.await.ok();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => Ok(loop_exit(&cancel, "tunnel")),
+        _ = async {
+            if let Some(h) = airgap_handle {
+                h.await.ok();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => Ok(loop_exit(&cancel, "airgap-targets")),
+        _ = async {
+            if let Some(h) = airgap_status_handle {
+                h.await.ok();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => Ok(loop_exit(&cancel, "airgap-status")),
         _ = async {
             if let Some(h) = commands_handle {
                 h.await.ok();

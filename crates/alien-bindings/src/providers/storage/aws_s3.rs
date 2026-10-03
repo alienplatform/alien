@@ -73,6 +73,89 @@ impl S3Storage {
             inner: store,
         })
     }
+
+    /// Creates an `S3Storage` for an S3-compatible endpoint (MinIO, Ceph RGW, ...).
+    ///
+    /// Credentials are either static keys or, when `static_keys` is `None`,
+    /// the ambient AWS credential provider. Conditional writes use standard
+    /// `If-Match` / `If-None-Match` preconditions.
+    pub fn with_endpoint(
+        bucket_name: String,
+        endpoint: S3CompatibleEndpoint,
+        credentials: S3Credentials,
+    ) -> Result<Self, Error> {
+        let setup_failed = |reason: String| ErrorData::BindingSetupFailed {
+            binding_type: "S3-compatible storage".to_string(),
+            reason,
+        };
+        let endpoint_url = Url::parse(&endpoint.url).into_alien_error().context(
+            ErrorData::InvalidConfigurationUrl {
+                url: endpoint.url.clone(),
+                reason: "Invalid S3 endpoint URL".to_string(),
+            },
+        )?;
+
+        let mut builder = AmazonS3Builder::new()
+            .with_bucket_name(&bucket_name)
+            .with_region(&endpoint.region)
+            .with_endpoint(endpoint.url.trim_end_matches('/'))
+            .with_allow_http(endpoint_url.scheme() == "http")
+            .with_virtual_hosted_style_request(!endpoint.force_path_style);
+        builder = match credentials {
+            S3Credentials::Static {
+                access_key_id,
+                secret_access_key,
+            } => builder
+                .with_access_key_id(access_key_id)
+                .with_secret_access_key(secret_access_key),
+            S3Credentials::Provider(provider) => {
+                builder.with_credentials(Arc::new(AwsCredentialBridge::new(provider)))
+            }
+        };
+        let inner = builder
+            .build()
+            .into_alien_error()
+            .context(setup_failed(format!(
+                "Failed to build S3 client for bucket '{}' at '{}'",
+                bucket_name, endpoint.url
+            )))?;
+
+        let url = Url::parse(&format!("s3://{}", bucket_name))
+            .into_alien_error()
+            .context(ErrorData::InvalidConfigurationUrl {
+                url: format!("s3://{}", bucket_name),
+                reason: "Invalid S3 URL format".to_string(),
+            })?;
+        Ok(Self {
+            url,
+            base_dir: Path::default(),
+            inner,
+        })
+    }
+}
+
+/// Where an S3-compatible store lives and how to address it.
+#[derive(Debug, Clone)]
+pub struct S3CompatibleEndpoint {
+    /// Base URL, e.g. `https://minio.internal:9000`.
+    pub url: String,
+    /// Region used for request signing.
+    pub region: String,
+    /// Path-style (`endpoint/bucket/key`) instead of virtual-hosted URLs.
+    pub force_path_style: bool,
+}
+
+/// Credentials for an S3-compatible store.
+pub enum S3Credentials {
+    /// Static access keys.
+    Static {
+        /// Access key ID.
+        access_key_id: String,
+        /// Secret access key.
+        secret_access_key: String,
+    },
+    /// Ambient AWS credential chain (IRSA, instance role, env).
+    Provider(AwsCredentialProvider),
 }
 
 impl Binding for S3Storage {}

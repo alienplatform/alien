@@ -17,6 +17,19 @@ use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::deployment_store::*;
 
+/// Setup JSON for the `deployment_groups.setup` column; NULL when empty.
+fn setup_json(setup: &DeploymentGroupSetup) -> Result<Option<String>, AlienError> {
+    if setup.is_empty() {
+        return Ok(None);
+    }
+    serde_json::to_string(setup)
+        .map(Some)
+        .into_alien_error()
+        .context(GenericError {
+            message: "Failed to serialize deployment group setup".to_string(),
+        })
+}
+
 fn import_source_to_string(source: &ImportSourceKind) -> String {
     serde_json::to_value(source)
         .ok()
@@ -267,6 +280,16 @@ impl SqliteDeploymentStore {
             project_id: p
                 .optional_string(6, "project_id")?
                 .unwrap_or_else(|| "default".to_string()),
+            setup: match p.optional_string(7, "setup")? {
+                Some(json) => {
+                    serde_json::from_str(&json)
+                        .into_alien_error()
+                        .context(GenericError {
+                            message: "Failed to parse deployment group setup".to_string(),
+                        })?
+                }
+                None => Default::default(),
+            },
         })
     }
 }
@@ -1445,6 +1468,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 DeploymentGroups::MaxDeployments,
                 DeploymentGroups::DeploymentCount,
                 DeploymentGroups::CreatedAt,
+                DeploymentGroups::Setup,
             ])
             .values_panic([
                 id.clone().into(),
@@ -1452,6 +1476,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 params.max_deployments.into(),
                 0i64.into(),
                 now.to_rfc3339().into(),
+                setup_json(&params.setup)?.into(),
             ])
             .to_string(SqliteQueryBuilder);
 
@@ -1465,6 +1490,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             max_deployments: params.max_deployments,
             deployment_count: 0,
             created_at: now,
+            setup: params.setup,
         })
     }
 
@@ -1484,6 +1510,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 DeploymentGroups::MaxDeployments,
                 DeploymentGroups::DeploymentCount,
                 DeploymentGroups::CreatedAt,
+                DeploymentGroups::Setup,
             ])
             .values_panic([
                 id.into(),
@@ -1491,6 +1518,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 params.max_deployments.into(),
                 0i64.into(),
                 now.to_rfc3339().into(),
+                setup_json(&params.setup)?.into(),
             ])
             .to_string(SqliteQueryBuilder);
 
@@ -1504,6 +1532,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             max_deployments: params.max_deployments,
             deployment_count: 0,
             created_at: now,
+            setup: params.setup,
         })
     }
 
@@ -1542,6 +1571,10 @@ impl DeploymentStore for SqliteDeploymentStore {
             .expr_as(
                 Expr::col((DeploymentGroups::Table, DeploymentGroups::ProjectId)),
                 sea_query::Alias::new("project_id"),
+            )
+            .expr_as(
+                Expr::col((DeploymentGroups::Table, DeploymentGroups::Setup)),
+                sea_query::Alias::new("setup"),
             )
             .from(DeploymentGroups::Table)
             .join(
@@ -1621,6 +1654,10 @@ impl DeploymentStore for SqliteDeploymentStore {
             .expr_as(
                 Expr::col((DeploymentGroups::Table, DeploymentGroups::ProjectId)),
                 sea_query::Alias::new("project_id"),
+            )
+            .expr_as(
+                Expr::col((DeploymentGroups::Table, DeploymentGroups::Setup)),
+                sea_query::Alias::new("setup"),
             )
             .from(DeploymentGroups::Table)
             .join(

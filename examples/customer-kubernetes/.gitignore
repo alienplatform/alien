@@ -1,0 +1,6 @@
+# Created while following the README
+/customer-*.json
+/airgap/
+/node_modules/
+/package-lock.json
+/.alien/

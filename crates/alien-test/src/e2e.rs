@@ -911,6 +911,7 @@ pub async fn deploy_test_app(
             stack: stack_by_platform_sdk,
             git_metadata: None,
             project_id: "default".to_string(),
+            channel: None,
         })
         .send()
         .await
@@ -926,6 +927,8 @@ pub async fn deploy_test_app(
         .body(alien_manager_api::types::CreateDeploymentGroupRequest {
             name: format!("e2e-group-{}", &uuid::Uuid::new_v4().to_string()[..8]),
             max_deployments: None,
+            environment_variables: Default::default(),
+            input_values: Default::default(),
         })
         .send()
         .await
@@ -988,6 +991,7 @@ pub async fn deploy_test_app(
         stack_settings: Some(stack_settings),
         environment_variables: deployment_environment_variables(app),
         resource_prefix: Some(resource_prefix),
+        input_values: Default::default(),
     };
 
     let resp = manager
@@ -1093,6 +1097,7 @@ pub async fn developer_setup(
             stack: stack_by_platform_sdk,
             git_metadata: None,
             project_id: "default".to_string(),
+            channel: None,
         })
         .send()
         .await
@@ -1108,6 +1113,8 @@ pub async fn developer_setup(
         .body(alien_manager_api::types::CreateDeploymentGroupRequest {
             name: format!("e2e-group-{}", &uuid::Uuid::new_v4().to_string()[..8]),
             max_deployments: None,
+            environment_variables: Default::default(),
+            input_values: Default::default(),
         })
         .send()
         .await

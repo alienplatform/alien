@@ -43,6 +43,21 @@ export type AgentSyncResponse = {
    */
   targetDynamicContainers?: Array<TargetDynamicContainer> | null | undefined;
   targetOperationsBundleSet?: TargetOperationsBundleSet | null | undefined;
+  /**
+   * Operator image this manager's charts install. Operators that manage
+   *
+   * @remarks
+   * their own workload update to it. Absent when the manager serves no
+   * charts.
+   */
+  targetOperatorImage?: string | null | undefined;
+  /**
+   * Base URL operators open tunnel connections to. Absent when this manager
+   *
+   * @remarks
+   * does not accept tunnels; operators then never dial.
+   */
+  tunnelUrl?: string | null | undefined;
 };
 
 /** @internal */
@@ -59,6 +74,8 @@ export const AgentSyncResponse$inboundSchema: z.ZodType<
   ).optional(),
   targetOperationsBundleSet: z.nullable(TargetOperationsBundleSet$inboundSchema)
     .optional(),
+  targetOperatorImage: z.nullable(z.string()).optional(),
+  tunnelUrl: z.nullable(z.string()).optional(),
 });
 
 export function agentSyncResponseFromJSON(

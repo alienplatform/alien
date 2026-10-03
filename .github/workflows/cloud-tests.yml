@@ -309,4 +309,21 @@ jobs:
           version: "27.x"
           repo-token: ${{ github.token }}
 
+      # S3-compatible object storage for the Kubernetes storage binding tests
+      # (a bucket behind a custom endpoint, as on-prem clusters provide).
+      - name: Start S3-compatible store
+        if: matrix.name == 'bindings'
+        run: |
+          printf '%s' '{"identities":[{"name":"alien","credentials":[{"accessKey":"alien","secretKey":"alien-secret"}],"actions":["Admin","Read","Write","List","Tagging"]}]}' > /tmp/s3.json
+          docker run -d --name s3 -p 19000:8333 -v /tmp/s3.json:/etc/s3.json \
+            chrislusf/seaweedfs server -s3 -s3.config=/etc/s3.json \
+            -master.volumeSizeLimitMB=64 -volume.max=100
+          for _ in $(seq 1 30); do curl -sf -o /dev/null -X PUT --aws-sigv4 "aws:amz:us-east-1:s3" -u alien:alien-secret http://127.0.0.1:19000/alien-test && break; sleep 2; done
+          {
+            echo "ALIEN_TEST_S3_COMPATIBLE_ENDPOINT=http://127.0.0.1:19000"
+            echo "ALIEN_TEST_S3_COMPATIBLE_ACCESS_KEY_ID=alien"
+            echo "ALIEN_TEST_S3_COMPATIBLE_SECRET_ACCESS_KEY=alien-secret"
+            echo "ALIEN_TEST_S3_COMPATIBLE_BUCKET=alien-test"
+          } >> "$GITHUB_ENV"
+
       - run: ${{ matrix.test_cmd }}

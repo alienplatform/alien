@@ -9,6 +9,7 @@ pub mod error;
 pub mod execution_context;
 pub mod git_utils;
 pub mod interaction;
+pub mod manager_profile;
 pub mod output;
 #[cfg(feature = "platform")]
 pub mod platform_deployment_resolver;
@@ -37,14 +38,15 @@ use crate::commands::{
 };
 use crate::commands::{
     build_and_post_release_simple, build_command, build_dev_status, commands_task,
-    commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task, destroy_task,
-    ensure_server_running_for_dev_session, ensure_server_running_with_env,
-    fetch_all_dev_deployment_live_states, init_task, local_operations_task, logs_task,
-    onboard_task, operations_task, prepare_dev_session_deployment, release_command, releases_task,
-    render_task, status_task, upgrade_task, validate_deploy_config, vault_remote_task, vault_task,
-    whoami_task, write_dev_status, BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs,
-    DeployArgs, DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs, OperationsArgs,
-    ReleaseArgs, ReleasesArgs, RenderArgs, StatusArgs, UpgradeArgs, WhoamiArgs,
+    commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task,
+    destroy_local_deployment, destroy_task, ensure_server_running_for_dev_session,
+    ensure_server_running_with_env, fetch_all_dev_deployment_live_states, init_task,
+    local_operations_task, logs_task, onboard_task, operations_task,
+    prepare_dev_session_deployment, release_command, releases_task, render_task, status_task,
+    upgrade_task, validate_deploy_config, vault_remote_task, vault_task, whoami_task,
+    write_dev_status, BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs, DeployArgs,
+    DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs, OperationsArgs, ReleaseArgs,
+    ReleasesArgs, RenderArgs, StatusArgs, UpgradeArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -77,11 +79,11 @@ pub struct Cli {
     #[arg(long, env = "ALIEN_PROJECT", global = true)]
     pub project: Option<String>,
 
-    /// Platform base URL (defaults to https://api.alien.dev)
-    #[arg(long, env = "ALIEN_BASE_URL", global = true)]
+    /// alien.dev API URL (defaults to https://api.alien.dev)
+    #[arg(long, env = "ALIEN_BASE_URL", global = true, hide = true)]
     pub base_url: Option<String>,
 
-    /// Platform API key
+    /// API key (for alien.dev, or with ALIEN_MANAGER_URL for a manager you run)
     #[arg(long, env = "ALIEN_API_KEY", hide_env_values = true, global = true)]
     pub api_key: Option<String>,
 
@@ -89,7 +91,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub no_browser: bool,
 
-    /// Workspace name
+    /// alien.dev workspace
     #[arg(long, env = "ALIEN_WORKSPACE", global = true)]
     pub workspace: Option<String>,
 }
@@ -185,12 +187,14 @@ pub enum Commands {
     Destroy(DestroyArgs),
     /// Manage vault secrets for a deployment
     Vault(commands::VaultRemoteArgs),
+    /// Create and revoke scoped tokens on your manager
+    Tokens(commands::TokensArgs),
     // No doc comment: it would replace the long help defined on `CommandsArgs`.
     #[command(alias = "command")]
     Commands(CommandsArgs),
     /// Run a local command against a deployment using manager-side credentials
     Debug(DebugArgs),
-    /// Start a standalone alien-manager server
+    /// Run a manager on this machine
     Serve(ServeArgs),
     /// Local development commands
     Dev(DevCommand),
@@ -247,7 +251,7 @@ pub struct ServeArgs {
     #[arg(long, short = 'c')]
     pub config: Option<PathBuf>,
 
-    /// Generate a template alien-manager.toml and exit.
+    /// Write a commented alien-manager.toml to the current directory (or --config) and exit.
     #[arg(long)]
     pub init: bool,
 
@@ -601,6 +605,53 @@ pub(crate) fn cli_env_vars_to_core(
     )
 }
 
+#[cfg(feature = "platform")]
+/// `alien login --manager`: check the key against the manager, then save it.
+async fn login_to_manager(url: &str, token: Option<String>) -> Result<()> {
+    let url = url.trim_end_matches('/').to_string();
+    let token = match token {
+        Some(token) => token,
+        None if output::can_prompt() => output::prompt_text("API key", None)?,
+        None => {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "token".to_string(),
+                message: "Pass --token (or set ALIEN_API_KEY) when not running in a terminal."
+                    .to_string(),
+            }))
+        }
+    };
+    let response = reqwest::Client::new()
+        .get(format!("{url}/v1/whoami"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("Could not reach the manager at {url}"),
+            url: Some(url.clone()),
+        })?;
+    if !response.status().is_success() {
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!(
+                "The manager at {url} rejected the API key ({})",
+                response.status()
+            ),
+            url: Some(url.clone()),
+        }));
+    }
+    manager_profile::save(&manager_profile::ManagerProfile {
+        url: url.clone(),
+        api_key: token,
+    })?;
+    println!("{}", ui::success_line(&format!("Connected to {url}.")));
+    println!(
+        "{} {}",
+        ui::dim_label("Next"),
+        ui::command("alien release   then   alien onboard <customer>")
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -921,7 +972,26 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
 
     // Handle --init: generate template and exit
     if args.init {
-        print!("{}", ManagerTomlConfig::generate_template());
+        let path = args
+            .config
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("alien-manager.toml"));
+        if path.exists() {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!("{} already exists; not overwriting it", path.display()),
+            }));
+        }
+        std::fs::write(&path, ManagerTomlConfig::generate_template())
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Failed to write {}", path.display()),
+            })?;
+        println!("{}", success_line(&format!("Wrote {}.", path.display())));
+        println!(
+            "{} {}",
+            dim_label("Next"),
+            command(&format!("alien serve --config {}", path.display()))
+        );
         return Ok(());
     }
 
@@ -951,7 +1021,7 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
     let state_dir = config
         .state_dir
         .as_ref()
-        .expect("state_dir is required for standalone mode");
+        .expect("the manager config always resolves a state directory");
     std::fs::create_dir_all(state_dir)
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
@@ -963,7 +1033,7 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
     let db_path = config
         .db_path
         .as_ref()
-        .expect("db_path is required for standalone mode");
+        .expect("the manager config always resolves a database path");
 
     // Create SQLite database and token store first (needed for token bootstrap)
     let db = std::sync::Arc::new(
@@ -979,75 +1049,27 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
     let token_store: std::sync::Arc<dyn alien_manager::traits::TokenStore> =
         std::sync::Arc::new(alien_manager::stores::sqlite::SqliteTokenStore::new(db));
 
-    // Bootstrap admin token — DB is the source of truth.
-    // The plaintext token is only shown on first generation (like AWS/Stripe API keys).
-    let legacy_token_path = state_dir.join("admin-token");
-    let existing_tokens =
-        token_store
-            .list_tokens()
-            .await
-            .context(ErrorData::ServerStartFailed {
-                reason: "Failed to list tokens".to_string(),
-            })?;
-    let existing_admin = existing_tokens
-        .iter()
-        .find(|t| t.token_type == TokenType::Admin);
-
-    let generated_token = if existing_admin.is_some() {
-        // Existing admin token in DB — migrate away from legacy plaintext file
-        if legacy_token_path.exists() {
-            let _ = std::fs::remove_file(&legacy_token_path);
-        }
-        None
-    } else if legacy_token_path.exists() {
-        // Legacy migration: read plaintext file, hash into DB, delete file
-        let raw = std::fs::read_to_string(&legacy_token_path)
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "read".to_string(),
-                file_path: legacy_token_path.display().to_string(),
-                reason: "Failed to read legacy admin token".to_string(),
-            })?;
-        let raw = raw.trim().to_string();
-        let key_hash = hash_token(&raw);
-        let key_prefix = raw[..12.min(raw.len())].to_string();
-        token_store
-            .create_token(alien_manager::traits::CreateTokenParams {
-                token_type: TokenType::Admin,
-                key_prefix,
-                key_hash,
-                deployment_group_id: None,
-                deployment_id: None,
-            })
-            .await
-            .context(ErrorData::ServerStartFailed {
-                reason: "Failed to migrate admin token".to_string(),
-            })?;
-        let _ = std::fs::remove_file(&legacy_token_path);
-        // Show the token one last time during migration
-        Some(raw)
-    } else {
-        // First run: generate new token, hash into DB, show once
-        let raw = format!(
-            "ax_admin_{}",
-            uuid::Uuid::new_v4().to_string().replace('-', "")
-        );
-        let key_hash = hash_token(&raw);
-        let key_prefix = raw[..12.min(raw.len())].to_string();
-        token_store
-            .create_token(alien_manager::traits::CreateTokenParams {
-                token_type: TokenType::Admin,
-                key_prefix,
-                key_hash,
-                deployment_group_id: None,
-                deployment_id: None,
-            })
-            .await
-            .context(ErrorData::ServerStartFailed {
-                reason: "Failed to bootstrap admin token".to_string(),
-            })?;
-        Some(raw)
+    let generated_token = match alien_manager::bootstrap::ensure_admin_token(
+        token_store.as_ref(),
+        state_dir,
+        env::var(alien_manager::bootstrap::ADMIN_TOKEN_ENV).ok(),
+    )
+    .await
+    .context(ErrorData::ServerStartFailed {
+        reason: "Failed to set up the admin token".to_string(),
+    })? {
+        alien_manager::bootstrap::AdminToken::Generated(token) => Some(token),
+        _ => None,
     };
+    config.response_signing_key = alien_manager::bootstrap::response_signing_key(state_dir)
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to set up the response signing key".to_string(),
+        })?;
+    let bundle_signing_key = alien_manager::bootstrap::bundle_signing_key(state_dir).context(
+        ErrorData::ServerStartFailed {
+            reason: "Failed to set up the bundle signing key".to_string(),
+        },
+    )?;
 
     // Re-read the admin token record for the prefix (used in subsequent-run display)
     let admin_prefix = if generated_token.is_none() {
@@ -1063,6 +1085,12 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
     // Build the server
     let server = AlienManager::builder(config.clone())
         .token_store(token_store)
+        .tunnels()
+        .charts(alien_manager::routes::charts::ChartSettings::new(
+            toml_config.operator.image.clone(),
+            toml_config.operator.insecure_registry,
+        ))
+        .bundle_signing_key(bundle_signing_key)
         .with_standalone_defaults(&toml_config)
         .await
         .context(ErrorData::ServerStartFailed {
@@ -1114,25 +1142,18 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
     }
 
     println!();
-    if let Some(ref token) = generated_token {
-        println!(
-            "  {}",
-            dim_label(&format!("export ALIEN_MANAGER_URL={manager_url}"))
-        );
-        println!("  {}", dim_label(&format!("export ALIEN_API_KEY={token}")));
-    } else {
-        println!(
-            "  {}",
-            dim_label(&format!("export ALIEN_MANAGER_URL={manager_url}"))
-        );
-    }
-
-    println!();
+    let token_hint = generated_token
+        .clone()
+        .unwrap_or_else(|| "<admin-token>".to_string());
+    println!("  {}", dim_label("Connect the CLI (in another terminal):"));
     println!(
-        "  {} {}",
-        dim_label("Next"),
-        command("alien release --platform aws")
+        "  {}",
+        command(&format!(
+            "alien login --manager {manager_url} --token {token_hint}"
+        ))
     );
+    println!();
+    println!("  {} {}", dim_label("Next"), command("alien release"));
     println!("        {}", command("alien onboard <customer-name>"));
     println!();
 
@@ -1141,13 +1162,6 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
 
     // Watch deployments until Ctrl+C or server exit
     watch_serve_deployments(deployment_store, server_handle).await
-}
-
-fn hash_token(token: &str) -> String {
-    use sha2::Digest;
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(token.as_bytes());
-    hex::encode(hasher.finalize())
 }
 
 /// Poll deployment store and render auto-updating deployment cards.
@@ -1334,7 +1348,10 @@ async fn handle_dev_command(dev_cmd: DevCommand) -> Result<()> {
         Some(DevSubcommand::Releases(args)) => releases_task(args, ctx).await?,
         Some(DevSubcommand::Whoami(args)) => whoami_task(args, ctx).await?,
         Some(DevSubcommand::Deploy(args)) => deploy_task(args, ctx).await?,
-        Some(DevSubcommand::Destroy(args)) => destroy_task(args, ctx).await?,
+        Some(DevSubcommand::Destroy(args)) => {
+            destroy_local_deployment(port, &args.name, args.force).await?;
+            println!("{}", success_line("Deployment destroyed."));
+        }
         Some(DevSubcommand::Release(args)) => release_command(args, ctx).await?,
         Some(DevSubcommand::Vault(args)) => vault_task(args, port).await?,
         Some(DevSubcommand::Commands(args)) => commands_task_dev(args, port).await?,
@@ -1840,14 +1857,40 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         args.deployment()?;
     }
 
-    let ctx = if let Ok(server_url) = env::var("ALIEN_MANAGER_URL") {
+    // Connecting to a manager you run doesn't need an execution context.
+    #[cfg(feature = "platform")]
+    if let Some(Commands::Platform(PlatformCommand::Login(args))) = &cli.command {
+        if let Some(url) = &args.manager {
+            return login_to_manager(url, args.token.clone()).await;
+        }
+        // Signing in to alien.dev replaces a saved manager.
+        manager_profile::clear()?;
+    }
+    #[cfg(feature = "platform")]
+    if let Some(Commands::Platform(PlatformCommand::Logout(_))) = &cli.command {
+        if manager_profile::clear()? {
+            println!("{}", ui::success_line("Disconnected from your manager."));
+        }
+    }
+
+    let saved_manager = if env::var("ALIEN_MANAGER_URL").is_ok() {
+        None
+    } else {
+        manager_profile::load()?
+    };
+    let ctx = if let Some(profile) = saved_manager {
+        ExecutionMode::Standalone {
+            server_url: profile.url,
+            api_key: cli.api_key.clone().unwrap_or(profile.api_key),
+        }
+    } else if let Ok(server_url) = env::var("ALIEN_MANAGER_URL") {
         let api_key = cli
             .api_key
             .clone()
             .or_else(|| env::var("ALIEN_API_KEY").ok())
             .ok_or_else(|| {
                 AlienError::new(ErrorData::ConfigurationError {
-                    message: "ALIEN_API_KEY is required when ALIEN_MANAGER_URL is set.".to_string(),
+                    message: "Set ALIEN_API_KEY along with ALIEN_MANAGER_URL, or run `alien login --manager <url>`.".to_string(),
                 })
             })?;
 
@@ -1872,7 +1915,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         #[cfg(not(feature = "platform"))]
         {
             return Err(AlienError::new(ErrorData::ConfigurationError {
-                message: "No manager URL configured. Export ALIEN_MANAGER_URL=http://localhost:8080 to target a standalone manager.".to_string(),
+                message: "No manager configured. Run `alien login --manager <url>`, or set ALIEN_MANAGER_URL and ALIEN_API_KEY.".to_string(),
             }));
         }
     };
@@ -1906,6 +1949,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             Some(Commands::Deploy(args)) => deploy_task(args, ctx).await?,
             Some(Commands::Destroy(args)) => destroy_task(args, ctx).await?,
             Some(Commands::Vault(args)) => vault_remote_task(args, ctx).await?,
+            Some(Commands::Tokens(args)) => commands::tokens_task(args, ctx).await?,
             Some(Commands::Commands(args)) => commands_task(args, ctx).await?,
             Some(Commands::Debug(args)) => debug_task(args, ctx).await?,
             Some(Commands::Dev(dev_cmd)) => handle_dev_command(dev_cmd).await?,

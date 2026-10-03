@@ -1,7 +1,12 @@
 use crate::error::Result;
 use crate::{CheckResult, StackCompatibilityCheck};
+use alien_core::instance_catalog::{
+    find_instance_type, is_same_architecture_aws_machine, max_configurable_ephemeral_storage_bytes,
+    parse_memory_bytes,
+};
 use alien_core::{
-    ComputeCluster, Platform, Resource, ResourceLifecycle, Sandbox, SandboxCode, Stack,
+    CapacityGroup, ComputeCluster, Container, Platform, Resource, ResourceLifecycle, Sandbox,
+    SandboxCode, Stack,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -19,11 +24,15 @@ pub struct FrozenResourcesUnchangedCheck {
     pub platform: Platform,
 }
 
-/// Setup owns the ComputeCluster identity and network boundary, but its
-/// registered runtime controller deliberately owns fleet capacity. Keep this
-/// exception structural and narrow: changing groups, profiles, placement, or
-/// networking still requires setup.
-fn runtime_managed_frozen_change(old: &Resource, new: &Resource) -> bool {
+/// Setup owns the ComputeCluster identity and network boundary; the runtime controller owns fleet
+/// capacity and, on AWS, a group's machine within one catalog architecture, which the stack's
+/// images target. Any other group, profile, placement or networking change needs setup.
+fn runtime_managed_frozen_change(
+    platform: Platform,
+    new_stack: &Stack,
+    old: &Resource,
+    new: &Resource,
+) -> bool {
     let (Some(old_cluster), Some(new_cluster)) = (
         old.downcast_ref::<ComputeCluster>(),
         new.downcast_ref::<ComputeCluster>(),
@@ -46,8 +55,135 @@ fn runtime_managed_frozen_change(old: &Resource, new: &Resource) -> bool {
         old_group.min_size = new_group.min_size;
         old_group.max_size = new_group.max_size;
         old_group.scale_policy = new_group.scale_policy.clone();
+        if platform == Platform::Aws
+            && old_group.instance_type != new_group.instance_type
+            && same_aws_architecture(
+                old_group.instance_type.as_deref(),
+                new_group.instance_type.as_deref(),
+            )
+            && profile_matches_catalog(
+                new_group,
+                installed_disk(old_group),
+                requested_disk(new_stack, new_cluster, &new_group.group_id),
+            )
+        {
+            old_group.instance_type = new_group.instance_type.clone();
+            old_group.profile = new_group.profile.clone();
+        }
     }
     normalized == *new_cluster
+}
+
+fn same_aws_architecture(old: Option<&str>, new: Option<&str>) -> bool {
+    old.zip(new)
+        .is_some_and(|(old, new)| is_same_architecture_aws_machine(old, new))
+}
+
+/// The installed group's disk, from its machine: the catalog fixes some disks, and a recorded
+/// profile sizes the rest.
+enum InstalledDisk {
+    /// Sized from the workload's request by the mutation (the catalog disk when no profile was
+    /// recorded), so an unchanged request keeps it.
+    Configurable(u64),
+    /// A fixed size: it records no request, but a request it met was at most this size.
+    Fixed(u64),
+    /// Not a catalog machine.
+    Unknown,
+}
+
+fn installed_disk(group: &CapacityGroup) -> InstalledDisk {
+    let spec = group
+        .instance_type
+        .as_deref()
+        .and_then(|name| find_instance_type(Platform::Aws, name));
+    let Some(spec) = spec else {
+        return InstalledDisk::Unknown;
+    };
+    let catalog_disk = spec.to_machine_profile().ephemeral_storage_bytes;
+    if spec.has_configurable_ephemeral_storage() {
+        InstalledDisk::Configurable(
+            group
+                .profile
+                .as_ref()
+                .map_or(catalog_disk, |p| p.ephemeral_storage_bytes),
+        )
+    } else {
+        InstalledDisk::Fixed(catalog_disk)
+    }
+}
+
+/// The largest ephemeral storage requested by the containers the compute mutation places on the
+/// group: those naming it as their pool, or with no pool when the cluster has one group. `None`
+/// when a request does not parse, which refuses any disk that needs the request.
+fn requested_disk(stack: &Stack, cluster: &ComputeCluster, group_id: &str) -> Option<u64> {
+    let single_group = cluster.capacity_groups.len() == 1;
+    stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<Container>())
+        .filter(|container| {
+            container.cluster.as_deref() == Some(cluster.id.as_str())
+                && match container.pool.as_deref() {
+                    Some(pool) => pool == group_id,
+                    None => single_group,
+                }
+        })
+        .filter_map(|container| container.ephemeral_storage.as_deref())
+        .try_fold(0, |max, storage| {
+            parse_memory_bytes(storage).ok().map(|bytes| max.max(bytes))
+        })
+}
+
+/// The profile must be one the compute mutation produces for this machine with the workload's
+/// disk request unchanged: a configurable disk kept at the installed size; off a fixed disk, the
+/// catalog disk grown to the containers' request, no larger than the installed disk; off an
+/// uncatalogued machine, the catalog disk. A fixed disk stays at the catalog's and must cover
+/// the request, and nested
+/// virtualization needs a capable machine. Any other disk change needs setup; an explicit cluster
+/// whose release declares the disk is refused off a fixed disk, since the mutation drops it.
+fn profile_matches_catalog(
+    group: &CapacityGroup,
+    installed: InstalledDisk,
+    requested: Option<u64>,
+) -> bool {
+    let (Some(spec), Some(profile)) = (
+        group
+            .instance_type
+            .as_deref()
+            .and_then(|name| find_instance_type(Platform::Aws, name)),
+        group.profile.as_ref(),
+    ) else {
+        return false;
+    };
+    let catalog = spec.to_machine_profile();
+    let disk = profile.ephemeral_storage_bytes;
+    let storage_matches = if spec.has_configurable_ephemeral_storage() {
+        let within_limits = disk >= catalog.ephemeral_storage_bytes
+            && max_configurable_ephemeral_storage_bytes(Platform::Aws)
+                .is_some_and(|max| disk <= max);
+        within_limits
+            && match installed {
+                InstalledDisk::Configurable(installed) => disk == installed,
+                InstalledDisk::Fixed(installed) => {
+                    disk <= installed
+                        && requested.is_some_and(|r| {
+                            disk == spec
+                                .to_machine_profile_for_storage(r)
+                                .ephemeral_storage_bytes
+                        })
+                }
+                InstalledDisk::Unknown => disk == catalog.ephemeral_storage_bytes,
+            }
+    } else {
+        disk == catalog.ephemeral_storage_bytes && requested.is_some_and(|r| r <= disk)
+    };
+    profile
+        .architecture
+        .is_none_or(|arch| arch == spec.architecture)
+        && profile.cpu == catalog.cpu
+        && profile.memory_bytes == catalog.memory_bytes
+        && profile.gpu == catalog.gpu
+        && storage_matches
+        && (group.nested_virtualization != Some(true) || spec.is_nested_virt_capable())
 }
 
 /// On Azure and GCP only the runtime controller reads the image and setup renders no grant from
@@ -130,7 +266,12 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
 
                 // Check if configuration changed (only check if still frozen)
                 if old_entry.config != new_entry.config
-                    && !runtime_managed_frozen_change(&old_entry.config, &new_entry.config)
+                    && !runtime_managed_frozen_change(
+                        self.platform,
+                        new_stack,
+                        &old_entry.config,
+                        &new_entry.config,
+                    )
                     && !runtime_managed_sandbox_image(
                         self.platform,
                         &old_entry.config,
@@ -159,6 +300,7 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
 mod tests {
     use super::*;
     use alien_core::permissions::PermissionsConfig;
+    use alien_core::MachineProfile;
     use alien_core::{
         CapacityGroup, ComputeCluster, Resource, ResourceEntry, ResourceLifecycle, Stack, Storage,
     };
@@ -481,17 +623,41 @@ mod tests {
     }
 
     fn compute_cluster(size: u32) -> ComputeCluster {
+        machine_cluster("m8i.2xlarge", size)
+    }
+
+    fn machine_cluster(instance_type: &str, size: u32) -> ComputeCluster {
         ComputeCluster::new("compute".to_string())
             .capacity_group(CapacityGroup {
                 group_id: "workers".to_string(),
-                instance_type: Some("m8i.2xlarge".to_string()),
+                instance_type: Some(instance_type.to_string()),
                 profile: None,
                 min_size: size,
                 max_size: size,
                 scale_policy: None,
-                nested_virtualization: Some(true),
+                nested_virtualization: None,
             })
             .build()
+    }
+
+    /// Sets a group's machine and its unadjusted catalog profile.
+    fn with_machine(mut cluster: ComputeCluster, instance_type: &str) -> ComputeCluster {
+        let group = &mut cluster.capacity_groups[0];
+        group.instance_type = Some(instance_type.to_string());
+        group.profile =
+            find_instance_type(Platform::Aws, instance_type).map(|spec| spec.to_machine_profile());
+        cluster
+    }
+
+    async fn frozen_check(
+        platform: Platform,
+        old: ComputeCluster,
+        new: ComputeCluster,
+    ) -> CheckResult {
+        FrozenResourcesUnchangedCheck { platform }
+            .check(&compute_stack(old), &compute_stack(new))
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -512,14 +678,364 @@ mod tests {
     async fn compute_boundary_change_remains_frozen() {
         let old = compute_cluster(2);
         let mut changed = compute_cluster(2);
-        changed.capacity_groups[0].instance_type = Some("m8i.4xlarge".to_string());
+        changed.capacity_groups[0].nested_virtualization = Some(false);
+        let result = frozen_check(Platform::Aws, old, changed).await;
+        assert!(!result.success);
+        assert!(result.errors[0].contains("Rerun setup"));
+    }
+
+    #[tokio::test]
+    async fn an_aws_machine_change_within_one_architecture_is_runtime_manageable() {
+        let old = with_machine(machine_cluster("t4g.micro", 2), "t4g.micro");
+        let new = with_machine(machine_cluster("t4g.micro", 2), "c7g.medium");
+        let result = frozen_check(Platform::Aws, old, new).await;
+        assert!(result.success, "{:?}", result.errors);
+    }
+
+    #[tokio::test]
+    async fn an_aws_machine_change_with_new_bounds_is_runtime_manageable() {
+        let old = with_machine(machine_cluster("t4g.micro", 2), "t4g.micro");
+        let new = with_machine(machine_cluster("t4g.micro", 4), "c7g.medium");
+        let result = frozen_check(Platform::Aws, old, new).await;
+        assert!(result.success, "{:?}", result.errors);
+    }
+
+    #[tokio::test]
+    async fn an_aws_machine_change_across_architectures_needs_setup() {
+        let old = with_machine(machine_cluster("t4g.micro", 2), "t4g.micro");
+        let new = with_machine(machine_cluster("t4g.micro", 2), "m7i.large");
+        let result = frozen_check(Platform::Aws, old, new).await;
+        assert!(!result.success, "arm64 to x86_64 must rerun setup");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_machine_needs_setup() {
+        let old = with_machine(machine_cluster("t4g.micro", 2), "t4g.micro");
+        let to_unknown = with_machine(machine_cluster("t4g.micro", 2), "t4g.unknown");
+        assert!(
+            !frozen_check(Platform::Aws, old.clone(), to_unknown.clone())
+                .await
+                .success
+        );
+        assert!(
+            !frozen_check(Platform::Aws, to_unknown, old.clone())
+                .await
+                .success
+        );
+
+        let mut to_none = old.clone();
+        to_none.capacity_groups[0].instance_type = None;
+        assert!(!frozen_check(Platform::Aws, old, to_none).await.success);
+    }
+
+    #[tokio::test]
+    async fn a_machine_change_outside_aws_needs_setup() {
+        for platform in [Platform::Gcp, Platform::Azure] {
+            let old = with_machine(machine_cluster("t4g.micro", 2), "t4g.micro");
+            let new = with_machine(machine_cluster("t4g.micro", 2), "c7g.medium");
+            let result = frozen_check(platform, old, new).await;
+            assert!(
+                !result.success,
+                "{platform} machine changes stay setup-owned"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_profile_change_without_a_machine_change_needs_setup() {
+        let old = with_machine(machine_cluster("t4g.micro", 2), "t4g.micro");
+        let mut new = old.clone();
+        new.capacity_groups[0]
+            .profile
+            .as_mut()
+            .expect("catalog profile")
+            .memory_bytes *= 2;
+        let result = frozen_check(Platform::Aws, old, new).await;
+        assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn a_machine_change_cannot_carry_a_forged_profile_past_setup() {
+        let old = with_machine(machine_cluster("t4g.micro", 2), "t4g.micro");
+        let forgeries: [fn(&mut MachineProfile); 5] = [
+            |profile| profile.ephemeral_storage_bytes = 1,
+            |profile| {
+                profile.architecture = Some(alien_core::instance_catalog::Architecture::X86_64)
+            },
+            |profile| profile.memory_bytes *= 64,
+            |profile| profile.cpu = "64.0".to_string(),
+            |profile| {
+                profile.gpu = Some(alien_core::GpuSpec {
+                    gpu_type: "nvidia-h100".to_string(),
+                    count: 8,
+                })
+            },
+        ];
+        for forge in forgeries {
+            let mut new = with_machine(machine_cluster("t4g.micro", 2), "c7g.medium");
+            forge(
+                new.capacity_groups[0]
+                    .profile
+                    .as_mut()
+                    .expect("catalog profile"),
+            );
+            let result = frozen_check(Platform::Aws, old.clone(), new).await;
+            assert!(
+                !result.success,
+                "a profile the catalog does not back needs setup"
+            );
+        }
+
+        let mut without_profile = with_machine(machine_cluster("t4g.micro", 2), "c7g.medium");
+        without_profile.capacity_groups[0].profile = None;
+        assert!(
+            !frozen_check(Platform::Aws, old, without_profile)
+                .await
+                .success
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fixed_disk_machine_change_keeps_the_catalog_disk() {
+        let old = with_machine(machine_cluster("i4i.xlarge", 2), "i4i.xlarge");
+        let new = with_machine(machine_cluster("i4i.xlarge", 2), "i4i.2xlarge");
+        let result = frozen_check(Platform::Aws, old.clone(), new.clone()).await;
+        assert!(result.success, "{:?}", result.errors);
+
+        let mut grown = new;
+        grown.capacity_groups[0]
+            .profile
+            .as_mut()
+            .expect("catalog profile")
+            .ephemeral_storage_bytes *= 2;
+        assert!(!frozen_check(Platform::Aws, old, grown).await.success);
+    }
+
+    #[tokio::test]
+    async fn a_nested_virtualization_group_moves_only_to_a_capable_machine() {
+        let nested = |machine| {
+            let mut cluster = with_machine(machine_cluster(machine, 2), machine);
+            cluster.capacity_groups[0].nested_virtualization = Some(true);
+            cluster
+        };
+        let result = frozen_check(Platform::Aws, nested("m8i.large"), nested("c8i.large")).await;
+        assert!(result.success, "{:?}", result.errors);
+        assert!(
+            !frozen_check(Platform::Aws, nested("m8i.large"), nested("m7i.xlarge"))
+                .await
+                .success
+        );
+        let plain = |machine| with_machine(machine_cluster(machine, 2), machine);
+        let result = frozen_check(Platform::Aws, plain("m8i.large"), plain("m7i.xlarge")).await;
+        assert!(result.success, "{:?}", result.errors);
+    }
+
+    /// A cluster with no workload skips the compute mutation, so its profile is whatever the
+    /// stack declares; a machine change must not carry a disk change past setup.
+    #[tokio::test]
+    async fn a_machine_change_cannot_grow_the_disk_past_setup() {
+        let old = with_machine(machine_cluster("t4g.micro", 2), "t4g.micro");
+        let mut new = with_machine(machine_cluster("t4g.micro", 2), "t4g.small");
+        new.capacity_groups[0]
+            .profile
+            .as_mut()
+            .expect("catalog profile")
+            .ephemeral_storage_bytes = 1024 * 1024 * 1024 * 1024;
+        assert!(!frozen_check(Platform::Aws, old, new).await.success);
+    }
+
+    #[tokio::test]
+    async fn a_machine_change_cannot_shrink_the_disk_past_setup() {
+        let mut old = machine_cluster("t4g.micro", 2);
+        old.capacity_groups[0].profile = Some(
+            find_instance_type(Platform::Aws, "t4g.micro")
+                .expect("catalog machine")
+                .to_machine_profile_for_storage(100 * 1024 * 1024 * 1024),
+        );
+        let new = with_machine(machine_cluster("t4g.micro", 2), "t4g.small");
+        assert!(!frozen_check(Platform::Aws, old, new).await.success);
+    }
+
+    /// The new stack with one pool-less container on the single-group cluster requesting
+    /// `storage`, as the compute mutation leaves an auto cluster with one group.
+    fn stack_with_request(cluster: ComputeCluster, storage: &str) -> Stack {
+        let mut stack = compute_stack(cluster);
+        let mut container = alien_core::Container::new("api".to_string())
+            .code(alien_core::ContainerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .permissions("test".to_string())
+            .build();
+        container.cluster = Some("compute".to_string());
+        container.ephemeral_storage = Some(storage.to_string());
+        stack.resources.insert(
+            "api".to_string(),
+            ResourceEntry {
+                config: Resource::new(container),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: vec![],
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        stack
+    }
+
+    #[tokio::test]
+    async fn a_fixed_disk_target_must_cover_the_request() {
+        let old = with_machine(machine_cluster("m7i.large", 2), "m7i.large");
+        let new = with_machine(machine_cluster("m7i.large", 2), "i4i.xlarge");
+        let check = |storage: &'static str| {
+            let (old, new) = (
+                compute_stack(old.clone()),
+                stack_with_request(new.clone(), storage),
+            );
+            async move {
+                FrozenResourcesUnchangedCheck {
+                    platform: Platform::Aws,
+                }
+                .check(&old, &new)
+                .await
+                .unwrap()
+                .success
+            }
+        };
+        assert!(check("20Gi").await);
+        assert!(
+            !check("2Ti").await,
+            "937 GiB does not cover a 2 TiB request"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fixed_disk_machine_without_a_recorded_profile_moves_to_the_requested_disk() {
+        let mut old = with_machine(machine_cluster("i4i.xlarge", 2), "i4i.xlarge");
+        old.capacity_groups[0].profile = None;
+        let mut new = with_machine(machine_cluster("i4i.xlarge", 2), "m7i.large");
+        new.capacity_groups[0]
+            .profile
+            .as_mut()
+            .expect("catalog profile")
+            .ephemeral_storage_bytes = 40 * 1024 * 1024 * 1024;
         let result = FrozenResourcesUnchangedCheck {
             platform: Platform::Aws,
         }
-        .check(&compute_stack(old), &compute_stack(changed))
+        .check(&compute_stack(old), &stack_with_request(new, "40Gi"))
         .await
         .unwrap();
-        assert!(!result.success);
+        assert!(result.success, "{:?}", result.errors);
+    }
+
+    #[tokio::test]
+    async fn a_fixed_disk_machine_moves_to_the_disk_its_containers_request() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let old = with_machine(machine_cluster("i4i.xlarge", 2), "i4i.xlarge");
+        let with_disk = |bytes: u64| {
+            let mut cluster = with_machine(machine_cluster("i4i.xlarge", 2), "m7i.large");
+            cluster.capacity_groups[0]
+                .profile
+                .as_mut()
+                .expect("catalog profile")
+                .ephemeral_storage_bytes = bytes;
+            cluster
+        };
+        let check = |new: ComputeCluster, storage: Option<&str>| {
+            let old = compute_stack(old.clone());
+            let new = match storage {
+                Some(storage) => stack_with_request(new, storage),
+                None => compute_stack(new),
+            };
+            async move {
+                FrozenResourcesUnchangedCheck {
+                    platform: Platform::Aws,
+                }
+                .check(&old, &new)
+                .await
+                .unwrap()
+                .success
+            }
+        };
+
+        assert!(
+            check(with_disk(20 * GIB), None).await,
+            "no request: catalog disk"
+        );
+        assert!(
+            check(with_disk(40 * GIB), Some("40Gi")).await,
+            "the request's disk"
+        );
+        assert!(
+            !check(with_disk(500 * GIB), None).await,
+            "a disk nobody requested"
+        );
+        assert!(
+            !check(with_disk(500 * GIB), Some("40Gi")).await,
+            "more than requested"
+        );
+        assert!(
+            !check(with_disk(2048 * GIB), Some("2Ti")).await,
+            "a request the installed disk never met is a storage change"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_machine_change_keeps_the_storage_the_workload_requested() {
+        let mut old = machine_cluster("t4g.micro", 2);
+        old.capacity_groups[0].profile = Some(
+            find_instance_type(Platform::Aws, "t4g.micro")
+                .expect("catalog machine")
+                .to_machine_profile_for_storage(200 * 1024 * 1024 * 1024),
+        );
+        let mut new = machine_cluster("c7g.medium", 2);
+        new.capacity_groups[0].profile = Some(
+            find_instance_type(Platform::Aws, "c7g.medium")
+                .expect("catalog machine")
+                .to_machine_profile_for_storage(200 * 1024 * 1024 * 1024),
+        );
+        let mut without_architecture = new.clone();
+        if let Some(profile) = without_architecture.capacity_groups[0].profile.as_mut() {
+            profile.architecture = None;
+        }
+
+        let result = frozen_check(Platform::Aws, old.clone(), new).await;
+        assert!(result.success, "{:?}", result.errors);
+        let result = frozen_check(Platform::Aws, old, without_architecture).await;
+        assert!(result.success, "{:?}", result.errors);
+    }
+
+    #[tokio::test]
+    async fn a_machine_change_cannot_carry_a_group_change_past_setup() {
+        let old = with_machine(machine_cluster("t4g.micro", 2), "t4g.micro");
+
+        let mut renamed = with_machine(machine_cluster("t4g.micro", 2), "c7g.medium");
+        renamed.capacity_groups[0].group_id = "others".to_string();
+        assert!(
+            !frozen_check(Platform::Aws, old.clone(), renamed)
+                .await
+                .success
+        );
+
+        let mut added = with_machine(machine_cluster("t4g.micro", 2), "c7g.medium");
+        let mut extra = added.capacity_groups[0].clone();
+        extra.group_id = "others".to_string();
+        added.capacity_groups.push(extra);
+        assert!(
+            !frozen_check(Platform::Aws, old.clone(), added)
+                .await
+                .success
+        );
+
+        let mut nested = with_machine(machine_cluster("t4g.micro", 2), "c7g.medium");
+        nested.capacity_groups[0].nested_virtualization = Some(false);
+        assert!(!frozen_check(Platform::Aws, old, nested).await.success);
     }
 
     fn sandbox_stack(image: &str, idle_pause_seconds: Option<u32>) -> Stack {

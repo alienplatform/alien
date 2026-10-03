@@ -40,6 +40,7 @@ which = "6.0"
 
 
 [dev-dependencies]
+container-registry = { workspace = true, features = ["test-support"] }
 httpmock = { workspace = true }
 dockdash = { workspace = true, features = ["test-utils"] }
 alien-build = { path = ".", features = ["test-utils"] }

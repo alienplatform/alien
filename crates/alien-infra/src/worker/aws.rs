@@ -4328,10 +4328,19 @@ impl AwsWorkerController {
             .get_function_configuration(lookup_identifier, None)
             .await
         {
+            // `lambda:GetFunction` is granted only for functions that carry the stack's tags.
+            // A deleted function has none, so AWS answers AccessDenied instead of
+            // ResourceNotFound. Both mean the function is gone. Returning the denial as an
+            // error would make the executor's best-effort delete rule mark the worker
+            // deleted here, before the network interface wait and the certificate delete
+            // have run.
             Err(e)
                 if matches!(
                     e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    Some(
+                        CloudClientErrorData::RemoteResourceNotFound { .. }
+                            | CloudClientErrorData::RemoteAccessDenied { .. }
+                    )
                 ) =>
             {
                 self.arn = None;
@@ -4441,7 +4450,10 @@ impl AwsWorkerController {
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
-        if let Some(certificate_arn) = self.certificate_arn.as_ref() {
+        // Custom-domain certificates belong to the customer and may be shared.
+        if let (Some(certificate_arn), false) =
+            (self.certificate_arn.as_ref(), self.uses_custom_domain)
+        {
             let aws_cfg = ctx.get_aws_config()?;
             let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
             match acm_client.delete_certificate(certificate_arn).await {
@@ -4863,7 +4875,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     };
 
     use alien_aws_clients::acm::{ImportCertificateResponse, MockAcmApi};
@@ -4871,19 +4883,23 @@ mod tests {
         Api, ApiMapping, DomainName, DomainNameConfiguration, Integration, MockApiGatewayV2Api,
         Route, Stage,
     };
+    use alien_aws_clients::ec2::{DescribeNetworkInterfacesResponse, MockEc2Api};
     use alien_aws_clients::iam::MockIamApi;
     use alien_aws_clients::lambda::{AddPermissionResponse, FunctionConfiguration, MockLambdaApi};
+    use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{
-        CertificateStatus, DnsRecordStatus, DomainMetadata, Platform, PublicEndpointUrls,
-        ResourceDomainInfo, ResourceStatus, Worker, WorkerOutputs,
+        CertificateStatus, ClientConfig, DeploymentConfig, DnsRecordStatus, DomainMetadata,
+        EnvironmentVariablesSnapshot, ExternalBindings, NetworkSettings, Platform,
+        PublicEndpointUrls, Resource, ResourceDefinition, ResourceDomainInfo, ResourceLifecycle,
+        ResourceStatus, StackResourceState, StackSettings, StackState, Worker, WorkerOutputs,
     };
     use alien_error::AlienError;
     use httpmock::prelude::*;
     use rstest::rstest;
 
     use crate::core::controller_test::SingleControllerExecutor;
-    use crate::core::MockPlatformServiceProvider;
+    use crate::core::{serialize_controller, MockPlatformServiceProvider, StackExecutor};
     use crate::worker::{
         fixtures::*, readiness_probe::test_utils::create_readiness_probe_mock, AwsWorkerController,
     };
@@ -5527,6 +5543,217 @@ mod tests {
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
+    }
+
+    // ─────────────── DELETE WITH TAG-CONDITIONED READS ────────────────
+
+    const TEST_CERTIFICATE_ARN: &str =
+        "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id";
+
+    fn access_denied() -> AlienError<CloudClientErrorData> {
+        AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+            resource_type: "Worker".to_string(),
+            resource_name: "test-public-func".to_string(),
+        })
+    }
+
+    /// Deletes a running public worker with the stack executor that production uses, in a
+    /// stack that owns its VPC. Returns the worker's final status.
+    ///
+    /// The stack executor matters here: its best-effort delete rule decides what an
+    /// access-denied answer does to the rest of the delete flow.
+    #[bon::builder]
+    async fn delete_public_worker_in_created_vpc(
+        mock_lambda: MockLambdaApi,
+        mock_ec2: MockEc2Api,
+        mock_acm: MockAcmApi,
+        #[builder(default)] uses_custom_domain: bool,
+    ) -> ResourceStatus {
+        let worker = function_public_ingress();
+        let worker_id = worker.id.clone();
+        let mut controller = AwsWorkerController::mock_ready(&format!("test-{worker_id}"));
+        controller.certificate_arn = Some(TEST_CERTIFICATE_ARN.to_string());
+        controller.uses_custom_domain = uses_custom_domain;
+
+        let mut state = StackState::new(Platform::Aws);
+        state.resource_prefix = "test".to_string();
+        state.resources.insert(
+            worker_id.clone(),
+            StackResourceState::builder()
+                .resource_type(Worker::RESOURCE_TYPE.to_string())
+                .status(ResourceStatus::Running)
+                .config(Resource::new(worker))
+                .internal_state(serialize_controller(&controller).unwrap())
+                .lifecycle(ResourceLifecycle::Live)
+                .dependencies(vec![])
+                .build(),
+        );
+
+        let mock_lambda = Arc::new(mock_lambda);
+        let mock_ec2 = Arc::new(mock_ec2);
+        let mock_acm = Arc::new(mock_acm);
+        let mut mock_provider = MockPlatformServiceProvider::new();
+        mock_provider
+            .expect_get_aws_lambda_client()
+            .returning(move |_| Ok(mock_lambda.clone()));
+        mock_provider
+            .expect_get_aws_ec2_client()
+            .returning(move |_| Ok(mock_ec2.clone()));
+        mock_provider
+            .expect_get_aws_acm_client()
+            .returning(move |_| Ok(mock_acm.clone()));
+
+        let deployment_config = DeploymentConfig::builder()
+            .stack_settings(StackSettings {
+                network: Some(NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                }),
+                ..Default::default()
+            })
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        let executor = StackExecutor::for_deletion_with_service_provider(
+            ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            &deployment_config,
+            Arc::new(mock_provider),
+            None,
+        )
+        .unwrap();
+
+        // Step without sleeping, as an external orchestrator would; the cap only stops a
+        // regression from looping forever.
+        for _ in 0..30 {
+            state = executor.step(state).await.unwrap().next_state;
+            let status = state.resources[&worker_id].status;
+            if status != ResourceStatus::Running && status != ResourceStatus::Deleting {
+                return status;
+            }
+        }
+        panic!("worker delete did not finish within 30 steps");
+    }
+
+    /// `lambda:GetFunction` is granted only for functions that carry the stack's tags. A
+    /// deleted function has no tags, so AWS answers the read that confirms the delete with
+    /// AccessDenied instead of ResourceNotFound. The delete flow has to treat that as "gone"
+    /// and still wait for the Lambda network interfaces, deleting only imported certificates.
+    #[rstest]
+    #[case::imported_certificate(false)]
+    #[case::customer_certificate(true)]
+    #[tokio::test]
+    async fn test_delete_finishes_cleanup_when_read_of_deleted_function_is_denied(
+        #[case] uses_custom_domain: bool,
+    ) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+
+        let mut mock_lambda = MockLambdaApi::new();
+        let recorded = calls.clone();
+        mock_lambda.expect_delete_function().returning(move |_, _| {
+            recorded.lock().unwrap().push("DeleteFunction");
+            Ok(())
+        });
+        let recorded = calls.clone();
+        mock_lambda
+            .expect_get_function_configuration()
+            .returning(move |_, _| {
+                recorded.lock().unwrap().push("GetFunction");
+                Err(access_denied())
+            });
+
+        let mut mock_ec2 = MockEc2Api::new();
+        let recorded = calls.clone();
+        mock_ec2
+            .expect_describe_network_interfaces()
+            .withf(|request| {
+                request.filters.as_ref().is_some_and(|filters| {
+                    filters.iter().any(|filter| {
+                        filter.name == "description"
+                            && filter.values == ["AWS Lambda VPC ENI-test-public-func*"]
+                    })
+                })
+            })
+            .returning(move |_| {
+                recorded.lock().unwrap().push("DescribeNetworkInterfaces");
+                Ok(DescribeNetworkInterfacesResponse {
+                    network_interface_set: None,
+                    next_token: None,
+                })
+            });
+
+        let mut mock_acm = MockAcmApi::new();
+        let recorded = calls.clone();
+        mock_acm
+            .expect_delete_certificate()
+            .times(if uses_custom_domain { 0 } else { 1 })
+            .withf(|certificate_arn| certificate_arn == TEST_CERTIFICATE_ARN)
+            .returning(move |_| {
+                recorded.lock().unwrap().push("DeleteCertificate");
+                Ok(())
+            });
+
+        let status = delete_public_worker_in_created_vpc()
+            .mock_lambda(mock_lambda)
+            .mock_ec2(mock_ec2)
+            .mock_acm(mock_acm)
+            .uses_custom_domain(uses_custom_domain)
+            .call()
+            .await;
+
+        let mut expected_calls = vec!["DeleteFunction", "GetFunction", "DescribeNetworkInterfaces"];
+        if !uses_custom_domain {
+            expected_calls.push("DeleteCertificate");
+        }
+        assert_eq!(*calls.lock().unwrap(), expected_calls);
+        assert_eq!(status, ResourceStatus::Deleted);
+    }
+
+    /// Continuing past the denied read must not wedge a delete whose role has lost its
+    /// permissions: the next call is denied too, and the worker still ends as `Deleted`.
+    #[tokio::test]
+    async fn test_delete_still_ends_when_calls_after_the_function_delete_are_denied() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+
+        let mut mock_lambda = MockLambdaApi::new();
+        let recorded = calls.clone();
+        mock_lambda.expect_delete_function().returning(move |_, _| {
+            recorded.lock().unwrap().push("DeleteFunction");
+            Ok(())
+        });
+        let recorded = calls.clone();
+        mock_lambda
+            .expect_get_function_configuration()
+            .returning(move |_, _| {
+                recorded.lock().unwrap().push("GetFunction");
+                Err(access_denied())
+            });
+
+        let mut mock_ec2 = MockEc2Api::new();
+        let recorded = calls.clone();
+        mock_ec2
+            .expect_describe_network_interfaces()
+            .returning(move |_| {
+                recorded.lock().unwrap().push("DescribeNetworkInterfaces");
+                Err(access_denied())
+            });
+
+        let status = delete_public_worker_in_created_vpc()
+            .mock_lambda(mock_lambda)
+            .mock_ec2(mock_ec2)
+            .mock_acm(MockAcmApi::new())
+            .call()
+            .await;
+
+        assert_eq!(
+            *calls.lock().unwrap(),
+            ["DeleteFunction", "GetFunction", "DescribeNetworkInterfaces"]
+        );
+        assert_eq!(status, ResourceStatus::Deleted);
     }
 
     // ─────────────── SPECIFIC VALIDATION TESTS ─────────────────

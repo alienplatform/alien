@@ -2,10 +2,14 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use alien_error::{Context, IntoAlienError};
+use hyper::server::conn::http1;
+use hyper_util::rt::{TokioIo, TokioTimer};
+use hyper_util::service::TowerToHyperService;
 use tokio::net::TcpListener;
-use tracing::info;
+use tracing::{debug, info, warn};
 
 use crate::config::ManagerConfig;
 use crate::dev::LogBuffer;
@@ -122,7 +126,7 @@ impl AlienManager {
 
         info!(%addr, "alien-manager listening");
 
-        axum::serve(listener, self.router)
+        serve(listener, self.router, INBOUND_IDLE_TIMEOUT)
             .await
             .into_alien_error()
             .context(ErrorData::InternalError {
@@ -130,5 +134,136 @@ impl AlienManager {
             })?;
 
         Ok(())
+    }
+}
+
+/// How long an inbound keep-alive connection may sit without sending a request before the
+/// server closes it. Without this, every connection a client opens and forgets stays open
+/// for the life of the process, along with its read buffer. Kept above the load balancer's
+/// 60s idle timeout so the balancer never reuses a connection the server has just closed.
+const INBOUND_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// Serve `router` on `listener` over HTTP/1, closing connections that stay idle longer than
+/// `idle_timeout`. `axum::serve` sets no timer, so it never closes an idle connection.
+///
+/// HTTP/1 only: every client of the manager (the load balancer, browsers, fetch, reqwest)
+/// speaks HTTP/1.1, and hyper's HTTP/1 header timeout covers a connection from its first byte,
+/// so a client that connects and sends nothing is closed too. Protocol auto-detection would
+/// wait for that first byte without any timeout.
+pub(crate) async fn serve(
+    listener: TcpListener,
+    router: axum::Router,
+    idle_timeout: Duration,
+) -> std::io::Result<()> {
+    let mut builder = http1::Builder::new();
+    // hyper only enforces the header read timeout once it has a timer. The timeout also runs
+    // between requests on a keep-alive connection, which is what makes it an idle timeout.
+    builder
+        .timer(TokioTimer::new())
+        .header_read_timeout(idle_timeout);
+    let builder = Arc::new(builder);
+
+    loop {
+        let stream = match listener.accept().await {
+            Ok((stream, _)) => stream,
+            Err(error) => {
+                // Typically fd exhaustion; the listener is still valid, so keep serving.
+                warn!(%error, "Failed to accept inbound connection");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+        };
+        let service = TowerToHyperService::new(router.clone());
+        let builder = builder.clone();
+        tokio::spawn(async move {
+            // `with_upgrades` keeps WebSocket upgrades (debug sessions) working.
+            if let Err(error) = builder
+                .serve_connection(TokioIo::new(stream), service)
+                .with_upgrades()
+                .await
+            {
+                debug!(%error, "Inbound connection ended with an error");
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{routing::get, Router};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    const REQUEST: &[u8] = b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+
+    /// Reads one complete HTTP/1.1 response (headers plus `content-length` body) so no bytes
+    /// of it are left behind to be mistaken for the next response or for a closed socket.
+    async fn read_response(stream: &mut TcpStream) -> String {
+        let mut bytes = Vec::new();
+        let mut chunk = [0u8; 1024];
+        loop {
+            let n = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut chunk))
+                .await
+                .expect("response should arrive before the deadline")
+                .expect("read should succeed");
+            assert!(n > 0, "server closed the connection instead of responding");
+            bytes.extend_from_slice(&chunk[..n]);
+            let text = String::from_utf8_lossy(&bytes);
+            let Some(header_end) = text.find("\r\n\r\n") else {
+                continue;
+            };
+            let content_length: usize = text[..header_end]
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length: "))
+                .expect("response should carry content-length")
+                .parse()
+                .expect("content-length should be a number");
+            if bytes.len() >= header_end + 4 + content_length {
+                return text.into_owned();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn idle_keep_alive_connection_is_closed_after_the_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        let router = Router::new().route("/health", get(|| async { "ok" }));
+        let idle_timeout = Duration::from_millis(300);
+        tokio::spawn(serve(listener, router, idle_timeout));
+
+        // A connection that never sends a byte is closed too: the timeout covers the first
+        // request, not only the gaps between requests.
+        let mut silent = TcpStream::connect(addr).await.expect("connect");
+        let mut buf = [0u8; 16];
+        let closed = tokio::time::timeout(idle_timeout * 5, silent.read(&mut buf))
+            .await
+            .expect("server should close the silent connection within the timeout")
+            .expect("read should return EOF, not an error");
+        assert_eq!(
+            closed, 0,
+            "expected EOF from the server closing the silent connection"
+        );
+
+        let mut stream = TcpStream::connect(addr).await.expect("connect");
+
+        // Two requests inside the idle window reuse the connection.
+        stream.write_all(REQUEST).await.expect("write");
+        assert!(read_response(&mut stream).await.starts_with("HTTP/1.1 200"));
+        tokio::time::sleep(idle_timeout / 2).await;
+        stream.write_all(REQUEST).await.expect("write");
+        assert!(read_response(&mut stream).await.starts_with("HTTP/1.1 200"));
+
+        // Silence for longer than the window: the server closes the connection (EOF).
+        let mut buf = [0u8; 16];
+        let closed = tokio::time::timeout(idle_timeout * 5, stream.read(&mut buf))
+            .await
+            .expect("server should close the idle connection within the timeout")
+            .expect("read should return EOF, not an error");
+        assert_eq!(
+            closed, 0,
+            "expected EOF from the server closing the idle connection"
+        );
     }
 }

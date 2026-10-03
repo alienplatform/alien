@@ -25,6 +25,10 @@ pub struct BuildConfigQuery {
 #[serde(rename_all = "camelCase")]
 pub struct BuildConfigResponse {
     pub repository_name: String,
+    /// Registry host deployments pull release images from (`host[:port]` of
+    /// this manager's public URL). Clients that push through a different
+    /// address reference images by this host so deployments can pull them.
+    pub registry_host: String,
 }
 
 pub fn router() -> Router<AppState> {
@@ -64,6 +68,7 @@ async fn get_build_config(
         if let Some(prefix) = state.registry_routing_table.prefix_for_platform(platform) {
             return Json(BuildConfigResponse {
                 repository_name: prefix.to_string(),
+                registry_host: registry_host(&state),
             })
             .into_response();
         }
@@ -88,6 +93,7 @@ async fn get_build_config(
     if let Some(route) = routes.resolve("") {
         return Json(BuildConfigResponse {
             repository_name: route.prefix.clone(),
+            registry_host: registry_host(&state),
         })
         .into_response();
     }
@@ -97,4 +103,8 @@ async fn get_build_config(
         "Multiple registries configured. Specify ?platform=aws|gcp|azure|local",
     )
         .into_response()
+}
+
+fn registry_host(state: &AppState) -> String {
+    alien_core::image_rewrite::strip_url_scheme(&state.config.base_url()).to_string()
 }

@@ -56,6 +56,15 @@ fn validate_container_public_endpoints(
     let mut public_backend_ports = std::collections::BTreeSet::new();
     let mut protocols = std::collections::BTreeSet::new();
 
+    if let Some(tunnel) = &container.tunnel {
+        if !container.ports.iter().any(|port| port.port == tunnel.port) {
+            failures.push(format!(
+                "Container '{}': tunnel references undeclared port {}",
+                container.id, tunnel.port
+            ));
+        }
+    }
+
     for endpoint in &container.public_endpoints {
         if let Err(error) = endpoint.validate_for_resource(&container.id) {
             failures.push(format!("Container '{}': {}", container.id, error));

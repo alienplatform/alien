@@ -19,8 +19,12 @@ WORKDIR /app
 COPY --from=binary-selector /tmp/alien-manager /app/alien-manager
 RUN chmod +x /app/alien-manager
 
-RUN mkdir -p /var/lib/alien-manager && chown nonroot:nonroot /var/lib/alien-manager
+# Database, embedded registry and keys live here; mount a volume on /data.
+RUN mkdir -p /data && chown nonroot:nonroot /data
 RUN chown -R nonroot:nonroot /app
+ENV STATE_DIR=/data
+VOLUME /data
+EXPOSE 8080
 
 USER nonroot
 

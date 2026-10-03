@@ -58,6 +58,7 @@ async fn make_deployment_store() -> (Arc<dyn DeploymentStore>, String) {
             CreateDeploymentGroupParams {
                 name: "imported-loop-group".to_string(),
                 max_deployments: 100,
+                setup: Default::default(),
             },
         )
         .await

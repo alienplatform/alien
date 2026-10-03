@@ -364,7 +364,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             if !ctx.is_platform() {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "command".to_string(),
-                    message: "Deployment event history requires platform mode.".to_string(),
+                    message: "This manager doesn't keep deployment event history. Use `alien logs --deployment` for recent activity.".to_string(),
                 }));
             }
             let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
@@ -412,7 +412,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             if !ctx.is_platform() {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "command".to_string(),
-                    message: "Machine inventory requires platform mode.".to_string(),
+                    message: "This manager doesn't report machine inventory.".to_string(),
                 }));
             }
             let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
@@ -539,9 +539,21 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             if ctx.is_dev() {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "command".to_string(),
-                    message: "`alien dev deployments pin` is not supported in local dev mode."
+                    message: "`alien dev deployments pin` is not available in `alien dev`."
                         .to_string(),
                 }));
+            }
+            if !ctx.is_platform() {
+                let client = resolve_manager_client(&ctx, None, !json).await?;
+                let deployment =
+                    crate::deployment_resolver::resolve(&client, &id, ctx.is_dev()).await?;
+                return crate::commands::release_channels_manager::pin(
+                    &client,
+                    &deployment.id,
+                    release_id.as_deref(),
+                    json,
+                )
+                .await;
             }
             let client = ctx.sdk_client().await?;
             let workspace_name = ctx.resolve_platform_workspace_context(true).await?.name;
@@ -549,10 +561,16 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
         }
         DeploymentsCmd::SetChannel { id, channel, json } => {
             if !ctx.is_platform() {
-                return Err(AlienError::new(ErrorData::ValidationError {
-                    field: "command".to_string(),
-                    message: "Changing release channels requires platform mode.".to_string(),
-                }));
+                let client = resolve_manager_client(&ctx, None, !json).await?;
+                let deployment =
+                    crate::deployment_resolver::resolve(&client, &id, ctx.is_dev()).await?;
+                return crate::commands::release_channels_manager::set_channel(
+                    &client,
+                    &deployment.id,
+                    &channel,
+                    json,
+                )
+                .await;
             }
             let client = ctx.sdk_client().await?;
             let workspace_name = ctx.resolve_platform_workspace_context(!json).await?.name;
@@ -588,7 +606,16 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             if ctx.is_dev() {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "command".to_string(),
-                    message: "`alien dev deployments token` is not supported in local dev mode."
+                    message: "`alien dev deployments token` is not available in `alien dev`."
+                        .to_string(),
+                }));
+            }
+            if ctx.is_standalone() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "command".to_string(),
+                    message: "This manager issues each deployment's token when it registers. \
+                              For a backend that calls deployments, create a scoped token with \
+                              `alien tokens create --tunnel`."
                         .to_string(),
                 }));
             }

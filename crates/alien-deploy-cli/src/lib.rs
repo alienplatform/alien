@@ -52,6 +52,10 @@ pub enum Commands {
     Join(JoinArgs),
     /// Leave a Machines deployment from this host.
     Leave(LeaveArgs),
+    /// Keep an air-gapped deployment up to date (run on both sides of the gap)
+    Sync(commands::sync::SyncArgs),
+    /// Return an air-gapped deployment to its previous release
+    Rollback(commands::sync::RollbackArgs),
 }
 
 /// Parse command-line arguments using any branding embedded in this binary.
@@ -147,6 +151,8 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         Commands::Register(args) => register_command(args, embedded_config.as_ref()).await,
         Commands::Join(args) => join_command(args, embedded_config.as_ref()).await,
         Commands::Leave(args) => leave_command(args).await,
+        Commands::Sync(args) => commands::sync::sync_command(args).await,
+        Commands::Rollback(args) => commands::sync::rollback_command(args).await,
     }
 }
 

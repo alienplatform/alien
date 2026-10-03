@@ -253,6 +253,29 @@ pub struct DeploymentGroupRecord {
     pub max_deployments: i64,
     pub deployment_count: i64,
     pub created_at: DateTime<Utc>,
+    /// Values the developer set for every deployment created in this group.
+    #[serde(default)]
+    pub setup: DeploymentGroupSetup,
+}
+
+/// Developer-provided configuration applied to each deployment a group's
+/// token creates: stack input values and environment variables.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentGroupSetup {
+    /// Stack input values, keyed by input ID.
+    #[serde(default)]
+    pub input_values: HashMap<String, serde_json::Value>,
+    /// Environment variables, including secret ones.
+    #[serde(default)]
+    pub environment_variables: Vec<EnvironmentVariable>,
+}
+
+impl DeploymentGroupSetup {
+    /// Whether the group carries no setup values.
+    pub fn is_empty(&self) -> bool {
+        self.input_values.is_empty() && self.environment_variables.is_empty()
+    }
 }
 
 /// Parameters for creating a deployment group.
@@ -260,6 +283,8 @@ pub struct DeploymentGroupRecord {
 pub struct CreateDeploymentGroupParams {
     pub name: String,
     pub max_deployments: i64,
+    /// Developer-provided values applied to each deployment the group creates.
+    pub setup: DeploymentGroupSetup,
 }
 
 /// Filter for listing deployments.

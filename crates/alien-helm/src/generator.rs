@@ -277,6 +277,10 @@ fn generate_helm_chart_internal(
         clusterrolebinding_tpl(),
     );
     files.insert("templates/secret.yaml".to_string(), secret_tpl());
+    files.insert(
+        "templates/registry-secret.yaml".to_string(),
+        registry_secret_tpl(),
+    );
     files.insert("templates/configmap.yaml".to_string(), configmap_tpl());
     files.insert("templates/deployment.yaml".to_string(), deployment_tpl());
     files.insert(
@@ -974,6 +978,10 @@ spec:
     spec:
       automountServiceAccountToken: false
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -1037,6 +1045,10 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -1116,6 +1128,10 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.remoteOperatorCleanupName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -1358,6 +1374,10 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -3871,6 +3891,14 @@ runtime:
     repository: registry.example.com/deployment/operator
     tag: latest
     pullPolicy: IfNotPresent
+    # Pull the Operator image with management.token (for an image served by
+    # the manager this chart connects to).
+    pullWithManagementToken: false
+    # Follow the Operator image the manager targets, so upgrades need no helm
+    # upgrade. Kubernetes keeps the running pod until the new one is ready.
+    selfUpdate: true
+  # Pull secrets for the Operator and for the application's workloads (added
+  # to their ServiceAccounts), for images in a registry that needs credentials.
   imagePullSecrets: []
   podLabels: {}
   podAnnotations: {}
@@ -3993,6 +4021,21 @@ heartbeat:
   collection:
     nodes:
       enabled: true
+
+airgapped:
+  # No connection to the manager: targets arrive in bundles installed with
+  # `alien-deploy sync`, which also carries state and telemetry back. Needs
+  # management.deploymentId from the bundle.
+  enabled: false
+  # Public key (ed25519:...) bundles must be signed with. Set by the first
+  # `alien-deploy sync --trusted-key`, and checked on every later one.
+  bundleSigningKey: ""
+
+tunnel:
+  # Serve requests the control plane sends through the manager to the stack's
+  # declared tunnel endpoints, over the Operator's outbound connection.
+  # false closes the tunnel; nothing else changes.
+  enabled: true
 
 clusterBootstrap:
   metricsServer:
@@ -4572,7 +4615,9 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
           "properties": {
             "repository": { "type": "string", "minLength": 1 },
             "tag": { "type": "string", "minLength": 1 },
-            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
+            "pullWithManagementToken": { "type": "boolean" },
+            "selfUpdate": { "type": "boolean" }
           }
         },
         "imagePullSecrets": {
@@ -4865,6 +4910,21 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             "tenantId": { "type": "string" }
           }
         }
+      }
+    },
+    "airgapped": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "bundleSigningKey": { "type": "string" }
+      }
+    },
+    "tunnel": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" }
       }
     },
     "heartbeat": {
@@ -5298,8 +5358,11 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- default "encryption-key" .Values.runtime.encryption.existingSecret.key -}}
 {{- end -}}
 
+{{- /* Cluster-scoped: the namespace hash keeps installs of the same chart in
+different namespaces of one cluster from colliding. */ -}}
 {{- define "deployment.heartbeatNodeClusterRoleName" -}}
-{{- printf "%s-heartbeat-nodes" (include "deployment.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- $suffix := printf "heartbeat-nodes-%s" (sha256sum .Release.Namespace | trunc 8) -}}
+{{- printf "%s-%s" (include "deployment.fullname" . | trunc (int (sub 62 (len $suffix))) | trimSuffix "-") $suffix -}}
 {{- end -}}
 "#
     .to_string()
@@ -5338,6 +5401,10 @@ metadata:
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+{{- with $.Values.runtime.imagePullSecrets }}
+imagePullSecrets:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
 ---
 {{- end }}
 "#
@@ -5480,6 +5547,26 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: {{ include "deployment.heartbeatNodeClusterRoleName" . }}
+{{- end }}
+"#
+    .to_string()
+}
+
+/// Pull credentials for an Operator image served by the manager: the
+/// registry is the image's host and the password is the install token.
+fn registry_secret_tpl() -> String {
+    r#"{{- if and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+{{- $registry := first (splitList "/" .Values.runtime.image.repository) }}
+{{- $auth := printf "%s:%s" (default "deployment" .Values.management.name) .Values.management.token | b64enc }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "deployment.fullname" . }}-registry
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: {{ dict "auths" (dict $registry (dict "auth" $auth)) | toJson | b64enc }}
 {{- end }}
 "#
     .to_string()
@@ -5679,6 +5766,10 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -5901,6 +5992,10 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -6261,9 +6356,15 @@ spec:
       automountServiceAccountToken: {{ .Values.runtime.automountServiceAccountToken }}
       securityContext:
         {{- toYaml .Values.runtime.security.podSecurityContext | nindent 8 }}
-      {{- with .Values.runtime.imagePullSecrets }}
+      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+      {{- if or .Values.runtime.imagePullSecrets $pullWithToken }}
       imagePullSecrets:
+        {{- with .Values.runtime.imagePullSecrets }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $pullWithToken }}
+        - name: {{ include "deployment.fullname" . }}-registry
+        {{- end }}
       {{- end }}
       {{- with .Values.runtime.scheduling.nodeSelector }}
       nodeSelector:
@@ -6326,8 +6427,18 @@ spec:
             - name: AZURE_REGION
               value: {{ .Values.basePlatformConfig.azure.location | quote }}
             {{- end }}
+            {{- if dig "enabled" false (default dict .Values.airgapped) }}
+            {{- if not .Values.management.deploymentId }}
+              {{- fail "airgapped.enabled needs management.deploymentId (from the bundle)" }}
+            {{- end }}
+            - name: AIRGAP_TARGET_SECRET
+              value: {{ printf "%s-airgap-target" (include "deployment.fullname" .) | quote }}
+            - name: AIRGAP_STATUS_SECRET
+              value: {{ printf "%s-airgap-status" (include "deployment.fullname" .) | quote }}
+            {{- else }}
             - name: SYNC_URL
               value: {{ include "deployment.managementUrl" . | quote }}
+            {{- end }}
             - name: OPERATOR_NAME
               value: {{ .Values.management.name | quote }}
             - name: OPERATOR_RESOURCE_PREFIX
@@ -6354,8 +6465,10 @@ spec:
               value: "helm"
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
+            {{- if not (dig "enabled" false (default dict .Values.airgapped)) }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token
+            {{- end }}
             - name: OPERATOR_ENCRYPTION_KEY_FILE
               value: /etc/deployment/secrets/encryption-key
             - name: STACK_SETTINGS_FILE
@@ -6372,6 +6485,12 @@ spec:
             {{- end }}
             - name: SYNC_INTERVAL
               value: "30"
+            - name: TUNNEL_ENABLED
+              value: {{ dig "enabled" true (default dict .Values.tunnel) | quote }}
+            {{- if dig "selfUpdate" true .Values.runtime.image }}
+            - name: OPERATOR_SELF_UPDATE_DEPLOYMENT
+              value: {{ include "deployment.fullname" . | quote }}
+            {{- end }}
             - name: OTLP_PORT
               value: {{ .Values.runtime.api.port | quote }}
             - name: OTLP_HOST
@@ -8309,6 +8428,76 @@ mod tests {
             .assert_ok("helm template registered setup");
         crate::test_utils::helm_template_and_validate(&files, Some(&files["examples/onprem.yaml"]))
             .assert_ok("helm template external-bindings initialize path");
+    }
+
+    #[test]
+    fn cleanup_hooks_pull_with_the_install_pull_secrets() {
+        // A site whose registry needs a password installs with a pull Secret;
+        // the uninstall and upgrade hooks pull the cleanup image from the same
+        // registry, so `helm uninstall` hangs if they don't carry it.
+        let values = r#"
+management:
+  token: ax_dg_example
+  name: prod
+  url: https://manager.example.test
+  deploymentId: null
+runtime:
+  encryption:
+    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  imagePullSecrets:
+    - name: site-registry
+  cleanup:
+    onUninstall:
+      image:
+        repository: registry.site.internal/vendor/alpine/k8s
+        tag: "1.32.0"
+"#;
+        let registry = HelmRegistry::built_in();
+        let plain = generate_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample-stack".to_string(),
+            },
+        )
+        .expect("chart");
+        for (label, chart) in [("chart", plain), ("product chart", sample_product_chart())] {
+            let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
+            rendered.assert_ok(label);
+            let mut cleanup_pods = 0;
+            for document in serde_yaml::Deserializer::from_str(&rendered.stdout) {
+                let document = YamlValue::deserialize(document).expect("valid Kubernetes YAML");
+                let pod = match document["kind"].as_str() {
+                    Some("Pod") => &document["spec"],
+                    Some(_) => &document["spec"]["template"]["spec"],
+                    None => continue,
+                };
+                let runs_cleanup_image =
+                    pod["containers"].as_sequence().is_some_and(|containers| {
+                        containers.iter().any(|container| {
+                            container["image"]
+                                .as_str()
+                                .is_some_and(|image| image.starts_with("registry.site.internal/"))
+                        })
+                    });
+                if !runs_cleanup_image {
+                    continue;
+                }
+                cleanup_pods += 1;
+                let secrets: Vec<&str> = pod["imagePullSecrets"]
+                    .as_sequence()
+                    .map(|secrets| secrets.iter().filter_map(|s| s["name"].as_str()).collect())
+                    .unwrap_or_default();
+                assert!(
+                    secrets.contains(&"site-registry"),
+                    "{label}: {} {} runs the cleanup image without the pull Secret",
+                    document["kind"].as_str().unwrap_or_default(),
+                    document["metadata"]["name"].as_str().unwrap_or_default()
+                );
+            }
+            assert!(cleanup_pods > 0, "{label} rendered no cleanup hooks");
+        }
     }
 
     #[test]

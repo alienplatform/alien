@@ -194,8 +194,10 @@ pub struct SandboxLifecyclePolicy {
     /// never applied. AWS caps it at 8 hours.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_lifetime_seconds: Option<u32>,
-    /// Idle period after which the sandbox is paused, where the platform supports it
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Idle period after which the sandbox is paused, where the platform supports it.
+    ///
+    /// Stored state written before the rename calls this `idleSuspendSeconds`.
+    #[serde(alias = "idleSuspendSeconds", skip_serializing_if = "Option::is_none")]
     pub idle_pause_seconds: Option<u32>,
 }
 
@@ -521,7 +523,11 @@ pub struct Sandbox {
     pub limits: Option<SandboxLimits>,
     /// Outbound network policy
     pub egress: SandboxEgress,
-    /// Sandbox lifetime ceiling and idle behaviour
+    /// Sandbox lifetime ceiling and idle behaviour.
+    ///
+    /// Stored state written before the rename calls this `session`. A stack state or release
+    /// that old must stay readable, otherwise its deployment can no longer be updated or deleted.
+    #[serde(alias = "session")]
     pub lifecycle: SandboxLifecyclePolicy,
     /// Ports eligible for a preview capability. An application reaches its sandbox through the
     /// provider, so it cannot widen its own ingress at runtime; a holder of a remote binding's
@@ -2398,5 +2404,58 @@ mod tests {
             None,
             "a host list has no boolean and must not be approximated"
         );
+    }
+
+    /// A sandbox resource as a stack state recorded it before `session` became `lifecycle` and
+    /// `idleSuspendSeconds` became `idlePauseSeconds`. Such a state is still what a deployment
+    /// that old holds, and reading it is the first step of updating or deleting that deployment.
+    #[test]
+    fn stack_state_written_before_the_lifecycle_rename_still_reads() {
+        let stored: crate::StackResourceState = serde_json::from_value(serde_json::json!({
+            "type": "sandbox",
+            "config": {
+                "id": "sandbox",
+                "code": {
+                    "type": "image",
+                    "image": "s3://example-bundles/analysis/v1/bundle.zip"
+                },
+                "type": "sandbox",
+                "egress": { "mode": "allow" },
+                "session": { "maxLifetimeSeconds": 28800, "idleSuspendSeconds": 600 }
+            },
+            "status": "running",
+            "outputs": {
+                "type": "sandbox",
+                "identifier": "arn:aws:lambda:us-east-2:123456789012:microvm-image:example-sandbox",
+                "parentName": "arn:aws:lambda:us-east-2:123456789012:microvm-image:example-sandbox"
+            },
+            "lifecycle": "frozen",
+            "dependencies": [
+                { "id": "management", "type": "remote-stack-management" },
+                { "id": "access", "type": "resource-access" }
+            ],
+            "controllerPlatform": "aws"
+        }))
+        .expect("a stack state written before the rename must still deserialize");
+
+        let expected = Sandbox::new("sandbox".to_string())
+            .code(SandboxCode::Image {
+                image: "s3://example-bundles/analysis/v1/bundle.zip".to_string(),
+            })
+            .egress(SandboxEgress::Allow)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(28_800),
+                idle_pause_seconds: Some(600),
+            })
+            .build();
+        assert_eq!(stored.config.downcast_ref::<Sandbox>(), Some(&expected));
+
+        let rewritten = serde_json::to_value(&stored.config).expect("the sandbox serializes");
+        assert_eq!(
+            rewritten["lifecycle"],
+            serde_json::json!({ "maxLifetimeSeconds": 28800, "idlePauseSeconds": 600 }),
+            "the next write stores the current names"
+        );
+        assert!(rewritten.get("session").is_none());
     }
 }

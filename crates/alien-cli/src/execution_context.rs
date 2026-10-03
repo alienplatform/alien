@@ -178,7 +178,9 @@ impl ExecutionMode {
             Self::Dev { port } => Ok(ServerSdkClient::new(&format!("http://localhost:{}", port))),
             #[cfg(feature = "platform")]
             Self::Platform { .. } => Err(AlienError::new(ErrorData::ConfigurationError {
-                message: "server_sdk_client() is not available in platform mode. Use sdk_client() instead.".to_string(),
+                message:
+                    "server_sdk_client() is not available for alien.dev; use sdk_client() instead."
+                        .to_string(),
             })),
         }
     }
