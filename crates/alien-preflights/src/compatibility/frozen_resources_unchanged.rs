@@ -1,7 +1,9 @@
 use crate::error::Result;
 use crate::{CheckResult, StackCompatibilityCheck};
+use alien_core::instance_catalog::is_same_architecture_aws_machine;
 use alien_core::{
-    ComputeCluster, Platform, Resource, ResourceLifecycle, Sandbox, SandboxCode, Stack,
+    CapacityGroup, ComputeCluster, Platform, Resource, ResourceLifecycle, Sandbox, SandboxCode,
+    Stack,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -20,10 +22,12 @@ pub struct FrozenResourcesUnchangedCheck {
 }
 
 /// Setup owns the ComputeCluster identity and network boundary, but its
-/// registered runtime controller deliberately owns fleet capacity. Keep this
-/// exception structural and narrow: changing groups, profiles, placement, or
+/// registered runtime controller deliberately owns the fleet: capacity and, on
+/// AWS, the machine type within one CPU architecture. The compute mutation has
+/// already checked the new machine against the workloads and derived its
+/// profile, so the profile follows the machine. Changing groups, placement, or
 /// networking still requires setup.
-fn runtime_managed_frozen_change(old: &Resource, new: &Resource) -> bool {
+fn runtime_managed_frozen_change(platform: Platform, old: &Resource, new: &Resource) -> bool {
     let (Some(old_cluster), Some(new_cluster)) = (
         old.downcast_ref::<ComputeCluster>(),
         new.downcast_ref::<ComputeCluster>(),
@@ -46,8 +50,60 @@ fn runtime_managed_frozen_change(old: &Resource, new: &Resource) -> bool {
         old_group.min_size = new_group.min_size;
         old_group.max_size = new_group.max_size;
         old_group.scale_policy = new_group.scale_policy.clone();
+        if let Some((old_machine, new_machine)) = machine_change(old_group, new_group) {
+            if runtime_machine_change(platform, old_machine, new_machine) {
+                old_group.instance_type = new_group.instance_type.clone();
+                old_group.profile = new_group.profile.clone();
+            }
+        }
     }
     normalized == *new_cluster
+}
+
+fn machine_change<'a>(
+    old: &'a CapacityGroup,
+    new: &'a CapacityGroup,
+) -> Option<(&'a str, &'a str)> {
+    let (Some(old), Some(new)) = (old.instance_type.as_deref(), new.instance_type.as_deref())
+    else {
+        return None;
+    };
+    (old != new).then_some((old, new))
+}
+
+fn runtime_machine_change(platform: Platform, old: &str, new: &str) -> bool {
+    platform == Platform::Aws && is_same_architecture_aws_machine(old, new)
+}
+
+/// Explains machine changes that need setup, so the deployment error names them.
+fn machine_changes_needing_setup(
+    platform: Platform,
+    old: &Resource,
+    new: &Resource,
+) -> Vec<String> {
+    let (Some(old_cluster), Some(new_cluster)) = (
+        old.downcast_ref::<ComputeCluster>(),
+        new.downcast_ref::<ComputeCluster>(),
+    ) else {
+        return Vec::new();
+    };
+    new_cluster
+        .capacity_groups
+        .iter()
+        .filter_map(|new_group| {
+            let old_group = old_cluster
+                .capacity_groups
+                .iter()
+                .find(|group| group.group_id == new_group.group_id)?;
+            let (old_machine, new_machine) = machine_change(old_group, new_group)?;
+            (!runtime_machine_change(platform, old_machine, new_machine)).then(|| {
+                format!(
+                    "capacity group '{}' changes machine from '{old_machine}' to '{new_machine}', but without setup a machine can change only to an AWS machine of the same CPU architecture",
+                    new_group.group_id
+                )
+            })
+        })
+        .collect()
 }
 
 /// On Azure and GCP only the runtime controller reads the image and setup renders no grant from
@@ -130,17 +186,31 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
 
                 // Check if configuration changed (only check if still frozen)
                 if old_entry.config != new_entry.config
-                    && !runtime_managed_frozen_change(&old_entry.config, &new_entry.config)
+                    && !runtime_managed_frozen_change(
+                        self.platform,
+                        &old_entry.config,
+                        &new_entry.config,
+                    )
                     && !runtime_managed_sandbox_image(
                         self.platform,
                         &old_entry.config,
                         &new_entry.config,
                     )
                 {
+                    let details = machine_changes_needing_setup(
+                        self.platform,
+                        &old_entry.config,
+                        &new_entry.config,
+                    );
+                    let details = if details.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", details.join("; "))
+                    };
                     errors.push(format!(
-                        "Frozen resource '{}' was modified. \
+                        "Frozen resource '{}' was modified{}. \
                          Frozen resources are setup-owned. Rerun setup with the updated stack.",
-                        id
+                        id, details
                     ));
                 }
             }
@@ -508,11 +578,45 @@ mod tests {
         assert!(result.success, "{:?}", result.errors);
     }
 
+    async fn machine_change(platform: Platform, machine: &str) -> CheckResult {
+        let old = compute_cluster(2);
+        let mut changed = compute_cluster(3);
+        let group = &mut changed.capacity_groups[0];
+        group.instance_type = Some(machine.to_string());
+        group.profile = alien_core::instance_catalog::find_instance_type(platform, machine)
+            .map(|spec| spec.to_machine_profile());
+        FrozenResourcesUnchangedCheck { platform }
+            .check(&compute_stack(old), &compute_stack(changed))
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn aws_machine_change_within_one_architecture_is_runtime_manageable() {
+        let result = machine_change(Platform::Aws, "m8i.4xlarge").await;
+        assert!(result.success, "{:?}", result.errors);
+    }
+
+    #[tokio::test]
+    async fn other_machine_changes_need_setup() {
+        let result = machine_change(Platform::Aws, "c7g.xlarge").await;
+        assert!(!result.success);
+        assert!(
+            result.errors[0].contains(
+                "capacity group 'workers' changes machine from 'm8i.2xlarge' to 'c7g.xlarge'"
+            ),
+            "{:?}",
+            result.errors
+        );
+        assert!(!machine_change(Platform::Aws, "m8i.unknown").await.success);
+        assert!(!machine_change(Platform::Gcp, "m8i.4xlarge").await.success);
+    }
+
     #[tokio::test]
     async fn compute_boundary_change_remains_frozen() {
         let old = compute_cluster(2);
         let mut changed = compute_cluster(2);
-        changed.capacity_groups[0].instance_type = Some("m8i.4xlarge".to_string());
+        changed.capacity_groups[0].nested_virtualization = Some(false);
         let result = FrozenResourcesUnchangedCheck {
             platform: Platform::Aws,
         }
@@ -520,6 +624,7 @@ mod tests {
         .await
         .unwrap();
         assert!(!result.success);
+        assert!(result.errors[0].contains("Rerun setup"));
     }
 
     fn sandbox_stack(image: &str, idle_pause_seconds: Option<u32>) -> Stack {
