@@ -845,6 +845,7 @@ mod tests {
             default: None,
             platforms: None,
             validation: None,
+            generate: None,
             env: Vec::new(),
         };
         stack.inputs = vec![input.clone()];

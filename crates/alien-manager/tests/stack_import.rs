@@ -1825,6 +1825,7 @@ async fn an_import_carrying_a_deployer_secret_value_is_refused() {
         default: None,
         platforms: None,
         validation: None,
+        generate: None,
         env: Vec::new(),
     }];
     let fixture = make_fixture(Some(stack)).await;

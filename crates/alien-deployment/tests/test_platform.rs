@@ -2254,6 +2254,7 @@ fn database_password_input() -> alien_core::StackInputDefinition {
         default: None,
         platforms: None,
         validation: None,
+        generate: None,
         env: vec![alien_core::StackInputEnvironmentMapping {
             name: "DATABASE_PASSWORD".to_string(),
             target_resources: None,
