@@ -127,28 +127,29 @@ fn pin_hosts(hosts: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Installs an IPv4 OUTPUT default-deny policy atomically through iptables-restore.
-/// Replies to inbound agent/preview connections are allowed; a listening port never grants
-/// outbound access. Restricted policies disable DNS after startup hostname pinning.
-pub fn install(policy: &SandboxEgress) -> Result<()> {
-    if unsafe { libc::geteuid() } != 0 {
-        return Err(AlienError::new(failed("supervisor must start as root")));
+/// Atomically installs default-deny IPv4 egress for the declaration-owned command uid.
+/// AWS's internal transport must initialize after image restore; filtering its root traffic
+/// prevents the VM from serving requests. Native nftables uid matching is supported even
+/// though this kernel lacks the iptables owner extension.
+pub fn install(policy: &SandboxEgress, command_uid: u32) -> Result<()> {
+    if unsafe { libc::geteuid() } != 0 || command_uid == 0 {
+        return Err(AlienError::new(failed(
+            "requires a root supervisor and a non-root command uid",
+        )));
     }
     crate::privilege::block_command_ipv6();
     let ips = destinations(policy)?;
-    let mut rules =
-        String::from("*filter\n:INPUT ACCEPT [0:0]\n:FORWARD DROP [0:0]\n:OUTPUT DROP [0:0]\n");
+    // Keep other tables and AWS transport unchanged. add is idempotent; flush and replacement
+    // are submitted in one atomic batch, so commands never see a partial policy on restart.
+    let mut rules = format!("add table ip alien_egress\nflush table ip alien_egress\nadd chain ip alien_egress output {{ type filter hook output priority 0; policy accept; }}\nadd chain ip alien_egress commands\nadd rule ip alien_egress output meta skuid {command_uid} jump commands\n");
+    let mut add =
+        |rule: &str| rules.push_str(&format!("add rule ip alien_egress commands {rule}\n"));
     if !matches!(policy, SandboxEgress::Allow) {
-        rules
-            .push_str("-A OUTPUT -p udp --dport 53 -j DROP\n-A OUTPUT -p tcp --dport 53 -j DROP\n");
+        add("udp dport 53 drop");
+        add("tcp dport 53 drop");
     }
-    // AWS's ingress path bypasses conntrack on INPUT. Kernel TCP replies carry ACK;
-    // new outbound connections start with SYN without ACK and still need an allowlist
-    // rule. Commands have no NET_RAW capability to forge packets or NET_ADMIN to use
-    // TCP repair. Do not grant arbitrary egress based on a source/listening port.
-    rules.push_str("-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -p tcp --tcp-flags ACK ACK -j ACCEPT\n-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n");
-    // Restricted policies need no DNS after startup pinning. The guest kernel lacks the
-    // iptables owner match, so never create a resolver exception shared with commands.
+    add("oifname \"lo\" accept");
+    add("ct state established,related accept");
     if matches!(policy, SandboxEgress::Allow) {
         let resolv = fs::read_to_string("/etc/resolv.conf")
             .into_alien_error()
@@ -158,9 +159,7 @@ pub fn install(policy: &SandboxEgress) -> Result<()> {
             if words.next() == Some("nameserver") {
                 if let Some(ip) = words.next().and_then(|s| s.parse::<Ipv4Addr>().ok()) {
                     for protocol in ["udp", "tcp"] {
-                        rules.push_str(&format!(
-                            "-A OUTPUT -d {ip} -p {protocol} --dport 53 -j ACCEPT\n"
-                        ));
+                        add(&format!("ip daddr {ip} {protocol} dport 53 accept"));
                     }
                 }
             }
@@ -170,7 +169,7 @@ pub fn install(policy: &SandboxEgress) -> Result<()> {
         SandboxEgress::Deny => {}
         SandboxEgress::AllowDomains { .. } => {
             for ip in ips {
-                rules.push_str(&format!("-A OUTPUT -d {ip} -j ACCEPT\n"));
+                add(&format!("ip daddr {ip} accept"));
             }
         }
         SandboxEgress::Allow => {
@@ -186,23 +185,20 @@ pub fn install(policy: &SandboxEgress) -> Result<()> {
                 "198.18.0.0/15",
                 "224.0.0.0/3",
             ] {
-                rules.push_str(&format!("-A OUTPUT -d {cidr} -j DROP\n"));
+                add(&format!("ip daddr {cidr} drop"));
             }
-            rules.push_str("-A OUTPUT -j ACCEPT\n");
+            add("accept");
         }
     }
-    rules.push_str("COMMIT\n");
-    let mut child = Command::new("/usr/sbin/iptables-nft-restore")
-        .arg("--wait")
-        .arg("5")
+    add("drop");
+    let mut child = Command::new("/usr/sbin/nft")
+        .args(["--file", "-"])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .into_alien_error()
-        .context(failed(
-            "start iptables-nft-restore (the image must include iptables)",
-        ))?;
+        .context(failed("start nft (the image must include nftables)"))?;
     child
         .stdin
         .take()
@@ -213,7 +209,7 @@ pub fn install(policy: &SandboxEgress) -> Result<()> {
     let output = child
         .wait_with_output()
         .into_alien_error()
-        .context(failed("wait for iptables-nft-restore"))?;
+        .context(failed("wait for nft"))?;
     if !output.status.success() {
         return Err(AlienError::new(failed(String::from_utf8_lossy(
             &output.stderr,

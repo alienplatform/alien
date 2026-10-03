@@ -212,6 +212,10 @@ pub struct SandboxTool {
 /// and never the image's `ENV`, so a tool anywhere else is invisible to it.
 pub const DEFAULT_SANDBOX_TOOLS: &[SandboxTool] = &[
     SandboxTool {
+        package: Some("nftables"),
+        version_command: "/usr/sbin/nft --version",
+    },
+    SandboxTool {
         package: Some("iptables"),
         version_command: "iptables-nft --version",
     },

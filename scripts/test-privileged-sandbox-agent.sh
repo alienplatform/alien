@@ -19,7 +19,7 @@ cleanup() {
 trap cleanup EXIT
 cat > "$fixture/Dockerfile" <<'DOCKERFILE'
 FROM public.ecr.aws/docker/library/buildpack-deps:26.04@sha256:159ea382e6fb39e62480ee932113f885f7bd787cd4895fc4dc71aebb175077fd
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends iptables python3 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends iptables nftables python3 && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /sandbox /opt/alien && chown 60000:60000 /sandbox && chmod 0700 /sandbox
 DOCKERFILE
 cat > "$fixture/image-command.json" <<'JSON'
@@ -61,7 +61,7 @@ out,terminal=execute(['/bin/sh','-c','id -u; grep "^Cap" /proc/self/status; cat 
 assert terminal['code']==0 and out.startswith('60001\n'),(out,terminal)
 assert 'CapEff:\t0000000000000000' in out and 'CapBnd:\t0000000000000000' in out,out
 assert out.endswith('60001\nCapEff:\t0000000000000000\n'),out
-for command in [['/usr/sbin/iptables-nft','-P','OUTPUT','ACCEPT'],['/bin/sh','-c','echo overwritten >> /etc/hosts']]:
+for command in [['/usr/sbin/nft','flush','ruleset'],['/usr/sbin/iptables-nft','-P','OUTPUT','ACCEPT'],['/bin/sh','-c','echo overwritten >> /etc/hosts']]:
     out,terminal=execute(command); assert terminal['t']=='exit' and terminal['code']!=0,(command,out,terminal)
 # This qualifies routing, independent of the test host's TLS interception trust store.
 for hostname in ['example.com']:

@@ -11,7 +11,8 @@ new Sandbox("analysis")
 ```
 
 Alien's agent is the privileged entrypoint. Before it serves requests or starts
-image code, it installs an IPv4 OUTPUT default-deny policy, prepares the declared
+image code, it installs a default-deny IPv4 nftables policy for the declared command uid,
+prepares the declared
 command identity, and reduces its own capabilities. The image's OCI Entrypoint
 and Cmd then run as that identity. Exec, detached jobs, and services reached by
 preview also run as that identity. A caller cannot choose the uid or change the
@@ -24,7 +25,10 @@ IPv6 sockets, io_uring socket creation, and alternate syscall ABIs. AWS MicroVMs
 have an IPv6 default route, but their IPv6 netfilter tables are unavailable;
 blocking IPv6 per command preserves the agent's AWS transport.
 
-AWS cloud egress remains open. This mode creates no egress connector, proxy, or
+AWS cloud egress remains open. Native nftables uid matching restricts command
+traffic while preserving the root traffic AWS needs to initialize its internal
+transport after image restore. The iptables owner extension is unavailable on
+the guest kernel. This mode creates no egress connector, proxy, or
 firewall resources. AWS's extra capability grant is an implementation detail;
 the declaration exposes only the opt-in supervisor setting and the command uid.
 The supervisor retains network administration and the capabilities needed to
@@ -50,8 +54,8 @@ this supervisor contract today. Their ordinary sandbox behavior continues to wor
 
 ## Build a compatible bundle
 
-The image must include `/usr/sbin/iptables-nft-restore`. Alien's default sandbox
-base includes iptables. Older bundles cannot enable this setting: startup fails
+The image must include `/usr/sbin/nft`. Alien's default sandbox
+base includes nftables. Older bundles cannot enable this setting: startup fails
 unless they preserve the base image's OCI command as root-owned metadata.
 
 Pull the intended ARM64 base image, then package it with the inspected command:

@@ -69,7 +69,7 @@ fn main() -> Result<()> {
                 "prepare declared command identity",
                 "cannot write the image's passwd/group entries".to_string(),
             ))?;
-            alien_sandbox_agent::egress::install(&policy)?;
+            alien_sandbox_agent::egress::install(&policy, state.exec_identity.uid)?;
             alien_sandbox_agent::privilege::restrict_supervisor()
                 .into_alien_error()
                 .context(failed(
