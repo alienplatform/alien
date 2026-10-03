@@ -12,9 +12,10 @@ use crate::traits::deployment_store::DeploymentRecord;
 /// True when `grant` covers a binding of `kind`.
 pub fn grant_covers(grant: RemoteBindingGrant, kind: RemoteBindingKind) -> bool {
     match kind {
-        RemoteBindingKind::Storage | RemoteBindingKind::Key | RemoteBindingKind::Ai => {
-            grant == RemoteBindingGrant::Data
-        }
+        RemoteBindingKind::Storage
+        | RemoteBindingKind::Kv
+        | RemoteBindingKind::Key
+        | RemoteBindingKind::Ai => grant == RemoteBindingGrant::Data,
         RemoteBindingKind::Sandbox => grant == RemoteBindingGrant::Sandbox,
     }
 }
@@ -24,7 +25,10 @@ pub fn grant_covers(grant: RemoteBindingGrant, kind: RemoteBindingKind) -> bool 
 /// for it by name.
 pub fn write_authority_covers(kind: RemoteBindingKind) -> bool {
     match kind {
-        RemoteBindingKind::Storage | RemoteBindingKind::Key | RemoteBindingKind::Ai => true,
+        RemoteBindingKind::Storage
+        | RemoteBindingKind::Kv
+        | RemoteBindingKind::Key
+        | RemoteBindingKind::Ai => true,
         RemoteBindingKind::Sandbox => false,
     }
 }

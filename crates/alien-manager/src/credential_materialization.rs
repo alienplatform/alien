@@ -41,6 +41,9 @@ pub(crate) struct MaterializedCredentialLease {
 /// Exact cloud resource requested by remote binding resolution.
 pub(crate) enum RemoteBindingCredentialScope {
     AwsS3,
+    AwsDynamodb,
+    GcpFirestore,
+    AzureTable,
     AwsKms,
     GcpGcs,
     GcpCloudKms,
@@ -168,7 +171,9 @@ pub(crate) async fn materialize_remote_binding_lease(
         }
         ClientConfig::Azure(config) => {
             let azure_scope = match scope {
-                RemoteBindingCredentialScope::AzureBlob => AZURE_STORAGE_SCOPE,
+                // Blob and Table data planes share the storage audience.
+                RemoteBindingCredentialScope::AzureBlob
+                | RemoteBindingCredentialScope::AzureTable => AZURE_STORAGE_SCOPE,
                 RemoteBindingCredentialScope::AzureKeyVault => AZURE_KEY_VAULT_SCOPE,
                 RemoteBindingCredentialScope::AzureAi => AZURE_AI_SCOPE,
                 RemoteBindingCredentialScope::AzureSandbox => AZURE_SANDBOX_SCOPE,
@@ -232,6 +237,9 @@ fn aws_remote_storage_lease(
 fn remote_binding_scope_platform(scope: &RemoteBindingCredentialScope) -> Platform {
     match scope {
         RemoteBindingCredentialScope::AwsS3 => Platform::Aws,
+        RemoteBindingCredentialScope::AwsDynamodb => Platform::Aws,
+        RemoteBindingCredentialScope::GcpFirestore => Platform::Gcp,
+        RemoteBindingCredentialScope::AzureTable => Platform::Azure,
         RemoteBindingCredentialScope::AwsKms => Platform::Aws,
         RemoteBindingCredentialScope::AwsAi => Platform::Aws,
         RemoteBindingCredentialScope::AwsSandbox => Platform::Aws,

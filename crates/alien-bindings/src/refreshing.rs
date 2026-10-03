@@ -56,6 +56,22 @@ pub(super) trait KeyProviderApi: Send + Sync + fmt::Debug {
     async fn load_key(&self, binding_name: &str) -> Result<Arc<dyn Key>>;
 }
 
+/// The smallest provider surface needed by a refreshable KV handle.
+#[async_trait]
+pub(super) trait KvProviderApi: Send + Sync + fmt::Debug {
+    async fn load_kv(&self, binding_name: &str) -> Result<Arc<dyn Kv>>;
+}
+
+#[async_trait]
+impl<T> KvProviderApi for T
+where
+    T: BindingsProviderApi + Send + Sync + fmt::Debug,
+{
+    async fn load_kv(&self, binding_name: &str) -> Result<Arc<dyn Kv>> {
+        BindingsProviderApi::load_kv(self, binding_name).await
+    }
+}
+
 #[async_trait]
 impl<T> KeyProviderApi for T
 where
@@ -88,10 +104,6 @@ impl Resolver {
             provider,
             binding_name,
         }
-    }
-
-    async fn kv(&self) -> Result<Arc<dyn Kv>> {
-        self.provider.load_kv(&self.binding_name).await
     }
 
     async fn queue(&self) -> Result<Arc<dyn Queue>> {
@@ -365,14 +377,20 @@ impl RemoteStorage for RefreshingStorage {
 /// Key-value handle that resolves a fresh-enough provider for every operation.
 #[derive(Debug)]
 pub(super) struct RefreshingKv {
-    resolver: Resolver,
+    provider: Arc<dyn KvProviderApi>,
+    binding_name: String,
 }
 
 impl RefreshingKv {
-    pub(super) fn new(provider: Arc<dyn BindingsProviderApi>, binding_name: String) -> Self {
+    pub(super) fn new(provider: Arc<dyn KvProviderApi>, binding_name: String) -> Self {
         Self {
-            resolver: Resolver::new(provider, binding_name),
+            provider,
+            binding_name,
         }
+    }
+
+    async fn current(&self) -> Result<Arc<dyn Kv>> {
+        self.provider.load_kv(&self.binding_name).await
     }
 }
 
@@ -381,19 +399,19 @@ impl Binding for RefreshingKv {}
 #[async_trait]
 impl Kv for RefreshingKv {
     async fn get(&self, key: &str) -> Result<Option<KvEntry>> {
-        self.resolver.kv().await?.get(key).await
+        self.current().await?.get(key).await
     }
 
     async fn put(&self, key: &str, value: Vec<u8>, options: Option<KvPutOptions>) -> Result<bool> {
-        self.resolver.kv().await?.put(key, value, options).await
+        self.current().await?.put(key, value, options).await
     }
 
     async fn delete(&self, key: &str, if_version: Option<&str>) -> Result<bool> {
-        self.resolver.kv().await?.delete(key, if_version).await
+        self.current().await?.delete(key, if_version).await
     }
 
     async fn exists(&self, key: &str) -> Result<bool> {
-        self.resolver.kv().await?.exists(key).await
+        self.current().await?.exists(key).await
     }
 
     async fn scan_prefix(
@@ -402,8 +420,7 @@ impl Kv for RefreshingKv {
         limit: Option<usize>,
         cursor: Option<String>,
     ) -> Result<ScanResult> {
-        self.resolver
-            .kv()
+        self.current()
             .await?
             .scan_prefix(prefix, limit, cursor)
             .await

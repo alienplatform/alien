@@ -17,8 +17,11 @@ use tracing::debug;
 
 use crate::error::{ErrorData, Result};
 use crate::provider::BindingsProvider;
-use crate::refreshing::{KeyProviderApi, RefreshingKey, RefreshingStorage, StorageProviderApi};
-use crate::traits::{BindingsProviderApi, Key, Sandbox, Storage};
+use crate::refreshing::{
+    KeyProviderApi, KvProviderApi, RefreshingKey, RefreshingKv, RefreshingStorage,
+    StorageProviderApi,
+};
+use crate::traits::{BindingsProviderApi, Key, Kv, Sandbox, Storage};
 
 mod access;
 mod manager_conversion;
@@ -207,6 +210,13 @@ impl RemoteBindingsProvider {
 impl StorageProviderApi for RemoteBindingsProvider {
     async fn load_storage(&self, binding_name: &str) -> Result<Arc<dyn Storage>> {
         self.resolver(binding_name).await.storage().await
+    }
+}
+
+#[async_trait]
+impl KvProviderApi for RemoteBindingsProvider {
+    async fn load_kv(&self, binding_name: &str) -> Result<Arc<dyn Kv>> {
+        self.resolver(binding_name).await.kv().await
     }
 }
 
@@ -436,6 +446,21 @@ impl RemoteBindings {
         )))
     }
 
+    /// Loads a KV binding and keeps its short-lived credential lease fresh.
+    ///
+    /// Resolved through Storage, for the reason given on `key`.
+    pub async fn kv(&self, resource_id: &str) -> Result<Arc<dyn Kv>> {
+        let provider = self
+            .source
+            .provider(RemoteBindingCapability::Storage)
+            .await?;
+        provider.load_kv(resource_id).await?;
+        Ok(Arc::new(RefreshingKv::new(
+            provider,
+            resource_id.to_string(),
+        )))
+    }
+
     /// Loads a Key binding and keeps its short-lived credential lease fresh.
     ///
     /// Resolved through Storage: Platform's external-access schema names `storage` and `sandbox`
@@ -506,6 +531,28 @@ enum ResolvedRemoteBinding {
         binding: alien_core::GcsStorageBinding,
         #[serde(rename = "clientConfig")]
         client_config: Box<alien_core::GcpClientConfig>,
+        #[serde(rename = "expiresAt")]
+        expires_at: DateTime<Utc>,
+    },
+    Dynamodb {
+        binding: alien_core::DynamodbKvBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: Box<alien_core::AwsClientConfig>,
+        #[serde(rename = "expiresAt")]
+        expires_at: DateTime<Utc>,
+    },
+    Firestore {
+        binding: alien_core::FirestoreKvBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: Box<alien_core::GcpClientConfig>,
+        #[serde(rename = "expiresAt")]
+        expires_at: DateTime<Utc>,
+    },
+    #[serde(rename = "tablestorage")]
+    TableStorage {
+        binding: alien_core::TableStorageKvBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: Box<alien_core::AzureClientConfig>,
         #[serde(rename = "expiresAt")]
         expires_at: DateTime<Utc>,
     },
@@ -705,6 +752,42 @@ impl ResolvedRemoteBinding {
                     expires_at,
                 )
             }
+            Self::Dynamodb {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                validate_aws_remote_client_config(&client_config, expires_at)?;
+                (
+                    alien_core::ClientConfig::Aws(client_config),
+                    serialize_remote_binding(alien_core::KvBinding::Dynamodb(binding))?,
+                    expires_at,
+                )
+            }
+            Self::Firestore {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                validate_gcp_remote_client_config(&client_config)?;
+                (
+                    alien_core::ClientConfig::Gcp(client_config),
+                    serialize_remote_binding(alien_core::KvBinding::Firestore(binding))?,
+                    expires_at,
+                )
+            }
+            Self::TableStorage {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                validate_azure_remote_client_config(&client_config)?;
+                (
+                    alien_core::ClientConfig::Azure(client_config),
+                    serialize_remote_binding(alien_core::KvBinding::TableStorage(binding))?,
+                    expires_at,
+                )
+            }
             Self::Kms {
                 binding,
                 client_config,
@@ -781,7 +864,7 @@ impl ResolvedRemoteBinding {
             }
             Self::Bedrock { .. } | Self::Vertex { .. } | Self::Foundry { .. } => {
                 return Err(AlienError::new(ErrorData::RemoteAccessFailed {
-                    operation: "use an AI lease as a Storage, Key or Sandbox binding".to_string(),
+                    operation: "use an AI lease as a Storage, KV, Key or Sandbox binding".to_string(),
                 }));
             }
             #[cfg(test)]
@@ -970,6 +1053,7 @@ struct RemoteStorageResolver {
 #[derive(Clone, Copy)]
 enum RequestedBindingKind {
     Storage,
+    Kv,
     Key,
     Sandbox,
 }
@@ -988,6 +1072,14 @@ impl RemoteStorageResolver {
     async fn storage(&self) -> Result<Arc<dyn Storage>> {
         BindingsProviderApi::load_storage(
             &*self.provider(RequestedBindingKind::Storage).await?,
+            &self.resource_id,
+        )
+        .await
+    }
+
+    async fn kv(&self) -> Result<Arc<dyn Kv>> {
+        BindingsProviderApi::load_kv(
+            &*self.provider(RequestedBindingKind::Kv).await?,
             &self.resource_id,
         )
         .await
@@ -1108,6 +1200,9 @@ impl RemoteStorageResolver {
         match requested_kind {
             RequestedBindingKind::Storage => {
                 BindingsProviderApi::load_storage(&*provider, &self.resource_id).await?;
+            }
+            RequestedBindingKind::Kv => {
+                BindingsProviderApi::load_kv(&*provider, &self.resource_id).await?;
             }
             RequestedBindingKind::Key => {
                 BindingsProviderApi::load_key(&*provider, &self.resource_id).await?;

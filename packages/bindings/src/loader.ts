@@ -274,6 +274,7 @@ export interface RawBindingsHandle {
 /** Raw napi remote bindings entry point. */
 export interface RawRemoteBindingsHandle {
   storage(name: string): Promise<RawRemoteStorageHandle>
+  kv(name: string): Promise<RawKvHandle>
   key(name: string): Promise<RawKeyHandle>
   sandbox(name: string): Promise<RawSandboxHandle>
   ai(): Promise<RawRemoteAiLease>

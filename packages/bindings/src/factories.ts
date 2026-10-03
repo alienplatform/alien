@@ -604,6 +604,19 @@ export function createRemoteStorageFactory(bindings: RawRemoteBindingsHandle) {
   }
 }
 
+/** Build the remote KV factory around one native bindings handle. */
+export function createRemoteKvFactory(bindings: RawRemoteBindingsHandle) {
+  const kvs = new Map<string, Kv>()
+  return (name: string): Kv => {
+    let kv = kvs.get(name)
+    if (!kv) {
+      kv = makeKv(lazyHandle(() => bindings.kv(name)))
+      kvs.set(name, kv)
+    }
+    return kv
+  }
+}
+
 /** Build the remote Key factory around one native bindings handle. */
 export function createRemoteKeyFactory(bindings: RawRemoteBindingsHandle) {
   const keys = new Map<string, Key>()

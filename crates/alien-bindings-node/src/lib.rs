@@ -196,6 +196,13 @@ impl RemoteBindingsHandle {
         Ok(RemoteStorageHandle::new(storage, name))
     }
 
+    /// Resolve the key-value binding named `name`.
+    #[napi]
+    pub async fn kv(&self, name: String) -> napi::Result<KvHandle> {
+        let kv = self.inner.kv(&name).await.map_err(map_alien_error)?;
+        Ok(KvHandle::new(kv))
+    }
+
     /// Resolve the key binding named `name`.
     #[napi]
     pub async fn key(&self, name: String) -> napi::Result<KeyHandle> {

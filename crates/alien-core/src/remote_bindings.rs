@@ -5,6 +5,7 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteBindingKind {
     Storage,
+    Kv,
     Key,
     Ai,
     Sandbox,
@@ -31,6 +32,18 @@ const DEFINITIONS: &[RemoteBindingDefinition] = &[
         permission_set: "storage/remote-data-write",
         kind: RemoteBindingKind::Storage,
         description: "Read and write objects in this storage resource",
+        setup_support_resource_types: &[
+            "azure_resource_group",
+            "azure_storage_account",
+            "service_activation",
+        ],
+        revision: 1,
+    },
+    RemoteBindingDefinition {
+        resource_type: "kv",
+        permission_set: "kv/remote-data-write",
+        kind: RemoteBindingKind::Kv,
+        description: "Read and write entries in this key-value store",
         setup_support_resource_types: &[
             "azure_resource_group",
             "azure_storage_account",
