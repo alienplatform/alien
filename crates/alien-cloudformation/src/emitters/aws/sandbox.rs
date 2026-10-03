@@ -220,19 +220,16 @@ impl CfEmitter for AwsSandboxEmitter {
                 CfExpression::Integer(tier.baseline_memory_mib),
             )])]),
         );
-        // The enum has exactly one member, `ALL`, which grants mount, netns and eBPF. There is
-        // no subset to request, so the answer is none.
+        // AWS exposes only ALL; the agent reduces it before running image code or commands.
         properties.insert(
             "AdditionalOsCapabilities".to_string(),
-            CfExpression::list([]),
+            CfExpression::list(if sandbox.privileged_supervisor.is_some() {
+                vec![CfExpression::from("ALL")]
+            } else {
+                vec![]
+            }),
         );
         properties.insert("Hooks".to_string(), hooks());
-        if sandbox.privileged_supervisor.is_some() {
-            properties.insert(
-                "AdditionalOsCapabilities".to_string(),
-                CfExpression::list([CfExpression::from("ALL")]),
-            );
-        }
         properties.insert(
             "EnvironmentVariables".to_string(),
             environment_variables(sandbox),

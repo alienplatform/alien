@@ -5,6 +5,7 @@ use std::{
     fs,
     io::Write,
     net::{Ipv4Addr, ToSocketAddrs},
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     process::{Command, Stdio},
 };
 
@@ -68,16 +69,58 @@ fn destinations(policy: &SandboxEgress) -> Result<BTreeSet<Ipv4Addr>> {
             }
             ips.extend(addresses);
         }
-        fs::OpenOptions::new()
-            .append(true)
-            .open("/etc/hosts")
-            .into_alien_error()
-            .context(failed("open /etc/hosts"))?
-            .write_all(hosts.as_bytes())
+        pin_hosts(&hosts)
             .into_alien_error()
             .context(failed("pin allowlisted hostnames"))?;
     }
     Ok(ips)
+}
+
+/// AWS provides /etc/hosts as a read-only mount. Replace that mount during bootstrap,
+/// before dropping SYS_ADMIN; commands can read it but cannot replace or edit it.
+fn pin_hosts(hosts: &str) -> std::io::Result<()> {
+    match fs::OpenOptions::new().append(true).open("/etc/hosts") {
+        Ok(mut file) => return file.write_all(hosts.as_bytes()),
+        Err(error) if error.raw_os_error() == Some(libc::EROFS) => {}
+        Err(error) => return Err(error),
+    }
+    let mut content = fs::read_to_string("/etc/hosts")?;
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(hosts);
+    let source = "/opt/alien/pinned-hosts";
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(source)?;
+    file.write_all(content.as_bytes())?;
+    file.set_permissions(fs::Permissions::from_mode(0o444))?;
+    unsafe {
+        if libc::mount(
+            c"/opt/alien/pinned-hosts".as_ptr(),
+            c"/etc/hosts".as_ptr(),
+            std::ptr::null(),
+            libc::MS_BIND,
+            std::ptr::null(),
+        ) != 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        if libc::mount(
+            std::ptr::null(),
+            c"/etc/hosts".as_ptr(),
+            std::ptr::null(),
+            libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY,
+            std::ptr::null(),
+        ) != 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
 }
 
 /// Installs an IPv4 OUTPUT default-deny policy atomically through iptables-restore.

@@ -45,13 +45,12 @@ const ENV_ISOLATION: &str = "ALIEN_SANDBOX_ISOLATION";
 /// Bytes of each stream kept when the environment does not say.
 const DEFAULT_OUTPUT_CAP: usize = 4 * 1024 * 1024;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let state = Arc::new(load_state()?);
     let port: u16 = parse(ENV_PORT)?;
-    let mut image_child = None;
+    let mut run_image_command = false;
     if let Ok(encoded) = std::env::var("ALIEN_SANDBOX_EGRESS") {
         let policy = serde_json::from_str(&encoded)
             .into_alien_error()
@@ -61,6 +60,15 @@ async fn main() -> Result<()> {
             ))?;
         #[cfg(target_os = "linux")]
         {
+            alien_sandbox_agent::privilege::prepare_identity(
+                state.exec_identity,
+                &state.session_root,
+            )
+            .into_alien_error()
+            .context(failed(
+                "prepare declared command identity",
+                "cannot write the image's passwd/group entries".to_string(),
+            ))?;
             alien_sandbox_agent::egress::install(&policy)?;
             alien_sandbox_agent::privilege::restrict_supervisor()
                 .into_alien_error()
@@ -89,7 +97,7 @@ async fn main() -> Result<()> {
                     )));
             }
         }
-        image_child = alien_sandbox_agent::image_command::start(state.exec_identity)?;
+        run_image_command = true;
         #[cfg(not(target_os = "linux"))]
         return Err(invalid("ALIEN_SANDBOX_EGRESS", "requires Linux netfilter"));
     }
@@ -104,29 +112,46 @@ async fn main() -> Result<()> {
             "the agent could not take its port".to_string(),
         ))?;
 
-    if let Some(mut child) = image_child {
-        tokio::spawn(async move {
-            match child.wait().await {
-                Ok(status) => tracing::info!(%status, "image command exited"),
-                Err(error) => tracing::error!(%error, "could not reap image command"),
-            }
-        });
-    }
-    tracing::info!("sandbox agent listening on {address}");
+    // Linux capabilities are per thread. Build the runtime only after bootstrap reduction,
+    // so every worker inherits the reduced set rather than keeping AWS's ALL grant.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .into_alien_error()
+        .context(failed(
+            "start agent runtime",
+            "could not create the runtime".to_string(),
+        ))?;
+    runtime.block_on(async move {
+        let image_child = if run_image_command {
+            alien_sandbox_agent::image_command::start(state.exec_identity)?
+        } else {
+            None
+        };
+        if let Some(mut child) = image_child {
+            tokio::spawn(async move {
+                match child.wait().await {
+                    Ok(status) => tracing::info!(%status, "image command exited"),
+                    Err(error) => tracing::error!(%error, "could not reap image command"),
+                }
+            });
+        }
+        tracing::info!("sandbox agent listening on {address}");
 
-    axum::serve(
-        // tap_io is a no-op that wraps the listener in axum's TapIo, which is what makes the
-        // SocketAddr connect-info available for a custom listener (the orphan rule blocks impls
-        // straight onto SocketAddr).
-        BlockingListener::new(std_listener, address).tap_io(|_| {}),
-        router(state).into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await
-    .into_alien_error()
-    .context(failed(
-        "serve the agent protocol",
-        "the agent stopped serving".to_string(),
-    ))
+        axum::serve(
+            // tap_io is a no-op that wraps the listener in axum's TapIo, which is what makes the
+            // SocketAddr connect-info available for a custom listener (the orphan rule blocks impls
+            // straight onto SocketAddr).
+            BlockingListener::new(std_listener, address).tap_io(|_| {}),
+            router(state).into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .into_alien_error()
+        .context(failed(
+            "serve the agent protocol",
+            "the agent stopped serving".to_string(),
+        ))
+    })
 }
 
 /// A listener whose accept blocks in the `accept(2)` syscall instead of waiting on an epoll edge.

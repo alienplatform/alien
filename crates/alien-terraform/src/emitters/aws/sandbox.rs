@@ -682,11 +682,6 @@ fn tag_objects(ctx: &EmitContext<'_>, snake: bool) -> Expression {
         ("resource-type", Expression::String("sandbox".to_string())),
     ];
 
-    let mut pairs: std::collections::BTreeMap<String, String> = pairs
-        .into_iter()
-        .map(|(key, value)| (key.to_string(), value))
-        .collect();
-    pairs.extend(sandbox.supervisor_environment());
     Expression::from(
         pairs
             .into_iter()

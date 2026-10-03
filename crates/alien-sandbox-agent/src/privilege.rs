@@ -5,7 +5,8 @@
 //! before `pre_exec` runs, and by then the privilege needed to drop supplementary groups is gone.
 
 use std::{
-    io,
+    fs,
+    io::{self, Write},
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -151,8 +152,10 @@ pub fn restrict_supervisor() -> io::Result<()> {
         permitted: u32,
         inheritable: u32,
     }
-    // CHOWN, DAC_OVERRIDE, SETGID, SETUID, SETPCAP, NET_ADMIN.
-    let keep: u32 = (1 << 0) | (1 << 1) | (1 << 6) | (1 << 7) | (1 << 8) | (1 << 12);
+    // CHOWN, DAC_OVERRIDE, FOWNER (file projection), KILL (timeouts/cancellation),
+    // SETGID, SETUID, SETPCAP (irreversible child drop), NET_ADMIN.
+    let keep: u32 =
+        (1 << 0) | (1 << 1) | (1 << 3) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 8) | (1 << 12);
     unsafe {
         for capability in 0..64 {
             let present = libc::prctl(libc::PR_CAPBSET_READ, capability, 0, 0, 0);
@@ -254,6 +257,104 @@ unsafe fn deny_ipv6_sockets() -> io::Result<()> {
     };
     if libc::prctl(libc::PR_SET_SECCOMP, 2, &program, 0, 0) != 0 {
         return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn child_identity_and_ipv6_filter_are_irreversible() {
+        // Only async-signal-safe syscalls in the child: no allocator or test framework after fork.
+        unsafe {
+            let uid = if libc::geteuid() == 0 {
+                60000
+            } else {
+                libc::geteuid()
+            };
+            let gid = if libc::getegid() == 0 {
+                60000
+            } else {
+                libc::getegid()
+            };
+            let pid = libc::fork();
+            assert!(pid >= 0, "fork must succeed");
+            if pid == 0 {
+                block_command_ipv6();
+                if drop_to(ExecIdentity { uid, gid }).is_err() {
+                    libc::_exit(1);
+                }
+                if libc::geteuid() != uid || libc::getegid() != gid {
+                    libc::_exit(2);
+                }
+                let socket = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+                if socket < 0 {
+                    libc::_exit(3);
+                }
+                libc::close(socket);
+                if libc::socket(libc::AF_INET6, libc::SOCK_STREAM, 0) != -1
+                    || *libc::__errno_location() != libc::EPERM
+                {
+                    libc::_exit(4);
+                }
+                if libc::syscall(libc::SYS_io_uring_setup, 1, std::ptr::null::<u8>()) != -1
+                    || *libc::__errno_location() != libc::EPERM
+                {
+                    libc::_exit(5);
+                }
+                if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 0, 0, 0, 0) != -1 {
+                    libc::_exit(6);
+                }
+                if libc::setuid(0) != -1 {
+                    libc::_exit(7);
+                }
+                libc::_exit(0);
+            }
+            let mut status = 0;
+            assert_eq!(libc::waitpid(pid, &mut status, 0), pid);
+            assert!(libc::WIFEXITED(status), "child was killed: {status}");
+            assert_eq!(libc::WEXITSTATUS(status), 0, "identity/filter check failed");
+        }
+    }
+}
+
+/// Creates passwd/group entries for a declaration-owned numeric identity when the base image
+/// has none. The kernel itself needs no entry, but image commands often call getpwuid/getgrgid.
+/// This runs at startup, never in a forked child.
+pub fn prepare_identity(identity: ExecIdentity, root: &std::path::Path) -> io::Result<()> {
+    for (path, id, entry) in [
+        (
+            "/etc/passwd",
+            identity.uid,
+            format!(
+                "sandbox-{}:x:{}:{}::{}:/sbin/nologin\n",
+                identity.uid,
+                identity.uid,
+                identity.gid,
+                root.display()
+            ),
+        ),
+        (
+            "/etc/group",
+            identity.gid,
+            format!("sandbox-{}:x:{}:\n", identity.gid, identity.gid),
+        ),
+    ] {
+        let contents = fs::read_to_string(path)?;
+        if !contents.lines().any(|line| {
+            line.split(':')
+                .nth(2)
+                .and_then(|value| value.parse::<u32>().ok())
+                == Some(id)
+        }) {
+            let mut file = fs::OpenOptions::new().append(true).open(path)?;
+            if !contents.ends_with('\n') {
+                file.write_all(b"\n")?;
+            }
+            file.write_all(entry.as_bytes())?;
+        }
     }
     Ok(())
 }
