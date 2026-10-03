@@ -82,6 +82,40 @@ impl QueueHandle {
 
 #[napi]
 impl QueueHandle {
+    /// Send JSON messages; outcomes correspond to the input order.
+    #[napi]
+    pub async fn send_batch_json(&self, messages: Vec<String>) -> napi::Result<String> {
+        let messages = messages
+            .iter()
+            .map(|value| parse_json_payload(value))
+            .collect::<napi::Result<Vec<_>>>()?;
+        let results = self
+            .inner
+            .send_batch(messages)
+            .await
+            .map_err(map_alien_error)?;
+        serde_json::to_string(&results).map_err(|error| {
+            map_alien_error(AlienError::new(ErrorData::SerializationFailed {
+                message: error.to_string(),
+            }))
+        })
+    }
+
+    /// Send raw text messages; outcomes correspond to the input order.
+    #[napi]
+    pub async fn send_batch_text(&self, messages: Vec<String>) -> napi::Result<String> {
+        let results = self
+            .inner
+            .send_batch(messages.into_iter().map(MessagePayload::Text).collect())
+            .await
+            .map_err(map_alien_error)?;
+        serde_json::to_string(&results).map_err(|error| {
+            map_alien_error(AlienError::new(ErrorData::SerializationFailed {
+                message: error.to_string(),
+            }))
+        })
+    }
+
     /// Send a JSON message. `json_string` must be valid JSON.
     #[napi]
     pub async fn send_json(&self, json_string: String) -> napi::Result<()> {

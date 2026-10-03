@@ -1,4 +1,6 @@
+use super::{batch_end, encode_batch};
 use crate::error::{ErrorData, Result};
+use crate::traits::QueueSendResult;
 use crate::traits::{
     Binding, MessagePayload, Queue, QueueMessage, MAX_BATCH_SIZE, MAX_MESSAGE_BYTES,
 };
@@ -90,6 +92,50 @@ impl Queue for GcpPubSubQueue {
                     reason,
                 })
             })
+    }
+
+    async fn send_batch(
+        &self,
+        _queue: &str,
+        messages: Vec<MessagePayload>,
+    ) -> Result<Vec<QueueSendResult>> {
+        let (entries, mut results) = encode_batch(messages)?;
+        let mut start = 0;
+        while start < entries.len() {
+            // Far below Pub/Sub's 10MB request limit, including base64 overhead.
+            let end = batch_end(&entries, start, 1000, 256 * 1024);
+            let chunk = &entries[start..end];
+            let request = PublishRequest {
+                messages: chunk
+                    .iter()
+                    .map(|(_, body)| PubsubMessage {
+                        data: Some(BASE64_STANDARD.encode(body)),
+                        attributes: None,
+                        message_id: None,
+                        publish_time: None,
+                        ordering_key: None,
+                    })
+                    .collect(),
+            };
+            let result = self.client.publish(self.topic.clone(), request).await;
+            for (index, _) in chunk {
+                results[*index] = match &result {
+                    Ok(response) if response.message_ids.len() == chunk.len() => {
+                        QueueSendResult::Sent
+                    }
+                    Ok(_) => QueueSendResult::Unknown {
+                        code: "QUEUE_BATCH_RESPONSE_INVALID".to_string(),
+                        message: "Pub/Sub returned an unexpected number of message IDs".to_string(),
+                    },
+                    Err(error) => QueueSendResult::Unknown {
+                        code: error.code.clone(),
+                        message: error.to_string(),
+                    },
+                };
+            }
+            start = end;
+        }
+        Ok(results)
     }
 
     async fn receive(&self, _queue: &str, max_messages: usize) -> Result<Vec<QueueMessage>> {

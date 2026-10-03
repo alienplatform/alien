@@ -1,10 +1,13 @@
+use super::encode_batch;
 use crate::error::{ErrorData, Result};
+use crate::traits::QueueSendResult;
 use crate::traits::{
     Binding, MessagePayload, Queue, QueueMessage, MAX_BATCH_SIZE, MAX_MESSAGE_BYTES,
 };
 use alien_azure_clients::service_bus::{
     AzureServiceBusDataPlaneClient, SendMessageParameters, ServiceBusDataPlaneApi,
 };
+use alien_error::IntoAlienError;
 use alien_error::{Context, ContextError};
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
@@ -79,6 +82,63 @@ impl Queue for AzureServiceBusQueue {
                 binding_type: "queue.servicebus".to_string(),
                 reason: "Failed to send".to_string(),
             })
+    }
+
+    async fn send_batch(
+        &self,
+        _queue: &str,
+        messages: Vec<MessagePayload>,
+    ) -> Result<Vec<QueueSendResult>> {
+        let (entries, mut results) = encode_batch(messages)?;
+        // Measure the actual JSON envelope, including escaping, before sending.
+        let sizes = entries
+            .iter()
+            .map(|(_, body)| {
+                serde_json::to_vec(&serde_json::json!({ "Body": body }))
+                    .map(|encoded| encoded.len() + 1)
+                    .into_alien_error()
+                    .context(ErrorData::SerializationFailed {
+                        message: "Service Bus batch encoding".to_string(),
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut start = 0;
+        while start < entries.len() {
+            if sizes[start] + 2 > 256 * 1024 {
+                results[entries[start].0] = QueueSendResult::Rejected {
+                    code: "QUEUE_MESSAGE_SIZE_INVALID".to_string(),
+                    message: "Service Bus batch envelope exceeds 256KiB".to_string(),
+                };
+                start += 1;
+                continue;
+            }
+            let mut end = start;
+            let mut bytes = 2;
+            while end < entries.len() && end - start < 100 && bytes + sizes[end] <= 256 * 1024 {
+                bytes += sizes[end];
+                end += 1;
+            }
+            let chunk = &entries[start..end];
+            let result = self
+                .client
+                .send_message_batch(
+                    self.namespace.clone(),
+                    self.queue_name.clone(),
+                    chunk.iter().map(|(_, body)| body.clone()).collect(),
+                )
+                .await;
+            for (index, _) in chunk {
+                results[*index] = match &result {
+                    Ok(()) => QueueSendResult::Sent,
+                    Err(error) => QueueSendResult::Unknown {
+                        code: error.code.clone(),
+                        message: error.to_string(),
+                    },
+                };
+            }
+            start = end;
+        }
+        Ok(results)
     }
 
     async fn receive(&self, _queue: &str, max_messages: usize) -> Result<Vec<QueueMessage>> {

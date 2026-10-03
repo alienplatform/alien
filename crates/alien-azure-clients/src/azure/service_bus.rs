@@ -207,6 +207,14 @@ pub trait ServiceBusManagementApi: Send + Sync + std::fmt::Debug {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait ServiceBusDataPlaneApi: Send + Sync + std::fmt::Debug {
+    /// Send a JSON batch using the Service Bus HTTP batch protocol.
+    async fn send_message_batch(
+        &self,
+        namespace_name: String,
+        queue_name: String,
+        bodies: Vec<String>,
+    ) -> Result<()>;
+
     /// Send a message to a Service Bus queue
     async fn send_message(
         &self,
@@ -775,6 +783,56 @@ impl AzureServiceBusDataPlaneClient {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
+    async fn send_message_batch(
+        &self,
+        namespace_name: String,
+        queue_name: String,
+        bodies: Vec<String>,
+    ) -> Result<()> {
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://servicebus.azure.net/.default")
+            .await?;
+        let url =
+            self.build_data_plane_url(&namespace_name, &format!("/{queue_name}/messages"), None)?;
+        let messages = bodies
+            .into_iter()
+            .map(|body| serde_json::json!({ "Body": body }))
+            .collect::<Vec<_>>();
+        let response = self
+            .client
+            .post(url.clone())
+            .bearer_auth(token)
+            .header("Content-Type", "application/vnd.microsoft.servicebus.json")
+            .header("x-ms-retrypolicy", "NoRetry")
+            .json(&messages)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                message: "Service Bus batch send".to_string(),
+            })?;
+        let status = response.status();
+        if status != reqwest::StatusCode::CREATED {
+            let body =
+                response
+                    .text()
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::HttpRequestFailed {
+                        message: "Read Service Bus batch response".to_string(),
+                    })?;
+            return Err(AlienError::new(ErrorData::HttpResponseError {
+                message: format!("Service Bus batch send returned {status}"),
+                url: url.to_string(),
+                http_status: status.as_u16(),
+                http_request_text: None,
+                http_response_text: Some(body),
+            }));
+        }
+        Ok(())
+    }
+
     /// Send a message to a Service Bus queue
     async fn send_message(
         &self,

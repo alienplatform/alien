@@ -416,6 +416,8 @@ function makeKv(handle: () => Promise<RawKvHandle>): Kv {
 // The native bound queue already carries its configured queue name.
 function makeQueue(handle: () => Promise<RawQueueHandle>): Queue {
   return {
+    sendBatch: messages => guard(handle, async raw => JSON.parse(await raw.sendBatchJson(messages.map(message => JSON.stringify(message)))) as import("./types.js").QueueSendResult[]),
+    sendBatchText: messages => guard(handle, async raw => JSON.parse(await raw.sendBatchText(messages)) as import("./types.js").QueueSendResult[]),
     send: message => guard(handle, raw => raw.sendJson(JSON.stringify(message))),
     sendText: text => guard(handle, raw => raw.sendText(text)),
     receive: (max): Promise<QueueMessage[]> => guard(handle, raw => raw.receive(max)),
