@@ -95,11 +95,19 @@ async fn ensure_gcp_custom_role(
         Some(existing) => {
             converge_gcp_custom_role(iam, permission_set_id, custom_role, existing, desired).await
         }
-        // GCP hides a role once it can no longer be undeleted (7 days after
-        // deletion) but keeps rejecting its ID until the role is purged.
-        None => Err(create_conflict.context(ErrorData::GcpCustomRoleIdUnavailable {
+        // IAM reads are eventually consistent. An absent re-read proves no
+        // permanent deletion unless create explicitly reported that state.
+        None if matches!(
+            &create_conflict.error,
+            Some(CloudClientErrorData::RemoteResourceConflict { message, .. })
+                if message.contains("which has been marked for deletion")
+        ) => Err(create_conflict.context(ErrorData::GcpCustomRoleIdUnavailable {
             role_id: custom_role.role_id.clone(),
             message: "a role with this ID was deleted more than 7 days ago, so it can no longer be undeleted, and GCP rejects a new role with the same ID until the old one is purged, up to 44 days after deletion. Deploy with a different resource prefix, or retry after the old role is purged".to_string(),
+        })),
+        None => Err(create_conflict.context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create custom role '{}'", custom_role.role_id),
+            resource_id: Some(permission_set_id.to_string()),
         })),
     }
 }
@@ -2389,6 +2397,185 @@ mod tests {
         ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
             .await
             .expect("a role soft-deleted during setup should be reused");
+    }
+
+    #[tokio::test]
+    async fn gcp_custom_role_stale_read_after_create_conflict_converges_on_retry() {
+        let mut iam = MockIamApi::new();
+        let mut seq = Sequence::new();
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Err(not_found()));
+        iam.expect_create_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| {
+                Err(gcp_error(
+                    409,
+                    r#"{"error":{"code":409,"message":"A role named role_acme_storage_data_write in projects/p already exists.","status":"ALREADY_EXISTS"}}"#,
+                ))
+            });
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Err(not_found()));
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Ok(gcp_role(&["storage.objects.get"], false)));
+        expect_patch_to_desired(&mut iam, &mut seq);
+        iam.expect_undelete_role().never();
+
+        let error = ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect_err("an inconclusive read should return the create conflict");
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+        assert!(error.retryable);
+        assert_eq!(
+            error.source.as_ref().unwrap().code,
+            "REMOTE_RESOURCE_CONFLICT"
+        );
+        assert!(error
+            .source
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("already exists"));
+
+        ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect("the caller's retry should update the now-visible role");
+    }
+
+    #[tokio::test]
+    async fn gcp_custom_role_stale_read_after_soft_delete_converges_on_retry() {
+        let mut iam = MockIamApi::new();
+        let mut seq = Sequence::new();
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Err(not_found()));
+        iam.expect_create_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| {
+                Err(gcp_error(
+                    400,
+                    r#"{"error":{"code":400,"message":"You can't create a role with role_id (role_acme_storage_data_write) where there is an existing role with that role_id in a deleted state.","status":"FAILED_PRECONDITION"}}"#,
+                ))
+            });
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Err(not_found()));
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Ok(gcp_role(&["storage.objects.get"], true)));
+        iam.expect_undelete_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .withf(|name| name == PROBE_ROLE_NAME)
+            .returning(|_| Ok(gcp_role(&["storage.objects.get"], false)));
+        expect_patch_to_desired(&mut iam, &mut seq);
+
+        let error = ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect_err("a soft-deleted role hidden by a stale read can still be reused");
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+        assert!(error.retryable);
+        assert!(error
+            .source
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("deleted state"));
+
+        ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect("the caller's retry should undelete and update the now-visible role");
+    }
+
+    #[tokio::test]
+    async fn gcp_custom_role_unknown_precondition_and_missing_read_remain_retryable() {
+        let mut iam = MockIamApi::new();
+        let mut seq = Sequence::new();
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Err(not_found()));
+        iam.expect_create_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| {
+                Err(gcp_error(
+                    400,
+                    r#"{"error":{"code":400,"message":"A role precondition was not met.","status":"FAILED_PRECONDITION"}}"#,
+                ))
+            });
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Err(not_found()));
+        iam.expect_undelete_role().never();
+        iam.expect_patch_role().never();
+
+        let error = ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect_err("an unknown precondition does not establish permanent deletion");
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+        assert!(error.retryable);
+        assert_eq!(
+            error.source.as_ref().unwrap().code,
+            "REMOTE_RESOURCE_CONFLICT"
+        );
+        assert!(error
+            .source
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("precondition was not met"));
+    }
+
+    #[tokio::test]
+    async fn gcp_custom_role_failed_read_after_conflict_preserves_read_error() {
+        let mut iam = MockIamApi::new();
+        let mut seq = Sequence::new();
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Err(not_found()));
+        iam.expect_create_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| {
+                Err(gcp_error(
+                    400,
+                    r#"{"error":{"code":400,"message":"You can't create a role_id (role_acme_storage_data_write) which has been marked for deletion.","status":"FAILED_PRECONDITION"}}"#,
+                ))
+            });
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| {
+                Err(gcp_error(
+                    503,
+                    r#"{"error":{"code":503,"message":"IAM is temporarily unavailable.","status":"UNAVAILABLE"}}"#,
+                ))
+            });
+        iam.expect_undelete_role().never();
+        iam.expect_patch_role().never();
+
+        let error = ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect_err("a failed read cannot establish role absence");
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+        assert!(error.retryable);
+        assert_eq!(
+            error.source.as_ref().unwrap().code,
+            "REMOTE_SERVICE_UNAVAILABLE"
+        );
     }
 
     #[tokio::test]
