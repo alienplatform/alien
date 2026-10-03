@@ -401,6 +401,21 @@ pub enum ErrorData {
         resource_id: Option<String>,
     },
 
+    /// GCP refuses a custom role ID because a role with that ID is being permanently deleted.
+    #[error(
+        code = "GCP_CUSTOM_ROLE_ID_UNAVAILABLE",
+        message = "GCP custom role ID '{role_id}' cannot be reused yet: {message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    GcpCustomRoleIdUnavailable {
+        /// The custom role ID that GCP rejected
+        role_id: String,
+        /// Why the ID is unavailable and what the operator can do
+        message: String,
+    },
+
     /// Local platform service not available.
     #[error(
         code = "LOCAL_SERVICES_NOT_AVAILABLE",
