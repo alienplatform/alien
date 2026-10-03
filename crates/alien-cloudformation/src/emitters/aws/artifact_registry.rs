@@ -7,7 +7,9 @@ use crate::{
     },
     template::{CfExpression, CfResource},
 };
-use alien_core::{import::EmitContext, ArtifactRegistry, Result, ServiceAccount};
+use alien_core::{
+    import::EmitContext, ArtifactRegistry, Result, ServiceAccount, ALIEN_STACK_TAG_KEY,
+};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsArtifactRegistryEmitter;
@@ -205,6 +207,16 @@ fn ecr_policy_document(ctx: &EmitContext<'_>, push: bool) -> Result<CfExpression
                                 registry.id()
                             )),
                         ]),
+                    ),
+                    (
+                        "Condition",
+                        CfExpression::object([(
+                            "StringEqualsIfExists",
+                            CfExpression::object([(
+                                format!("aws:ResourceTag/{ALIEN_STACK_TAG_KEY}"),
+                                CfExpression::ref_("AWS::StackName"),
+                            )]),
+                        )]),
                     ),
                 ]),
             ]),

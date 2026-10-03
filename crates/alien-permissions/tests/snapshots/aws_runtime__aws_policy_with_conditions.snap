@@ -20,6 +20,9 @@ expression: result
       "Condition": {
         "StringEquals": {
           "sts:ExternalId": "my-external-id"
+        },
+        "StringEqualsIfExists": {
+          "aws:ResourceTag/deployment": "my-stack"
         }
       }
     }

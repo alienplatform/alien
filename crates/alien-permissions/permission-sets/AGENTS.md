@@ -5,6 +5,11 @@
 3. Make sure all permissions / actions are accurate according to the cloud documentation.
 4. Prefer two scopes in bindings: `stack` and `resource`.
    - AWS: use ARNs with `${stackPrefix}-*` and `${stackPrefix}-${resourceName}-*` patterns.
+   - A resource prefix may contain `-`, so `${stackPrefix}-*` also names the resources of a
+     deployment whose prefix extends this one. The AWS generators add
+     `StringEqualsIfExists: { aws:ResourceTag/${stackTag}: ${stackPrefix} }` to every allow whose
+     resource continues a name with a wildcard, so tagged resources of that deployment fall
+     outside the grant.
    - A set that reaches a sandbox session leaves no wildcard in the resource-name segment:
      `${stackPrefix}-${resourceName}-*` also matches sibling `agents-2` when filed under `agents`.
      The single-tenancy gate scopes such a set by its profile key, which holds only while the

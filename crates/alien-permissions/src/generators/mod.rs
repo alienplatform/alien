@@ -1,4 +1,5 @@
 pub mod aws_cloudformation;
+mod aws_deployment_scope;
 pub mod aws_runtime;
 pub mod azure_runtime;
 pub mod gcp_runtime;

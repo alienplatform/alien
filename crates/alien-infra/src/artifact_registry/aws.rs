@@ -12,7 +12,7 @@ use alien_core::{
     ArtifactRegistryHeartbeatStatus, ArtifactRegistryOutputs, AwsEcrArtifactRegistryHeartbeatData,
     AwsEcrRepositoryHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
-    ResourceStatus,
+    ResourceStatus, ALIEN_STACK_TAG_KEY,
 };
 
 use alien_aws_clients::aws::ecr::{
@@ -1221,7 +1221,8 @@ impl AwsArtifactRegistryController {
                         "ecr:DescribeImages",
                         "ecr:ListImages"
                     ],
-                    "Resource": format!("arn:aws:ecr:{}:{}:repository/{}-{}-*", aws_cfg.region, aws_cfg.account_id, ctx.resource_prefix, registry_id)
+                    "Resource": format!("arn:aws:ecr:{}:{}:repository/{}-{}-*", aws_cfg.region, aws_cfg.account_id, ctx.resource_prefix, registry_id),
+                    "Condition": own_repositories_condition(ctx.resource_prefix)
                 }
             ]
         });
@@ -1263,7 +1264,8 @@ impl AwsArtifactRegistryController {
                         "ecr:CreateRepository",
                         "ecr:DeleteRepository"
                     ],
-                    "Resource": format!("arn:aws:ecr:{}:{}:repository/{}-{}-*", aws_cfg.region, aws_cfg.account_id, ctx.resource_prefix, registry_id)
+                    "Resource": format!("arn:aws:ecr:{}:{}:repository/{}-{}-*", aws_cfg.region, aws_cfg.account_id, ctx.resource_prefix, registry_id),
+                    "Condition": own_repositories_condition(ctx.resource_prefix)
                 }
             ]
         });
@@ -1284,6 +1286,16 @@ impl AwsArtifactRegistryController {
             _internal_stay_count: None,
         }
     }
+}
+
+/// Repository names start with `<prefix>-<registry>-`, which a deployment whose prefix extends
+/// that name also uses. Its repositories carry its own deployment tag, which this rules out.
+fn own_repositories_condition(resource_prefix: &str) -> serde_json::Value {
+    serde_json::json!({
+        "StringEqualsIfExists": {
+            format!("aws:ResourceTag/{ALIEN_STACK_TAG_KEY}"): resource_prefix
+        }
+    })
 }
 
 fn emit_aws_artifact_registry_heartbeat(

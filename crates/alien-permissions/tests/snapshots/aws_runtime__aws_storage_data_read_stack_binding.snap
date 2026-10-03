@@ -16,7 +16,12 @@ expression: result
       "Resource": [
         "arn:aws:s3:::my-stack-*",
         "arn:aws:s3:::my-stack-*/*"
-      ]
+      ],
+      "Condition": {
+        "StringEqualsIfExists": {
+          "aws:ResourceTag/deployment": "my-stack"
+        }
+      }
     }
   ]
 }

@@ -1,6 +1,9 @@
 use crate::{
     error::{ErrorData, Result},
-    generators::labels::{entry_pascal_label, has_explicit_label},
+    generators::{
+        aws_deployment_scope::condition_template,
+        labels::{entry_pascal_label, has_explicit_label},
+    },
     BindingTarget, PermissionContext,
 };
 use alien_core::{PermissionGrant, PermissionSet};
@@ -103,7 +106,10 @@ impl AwsCloudFormationPermissionsGenerator {
                 self.interpolate_cloudformation_resources(&binding_spec.resources, context)?;
             let not_resources =
                 self.interpolate_cloudformation_resources(&binding_spec.not_resources, context)?;
-            let conditions = self.extract_cloudformation_conditions(binding_spec, context)?;
+            let conditions = self.extract_cloudformation_conditions(
+                condition_template(&platform_permission.effect, binding_spec),
+                context,
+            )?;
 
             let statement_id = self.statement_id(
                 permission_set,
@@ -277,13 +283,13 @@ impl AwsCloudFormationPermissionsGenerator {
         }
     }
 
-    /// Extract AWS conditions from binding spec for CloudFormation
+    /// Interpolate a statement's condition template for CloudFormation
     fn extract_cloudformation_conditions(
         &self,
-        binding_spec: &alien_core::AwsBindingSpec,
+        condition_template: Option<IndexMap<String, IndexMap<String, String>>>,
         context: &PermissionContext,
     ) -> Result<IndexMap<String, IndexMap<String, JsonValue>>> {
-        if let Some(condition_template) = &binding_spec.condition {
+        if let Some(condition_template) = &condition_template {
             let mut interpolated_conditions = IndexMap::new();
 
             // Sort condition keys for deterministic output
