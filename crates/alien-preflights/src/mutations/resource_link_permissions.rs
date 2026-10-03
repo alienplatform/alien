@@ -281,6 +281,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations_enabled: false,
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
