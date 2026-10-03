@@ -107,7 +107,7 @@ impl AwsSandboxImportData {
             bundle_uri: Some(bundle_uri),
             egress_connector_arns,
             preview_ports: sandbox.preview_ports.clone(),
-            allow_egress: matches!(sandbox.egress, SandboxEgress::Allow),
+            allow_egress: matches!(sandbox.cloud_egress(), SandboxEgress::Allow),
         })
     }
 }

@@ -112,7 +112,7 @@ pub fn remote_binding_undeliverable_reason(entry: &ResourceEntry) -> Option<&'st
     remote_binding_for_entry(entry)?;
     let sandbox = entry.config.downcast_ref::<Sandbox>()?;
 
-    if !matches!(sandbox.egress, SandboxEgress::Allow) {
+    if !matches!(sandbox.cloud_egress(), SandboxEgress::Allow) {
         return Some(
             "a remotely published sandbox must declare egress 'allow'; the remote grant either \
              cannot pass a declared connector or lets its holder create sandboxes that ignore the \

@@ -497,6 +497,15 @@ impl SandboxCapability {
     }
 }
 
+/// Opt-in supervisor-owned network enforcement. Caller requests cannot change this identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxPrivilegedSupervisor {
+    /// Nonzero numeric uid and primary gid for every command, including the image entrypoint.
+    pub command_uid: u32,
+}
+
 /// An isolated environment for running untrusted code, created at runtime.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -523,6 +532,10 @@ pub struct Sandbox {
     pub limits: Option<SandboxLimits>,
     /// Outbound network policy
     pub egress: SandboxEgress,
+    /// Have Alien's agent install the declared egress policy before running any image code.
+    /// Unsupported backends refuse this at plan time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privileged_supervisor: Option<SandboxPrivilegedSupervisor>,
     /// Sandbox lifetime ceiling and idle behaviour.
     ///
     /// Stored state written before the rename calls this `session`. A stack state or release
@@ -555,7 +568,7 @@ pub fn stack_needs_named_subnets_at_setup(stack: &crate::Stack) -> bool {
         resource
             .config
             .downcast_ref::<Sandbox>()
-            .is_some_and(|sandbox| !matches!(sandbox.egress, SandboxEgress::Allow))
+            .is_some_and(|sandbox| !matches!(sandbox.cloud_egress(), SandboxEgress::Allow))
     })
 }
 
@@ -566,6 +579,35 @@ impl Sandbox {
     /// Returns the sandbox's unique identifier.
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// Cloud routing stays open when the agent owns enforcement.
+    pub fn cloud_egress(&self) -> &SandboxEgress {
+        if self.privileged_supervisor.is_some() {
+            &SandboxEgress::Allow
+        } else {
+            &self.egress
+        }
+    }
+
+    /// Startup contract for the privileged agent; never supplied by an exec caller.
+    pub fn supervisor_environment(&self) -> std::collections::BTreeMap<String, String> {
+        let mut env = std::collections::BTreeMap::new();
+        if let Some(supervisor) = &self.privileged_supervisor {
+            env.insert(
+                "ALIEN_SANDBOX_EXEC_UID".to_string(),
+                supervisor.command_uid.to_string(),
+            );
+            env.insert(
+                "ALIEN_SANDBOX_EXEC_GID".to_string(),
+                supervisor.command_uid.to_string(),
+            );
+            env.insert(
+                "ALIEN_SANDBOX_EGRESS".to_string(),
+                serde_json::to_string(&self.egress).expect("egress serializes"),
+            );
+        }
+        env
     }
 
     /// The declared ceilings, or the defaults a platform applies when none were named.
@@ -582,7 +624,25 @@ impl Sandbox {
     /// Runs at plan time so an unenforceable limit or an unsupported egress mode fails before
     /// anything is provisioned, rather than at the first exec.
     pub fn validate_for_platform(&self, platform: Platform) -> Result<()> {
-        let capabilities = SandboxCapabilities::for_platform(platform)?;
+        let mut capabilities = SandboxCapabilities::for_platform(platform)?;
+        if let Some(supervisor) = &self.privileged_supervisor {
+            if platform != Platform::Aws {
+                return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
+                    capability: "privilegedSupervisor".to_string(),
+                    platform: platform.to_string(),
+                }));
+            }
+            if supervisor.command_uid == 0 || supervisor.command_uid == u32::MAX {
+                return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                    resource_id: self.id.clone(),
+                    field: "privilegedSupervisor.commandUid".to_string(),
+                    value: supervisor.command_uid.to_string(),
+                    reason: "must be a non-root Linux uid other than the invalid uid sentinel"
+                        .to_string(),
+                }));
+            }
+            capabilities.domain_egress_rules = true;
+        }
 
         // `alien build` builds an AWS sandbox's base image, so source is a declaration there and
         // the emitters refuse it only if it reaches them unbuilt. Everywhere else the image is
@@ -2267,6 +2327,44 @@ mod tests {
         assert_eq!(quantity_mib("1Ti"), Some(1024 * 1024));
         assert_eq!(millicores("1"), Some(1000));
         assert_eq!(millicores("500m"), Some(500));
+    }
+
+    #[test]
+    fn privileged_supervisor_fixes_identity_and_requires_an_enforceable_backend() {
+        let mut sandbox = sandbox_with(
+            SandboxEgress::AllowDomains {
+                domains: vec!["example.com".to_string()],
+            },
+            vec![],
+        );
+        sandbox.privileged_supervisor = Some(SandboxPrivilegedSupervisor { command_uid: 60001 });
+        sandbox
+            .validate_for_platform(Platform::Aws)
+            .expect("AWS can enforce the policy in the agent");
+        assert_eq!(sandbox.cloud_egress(), &SandboxEgress::Allow);
+        assert_eq!(
+            sandbox.supervisor_environment()["ALIEN_SANDBOX_EXEC_UID"],
+            "60001"
+        );
+        for platform in [
+            Platform::Local,
+            Platform::Kubernetes,
+            Platform::Azure,
+            Platform::Gcp,
+        ] {
+            let error = sandbox
+                .validate_for_platform(platform)
+                .expect_err("cannot grant a privilege boundary the backend lacks");
+            assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+            assert!(error.message.contains("privilegedSupervisor"));
+        }
+        for uid in [0, u32::MAX] {
+            sandbox.privileged_supervisor.as_mut().unwrap().command_uid = uid;
+            let error = sandbox
+                .validate_for_platform(Platform::Aws)
+                .expect_err("invalid uid must fail at plan time");
+            assert_eq!(error.code, "SANDBOX_LIMIT_INVALID");
+        }
     }
 
     #[test]

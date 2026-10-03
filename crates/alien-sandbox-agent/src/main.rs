@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use alien_core::sandbox_capability::SandboxSessionIdentity;
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_sandbox_agent::error::{ErrorData, Result};
 use alien_sandbox_agent::exec::ExecIdentity;
 use alien_sandbox_agent::jobs::JobRegistry;
@@ -51,6 +51,48 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(load_state()?);
     let port: u16 = parse(ENV_PORT)?;
+    let mut image_child = None;
+    if let Ok(encoded) = std::env::var("ALIEN_SANDBOX_EGRESS") {
+        let policy = serde_json::from_str(&encoded)
+            .into_alien_error()
+            .context(failed(
+                "parse egress policy",
+                "invalid startup policy".to_string(),
+            ))?;
+        #[cfg(target_os = "linux")]
+        {
+            alien_sandbox_agent::egress::install(&policy)?;
+            alien_sandbox_agent::privilege::restrict_supervisor()
+                .into_alien_error()
+                .context(failed(
+                    "reduce supervisor capabilities",
+                    "cannot restrict the supervisor grant".to_string(),
+                ))?;
+            // The directory was created for the image's default uid. The declaration owns the
+            // identity, so fix it before commands or uploaded files can exist.
+            let path = std::ffi::CString::new(state.session_root.as_os_str().as_encoded_bytes())
+                .into_alien_error()
+                .context(failed("prepare session root", "invalid path".to_string()))?;
+            if unsafe {
+                libc::chown(
+                    path.as_ptr(),
+                    state.exec_identity.uid,
+                    state.exec_identity.gid,
+                )
+            } != 0
+            {
+                return Err(std::io::Error::last_os_error()
+                    .into_alien_error()
+                    .context(failed(
+                        "own session root",
+                        "cannot apply declared command identity".to_string(),
+                    )));
+            }
+        }
+        image_child = alien_sandbox_agent::image_command::start(state.exec_identity)?;
+        #[cfg(not(target_os = "linux"))]
+        return Err(invalid("ALIEN_SANDBOX_EGRESS", "requires Linux netfilter"));
+    }
 
     // All interfaces: on AWS the agent is reached from outside the guest, and a
     // loopback bind would make it unreachable.
@@ -62,6 +104,14 @@ async fn main() -> Result<()> {
             "the agent could not take its port".to_string(),
         ))?;
 
+    if let Some(mut child) = image_child {
+        tokio::spawn(async move {
+            match child.wait().await {
+                Ok(status) => tracing::info!(%status, "image command exited"),
+                Err(error) => tracing::error!(%error, "could not reap image command"),
+            }
+        });
+    }
     tracing::info!("sandbox agent listening on {address}");
 
     axum::serve(

@@ -5,6 +5,7 @@ import {
   type SandboxEgress,
   type SandboxLifecyclePolicy,
   type SandboxLimits,
+  type SandboxPrivilegedSupervisor,
   SandboxSchema,
 } from "./generated/index.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
@@ -17,6 +18,7 @@ export type {
   SandboxLifecyclePolicy,
   SandboxLimits,
   SandboxOutputs,
+  SandboxPrivilegedSupervisor,
 } from "./generated/index.js"
 export { SandboxSchema as SandboxConfigSchema } from "./generated/index.js"
 
@@ -84,6 +86,12 @@ export class Sandbox extends ResourceBuilder {
    */
   public egress(egress: SandboxEgress): this {
     this._config.egress = egress
+    return this
+  }
+
+  /** Fixes the unprivileged command identity and lets Alien's supervisor enforce egress. */
+  public privilegedSupervisor(supervisor: SandboxPrivilegedSupervisor): this {
+    this._config.privilegedSupervisor = supervisor
     return this
   }
 

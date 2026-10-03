@@ -227,7 +227,16 @@ impl CfEmitter for AwsSandboxEmitter {
             CfExpression::list([]),
         );
         properties.insert("Hooks".to_string(), hooks());
-        properties.insert("EnvironmentVariables".to_string(), environment_variables());
+        if sandbox.privileged_supervisor.is_some() {
+            properties.insert(
+                "AdditionalOsCapabilities".to_string(),
+                CfExpression::list([CfExpression::from("ALL")]),
+            );
+        }
+        properties.insert(
+            "EnvironmentVariables".to_string(),
+            environment_variables(sandbox),
+        );
         properties.insert("Tags".to_string(), tags(ctx));
 
         let mut resources = vec![role];
@@ -258,7 +267,7 @@ impl CfEmitter for AwsSandboxEmitter {
             ),
             (
                 "allowEgress",
-                CfExpression::from(matches!(sandbox.egress, SandboxEgress::Allow)),
+                CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
             ),
             // Both `GetMicrovmImage` and `RunMicrovm` require the ARN — measured against the
             // live API, where a bare name is refused with "Malformed ARN - doesn't start with
@@ -297,7 +306,7 @@ impl CfEmitter for AwsSandboxEmitter {
             ),
             (
                 "allowEgress".to_string(),
-                CfExpression::from(matches!(sandbox.egress, SandboxEgress::Allow)),
+                CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
             ),
             (
                 "imageArn".to_string(),
@@ -415,7 +424,7 @@ fn runtime_import_ref(sandbox: &Sandbox, image_id: &str) -> Result<CfExpression>
         ),
         (
             "allowEgress",
-            CfExpression::from(matches!(sandbox.egress, SandboxEgress::Allow)),
+            CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
         ),
         ("buildRoleArn", CfExpression::get_att(&role_id, "Arn")),
         ("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)),
@@ -594,7 +603,7 @@ fn hooks() -> CfExpression {
 ///
 /// `transport` authorization on AWS: the proxy validates a token scoped to one MicroVM before a
 /// request arrives, and one MicroVM is one session.
-fn environment_variables() -> CfExpression {
+fn environment_variables(sandbox: &Sandbox) -> CfExpression {
     let pairs = [
         ("ALIEN_SANDBOX_ROOT", AWS_MICROVM.session_root.to_string()),
         ("ALIEN_SANDBOX_PORT", AWS_MICROVM.port.to_string()),
@@ -606,9 +615,14 @@ fn environment_variables() -> CfExpression {
         ("ALIEN_SANDBOX_EXEC_GID", AWS_MICROVM.exec_uid.to_string()),
     ];
 
+    let mut pairs: std::collections::BTreeMap<String, String> = pairs
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value))
+        .collect();
+    pairs.extend(sandbox.supervisor_environment());
     CfExpression::list(pairs.into_iter().map(|(key, value)| {
         CfExpression::object([
-            ("Key", CfExpression::from(key)),
+            ("Key", CfExpression::from(key.as_str())),
             ("Value", CfExpression::from(value.as_str())),
         ])
     }))
@@ -693,7 +707,7 @@ fn egress_network(
             reason,
         })
     };
-    let Some(network) = sandbox_egress_network(ctx.stack, &sandbox.egress)
+    let Some(network) = sandbox_egress_network(ctx.stack, sandbox.cloud_egress())
         .map_err(|refusal| refuse(refusal.to_string()))?
     else {
         return Ok(None);
@@ -732,7 +746,7 @@ fn egress_network(
 /// Empty is not a missing value here: it is how `allow` is expressed on the wire, and the
 /// binding carries `allowEgress` alongside so the two cannot be confused.
 fn egress_connector_arns(sandbox: &Sandbox, image_id: &str) -> CfExpression {
-    match sandbox.egress {
+    match sandbox.cloud_egress() {
         SandboxEgress::Allow => CfExpression::list([]),
         _ => CfExpression::list([CfExpression::get_att(
             format!("{image_id}EgressConnector"),

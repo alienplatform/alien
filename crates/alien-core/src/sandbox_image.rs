@@ -587,3 +587,18 @@ mod tests {
         assert!(contract_env(&GCP_AGENT_PLATFORM).contains("ALIEN_SANDBOX_ISOLATION=platform"));
     }
 }
+
+/// Root-owned metadata copied from the base image at bundle creation, never from an exec caller.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxImageCommand {
+    /// OCI Entrypoint followed by Cmd; empty means there is no image command.
+    pub command: Vec<String>,
+    /// Image environment only, before runtime authorization and provider variables are added.
+    pub env: std::collections::BTreeMap<String, String>,
+    /// OCI WorkingDir, or / if the image does not declare one.
+    pub working_directory: String,
+}
+
+/// Installed outside the command-writable session directory.
+pub const IMAGE_COMMAND_PATH: &str = "/opt/alien/image-command.json";
