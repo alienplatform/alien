@@ -74,7 +74,7 @@ assert terminal['code']==28,(out,terminal)
 out,terminal=execute(['/usr/bin/python3','-c','import socket; socket.socket(socket.AF_INET6,socket.SOCK_STREAM)'])
 assert terminal['code']!=0 and 'Operation not permitted' in out,(out,terminal)
 
-# Commands cannot forge ACK packets or change TCP state to bypass the SYN boundary.
+# Commands cannot forge packets or change kernel TCP state to bypass policy.
 for program in [
     'import socket; socket.socket(socket.AF_INET,socket.SOCK_RAW,socket.IPPROTO_TCP)',
     'import socket; socket.socket(socket.AF_PACKET,socket.SOCK_RAW)',
@@ -104,5 +104,22 @@ for _ in range(20):
     if not os.path.exists('/proc/'+str(pid)): break
     time.sleep(.05)
 assert not os.path.exists('/proc/'+str(pid)), 'timed-out command must actually be killed and reaped'
+# Start a real preview service via the detached-job API under the declared identity.
+program="import os,http.server,socketserver; open('/sandbox/preview-identity','w').write(str(os.getuid())+'\\n'+open('/proc/self/status').read()); socketserver.TCPServer(('0.0.0.0',8973),http.server.SimpleHTTPRequestHandler).serve_forever()"
+request=urllib.request.Request('http://127.0.0.1:8971/v1/jobs/start',data=json.dumps({'command':['/usr/bin/python3','-c',program],'timeoutMs':30000}).encode(),headers={'Content-Type':'application/json'})
+assert json.load(opener.open(request,timeout=5))['jobId']
+for attempt in range(50):
+    try:
+        opener.open('http://127.0.0.1:8973/preview-identity',timeout=1).close();break
+    except OSError:
+        if attempt==49: raise
+        time.sleep(.1)
 print('privileged supervisor qualification passed')
 PY
+# A host client reaches the service across the Docker bridge, exercising non-loopback replies.
+container_ip=$(docker inspect --format '{{.NetworkSettings.Networks.bridge.IPAddress}}' "$container")
+preview_identity=$(curl --noproxy '*' -fsS --max-time 5 "http://$container_ip:8973/preview-identity")
+[[ "$preview_identity" == 60001$'\n'* ]]
+[[ "$preview_identity" == *$'CapEff:\t0000000000000000'* ]]
+[[ "$preview_identity" == *$'CapBnd:\t0000000000000000'* ]]
+echo "unprivileged preview replies passed across the Docker bridge"

@@ -82,7 +82,8 @@ resources::sandbox` checks plan-time backend refusals and declaration-owned iden
 `cargo test -p alien-sandbox-agent --test privileged_supervisor -- --ignored`
 runs the IPv4 allowlist, DNS denial (including loopback), rule-mutation refusal,
 image identity, and command cancellation checks in a private Docker network
-namespace. It requires Linux Docker with NET_ADMIN and internet access.
+namespace, including replies from an unprivileged preview job to a host client
+across the Docker bridge. It requires local Linux Docker with NET_ADMIN and internet access.
 
 Live qualification must additionally run this agent on a MicroVM, verify allowed
 IPv4 traffic and denied traffic to another address, attempt to change OUTPUT rules
