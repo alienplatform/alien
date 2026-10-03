@@ -40,6 +40,10 @@ allowed IP are reachable. Wildcards and IPv6-only destinations are unsupported.
 private/link-local destinations. Loopback services and replies to inbound agent or
 preview connections remain available in every policy.
 
+Remote raw cloud grants are refused for this mode: their holders could select a
+retained image version with a different uid or policy. Use an ordinary workload
+binding, which selects the active version.
+
 Local, Kubernetes, Azure, and GCP currently refuse this opt-in at plan time. Local
 uses Docker exec and Kubernetes runs a capability-free agent; neither can honor
 this supervisor contract today. Their ordinary sandbox behavior continues to work.
@@ -71,6 +75,11 @@ root. Upload the bundle to the S3 location declared in `code.image`.
 IPv4 socket availability, denied IPv6/io_uring operations, and execution of saved
 image commands with their image environment. `cargo test -p alien-core --lib
 resources::sandbox` checks plan-time backend refusals and declaration-owned identity.
+`cargo test -p alien-sandbox-agent --test privileged_supervisor -- --ignored`
+runs the IPv4 allowlist, DNS denial (including loopback), rule-mutation refusal,
+image identity, and command cancellation checks in a private Docker network
+namespace. It requires Linux Docker with NET_ADMIN and internet access.
+
 Live qualification must additionally run this agent on a MicroVM, verify allowed
 IPv4 traffic and denied traffic to another address, attempt to change OUTPUT rules
 through exec, and verify the image command's uid and capabilities. Delete all probe

@@ -50,7 +50,11 @@ fn destinations(policy: &SandboxEgress) -> Result<BTreeSet<Ipv4Addr>> {
                     "invalid allowlisted hostname '{domain}'"
                 ))));
             }
-            let addresses: BTreeSet<_> = (domain.as_str(), 0)
+            let hostname = domain
+                .strip_suffix('.')
+                .unwrap_or(domain)
+                .to_ascii_lowercase();
+            let addresses: BTreeSet<_> = (hostname.as_str(), 0)
                 .to_socket_addrs()
                 .into_alien_error()
                 .context(failed(format!("resolve {domain}")))?
@@ -65,7 +69,7 @@ fn destinations(policy: &SandboxEgress) -> Result<BTreeSet<Ipv4Addr>> {
                 ))));
             }
             for ip in &addresses {
-                hosts.push_str(&format!("{ip} {domain}\n"));
+                hosts.push_str(&format!("{ip} {hostname} {hostname}.\n"));
             }
             ips.extend(addresses);
         }
@@ -125,7 +129,7 @@ fn pin_hosts(hosts: &str) -> std::io::Result<()> {
 
 /// Installs an IPv4 OUTPUT default-deny policy atomically through iptables-restore.
 /// Replies to inbound agent/preview connections are allowed; a listening port never grants
-/// outbound access. DNS is available to the privileged supervisor only.
+/// outbound access. Restricted policies disable DNS after startup hostname pinning.
 pub fn install(policy: &SandboxEgress) -> Result<()> {
     if unsafe { libc::geteuid() } != 0 {
         return Err(AlienError::new(failed("supervisor must start as root")));
@@ -135,26 +139,25 @@ pub fn install(policy: &SandboxEgress) -> Result<()> {
     let mut rules =
         String::from("*filter\n:INPUT ACCEPT [0:0]\n:FORWARD DROP [0:0]\n:OUTPUT DROP [0:0]\n");
     if !matches!(policy, SandboxEgress::Allow) {
-        rules.push_str("-A OUTPUT -p udp --dport 53 -m owner ! --uid-owner 0 -j DROP\n-A OUTPUT -p tcp --dport 53 -m owner ! --uid-owner 0 -j DROP\n");
+        rules
+            .push_str("-A OUTPUT -p udp --dport 53 -j DROP\n-A OUTPUT -p tcp --dport 53 -j DROP\n");
     }
     rules.push_str("-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n");
-    // Resolver addresses are startup configuration, not caller input.
-    let resolv = fs::read_to_string("/etc/resolv.conf")
-        .into_alien_error()
-        .context(failed("read resolver configuration"))?;
-    for line in resolv.lines() {
-        let mut words = line.split_whitespace();
-        if words.next() == Some("nameserver") {
-            if let Some(ip) = words.next().and_then(|s| s.parse::<Ipv4Addr>().ok()) {
-                for protocol in ["udp", "tcp"] {
-                    let owner = if matches!(policy, SandboxEgress::Allow) {
-                        ""
-                    } else {
-                        " -m owner --uid-owner 0"
-                    };
-                    rules.push_str(&format!(
-                        "-A OUTPUT -d {ip} -p {protocol} --dport 53{owner} -j ACCEPT\n"
-                    ));
+    // Restricted policies need no DNS after startup pinning. The guest kernel lacks the
+    // iptables owner match, so never create a resolver exception shared with commands.
+    if matches!(policy, SandboxEgress::Allow) {
+        let resolv = fs::read_to_string("/etc/resolv.conf")
+            .into_alien_error()
+            .context(failed("read resolver configuration"))?;
+        for line in resolv.lines() {
+            let mut words = line.split_whitespace();
+            if words.next() == Some("nameserver") {
+                if let Some(ip) = words.next().and_then(|s| s.parse::<Ipv4Addr>().ok()) {
+                    for protocol in ["udp", "tcp"] {
+                        rules.push_str(&format!(
+                            "-A OUTPUT -d {ip} -p {protocol} --dport 53 -j ACCEPT\n"
+                        ));
+                    }
                 }
             }
         }

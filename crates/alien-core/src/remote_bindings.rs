@@ -112,7 +112,11 @@ pub fn remote_binding_undeliverable_reason(entry: &ResourceEntry) -> Option<&'st
     remote_binding_for_entry(entry)?;
     let sandbox = entry.config.downcast_ref::<Sandbox>()?;
 
-    if !matches!(sandbox.cloud_egress(), SandboxEgress::Allow) {
+    if sandbox.privileged_supervisor.is_some() {
+        return Some("a remotely published sandbox cannot declare privilegedSupervisor; the raw grant can start retained image versions with a different command identity or egress policy; use an ordinary workload binding");
+    }
+
+    if !matches!(sandbox.egress, SandboxEgress::Allow) {
         return Some(
             "a remotely published sandbox must declare egress 'allow'; the remote grant either \
              cannot pass a declared connector or lets its holder create sandboxes that ignore the \
@@ -189,6 +193,36 @@ mod tests {
             dependencies: Vec::new(),
             lifecycle: ResourceLifecycle::Frozen,
             remote_access: true,
+        }
+    }
+
+    #[test]
+    fn a_remote_grant_cannot_bypass_supervision_through_a_retained_version() {
+        for egress in [
+            SandboxEgress::Allow,
+            SandboxEgress::Deny,
+            SandboxEgress::AllowDomains {
+                domains: vec!["example.com".to_string()],
+            },
+        ] {
+            let mut entry = remote_sandbox(egress, vec![]);
+            let mut sandbox = entry
+                .config
+                .downcast_ref::<Sandbox>()
+                .expect("sandbox")
+                .clone();
+            sandbox.privileged_supervisor =
+                Some(crate::SandboxPrivilegedSupervisor { command_uid: 60001 });
+            entry.config = crate::Resource::new(sandbox);
+            assert!(remote_binding_undeliverable_reason(&entry)
+                .expect("raw version-wide grant is unsafe")
+                .contains("privilegedSupervisor"));
+            entry.remote_access = false;
+            assert_eq!(
+                remote_binding_undeliverable_reason(&entry),
+                None,
+                "ordinary bindings select the active version"
+            );
         }
     }
 
