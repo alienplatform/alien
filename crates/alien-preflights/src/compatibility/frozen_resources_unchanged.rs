@@ -86,7 +86,7 @@ fn validated_machine_profile(platform: Platform, group: &CapacityGroup) -> bool 
         &selection,
     )
     .is_ok()
-        && materialized.profile == group.profile
+        && (group.profile.is_none() || materialized.profile == group.profile)
 }
 
 fn machine_change<'a>(
@@ -624,6 +624,31 @@ mod tests {
     async fn aws_machine_change_within_one_architecture_is_runtime_manageable() {
         let result = machine_change(Platform::Aws, "m8i.4xlarge").await;
         assert!(result.success, "{:?}", result.errors);
+    }
+
+    #[tokio::test]
+    async fn idle_declared_machine_change_validates_without_a_recorded_profile() {
+        let old = compute_cluster(2);
+        let mut changed = old.clone();
+        changed.capacity_groups[0].instance_type = Some("m8i.4xlarge".into());
+        let check = FrozenResourcesUnchangedCheck {
+            platform: Platform::Aws,
+        };
+        assert!(
+            check
+                .check(&compute_stack(old.clone()), &compute_stack(changed.clone()))
+                .await
+                .unwrap()
+                .success
+        );
+        changed.capacity_groups[0].instance_type = Some("m7i.4xlarge".into());
+        assert!(
+            !check
+                .check(&compute_stack(old), &compute_stack(changed))
+                .await
+                .unwrap()
+                .success
+        );
     }
 
     #[tokio::test]
