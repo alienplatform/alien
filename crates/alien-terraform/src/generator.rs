@@ -230,6 +230,7 @@ fn generate_terraform_module_internal(
     let mut registration_resources: Vec<(Option<String>, Expression)> = Vec::new();
     let mut shared_locals: IndexMap<String, Expression> = IndexMap::new();
     let mut gated = crate::gating::GatedAddresses::default();
+    let mut secrets_vault_binding: Option<Expression> = None;
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
@@ -310,6 +311,10 @@ fn generate_terraform_module_internal(
         let local_contributions = std::mem::take(&mut fragment.locals);
         shared_locals.extend(local_contributions);
         per_resource.insert(resource_id.clone(), fragment);
+
+        if resource_id.as_str() == alien_core::SECRETS_VAULT_ID {
+            secrets_vault_binding = emitter.emit_binding_ref(&ctx)?;
+        }
 
         let registration_data = emitter.emit_import_ref(&ctx)?;
         registration_resources.push((
@@ -535,6 +540,7 @@ fn generate_terraform_module_internal(
             target,
             options.registration.as_ref(),
             &stack_inputs,
+            deployer_secret_outputs(stack, target, secrets_vault_binding.as_ref())?,
         ))?,
     );
     if let Some(contents) = remote_bindings_permissions_md(stack, target) {
@@ -1497,6 +1503,9 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
         .iter()
         .filter(|input| {
             input.provided_by.contains(&StackInputProvider::Deployer)
+                // Deployer secrets are written into the customer's own secret
+                // store, so no variable (and no state) ever holds them.
+                && !alien_core::is_deployer_secret_input(input)
                 && input
                     .platforms
                     .as_ref()
@@ -1504,6 +1513,110 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
         })
         .cloned()
         .collect()
+}
+
+/// One output per deployer secret, naming where the deployer writes its value.
+///
+/// The name comes from the `secrets` vault's binding: a Parameter Store or
+/// Secret Manager prefix, or a Key Vault. On a Kubernetes target the value is
+/// a Secret in the deployment's namespace whose name the operator derives, so
+/// the output carries the vault key and the deployment status shows the full
+/// name.
+fn deployer_secret_outputs(
+    stack: &Stack,
+    target: TerraformTarget,
+    secrets_vault_binding: Option<&Expression>,
+) -> Result<Vec<(String, Expression, String)>> {
+    let platform = target.deployment_platform();
+    let inputs: Vec<&StackInputDefinition> = stack
+        .inputs()
+        .iter()
+        .filter(|input| {
+            alien_core::is_deployer_secret_input(input)
+                && input
+                    .platforms
+                    .as_ref()
+                    .is_none_or(|platforms| platforms.contains(&platform))
+        })
+        .collect();
+    if inputs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let binding_field = |field: &str| match secrets_vault_binding {
+        Some(Expression::Object(binding)) => binding.iter().find_map(|(key, value)| {
+            matches!(key, hcl::expr::ObjectKey::Identifier(id) if id.as_str() == field)
+                .then(|| value.clone())
+        }),
+        _ => None,
+    };
+    let missing_vault = || {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: "generate_terraform_module".to_string(),
+            reason: format!(
+                "deployer secret inputs live in the '{}' vault, which this module does not \
+                 emit; run the stack through preflights so the vault is added",
+                alien_core::SECRETS_VAULT_ID
+            ),
+        })
+    };
+
+    let mut outputs = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        let vault_key = alien_core::deployer_secret_vault_key(&input.id);
+        let (value, description) = if target.is_kubernetes() {
+            (
+                expr::object([("vault_key", Expression::String(vault_key))]),
+                format!(
+                    "Secrets vault key for '{}'; the deployment status shows the Kubernetes \
+                     Secret to create.",
+                    input.label
+                ),
+            )
+        } else if let Some(vault_name) = binding_field("vaultName") {
+            (
+                expr::object([
+                    ("key_vault", vault_name),
+                    (
+                        "name",
+                        Expression::String(alien_core::vault_naming::key_vault_secret_name(
+                            &vault_key,
+                        )),
+                    ),
+                ]),
+                format!(
+                    "Key Vault secret to write the '{}' value into.",
+                    input.label
+                ),
+            )
+        } else {
+            let prefix = binding_field("vaultPrefix").ok_or_else(missing_vault)?;
+            (
+                expr::object([(
+                    "name",
+                    Expression::FuncCall(Box::new(
+                        hcl::expr::FuncCall::builder(hcl::Identifier::sanitized("join"))
+                            .arg(Expression::String("-".to_string()))
+                            .arg(Expression::Array(vec![
+                                prefix,
+                                Expression::String(vault_key),
+                            ]))
+                            .build(),
+                    )),
+                )]),
+                format!("Secret to write the '{}' value into.", input.label),
+            )
+        };
+        outputs.push((
+            format!(
+                "deployer_secret_{}",
+                terraform_stack_input_variable_name(input).trim_start_matches("input_")
+            ),
+            value,
+            description,
+        ));
+    }
+    Ok(outputs)
 }
 
 fn validate_stack_inputs_for_terraform(inputs: &[StackInputDefinition]) -> Result<()> {
@@ -1527,22 +1640,7 @@ fn validate_stack_inputs_for_terraform(inputs: &[StackInputDefinition]) -> Resul
         }
     }
 
-    let secret_inputs: Vec<&str> = inputs
-        .iter()
-        .filter(|input| input.kind == StackInputKind::Secret)
-        .map(|input| input.id.as_str())
-        .collect();
-    if secret_inputs.is_empty() {
-        return Ok(());
-    }
-
-    Err(AlienError::new(ErrorData::OperationNotSupported {
-        operation: "generate_terraform_module".to_string(),
-        reason: format!(
-            "Terraform deployer-provided secret stack inputs are not enabled because this provider cannot prove values stay out of Terraform state yet. Use the deployment portal, CloudFormation, or deploy CLI for secret inputs, or move these inputs out of the Terraform setup path: {}",
-            secret_inputs.join(", ")
-        ),
-    }))
+    Ok(())
 }
 
 fn stack_input_description(label: &str, description: &str) -> String {
@@ -3767,6 +3865,7 @@ fn outputs_body(
     target: TerraformTarget,
     registration: Option<&TerraformRegistration>,
     stack_inputs: &[StackInputDefinition],
+    deployer_secret_outputs: Vec<(String, Expression, String)>,
 ) -> Body {
     let mut outputs = vec![
         (
@@ -3903,10 +4002,12 @@ fn outputs_body(
 
     let blocks: Vec<Structure> = outputs
         .into_iter()
+        .map(|(name, value, description)| (name.to_string(), value, description.to_string()))
+        .chain(deployer_secret_outputs)
         .map(|(name, value, description)| {
             let mut body = vec![
                 attr("value", value),
-                attr("description", Expression::String(description.to_string())),
+                attr("description", Expression::String(description)),
             ];
             if name == "deployment_stack_settings"
                 || name == "deployment_token"
@@ -3917,7 +4018,7 @@ fn outputs_body(
 
             nested(Block {
                 identifier: Identifier::sanitized("output"),
-                labels: vec![BlockLabel::String(name.to_string())],
+                labels: vec![BlockLabel::String(name)],
                 body: Body::from(body),
             })
         })
@@ -4344,8 +4445,13 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
         assert!(registration_body
             .contains("stack_settings = jsondecode(jsonencode(local.deployment_settings))"));
 
-        let outputs = render_body(outputs_body(TerraformTarget::Aws, Some(&registration), &[]))
-            .expect("outputs");
+        let outputs = render_body(outputs_body(
+            TerraformTarget::Aws,
+            Some(&registration),
+            &[],
+            Vec::new(),
+        ))
+        .expect("outputs");
         assert!(outputs.contains("example_app_deployment.this.deployment_id"));
         assert!(!outputs.contains("deployment_input_values"));
     }

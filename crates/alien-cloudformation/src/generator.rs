@@ -365,6 +365,7 @@ pub fn generate_cloudformation_template(
 
     let mut registration_resources: Vec<RegistrationEntry> = Vec::new();
     let mut emitted_resource_ids: IndexMap<String, Vec<String>> = IndexMap::new();
+    let mut secrets_vault_binding: Option<CfExpression> = None;
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
@@ -464,6 +465,10 @@ pub fn generate_cloudformation_template(
             insert_resource(&mut template, emitted)?;
         }
 
+        if resource_id.as_str() == alien_core::SECRETS_VAULT_ID {
+            secrets_vault_binding = emitter.emit_binding_ref(&ctx)?;
+        }
+
         let registration_data = emitter.emit_import_ref(&ctx)?;
         registration_resources.push(RegistrationEntry {
             enabled_when: enabled_when.map(str::to_string),
@@ -493,6 +498,13 @@ pub fn generate_cloudformation_template(
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
     apply_network_iam_dependencies(stack, &emitted_resource_ids, &mut template);
     consolidate_role_inline_policies(&mut template)?;
+
+    add_deployer_secret_outputs(
+        &mut template,
+        stack,
+        options.target,
+        secrets_vault_binding.as_ref(),
+    )?;
 
     if let Some(service_token) = options.registration.service_token(&mut template)? {
         add_custom_resource(
@@ -544,6 +556,9 @@ fn stack_inputs_for_cloudformation(
         .iter()
         .filter(|input| {
             input.provided_by.contains(&StackInputProvider::Deployer)
+                // Deployer secrets are written into the customer's own secret
+                // store, never passed through the template.
+                && !alien_core::is_deployer_secret_input(input)
                 && input
                     .platforms
                     .as_ref()
@@ -551,6 +566,93 @@ fn stack_inputs_for_cloudformation(
         })
         .cloned()
         .collect()
+}
+
+/// One output per deployer secret, naming where the deployer writes its value.
+///
+/// On AWS that is the SSM parameter in the stack's `secrets` vault. On a
+/// Kubernetes target the value is a Secret in the deployment's namespace whose
+/// name the operator derives, so the output carries the vault key and the
+/// deployment status shows the full name.
+fn add_deployer_secret_outputs(
+    template: &mut CfTemplate,
+    stack: &Stack,
+    target: CloudFormationTarget,
+    secrets_vault_binding: Option<&CfExpression>,
+) -> Result<()> {
+    let platform = target.deployment_platform();
+    let inputs: Vec<&StackInputDefinition> = stack
+        .inputs()
+        .iter()
+        .filter(|input| {
+            alien_core::is_deployer_secret_input(input)
+                && input
+                    .platforms
+                    .as_ref()
+                    .is_none_or(|platforms| platforms.contains(&platform))
+        })
+        .collect();
+    if inputs.is_empty() {
+        return Ok(());
+    }
+
+    let vault_prefix = if target.is_kubernetes() {
+        None
+    } else {
+        let prefix = match secrets_vault_binding {
+            Some(CfExpression::Object(binding)) => binding.get("vaultPrefix").cloned(),
+            _ => None,
+        };
+        Some(prefix.ok_or_else(|| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate_cloudformation_template".to_string(),
+                reason: format!(
+                    "deployer secret inputs live in the '{}' vault, which this stack does not \
+                     emit; run the stack through preflights so the vault is added",
+                    alien_core::SECRETS_VAULT_ID
+                ),
+            })
+        })?)
+    };
+
+    for input in inputs {
+        let vault_key = alien_core::deployer_secret_vault_key(&input.id);
+        let output_name = format!("DeployerSecret{}", sanitize_logical_id(&input.id));
+        if template.outputs.contains_key(&output_name) {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate_cloudformation_template".to_string(),
+                reason: format!(
+                    "stack input '{}' normalizes to CloudFormation output '{output_name}', \
+                     which another input already claimed; rename one",
+                    input.id
+                ),
+            }));
+        }
+        let (description, value) = match &vault_prefix {
+            Some(prefix) => (
+                format!(
+                    "SSM SecureString parameter to write the '{}' value into.",
+                    input.label
+                ),
+                CfExpression::join(
+                    "-",
+                    CfExpression::list([prefix.clone(), CfExpression::from(vault_key)]),
+                ),
+            ),
+            None => (
+                format!(
+                    "Secrets vault key for '{}'; the deployment status shows the Kubernetes \
+                     Secret to create.",
+                    input.label
+                ),
+                CfExpression::from(vault_key),
+            ),
+        };
+        template
+            .outputs
+            .insert(output_name, output(&description, value));
+    }
+    Ok(())
 }
 
 fn stack_input_parameter_name(input: &StackInputDefinition) -> String {
