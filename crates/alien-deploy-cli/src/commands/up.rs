@@ -1487,6 +1487,7 @@ machine = "m8i.xlarge"
             default: None,
             platforms: None,
             validation: None,
+            generate: None,
             env: vec![],
         }
     }

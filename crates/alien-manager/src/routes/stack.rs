@@ -180,6 +180,14 @@ pub async fn stack_import(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+    let stack_inputs = source_stack.inputs.clone();
+    // Generated secrets are developer-owned and never setup parameters, so a
+    // setup caller must not be able to set or replace one.
+    if let Err(e) =
+        crate::generated_inputs::reject_generated_input_values(&stack_inputs, &req.input_values)
+    {
+        return e.into_response();
+    }
 
     // A gated resource renders behind its input in the setup template, so its
     // absence from the delivered resource ids IS the deployer's answer,
@@ -280,6 +288,14 @@ pub async fn stack_import(
                 return ErrorData::forbidden("Cannot update imported deployment in this group")
                     .into_response();
             }
+            // This write replaces the stored map and the request never carries
+            // a generated secret, so keep the value the deployment holds.
+            crate::generated_inputs::carry_stored_generated_input_values(
+                &stack_inputs,
+                req.platform,
+                &existing.input_values,
+                &mut req.input_values,
+            );
             if !setup_contract_lane_matches(&existing, &req) {
                 return AlienError::new(ErrorData::ImportedDeploymentConflict {
                     reason: format!(
@@ -513,6 +529,12 @@ pub async fn stack_import(
         })
         .into_response();
     }
+
+    crate::generated_inputs::generate_missing_input_values(
+        &stack_inputs,
+        req.platform,
+        &mut req.input_values,
+    );
 
     let (raw_token, key_prefix, key_hash) = ids::generate_token(TokenType::Deployment.prefix());
 

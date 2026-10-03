@@ -34,6 +34,7 @@ fn stack_with_inputs() -> Stack {
                 min_items: None,
                 max_items: None,
             }),
+            generate: None,
             env: vec![StackInputEnvironmentMapping {
                 name: "API_BASE_URL".to_string(),
                 target_resources: None,

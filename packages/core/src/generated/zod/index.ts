@@ -393,6 +393,7 @@ export type { SandboxHeartbeatStatus } from "./sandbox-heartbeat-status-schema.j
 export type { SandboxLifecyclePolicy } from "./sandbox-lifecycle-policy-schema.js";
 export type { SandboxLimits } from "./sandbox-limits-schema.js";
 export type { SandboxOutputs } from "./sandbox-outputs-schema.js";
+export type { SandboxPrivilegedSupervisor } from "./sandbox-privileged-supervisor-schema.js";
 export type { Sandbox } from "./sandbox-schema.js";
 export type { ScheduledEvent } from "./scheduled-event-schema.js";
 export type { ServiceAccountHeartbeatData } from "./service-account-heartbeat-data-schema.js";
@@ -407,6 +408,7 @@ export type { StackInputDefaultValue } from "./stack-input-default-value-schema.
 export type { StackInputDefinition } from "./stack-input-definition-schema.js";
 export type { StackInputEnvironmentMapping } from "./stack-input-environment-mapping-schema.js";
 export type { StackInputEnvironmentVariableType } from "./stack-input-environment-variable-type-schema.js";
+export type { StackInputGenerate } from "./stack-input-generate-schema.js";
 export type { StackInputKind } from "./stack-input-kind-schema.js";
 export type { StackInputProvider } from "./stack-input-provider-schema.js";
 export type { StackInputValidation } from "./stack-input-validation-schema.js";
@@ -841,6 +843,7 @@ export { SandboxHeartbeatStatusSchema } from "./sandbox-heartbeat-status-schema.
 export { SandboxLifecyclePolicySchema } from "./sandbox-lifecycle-policy-schema.js";
 export { SandboxLimitsSchema } from "./sandbox-limits-schema.js";
 export { SandboxOutputsSchema } from "./sandbox-outputs-schema.js";
+export { SandboxPrivilegedSupervisorSchema } from "./sandbox-privileged-supervisor-schema.js";
 export { SandboxSchema } from "./sandbox-schema.js";
 export { ScheduledEventSchema } from "./scheduled-event-schema.js";
 export { ServiceAccountHeartbeatDataSchema } from "./service-account-heartbeat-data-schema.js";
@@ -855,6 +858,7 @@ export { StackInputDefaultValueSchema } from "./stack-input-default-value-schema
 export { StackInputDefinitionSchema } from "./stack-input-definition-schema.js";
 export { StackInputEnvironmentMappingSchema } from "./stack-input-environment-mapping-schema.js";
 export { StackInputEnvironmentVariableTypeSchema } from "./stack-input-environment-variable-type-schema.js";
+export { StackInputGenerateSchema } from "./stack-input-generate-schema.js";
 export { StackInputKindSchema } from "./stack-input-kind-schema.js";
 export { StackInputProviderSchema } from "./stack-input-provider-schema.js";
 export { StackInputValidationSchema } from "./stack-input-validation-schema.js";

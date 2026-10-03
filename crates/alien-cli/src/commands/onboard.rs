@@ -794,11 +794,12 @@ fn collect_stack_input_values(
         }
     }
 
-    // A secret the deployer may also provide is optional here: without a
+    // Alien generates a value for generated inputs when none is passed. A
+    // secret the deployer may also provide is optional here: without a
     // developer value, the deployer writes it into their own secret store.
-    for input in inputs
-        .iter()
-        .filter(|input| input.required && !is_deployer_secret_input(input))
+    for input in inputs.iter().filter(|input| {
+        input.required && !input.is_generated() && !is_deployer_secret_input(input)
+    })
     {
         if !raw_values.contains_key(&input.id) {
             if json || !can_prompt() {
@@ -951,7 +952,9 @@ fn validate_string_stack_input(input: &StackInputDefinition, value: &str) -> Res
 fn print_required_developer_inputs(inputs: &[StackInputDefinition]) {
     let required = inputs
         .iter()
-        .filter(|input| input.required && !is_deployer_secret_input(input))
+        .filter(|input| {
+            input.required && !input.is_generated() && !is_deployer_secret_input(input)
+        })
         .collect::<Vec<_>>();
     if required.is_empty() {
         return;
@@ -1659,6 +1662,7 @@ mod tests {
             default: None,
             platforms: None,
             validation: None,
+            generate: None,
             env: vec![],
         }
     }
@@ -1865,6 +1869,34 @@ mod tests {
 
         assert!(err.to_string().contains("Missing developer input"));
         assert!(err.to_string().contains("--secret-input serviceToken=..."));
+    }
+
+    #[test]
+    fn generated_inputs_are_not_required_but_can_be_overridden() {
+        let generated = StackInputDefinition {
+            generate: Some(alien_core::StackInputGenerate { length: 64 }),
+            ..input("signingKey", StackInputKind::Secret, true)
+        };
+
+        let values = collect_stack_input_values(
+            std::slice::from_ref(&generated),
+            &[],
+            &[],
+            &[Platform::Aws],
+            true,
+        )
+        .expect("a generated input needs no value");
+        assert!(values.is_empty(), "Alien generates the value later");
+
+        let values = collect_stack_input_values(
+            &[generated],
+            &[],
+            &["signingKey=0123456789abcdef0123".to_string()],
+            &[Platform::Aws],
+            true,
+        )
+        .expect("an explicit value overrides generation");
+        assert_eq!(values.len(), 1);
     }
 
     #[test]

@@ -402,6 +402,7 @@ mod tests {
             default: None,
             platforms: None,
             validation: None,
+            generate: None,
             env: vec![StackInputEnvironmentMapping {
                 name: "DATABASE_PASSWORD".to_string(),
                 target_resources: None,

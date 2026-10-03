@@ -31,6 +31,7 @@ fn plain_input_stack() -> Stack {
                 min_items: None,
                 max_items: None,
             }),
+            generate: None,
             env: vec![StackInputEnvironmentMapping {
                 name: "API_BASE_URL".to_string(),
                 target_resources: None,
@@ -216,6 +217,7 @@ fn inputs_colliding_after_normalization_are_refused() {
             default: None,
             platforms: None,
             validation: None,
+            generate: None,
             env: Vec::new(),
         }
     }

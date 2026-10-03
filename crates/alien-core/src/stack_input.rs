@@ -109,6 +109,25 @@ pub enum StackInputDefaultValue {
     StringList(Vec<String>),
 }
 
+/// Shortest value Alien generates for a secret input.
+pub const STACK_INPUT_GENERATE_MIN_LENGTH: u32 = 16;
+/// Longest value Alien generates for a secret input.
+pub const STACK_INPUT_GENERATE_MAX_LENGTH: u32 = 256;
+
+/// Asks Alien to generate a secret input's value.
+///
+/// The value is an alphanumeric string (`A-Z`, `a-z`, `0-9`), so it is safe in
+/// connection strings, command lines and environment variables. It is generated
+/// once, when the deployment's input values are first resolved, and then kept
+/// with the deployment's other input values.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct StackInputGenerate {
+    /// Number of characters to generate.
+    pub length: u32,
+}
+
 /// Stack input definition serialized into a release stack.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -138,12 +157,22 @@ pub struct StackInputDefinition {
     /// Portable validation constraints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validation: Option<StackInputValidation>,
+    /// Alien generates the value when none is provided. Secret,
+    /// developer-provided inputs only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generate: Option<StackInputGenerate>,
     /// Runtime env-var mappings for v1 input resolution.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env: Vec<StackInputEnvironmentMapping>,
 }
 
 impl StackInputDefinition {
+    /// Whether Alien generates this input's value when none is provided. A
+    /// generated input never needs a value from the developer or deployer.
+    pub fn is_generated(&self) -> bool {
+        self.generate.is_some()
+    }
+
     /// A deployer-provided boolean input, the shape `.enabled(input)` gates
     /// on. With a default the input is optional; without one it is required,
     /// since an unanswered gate would leave the resource's existence
@@ -167,6 +196,7 @@ impl StackInputDefinition {
             default: default.map(StackInputDefaultValue::Boolean),
             platforms: None,
             validation: None,
+            generate: None,
             env: Vec::new(),
         }
     }
@@ -303,6 +333,7 @@ mod environment_tests {
             description: id.to_string(),
             placeholder: None,
             default: None,
+            generate: None,
             platforms: None,
             validation: None,
             env: vec![StackInputEnvironmentMapping {
