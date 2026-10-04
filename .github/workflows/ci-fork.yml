@@ -39,7 +39,7 @@ jobs:
 
       - name: Install development tools
         id: mise
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5.1.0
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
           MISE_DISABLE_TOOLS: rust
@@ -56,7 +56,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install Rust toolchain
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5.1.0
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
         with:

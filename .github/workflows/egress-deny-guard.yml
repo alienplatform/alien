@@ -42,7 +42,7 @@ jobs:
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Install Rust toolchain
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5.1.0
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
         with:
@@ -311,7 +311,7 @@ jobs:
 
       - if: steps.survived.outputs.stack == 'present'
         name: Install Rust toolchain
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5.1.0
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
         with:
