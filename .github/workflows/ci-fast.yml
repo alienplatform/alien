@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 
-# CI timing experiment (ALIEN-1216, not for merge): unwind + no debug info + mold linker
+# CI timing experiment (ALIEN-1216, not for merge): all-in PR tier (build changes, reuse build, no worker tests, Kind lifecycle steps off)
 env:
   # Fall back to local compilation when the shared sccache backend returns a
   # transient error (e.g. webdav 403) instead of failing the whole build.
@@ -277,6 +277,7 @@ jobs:
             'and not binary_id(alien-ai-gateway::live_direct_providers)'
             'and not binary_id(alien-ai-gateway::live_foundry_claude)'
             'and not binary_id(alien-ai-gateway::live_vertex_claude)'
+            'and not binary_id(alien-local::worker_integration)'
           )
           # Compile non-default feature coverage in the same unified graph. Running
           # these as later `cargo test` commands adds two serial recompilation tails.
@@ -285,13 +286,15 @@ jobs:
             --filter-expr "${FILTER_CLAUSES[*]}"
 
       - name: Start disposable Kubernetes cluster
-        if: needs.changes.outputs.product_lifecycle == 'true'
+        # ALIEN-1216 experiment: modelled as moved to the merge-queue tier.
+        if: false
         uses: helm/kind-action@v1.14.0
         with:
           cluster_name: alien-product-lifecycle
 
       - name: Kubernetes compute pool dynamic container lifecycle
-        if: needs.changes.outputs.product_lifecycle == 'true'
+        # ALIEN-1216 experiment: modelled as moved to the merge-queue tier.
+        if: false
         env:
           ALIEN_DYNAMIC_KIND_CONTEXT: kind-alien-product-lifecycle
           ALIEN_DYNAMIC_KIND_NAMESPACE: alien-dynamic-compute-ci
@@ -308,7 +311,8 @@ jobs:
             --ignored --nocapture --test-threads=1
 
       - name: Product Remote Operator Helm and Terraform lifecycle
-        if: needs.changes.outputs.product_lifecycle == 'true'
+        # ALIEN-1216 experiment: modelled as moved to the merge-queue tier.
+        if: false
         env:
           ALIEN_RUN_PRODUCT_LIFECYCLE_E2E: "1"
         run: |
@@ -323,7 +327,7 @@ jobs:
         # and only the test binary re-run under sudo: a root `cargo` would leave
         # root-owned artifacts behind for the cache upload.
         run: |
-          binary=$(cargo test -p alien-sandbox-agent --test privileged --no-run --message-format=json \
+          binary=$(cargo test --workspace --features alien-manager/openapi,alien-bindings/platform-sdk --no-run --message-format=json \
             | sed -n 's/.*"executable":"\([^"]*privileged-[^"]*\)".*/\1/p' | head -1)
           test -x "$binary"
           sudo "$binary" --ignored
@@ -333,7 +337,8 @@ jobs:
         # compares the two. Named here so a Dockerfile-only change still fails
         # visibly rather than inside the workspace run.
         run: |
-          cargo test -p alien-core --lib sandbox_image
+          cargo nextest run --workspace --features alien-manager/openapi,alien-bindings/platform-sdk \
+            --filter-expr 'package(alien-core) and kind(lib) and test(sandbox_image)'
 
       - name: Sandbox agent smoke test harness
         # Drives the release smoke test against a stub docker, once per failure
