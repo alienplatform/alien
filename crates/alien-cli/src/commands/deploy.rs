@@ -889,7 +889,7 @@ async fn create_deployment_with_group_session(
     parse_api_response(response, "Failed to create deployment").await
 }
 
-fn deployment_manager_http_client(
+pub(crate) fn deployment_manager_http_client(
     deployment_token: &str,
     workspace: Option<&str>,
 ) -> Result<reqwest::Client> {

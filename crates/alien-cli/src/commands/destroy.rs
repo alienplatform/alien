@@ -6,9 +6,10 @@
 //! 3. Request deletion via manager
 //! 4. Run deletion step loop (acquire → step → reconcile → release)
 
-use crate::deployment_tracking::DeploymentTracker;
+use crate::commands::deploy::deployment_manager_http_client;
+use crate::deployment_tracking::{DeploymentTracker, TrackedDeployment};
 use crate::error::{ErrorData, Result};
-use crate::execution_context::ExecutionMode;
+use crate::execution_context::{ExecutionMode, ManagerContext};
 use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps};
 use alien_core::{ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, Platform};
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome};
@@ -101,15 +102,36 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
     let manager_ctx = ctx
         .resolve_manager(&tracked_deployment.project_id, &platform_name)
         .await?;
-    let manager_client = manager_ctx.client;
 
     steps.complete(1, Some(format!("Manager: {}", manager_ctx.manager_url)));
+
+    destroy_tracked_deployment(&args, platform, &tracked_deployment, manager_ctx, steps).await
+}
+
+/// Delete a tracked deployment through its resolved manager.
+async fn destroy_tracked_deployment(
+    args: &DestroyArgs,
+    platform: Platform,
+    tracked_deployment: &TrackedDeployment,
+    manager_ctx: ManagerContext,
+    steps: FixedSteps,
+) -> Result<()> {
+    // Manager discovery may authenticate as the user, but teardown drives the
+    // manager's sync endpoints, which only accept the deployment's own token.
+    let manager_client = alien_manager_api::Client::new_with_client(
+        &manager_ctx.manager_url,
+        deployment_manager_http_client(
+            &tracked_deployment.api_key,
+            manager_ctx.workspace.as_deref(),
+        )?,
+    );
+    let operator_client = manager_ctx.client;
 
     // Step 3: Delete via manager
     steps.activate(2, Some(tracked_deployment.deployment_id.clone()));
 
     if args.force {
-        manager_client
+        operator_client
             .delete_deployment()
             .id(&tracked_deployment.deployment_id)
             .body(alien_manager_api::types::DeleteDeploymentRequest {
@@ -147,7 +169,7 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         steps.activate(2, Some("Setup teardown required".to_string()));
     } else {
         // Request deletion
-        manager_client
+        operator_client
             .delete_deployment()
             .id(&tracked_deployment.deployment_id)
             .body(alien_manager_api::types::DeleteDeploymentRequest {
@@ -412,4 +434,125 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        extract::State,
+        http::{HeaderMap, StatusCode},
+        response::{IntoResponse, Response},
+        routing::{get, post},
+        Json, Router,
+    };
+    use std::sync::{Arc, Mutex};
+
+    const DEPLOYMENT_TOKEN: &str = "deployment-secret";
+
+    #[derive(Default)]
+    struct ManagerState {
+        acquire_authorizations: Vec<String>,
+        deleted: bool,
+    }
+
+    type Shared = Arc<Mutex<ManagerState>>;
+
+    async fn get_deployment(State(state): State<Shared>) -> Response {
+        if state.lock().unwrap().deleted {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        Json(serde_json::json!({
+            "id": "dep_test",
+            "name": "test",
+            "platform": "test",
+            "status": "teardown-required",
+            "deploymentGroupId": "dg_test",
+            "deploymentProtocolVersion": 1,
+            "projectId": "proj_test",
+            "workspaceId": "ws_test",
+            "retryRequested": false,
+            "createdAt": "2026-10-05T00:00:00Z"
+        }))
+        .into_response()
+    }
+
+    /// Mirrors the platform: sync acquire only accepts deployment-scoped tokens.
+    /// A granted acquire finds nothing left to tear down, so the deployment is gone.
+    async fn acquire(State(state): State<Shared>, headers: HeaderMap) -> Response {
+        let authorization = headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let mut state = state.lock().unwrap();
+        state.acquire_authorizations.push(authorization.clone());
+        if authorization != format!("Bearer {DEPLOYMENT_TOKEN}") {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        state.deleted = true;
+        Json(serde_json::json!({ "deployments": [] })).into_response()
+    }
+
+    #[tokio::test]
+    async fn teardown_required_destroy_acquires_with_the_deployment_token() {
+        let state = Shared::default();
+        let app = Router::new()
+            .route("/v1/deployments/{id}", get(get_deployment))
+            .route("/v1/sync/acquire", post(acquire))
+            .with_state(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind manager");
+        let manager_url = format!("http://{}", listener.local_addr().expect("manager address"));
+        tokio::spawn(async move { axum::serve(listener, app).await.expect("serve manager") });
+
+        // Discovery authenticated as the user, as `alien destroy` does with a CLI login.
+        let user_http_client =
+            crate::auth::client_with_auth_and_workspace("Bearer user-session", "ws-name")
+                .expect("user client");
+        let manager_ctx = ManagerContext {
+            manager_url: manager_url.clone(),
+            manager_name: None,
+            manager_is_system: None,
+            manager_cloud: None,
+            client: alien_manager_api::Client::new_with_client(
+                &manager_url,
+                user_http_client.clone(),
+            ),
+            http_client: user_http_client,
+            auth_token: Some("user-session".to_string()),
+            repository_name: None,
+            repository_uri: None,
+            workspace: Some("ws-name".to_string()),
+        };
+        let tracked = TrackedDeployment {
+            name: "test".to_string(),
+            deployment_id: "dep_test".to_string(),
+            api_key: DEPLOYMENT_TOKEN.to_string(),
+            workspace_id: "ws_test".to_string(),
+            project_id: "proj_test".to_string(),
+        };
+        let args = DestroyArgs {
+            token: None,
+            name: "test".to_string(),
+            platform: Some("test".to_string()),
+            force: false,
+        };
+
+        destroy_tracked_deployment(
+            &args,
+            Platform::Test,
+            &tracked,
+            manager_ctx,
+            FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]),
+        )
+        .await
+        .expect("destroy should finish once the deployment is gone");
+
+        assert_eq!(
+            state.lock().unwrap().acquire_authorizations,
+            vec![format!("Bearer {DEPLOYMENT_TOKEN}")]
+        );
+    }
 }
