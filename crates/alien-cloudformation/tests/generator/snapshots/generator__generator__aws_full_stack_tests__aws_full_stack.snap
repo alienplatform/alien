@@ -1031,6 +1031,7 @@ Resources:
         Value: assets
       - Key: resource-type
         Value: storage
+      AbacStatus: Enabled
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
   AssetsBucketPolicy:
@@ -1141,6 +1142,7 @@ Resources:
         Value: mailbox
       - Key: resource-type
         Value: storage
+      AbacStatus: Enabled
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
   MailboxBucketPolicy:
