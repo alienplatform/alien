@@ -292,18 +292,19 @@ jobs:
 
       # The Kind steps below take ~35 min, so they run after merge (pushes to main)
       # instead of on every PR push. A failure on main opens an issue (main-failure).
+      # To run them on a branch before merging, start this workflow manually there.
       - name: Start disposable Kubernetes cluster
         if: >-
-          github.event_name != 'pull_request' && github.event_name != 'merge_group' &&
-          needs.changes.outputs.product_lifecycle == 'true'
+          github.event_name == 'workflow_dispatch' ||
+          (github.event_name == 'push' && needs.changes.outputs.product_lifecycle == 'true')
         uses: helm/kind-action@v1.14.0
         with:
           cluster_name: alien-product-lifecycle
 
       - name: Kubernetes compute pool dynamic container lifecycle
         if: >-
-          github.event_name != 'pull_request' && github.event_name != 'merge_group' &&
-          needs.changes.outputs.product_lifecycle == 'true'
+          github.event_name == 'workflow_dispatch' ||
+          (github.event_name == 'push' && needs.changes.outputs.product_lifecycle == 'true')
         env:
           ALIEN_DYNAMIC_KIND_CONTEXT: kind-alien-product-lifecycle
           ALIEN_DYNAMIC_KIND_NAMESPACE: alien-dynamic-compute-ci
@@ -323,8 +324,8 @@ jobs:
 
       - name: Product Remote Operator Helm and Terraform lifecycle
         if: >-
-          github.event_name != 'pull_request' && github.event_name != 'merge_group' &&
-          needs.changes.outputs.product_lifecycle == 'true'
+          github.event_name == 'workflow_dispatch' ||
+          (github.event_name == 'push' && needs.changes.outputs.product_lifecycle == 'true')
         env:
           ALIEN_RUN_PRODUCT_LIFECYCLE_E2E: "1"
         run: |
