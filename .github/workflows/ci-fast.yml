@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 
-# CI timing experiment (ALIEN-1216, not for merge): unwind + no debug info
+# CI timing experiment (ALIEN-1216, not for merge): unwind + no debug info + Swatinem/rust-cache
 env:
   # Fall back to local compilation when the shared sccache backend returns a
   # transient error (e.g. webdav 403) instead of failing the whole build.
@@ -178,6 +178,10 @@ jobs:
           version: v0.16.0
 
       - uses: taiki-e/install-action@nextest
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: alien-1216-ci-exp
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
