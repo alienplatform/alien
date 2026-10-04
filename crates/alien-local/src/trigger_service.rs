@@ -8,7 +8,7 @@
 //! For the local platform, this service runs independently of the worker and delivers
 //! events via the runtime's `ControlGrpcServer::send_task()`. This ensures:
 //! - At-least-once delivery for queue messages (ack only on handler success)
-//! - Filesystem-level storage event watching via `notify` (no polling)
+//! - Filesystem notifications plus reconciliation of committed storage objects
 //! - Persistent cron state for catch-up after restarts
 //!
 //! ## Cron Expression Format
@@ -19,6 +19,7 @@
 //!
 //! See docs/02-manager/10-deployment-protocol.md for the full protocol.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,7 +35,7 @@ use alien_worker_protocol::ControlGrpcServer;
 use chrono::Utc;
 use prost_types::Timestamp;
 use tokio::sync::broadcast;
-use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 
 use crate::error::ErrorData;
@@ -50,6 +51,7 @@ pub struct LocalTriggerService {
     triggers: Vec<WorkerTrigger>,
     bindings_provider: Arc<LocalBindingsProvider>,
     state_dir: PathBuf,
+    control_server: Arc<ControlGrpcServer>,
     shutdown_rx: broadcast::Receiver<()>,
 }
 
@@ -58,12 +60,14 @@ impl LocalTriggerService {
         triggers: Vec<WorkerTrigger>,
         bindings_provider: Arc<LocalBindingsProvider>,
         state_dir: PathBuf,
+        control_server: Arc<ControlGrpcServer>,
         shutdown_rx: broadcast::Receiver<()>,
     ) -> Self {
         Self {
             triggers,
             bindings_provider,
             state_dir,
+            control_server,
             shutdown_rx,
         }
     }
@@ -75,14 +79,14 @@ impl LocalTriggerService {
             return Ok(());
         }
 
-        let control_server = wait_for_control_server().await?;
+        let control_server = self.control_server.clone();
 
         info!(
             trigger_count = self.triggers.len(),
             "Starting local trigger service"
         );
 
-        let mut handles: Vec<JoinHandle<()>> = Vec::new();
+        let mut handles = JoinSet::new();
 
         for trigger in &self.triggers {
             match trigger {
@@ -93,13 +97,13 @@ impl LocalTriggerService {
                     let mut shutdown = self.shutdown_rx.resubscribe();
 
                     info!(queue = %binding_name, "Starting queue trigger poller");
-                    handles.push(tokio::spawn(async move {
+                    handles.spawn(async move {
                         if let Err(e) =
                             poll_queue(&binding_name, &provider, &cs, &mut shutdown).await
                         {
                             error!(queue = %binding_name, error = %e, "Queue poller error");
                         }
-                    }));
+                    });
                 }
                 WorkerTrigger::Storage { storage, events } => {
                     let binding_name = storage.id.clone();
@@ -117,7 +121,7 @@ impl LocalTriggerService {
                     let mut shutdown = self.shutdown_rx.resubscribe();
 
                     info!(storage = %binding_name, events = ?event_types, "Starting storage trigger watcher");
-                    handles.push(tokio::spawn(async move {
+                    handles.spawn(async move {
                         if let Err(e) = watch_storage(
                             &binding_name,
                             &storage_path,
@@ -129,7 +133,7 @@ impl LocalTriggerService {
                         {
                             error!(storage = %binding_name, error = %e, "Storage watcher error");
                         }
-                    }));
+                    });
                 }
                 WorkerTrigger::Schedule { cron } => {
                     let cron_expr = cron.clone();
@@ -138,70 +142,34 @@ impl LocalTriggerService {
                     let mut shutdown = self.shutdown_rx.resubscribe();
 
                     info!(cron = %cron_expr, "Starting cron trigger scheduler");
-                    handles.push(tokio::spawn(async move {
+                    handles.spawn(async move {
                         if let Err(e) =
                             run_cron_scheduler(&cron_expr, &cron_state_dir, &cs, &mut shutdown)
                                 .await
                         {
                             error!(cron = %cron_expr, error = %e, "Cron scheduler error");
                         }
-                    }));
+                    });
                 }
             }
         }
 
         // Wait for shutdown signal
-        self.shutdown_rx.recv().await.ok();
+        tokio::select! {
+            _ = self.shutdown_rx.recv() => {},
+            result = handles.join_next() => {
+                return Err(AlienError::new(ErrorData::TriggerServiceError {
+                    trigger_type: "all".to_string(), trigger_id: String::new(),
+                    reason: format!("Trigger task exited unexpectedly: {:?}", result),
+                }));
+            }
+        }
 
         info!("Shutting down local trigger service");
-        for handle in handles {
-            handle.abort();
-        }
+        handles.shutdown().await;
 
         Ok(())
     }
-}
-
-// ---------------------------------------------------------------------------
-// Wait for runtime to expose ControlGrpcServer
-// ---------------------------------------------------------------------------
-
-/// Wait for the runtime's control server AND for the application to register
-/// its event handlers. The trigger service must not deliver events before the
-/// application is ready — otherwise tasks arrive with "No handler found."
-async fn wait_for_control_server() -> Result<Arc<ControlGrpcServer>> {
-    // Wait for control server to exist
-    let cs = {
-        let mut cs_opt = None;
-        for _ in 0..60 {
-            if let Some(cs) = alien_worker_runtime::get_control_server() {
-                cs_opt = Some(cs);
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-        cs_opt.ok_or_else(|| {
-            AlienError::new(ErrorData::TriggerServiceError {
-                trigger_type: "all".to_string(),
-                trigger_id: String::new(),
-                reason: "Timeout waiting for runtime ControlGrpcServer (30s)".to_string(),
-            })
-        })?
-    };
-
-    // Wait for application to register at least one event handler
-    for _ in 0..60 {
-        if cs.has_registered_handlers().await {
-            return Ok(cs);
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-
-    // Proceed anyway — the app might not have handlers (just triggers in config)
-    warn!(
-        "Application has not registered event handlers after 30s, starting trigger polling anyway"
-    );
-    Ok(cs)
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +279,7 @@ async fn poll_queue_once(
                 receipt_handle: msg.receipt_handle.clone(),
                 attempt_count: msg.attempt,
                 timestamp: Some(now_timestamp()),
-                attributes: std::collections::HashMap::new(),
+                attributes: HashMap::new(),
             })),
         };
 
@@ -363,8 +331,24 @@ async fn watch_storage(
     let (fs_tx, mut fs_rx) = tokio::sync::mpsc::channel::<Event>(256);
 
     let mut watcher = notify::recommended_watcher(move |result: notify::Result<Event>| {
-        if let Ok(event) = result {
-            let _ = fs_tx.blocking_send(event);
+        match result {
+            Ok(event)
+                if matches!(
+                    event.kind,
+                    EventKind::Create(_)
+                        | EventKind::Remove(_)
+                        | EventKind::Modify(
+                            notify::event::ModifyKind::Name(_) | notify::event::ModifyKind::Data(_)
+                        )
+                ) =>
+            {
+                // Reconciliation covers dropped hints; never block watch registration.
+                let _ = fs_tx.try_send(event);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                warn!(%error, "Storage watcher error; periodic reconciliation remains active")
+            }
         }
     })
     .into_alien_error()
@@ -411,110 +395,173 @@ async fn watch_storage(
         "Watching storage directory for changes"
     );
 
+    // Recursive inotify registration races writes into new directories. Notifications only
+    // wake reconciliation; committed objects remain pending until their handler succeeds.
+    // A recovered Worker replays existing objects, matching at-least-once cloud delivery.
+    //
+    // `known` holds every committed object seen since start, with the version whose
+    // creation event succeeded (`None` while that creation is still pending). Deletion is
+    // derived from `known`, so an object whose creation handler failed still gets its
+    // deletion event.
+    let mut known: HashMap<PathBuf, Option<ObjectVersion>> = HashMap::new();
+    let mut reconcile = tokio::time::interval(Duration::from_secs(1));
+    reconcile.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
-            _ = shutdown.recv() => {
-                info!(storage = %binding_name, "Storage watcher shutting down");
-                return Ok(());
+            _ = shutdown.recv() => return Ok(()),
+            _ = reconcile.tick() => {},
+            _ = fs_rx.recv() => {},
+        }
+        // One scan covers every hint queued so far, so a write burst costs one scan
+        // instead of one per hint, and the timer restarts after each scan. Only the hints
+        // already queued are drained, so a steady stream of new ones cannot delay the scan.
+        for _ in 0..fs_rx.len() {
+            let _ = fs_rx.try_recv();
+        }
+        reconcile.reset();
+        let root = canonical_storage_path.clone();
+        let current = match tokio::task::spawn_blocking(move || storage_snapshot(&root))
+            .await
+            .into_alien_error()
+            .context(ErrorData::TriggerServiceError {
+                trigger_type: "storage".to_string(),
+                trigger_id: binding_name.to_string(),
+                reason: "Storage scan task failed".to_string(),
+            })? {
+            Ok(current) => current,
+            Err(error) => {
+                // Pending objects stay pending and the next tick rescans. Returning would
+                // stop the Worker's queue and cron triggers along with this watcher.
+                warn!(storage = %binding_name, %error, "Storage scan failed; retrying on the next reconciliation");
+                continue;
             }
-            Some(event) = fs_rx.recv() => {
-                let event_type = match event.kind {
-                    EventKind::Create(_) => "created",
-                    // object_store's local backend stages an upload as
-                    // `key#N` and renames it into place on completion, so
-                    // the finished object surfaces as a rename, not a
-                    // create.
-                    EventKind::Modify(notify::event::ModifyKind::Name(_)) => "created",
-                    EventKind::Remove(_) => "deleted",
-                    _ => continue,
+        };
+        for path in current.keys() {
+            known.entry(path.clone()).or_insert(None);
+        }
+        let changes = known
+            .iter()
+            .filter_map(|(path, delivered)| match current.get(path) {
+                Some(version) if *delivered != Some(*version) => {
+                    Some((path.clone(), "created", Some(*version)))
+                }
+                Some(_) => None,
+                None => Some((path.clone(), "deleted", None)),
+            })
+            .collect::<Vec<_>>();
+        for (path, event_type, version) in changes {
+            if event_types.iter().any(|event| event == event_type) {
+                let relative = path
+                    .strip_prefix(&canonical_storage_path)
+                    .into_alien_error()
+                    .context(ErrorData::TriggerServiceError {
+                        trigger_type: "storage".to_string(),
+                        trigger_id: binding_name.to_string(),
+                        reason: "Storage object is outside the watched root".to_string(),
+                    })?
+                    .to_string_lossy()
+                    .to_string();
+                let task = Task {
+                    task_id: uuid::Uuid::new_v4().to_string(),
+                    payload: Some(control::task::Payload::StorageEvent(ProtoStorageEvent {
+                        bucket: binding_name.to_string(),
+                        key: relative,
+                        event_type: event_type.to_string(),
+                        size: version.map_or(0, |(_, size)| size),
+                        timestamp: Some(now_timestamp()),
+                        ..Default::default()
+                    })),
                 };
-
-                if !event_types.iter().any(|e| e == event_type) {
-                    continue;
-                }
-
-                for path in &event.paths {
-                    if path.is_dir() {
+                let result = tokio::select! {
+                    _ = shutdown.recv() => return Ok(()),
+                    result = control_server.send_task(task, Duration::from_secs(30)) => result,
+                };
+                match result {
+                    Ok(result) if result.success => {}
+                    result => {
+                        warn!(storage = %binding_name, ?result, "Storage event failed; retaining for reconciliation");
                         continue;
                     }
-
-                    // Never emit events for object_store's `key#N` staging
-                    // files — only the final renamed object is an object.
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if name
-                            .rsplit_once('#')
-                            .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-                        {
-                            continue;
-                        }
-                    }
-
-                    // A created object must exist: this drops the vanished
-                    // half of rename pairs (the old name) and any file that
-                    // was removed again before we got here.
-                    if event_type == "created" && !path.is_file() {
-                        continue;
-                    }
-
-                    let relative = match path
-                        .strip_prefix(&canonical_storage_path)
-                        .or_else(|_| path.strip_prefix(storage_path))
-                    {
-                        Ok(rel) => rel.to_string_lossy().to_string(),
-                        Err(_) => {
-                            warn!(
-                                storage = %binding_name,
-                                path = %path.display(),
-                                "Storage event path outside the watched root; skipping"
-                            );
-                            continue;
-                        }
-                    };
-
-                    let size = if event_type == "created" {
-                        std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
-                    } else {
-                        0
-                    };
-
-                    debug!(
-                        storage = %binding_name,
-                        key = %relative,
-                        event_type = %event_type,
-                        "Storage event detected"
-                    );
-
-                    let task = Task {
-                        task_id: uuid::Uuid::new_v4().to_string(),
-                        payload: Some(control::task::Payload::StorageEvent(ProtoStorageEvent {
-                            bucket: binding_name.to_string(),
-                            key: relative,
-                            event_type: event_type.to_string(),
-                            size,
-                            timestamp: Some(now_timestamp()),
-                            content_type: String::new(),
-                            etag: String::new(),
-                            region: String::new(),
-                            version_id: String::new(),
-                            current_tier: String::new(),
-                            metadata: std::collections::HashMap::new(),
-                        })),
-                    };
-
-                    if let Err(e) = control_server
-                        .send_task(task, Duration::from_secs(30))
-                        .await
-                    {
-                        warn!(
-                            storage = %binding_name,
-                            error = %e,
-                            "Failed to deliver storage event to handler"
-                        );
-                    }
                 }
+            }
+            if version.is_some() {
+                known.insert(path, version);
+            } else {
+                known.remove(&path);
             }
         }
     }
+}
+
+/// Modification time and size of a committed storage object.
+type ObjectVersion = (std::time::SystemTime, u64);
+
+fn storage_snapshot(root: &Path) -> Result<HashMap<PathBuf, ObjectVersion>> {
+    let mut objects = HashMap::new();
+    let mut directories = vec![root.to_path_buf()];
+    while let Some(directory) = directories.pop() {
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error)
+                    .into_alien_error()
+                    .context(ErrorData::LocalDirectoryError {
+                        path: directory.display().to_string(),
+                        operation: "scan".to_string(),
+                        reason: "Failed to reconcile storage objects".to_string(),
+                    })
+            }
+        };
+        for entry in entries {
+            let entry = entry
+                .into_alien_error()
+                .context(ErrorData::LocalDirectoryError {
+                    path: directory.display().to_string(),
+                    operation: "scan".to_string(),
+                    reason: "Failed to read storage entry".to_string(),
+                })?;
+            let path = entry.path();
+            let metadata = match std::fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(error)
+                        .into_alien_error()
+                        .context(ErrorData::LocalDirectoryError {
+                            path: path.display().to_string(),
+                            operation: "stat".to_string(),
+                            reason: "Failed to inspect storage object".to_string(),
+                        })
+                }
+            };
+            if metadata.is_dir() {
+                directories.push(path);
+            } else if metadata.is_file() {
+                // object_store stages key#N, then renames to the committed key.
+                if path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.rsplit_once('#').is_some_and(|(_, suffix)| {
+                            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+                        })
+                    })
+                {
+                    continue;
+                }
+                let modified = metadata.modified().into_alien_error().context(
+                    ErrorData::LocalDirectoryError {
+                        path: path.display().to_string(),
+                        operation: "stat".to_string(),
+                        reason: "Failed to read object modification time".to_string(),
+                    },
+                )?;
+                objects.insert(path, (modified, metadata.len()));
+            }
+        }
+    }
+    Ok(objects)
 }
 
 // ---------------------------------------------------------------------------
@@ -664,6 +711,268 @@ fn now_timestamp() -> Timestamp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_worker_protocol::control::{
+        control_service_server::ControlService, send_task_result_request, SendTaskResultRequest,
+        TaskSuccess, WaitForTasksRequest,
+    };
+    use futures_util::StreamExt;
+    use std::collections::HashSet;
+    use tonic::Request;
+
+    async fn acknowledge(server: &ControlGrpcServer, task: &Task) {
+        server
+            .send_task_result(Request::new(SendTaskResultRequest {
+                task_id: task.task_id.clone(),
+                result: Some(send_task_result_request::Result::Success(
+                    TaskSuccess::default(),
+                )),
+            }))
+            .await
+            .expect("handler result accepted");
+    }
+
+    #[tokio::test]
+    async fn storage_reconciles_new_directories_while_handler_is_busy_and_after_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().to_path_buf();
+        let events = vec!["created".to_string(), "deleted".to_string()];
+        let server = Arc::new(ControlGrpcServer::new());
+        let mut stream = server
+            .wait_for_tasks(Request::new(WaitForTasksRequest::default()))
+            .await
+            .unwrap()
+            .into_inner();
+        let (shutdown, mut receiver) = broadcast::channel(1);
+        let task_root = root.clone();
+        let task_server = server.clone();
+        let task_events = events.clone();
+        let watcher = tokio::spawn(async move {
+            watch_storage(
+                "objects",
+                &task_root,
+                &task_events,
+                &task_server,
+                &mut receiver,
+            )
+            .await
+        });
+        std::fs::write(root.join("first"), b"first").unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("initial event")
+            .unwrap()
+            .unwrap();
+        // Commit immediately into fresh directories while delivery awaits the first handler.
+        // More hints than the 256-event buffer must not lose committed objects.
+        for index in 0..300 {
+            let folder = root.join(format!("new/{index}"));
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join("object#1"), b"payload").unwrap();
+            std::fs::rename(folder.join("object#1"), folder.join("object")).unwrap();
+        }
+        std::fs::write(root.join("unfinished#1"), b"unfinished").unwrap();
+        acknowledge(&server, &first).await;
+        let mut received = HashSet::new();
+        while received.len() < 300 {
+            let task = tokio::time::timeout(Duration::from_secs(10), stream.next())
+                .await
+                .expect("every committed object delivered")
+                .unwrap()
+                .unwrap();
+            let Some(control::task::Payload::StorageEvent(event)) = task.payload.as_ref() else {
+                panic!("expected storage task");
+            };
+            assert_eq!(event.bucket, "objects");
+            assert_eq!(event.event_type, "created");
+            assert_eq!(event.size, 7);
+            assert!(event.key.ends_with("/object"));
+            assert!(
+                received.insert(event.key.clone()),
+                "no duplicate successful delivery"
+            );
+            acknowledge(&server, &task).await;
+        }
+        std::fs::remove_file(root.join("first")).unwrap();
+        let deleted = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("delete delivered")
+            .unwrap()
+            .unwrap();
+        let Some(control::task::Payload::StorageEvent(event)) = deleted.payload.as_ref() else {
+            panic!("expected storage deletion");
+        };
+        assert_eq!(event.key, "first");
+        assert_eq!(event.event_type, "deleted");
+        acknowledge(&server, &deleted).await;
+        // A handler failure must not acknowledge the committed object.
+        std::fs::write(root.join("retry"), b"retry").unwrap();
+        let failed = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        server
+            .send_task_result(Request::new(SendTaskResultRequest {
+                task_id: failed.task_id.clone(),
+                result: Some(send_task_result_request::Result::Error(
+                    control::TaskError {
+                        code: "retry".to_string(),
+                        message: "temporary failure".to_string(),
+                    },
+                )),
+            }))
+            .await
+            .unwrap();
+        let retried = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let Some(control::task::Payload::StorageEvent(event)) = retried.payload.as_ref() else {
+            panic!("expected retried storage task");
+        };
+        assert_eq!(event.key, "retry");
+        assert_ne!(failed.task_id, retried.task_id);
+        acknowledge(&server, &retried).await;
+        shutdown.send(()).unwrap();
+        watcher.await.unwrap().unwrap();
+        drop(stream);
+
+        // A new runtime uses its own protocol server and replays the retained bucket.
+        let replacement = Arc::new(ControlGrpcServer::new());
+        let mut replacement_stream = replacement
+            .wait_for_tasks(Request::new(WaitForTasksRequest::default()))
+            .await
+            .unwrap()
+            .into_inner();
+        let (shutdown, mut receiver) = broadcast::channel(1);
+        let task_server = replacement.clone();
+        let watcher = tokio::spawn(async move {
+            watch_storage("objects", &root, &events, &task_server, &mut receiver).await
+        });
+        let replay = tokio::time::timeout(Duration::from_secs(5), replacement_stream.next())
+            .await
+            .expect("retained bucket replayed through replacement server")
+            .unwrap()
+            .unwrap();
+        acknowledge(&replacement, &replay).await;
+        shutdown.send(()).unwrap();
+        watcher.await.unwrap().unwrap();
+    }
+
+    async fn next_storage_event(
+        stream: &mut (impl futures_util::Stream<Item = std::result::Result<Task, tonic::Status>>
+                  + Unpin),
+    ) -> (Task, ProtoStorageEvent) {
+        let task = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("storage event delivered")
+            .unwrap()
+            .unwrap();
+        let Some(control::task::Payload::StorageEvent(event)) = task.payload.clone() else {
+            panic!("expected storage task");
+        };
+        (task, event)
+    }
+
+    async fn fail(server: &ControlGrpcServer, task: &Task) {
+        server
+            .send_task_result(Request::new(SendTaskResultRequest {
+                task_id: task.task_id.clone(),
+                result: Some(send_task_result_request::Result::Error(
+                    control::TaskError {
+                        code: "failed".to_string(),
+                        message: "handler failed".to_string(),
+                    },
+                )),
+            }))
+            .await
+            .expect("handler result accepted");
+    }
+
+    #[tokio::test]
+    async fn storage_deletion_is_delivered_after_failed_creation() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().to_path_buf();
+        let server = Arc::new(ControlGrpcServer::new());
+        let mut stream = server
+            .wait_for_tasks(Request::new(WaitForTasksRequest::default()))
+            .await
+            .unwrap()
+            .into_inner();
+        let (shutdown, mut receiver) = broadcast::channel(1);
+        let task_root = root.clone();
+        let task_server = server.clone();
+        let watcher = tokio::spawn(async move {
+            let events = ["created".to_string(), "deleted".to_string()];
+            watch_storage("objects", &task_root, &events, &task_server, &mut receiver).await
+        });
+
+        std::fs::write(root.join("doomed"), b"doomed").unwrap();
+        let (created, event) = next_storage_event(&mut stream).await;
+        assert_eq!(
+            (event.key.as_str(), event.event_type.as_str()),
+            ("doomed", "created")
+        );
+        // The object disappears before its creation handler fails.
+        std::fs::remove_file(root.join("doomed")).unwrap();
+        fail(&server, &created).await;
+
+        let (deleted, event) = next_storage_event(&mut stream).await;
+        assert_eq!(
+            (event.key.as_str(), event.event_type.as_str()),
+            ("doomed", "deleted")
+        );
+        acknowledge(&server, &deleted).await;
+        shutdown.send(()).unwrap();
+        watcher.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn storage_scan_failure_keeps_watching_and_recovers() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("bucket");
+        std::fs::create_dir(&root).unwrap();
+        let server = Arc::new(ControlGrpcServer::new());
+        let mut stream = server
+            .wait_for_tasks(Request::new(WaitForTasksRequest::default()))
+            .await
+            .unwrap()
+            .into_inner();
+        let (shutdown, mut receiver) = broadcast::channel(1);
+        let task_root = root.clone();
+        let task_server = server.clone();
+        let watcher = tokio::spawn(async move {
+            let events = ["created".to_string()];
+            watch_storage("objects", &task_root, &events, &task_server, &mut receiver).await
+        });
+        std::fs::write(root.join("before"), b"before").unwrap();
+        let (task, event) = next_storage_event(&mut stream).await;
+        assert_eq!(event.key, "before");
+        acknowledge(&server, &task).await;
+
+        // A file where the bucket directory belongs makes every scan fail.
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::write(&root, b"not a directory").unwrap();
+        assert!(std::fs::read_dir(&root).is_err());
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(
+            !watcher.is_finished(),
+            "a failed scan must not end the trigger service"
+        );
+
+        std::fs::remove_file(&root).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("after"), b"after").unwrap();
+        let (task, event) = next_storage_event(&mut stream).await;
+        assert_eq!(
+            (event.key.as_str(), event.event_type.as_str()),
+            ("after", "created")
+        );
+        acknowledge(&server, &task).await;
+        shutdown.send(()).unwrap();
+        watcher.await.unwrap().unwrap();
+    }
 
     #[test]
     fn five_field_cron_gets_seconds_prepended() {
