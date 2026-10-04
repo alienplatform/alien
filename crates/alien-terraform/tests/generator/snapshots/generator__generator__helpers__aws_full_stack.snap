@@ -9,7 +9,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = ">= 6.23"
+      version = ">= 5.0"
     }
     random = {
       source  = "hashicorp/random"
@@ -544,14 +544,6 @@ resource "aws_s3_bucket" "assets" {
   }
 }
 
-resource "aws_s3_bucket_abac" "assets" {
-  bucket = aws_s3_bucket.assets.id
-
-  abac_status {
-    status = "Enabled"
-  }
-}
-
 resource "aws_s3_bucket_server_side_encryption_configuration" "assets" {
   bucket = aws_s3_bucket.assets.id
 
@@ -764,7 +756,6 @@ resource "terraform_data" "deployment_registration" {
     aws_iam_role_policy_attachment.management_managed_policy_1_attachment,
     aws_iam_role_policy.management_self_read,
     aws_s3_bucket.assets,
-    aws_s3_bucket_abac.assets,
     aws_s3_bucket_server_side_encryption_configuration.assets,
     aws_s3_bucket_ownership_controls.assets,
     aws_s3_bucket_public_access_block.assets,

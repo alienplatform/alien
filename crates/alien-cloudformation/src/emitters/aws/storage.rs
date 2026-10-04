@@ -156,10 +156,6 @@ impl CfEmitter for AwsStorageEmitter {
         }
 
         bucket.properties.insert("Tags".to_string(), tags(ctx));
-        // Grants condition on `aws:ResourceTag/deployment`; S3 evaluates bucket tags only with ABAC.
-        bucket
-            .properties
-            .insert("AbacStatus".to_string(), CfExpression::from("Enabled"));
         bucket.deletion_policy = Some("Retain".to_string());
         bucket.update_replace_policy = Some("Retain".to_string());
 

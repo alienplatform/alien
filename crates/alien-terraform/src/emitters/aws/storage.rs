@@ -33,7 +33,6 @@ impl TfEmitter for AwsStorageEmitter {
         let mut fragment = TfFragment::default();
 
         fragment.resource_blocks.push(bucket(label, ctx, storage));
-        fragment.resource_blocks.push(abac(label));
         fragment.resource_blocks.push(encryption(
             label,
             storage
@@ -132,19 +131,6 @@ fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> Block {
             ),
             attr("tags", tags(ctx, "storage")),
         ],
-    )
-}
-
-/// Grants condition on `aws:ResourceTag/deployment`; S3 evaluates bucket tags only with ABAC.
-fn abac(label: &str) -> Block {
-    let status = block(
-        "abac_status",
-        [attr("status", Expression::String("Enabled".to_string()))],
-    );
-    resource_block(
-        "aws_s3_bucket_abac",
-        label,
-        [attr("bucket", bucket_id(label)), nested(status)],
     )
 }
 
