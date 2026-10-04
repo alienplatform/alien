@@ -95,6 +95,7 @@ export * from "./domainsettings.js";
 export * from "./dynamiccontainerhealthcheck.js";
 export * from "./dynamiccontainerreport.js";
 export * from "./dynamiccontainerstatus.js";
+export * from "./endpointaccess.js";
 export * from "./envelope.js";
 export * from "./environmentvariable.js";
 export * from "./environmentvariabletype.js";
