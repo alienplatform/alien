@@ -18,16 +18,11 @@ use tracing::debug;
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait S3Api: Send + Sync + std::fmt::Debug {
     async fn create_bucket(&self, bucket: &str) -> Result<()>;
-    /// Adds or overwrites tags on a general purpose bucket with the S3 Control `TagResource`
-    /// API, which works whether or not the bucket has ABAC enabled. `PutBucketTagging` is
-    /// rejected once ABAC is enabled.
-    async fn tag_bucket(&self, bucket: &str, tags: &HashMap<String, String>) -> Result<()>;
-    /// Replaces a bucket's tags with `PutBucketTagging`. S3 rejects this call once the bucket
-    /// has ABAC enabled; use [`S3Api::tag_bucket`] there.
-    async fn put_bucket_tagging(&self, bucket: &str, tags: &HashMap<String, String>) -> Result<()>;
-    /// Enables attribute-based access control, so IAM evaluates `aws:ResourceTag` conditions
-    /// against the bucket's tags for bucket and object requests.
-    async fn enable_bucket_abac(&self, bucket: &str) -> Result<()>;
+    async fn put_bucket_abac_tags(
+        &self,
+        bucket: &str,
+        tags: &HashMap<String, String>,
+    ) -> Result<()>;
     async fn head_bucket(&self, bucket: &str) -> Result<()>;
     async fn get_bucket_versioning(&self, bucket: &str) -> Result<GetBucketVersioningOutput>;
     async fn get_bucket_lifecycle_configuration(
@@ -142,12 +137,11 @@ impl S3Client {
             .replace('\'', "&apos;")
     }
 
-    /// `<Tag>` elements in key order, shared by the `PutBucketTagging` and `TagResource` bodies.
-    fn tag_list_xml(tags: &HashMap<String, String>) -> String {
+    fn bucket_tagging_xml(tags: &HashMap<String, String>) -> String {
         let mut sorted_tags = tags.iter().collect::<Vec<_>>();
         sorted_tags.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
 
-        let mut xml = String::new();
+        let mut xml = String::from("<Tagging><TagSet>");
         for (key, value) in sorted_tags {
             xml.push_str("<Tag><Key>");
             xml.push_str(&Self::escape_xml(key));
@@ -155,38 +149,8 @@ impl S3Client {
             xml.push_str(&Self::escape_xml(value));
             xml.push_str("</Value></Tag>");
         }
+        xml.push_str("</TagSet></Tagging>");
         xml
-    }
-
-    /// URL of the S3 Control `TagResource` call for a bucket. The ARN stays unencoded: the
-    /// signer percent-encodes its `:` separators once, as S3 Control expects, and an
-    /// already-encoded path would be signed as `%253A`.
-    fn tag_resource_url(&self, bucket: &str) -> String {
-        let base = match self
-            .credentials
-            .get_service_endpoint_option("s3control")
-            .or_else(|| self.credentials.get_service_endpoint_option("s3"))
-        {
-            Some(override_url) => override_url.trim_end_matches('/').to_string(),
-            None => format!(
-                "https://{}.s3-control.{}.{}",
-                self.credentials.account_id(),
-                self.credentials.region(),
-                if self.credentials.region().starts_with("cn-") {
-                    "amazonaws.com.cn"
-                } else {
-                    "amazonaws.com"
-                }
-            ),
-        };
-        let partition = if self.credentials.region().starts_with("us-gov-") {
-            "aws-us-gov"
-        } else if self.credentials.region().starts_with("cn-") {
-            "aws-cn"
-        } else {
-            "aws"
-        };
-        format!("{base}/v20180820/tags/arn:{partition}:s3:::{bucket}")
     }
 
     fn host(&self, bucket: &str) -> String {
@@ -534,37 +498,19 @@ impl S3Api for S3Client {
         Self::map_result(result, "CreateBucket", bucket, body.as_deref())
     }
 
-    async fn tag_bucket(&self, bucket: &str, tags: &HashMap<String, String>) -> Result<()> {
-        self.credentials.ensure_fresh().await?;
-        let body = format!(
-            "<TagResourceRequest xmlns=\"http://awss3control.amazonaws.com/doc/2018-08-20/\"><Tags>{}</Tags></TagResourceRequest>",
-            Self::tag_list_xml(tags)
-        );
-        let builder = self
-            .client
-            .request(Method::POST, self.tag_resource_url(bucket))
-            .header("x-amz-account-id", self.credentials.account_id())
-            .content_type_xml()
-            .content_sha256(&body)
-            .body(body.clone());
-
-        let result =
-            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
-                .await;
-
-        Self::map_result(result, "TagResource", bucket, Some(&body))
-    }
-
-    async fn put_bucket_tagging(&self, bucket: &str, tags: &HashMap<String, String>) -> Result<()> {
-        self.credentials.ensure_fresh().await?;
-        let body = format!(
-            "<Tagging><TagSet>{}</TagSet></Tagging>",
-            Self::tag_list_xml(tags)
-        );
-        let content_md5 = STANDARD.encode(md5::compute(body.as_bytes()).0);
+    async fn put_bucket_abac_tags(
+        &self,
+        bucket: &str,
+        tags: &HashMap<String, String>,
+    ) -> Result<()> {
+        let host = self.host(bucket);
+        let body = Self::bucket_tagging_xml(tags);
+        let digest = md5::compute(body.as_bytes());
+        let content_md5 = STANDARD.encode(digest.0);
         let builder = self
             .client
             .request(Method::PUT, self.url(bucket, "?tagging"))
+            .host(&host)
             .content_type_xml()
             .header("content-md5", &content_md5)
             .content_sha256(&body)
@@ -575,25 +521,6 @@ impl S3Api for S3Client {
                 .await;
 
         Self::map_result(result, "PutBucketTagging", bucket, Some(&body))
-    }
-
-    async fn enable_bucket_abac(&self, bucket: &str) -> Result<()> {
-        self.credentials.ensure_fresh().await?;
-        let body = "<AbacStatus xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Status>Enabled</Status></AbacStatus>".to_string();
-        let content_md5 = STANDARD.encode(md5::compute(body.as_bytes()).0);
-        let builder = self
-            .client
-            .request(Method::PUT, self.url(bucket, "?abac"))
-            .content_type_xml()
-            .header("content-md5", &content_md5)
-            .content_sha256(&body)
-            .body(body.clone());
-
-        let result =
-            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
-                .await;
-
-        Self::map_result(result, "PutBucketAbac", bucket, Some(&body))
     }
 
     async fn head_bucket(&self, bucket: &str) -> Result<()> {
@@ -1898,282 +1825,4 @@ pub struct FilterRule {
     pub name: String,
     /// Filter value
     pub value: String,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use alien_core::{AwsClientConfig, AwsCredentials, AwsServiceOverrides};
-    use aws_credential_types::Credentials;
-    use aws_sigv4::{
-        http_request::{sign, SignableBody, SignableRequest, SigningSettings},
-        sign::v4,
-    };
-    use httpmock::prelude::*;
-    use sha2::Digest;
-    use std::time::{Duration, UNIX_EPOCH};
-
-    fn client(region: &str, endpoints: HashMap<String, String>) -> S3Client {
-        S3Client::new(
-            reqwest::Client::new(),
-            AwsCredentialProvider::from_config_sync(AwsClientConfig {
-                account_id: "123456789012".to_string(),
-                region: region.to_string(),
-                credentials: AwsCredentials::AccessKeys {
-                    access_key_id: "test-key".to_string(),
-                    secret_access_key: "test-secret".to_string(),
-                    session_token: None,
-                },
-                service_overrides: Some(AwsServiceOverrides { endpoints }),
-            }),
-        )
-    }
-
-    // Re-sign the request received by the HTTP server, including its actual Host/port,
-    // path, query, payload and signed headers. This catches routing/signing mismatches.
-    fn signature_matches(request: &HttpMockRequest) -> bool {
-        let headers = request.headers.as_ref().unwrap();
-        let header = |name: &str| {
-            headers
-                .iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case(name))
-                .unwrap()
-                .1
-                .as_str()
-        };
-        let authorization = header("authorization");
-        let credential = authorization
-            .split("Credential=")
-            .nth(1)
-            .unwrap()
-            .split(',')
-            .next()
-            .unwrap();
-        let scope: Vec<_> = credential.split('/').collect();
-        let region = if request.path.contains("arn:aws-us-gov:") {
-            "us-gov-west-1"
-        } else if request.path.contains("arn:aws-cn:") {
-            "cn-north-1"
-        } else {
-            "us-east-1"
-        };
-        if scope[2] != region {
-            return false;
-        }
-        let names = authorization
-            .split("SignedHeaders=")
-            .nth(1)
-            .unwrap()
-            .split(',')
-            .next()
-            .unwrap();
-        let signed_headers: Vec<_> = names.split(';').map(|name| (name, header(name))).collect();
-        let seconds = chrono::NaiveDateTime::parse_from_str(header("x-amz-date"), "%Y%m%dT%H%M%SZ")
-            .unwrap()
-            .and_utc()
-            .timestamp();
-        let identity = Credentials::new("test-key", "test-secret", None, None, "test").into();
-        let params = v4::SigningParams::builder()
-            .identity(&identity)
-            .region(scope[2])
-            .name("s3")
-            .time(UNIX_EPOCH + Duration::from_secs(seconds as u64))
-            .settings(SigningSettings::default())
-            .build()
-            .unwrap()
-            .into();
-        let mut url = format!("http://{}{}", header("host"), request.path);
-        if let Some(query) = request
-            .query_params
-            .as_ref()
-            .filter(|query| !query.is_empty())
-        {
-            url.push('?');
-            url.push_str(
-                &query
-                    .iter()
-                    .map(|(key, value)| format!("{key}={value}"))
-                    .collect::<Vec<_>>()
-                    .join("&"),
-            );
-        }
-        let signable = SignableRequest::new(
-            &request.method,
-            &url,
-            signed_headers.into_iter(),
-            SignableBody::Bytes(request.body.as_deref().unwrap_or_default()),
-        )
-        .unwrap();
-        let (_, signature) = sign(signable, &params).unwrap().into_parts();
-        authorization.ends_with(&format!("Signature={signature}"))
-    }
-
-    #[tokio::test]
-    async fn bucket_tagging_uses_s3_override_partition_xml_and_valid_signature() {
-        for (region, partition) in [
-            ("us-east-1", "aws"),
-            ("us-gov-west-1", "aws-us-gov"),
-            ("cn-north-1", "aws-cn"),
-        ] {
-            let server = MockServer::start_async().await;
-            let request = server.mock_async(|when, then| {
-                when.method(POST).path(format!("/proxy/v20180820/tags/arn:{partition}:s3:::acme-bucket"))
-                    .header("host", server.address().to_string())
-                    .header("x-amz-account-id", "123456789012")
-                    .header("content-type", "application/xml")
-                    .body("<TagResourceRequest xmlns=\"http://awss3control.amazonaws.com/doc/2018-08-20/\"><Tags><Tag><Key>a&amp;&lt;&gt;&quot;&apos;</Key><Value>value&amp;&lt;&gt;&quot;&apos;</Value></Tag><Tag><Key>z</Key><Value>last</Value></Tag></Tags></TagResourceRequest>")
-                    .matches(signature_matches);
-                then.status(200);
-            }).await;
-            client(
-                region,
-                HashMap::from([("s3".to_string(), format!("{}/proxy/", server.base_url()))]),
-            )
-            .tag_bucket(
-                "acme-bucket",
-                &HashMap::from([
-                    ("z".to_string(), "last".to_string()),
-                    ("a&<>\"'".to_string(), "value&<>\"'".to_string()),
-                ]),
-            )
-            .await
-            .unwrap();
-            request.assert_async().await;
-        }
-    }
-
-    #[tokio::test]
-    async fn explicit_s3control_override_takes_precedence() {
-        let s3 = MockServer::start_async().await;
-        let control = MockServer::start_async().await;
-        let unexpected = s3
-            .mock_async(|when, then| {
-                when.method(POST);
-                then.status(500);
-            })
-            .await;
-        let tagging = control
-            .mock_async(|when, then| {
-                when.method(POST)
-                    .path("/control/v20180820/tags/arn:aws:s3:::acme-bucket")
-                    .matches(signature_matches);
-                then.status(200);
-            })
-            .await;
-        client(
-            "us-east-1",
-            HashMap::from([
-                ("s3".to_string(), s3.base_url()),
-                (
-                    "s3control".to_string(),
-                    format!("{}/control", control.base_url()),
-                ),
-            ]),
-        )
-        .tag_bucket("acme-bucket", &HashMap::new())
-        .await
-        .unwrap();
-        tagging.assert_async().await;
-        assert_eq!(unexpected.hits_async().await, 0);
-    }
-
-    #[tokio::test]
-    async fn bucket_configuration_calls_sign_query_xml_and_md5_at_override_authority() {
-        for (query, body) in [
-            (
-                "abac",
-                "<AbacStatus xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Status>Enabled</Status></AbacStatus>",
-            ),
-            (
-                "tagging",
-                "<Tagging><TagSet><Tag><Key>deployment</Key><Value>acme</Value></Tag></TagSet></Tagging>",
-            ),
-        ] {
-            let server = MockServer::start_async().await;
-            let request = server
-                .mock_async(|when, then| {
-                    when.method(PUT)
-                        .path("/proxy/acme-bucket")
-                        .query_param(query, "")
-                        .header("host", server.address().to_string())
-                        .header("content-type", "application/xml")
-                        .header(
-                            "content-md5",
-                            STANDARD.encode(md5::compute(body.as_bytes()).0),
-                        )
-                        .header(
-                            "x-amz-content-sha256",
-                            hex::encode(sha2::Sha256::digest(body.as_bytes())),
-                        )
-                        .body(body)
-                        .matches(signature_matches);
-                    then.status(200);
-                })
-                .await;
-            let client = client(
-                "us-east-1",
-                HashMap::from([("s3".to_string(), format!("{}/proxy", server.base_url()))]),
-            );
-            match query {
-                "abac" => client.enable_bucket_abac("acme-bucket").await,
-                "tagging" => {
-                    client
-                        .put_bucket_tagging(
-                            "acme-bucket",
-                            &HashMap::from([("deployment".to_string(), "acme".to_string())]),
-                        )
-                        .await
-                }
-                _ => unreachable!(),
-            }
-            .unwrap();
-            request.assert_async().await;
-        }
-    }
-
-    #[tokio::test]
-    async fn new_bucket_operations_preserve_typed_provider_failures() {
-        let server = MockServer::start_async().await;
-        let tag = server
-            .mock_async(|when, then| {
-                when.method(POST)
-                    .path("/v20180820/tags/arn:aws:s3:::acme-bucket");
-                then.status(403)
-                    .header("content-type", "application/xml")
-                    .body("<Error><Code>AccessDenied</Code><Message>Denied</Message></Error>");
-            })
-            .await;
-        let abac = server
-            .mock_async(|when, then| {
-                when.method(PUT)
-                    .path("/acme-bucket")
-                    .query_param("abac", "");
-                then.status(404)
-                    .header("content-type", "application/xml")
-                    .body("<Error><Code>NoSuchBucket</Code><Message>Missing</Message></Error>");
-            })
-            .await;
-        let client = client(
-            "us-east-1",
-            HashMap::from([("s3".to_string(), server.base_url())]),
-        );
-        assert_eq!(
-            client
-                .tag_bucket("acme-bucket", &HashMap::new())
-                .await
-                .unwrap_err()
-                .code,
-            "REMOTE_ACCESS_DENIED"
-        );
-        assert_eq!(
-            client
-                .enable_bucket_abac("acme-bucket")
-                .await
-                .unwrap_err()
-                .code,
-            "REMOTE_RESOURCE_NOT_FOUND"
-        );
-        assert!(tag.hits_async().await > 0);
-        assert!(abac.hits_async().await > 0);
-    }
 }

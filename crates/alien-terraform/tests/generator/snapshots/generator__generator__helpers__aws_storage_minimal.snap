@@ -9,7 +9,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = ">= 6.23"
+      version = ">= 5.0"
     }
     random = {
       source  = "hashicorp/random"
@@ -173,14 +173,6 @@ resource "aws_s3_bucket" "data" {
   }
 }
 
-resource "aws_s3_bucket_abac" "data" {
-  bucket = aws_s3_bucket.data.id
-
-  abac_status {
-    status = "Enabled"
-  }
-}
-
 resource "aws_s3_bucket_server_side_encryption_configuration" "data" {
   bucket = aws_s3_bucket.data.id
 
@@ -231,7 +223,6 @@ resource "terraform_data" "deployment_registration" {
   }
   depends_on = [
     aws_s3_bucket.data,
-    aws_s3_bucket_abac.data,
     aws_s3_bucket_server_side_encryption_configuration.data,
     aws_s3_bucket_ownership_controls.data,
     aws_s3_bucket_public_access_block.data,

@@ -369,7 +369,6 @@ impl SingleControllerExecutor {
                 .clone()
         };
 
-        let deployment_config = self.deployment_config();
         let context = ResourceControllerContext {
             desired_config: &desired_config,
             platform: self.platform,
@@ -379,7 +378,19 @@ impl SingleControllerExecutor {
             registry: &self.registry,
             desired_stack: &self.desired_stack,
             service_provider: &self.service_provider,
-            deployment_config: &deployment_config,
+            deployment_config: &DeploymentConfig::builder()
+                .stack_settings(self.stack_settings.clone())
+                .maybe_management_config(self.management_config.clone())
+                .maybe_compute_backend(self.compute_backend.clone())
+                .environment_variables(self.environment_variables.clone())
+                .maybe_monitoring(self.monitoring.clone())
+                .external_bindings(self.external_bindings.clone())
+                .allow_frozen_changes(false)
+                .maybe_domain_metadata(self.domain_metadata.clone())
+                .maybe_public_endpoints(self.public_endpoints.clone())
+                .manager_url("https://test-manager.alien.dev".to_string())
+                .deployment_token("test-deployment-token".to_string())
+                .build(),
             initial_setup_authority: self.initial_setup_authority,
             heartbeat_collector: HeartbeatCollector::default(),
         };
@@ -398,52 +409,6 @@ impl SingleControllerExecutor {
         }
 
         Ok(step_result)
-    }
-
-    /// Asks the controller whether the executor should schedule an update for it while its
-    /// config is unchanged, as the stack executor does for a stable resource.
-    pub fn needs_update(&self) -> Result<bool> {
-        let entry = self
-            .desired_stack
-            .resources
-            .get(&self.resource_id)
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceNotFound {
-                    resource_id: self.resource_id.clone(),
-                    available_resources: self.desired_stack.resources.keys().cloned().collect(),
-                })
-            })?;
-        let deployment_config = self.deployment_config();
-        let context = ResourceControllerContext {
-            desired_config: &entry.config,
-            platform: self.platform,
-            client_config: self.client_config.clone(),
-            state: &self.stack_state,
-            resource_prefix: &self.resource_prefix,
-            registry: &self.registry,
-            desired_stack: &self.desired_stack,
-            service_provider: &self.service_provider,
-            deployment_config: &deployment_config,
-            initial_setup_authority: self.initial_setup_authority,
-            heartbeat_collector: HeartbeatCollector::default(),
-        };
-        self.controller.needs_update(&context)
-    }
-
-    fn deployment_config(&self) -> DeploymentConfig {
-        DeploymentConfig::builder()
-            .stack_settings(self.stack_settings.clone())
-            .maybe_management_config(self.management_config.clone())
-            .maybe_compute_backend(self.compute_backend.clone())
-            .environment_variables(self.environment_variables.clone())
-            .maybe_monitoring(self.monitoring.clone())
-            .external_bindings(self.external_bindings.clone())
-            .allow_frozen_changes(false)
-            .maybe_domain_metadata(self.domain_metadata.clone())
-            .maybe_public_endpoints(self.public_endpoints.clone())
-            .manager_url("https://test-manager.alien.dev".to_string())
-            .deployment_token("test-deployment-token".to_string())
-            .build()
     }
 
     /// Runs the controller until it reaches a "synced" state.
