@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 
-# CI timing experiment (ALIEN-1216, not for merge): all-in + TypeScript job gets no debug info and mold
+# CI timing experiment (ALIEN-1216, not for merge): all-in-ts on half-price arm-8 runners
 env:
   # Fall back to local compilation when the shared sccache backend returns a
   # transient error (e.g. webdav 403) instead of failing the whole build.
@@ -128,14 +128,14 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       needs.changes.outputs.rust == 'true' ||
       needs.changes.outputs.product_lifecycle == 'true'
-    runs-on: depot-ubuntu-24.04-arm-16
+    runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 120
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       # Bound peak compiler memory so the runner agent remains responsive
       # while the workspace's large test binaries compile and link.
-      CARGO_BUILD_JOBS: "8"
+      CARGO_BUILD_JOBS: "6"
       NEXTEST_TEST_THREADS: "8"
       CARGO_PROFILE_DEV_DEBUG: "0"
 
@@ -350,7 +350,7 @@ jobs:
     name: TypeScript packages and CLIs
     needs: [pr-conventions, changes]
     if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.typescript == 'true'
-    runs-on: depot-ubuntu-24.04-arm-16
+    runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 60
     env:
       CARGO_INCREMENTAL: "0"
