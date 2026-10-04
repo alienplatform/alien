@@ -12,7 +12,8 @@ use alien_core::{
         SandboxEgressConnector, LOOPBACK_ONLY_CIDR, SANDBOX_EGRESS_POLICY_NAME,
     },
     Network, NetworkSettings, RemoteBindings, ResourceLifecycle, Sandbox, SandboxCode,
-    SandboxEgress, SandboxLifecyclePolicy, Stack, StackSettings, Worker, WorkerCode,
+    SandboxEgress, SandboxLifecyclePolicy, SandboxPrivilegedSupervisor, Stack, StackSettings,
+    Worker, WorkerCode,
 };
 use serde_json::Value;
 
@@ -1864,19 +1865,33 @@ fn the_emitted_registration_matches_the_direct_seed() {
         cidr: None,
         availability_zones: 2,
     };
-    for (egress, bundle_uri) in [
+    let supervised = Some(SandboxPrivilegedSupervisor { command_uid: 60001 });
+    for (egress, privileged_supervisor, bundle_uri) in [
         (
             SandboxEgress::Allow,
+            None,
             "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
         ),
-        (SandboxEgress::Deny, LIVE_BUNDLE),
+        (SandboxEgress::Deny, None, LIVE_BUNDLE),
         (
             SandboxEgress::Deny,
+            None,
             "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
         ),
+        // The agent enforces these in the guest, so the cloud side sees open egress. A registration
+        // that read the declared egress instead refused this sandbox on direct deployments only.
+        (
+            SandboxEgress::AllowDomains {
+                domains: vec!["example.com".to_string()],
+            },
+            supervised.clone(),
+            LIVE_BUNDLE,
+        ),
+        (SandboxEgress::Deny, supervised.clone(), LIVE_BUNDLE),
     ] {
         let sandbox = Sandbox {
             preview_ports: vec![8080, 3000],
+            privileged_supervisor,
             ..sandbox_fixture_with(egress.clone(), bundle_uri)
         };
         let stack = Stack::new("acme-sandbox-registration-parity".to_string())
@@ -1888,7 +1903,10 @@ fn the_emitted_registration_matches_the_direct_seed() {
             )
             .add(sandbox.clone(), ResourceLifecycle::Live)
             .build();
-        let case = format!("{egress:?} sandbox built from {bundle_uri}");
+        let case = format!(
+            "{egress:?} sandbox (supervisor {:?}) built from {bundle_uri}",
+            sandbox.privileged_supervisor
+        );
         let (template, _yaml) = render_built_ins_template(
             &stack,
             StackSettings {
