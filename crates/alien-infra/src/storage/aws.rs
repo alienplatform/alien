@@ -1105,9 +1105,9 @@ impl AwsStorageController {
     }
 
     /// Enables ABAC so the `aws:ResourceTag/deployment` conditions in the deployment's grants
-    /// are evaluated against this bucket's tags. Access denied means the deployment's setup
-    /// predates the ABAC permissions: the bucket keeps working, the denial is recorded and
-    /// reported in the heartbeat, and `needs_update` retries later.
+    /// are evaluated against this bucket's tags. On access denied, the bucket keeps working,
+    /// the denial is recorded and reported in the heartbeat, and `needs_update` retries later.
+    /// Review the setup permissions or applicable access policy before retrying.
     async fn enable_abac(
         &mut self,
         client: &dyn S3Api,
@@ -1123,7 +1123,7 @@ impl AwsStorageController {
             Err(error) if is_access_denied(&error) => {
                 warn!(
                     bucket = %bucket_name,
-                    "s3:PutBucketAbac was denied; the bucket stays without ABAC until the deployment's setup is updated"
+                    "s3:PutBucketAbac was denied; review the setup permissions or applicable access policy"
                 );
                 self.abac_denied_at = Some(Utc::now());
                 Ok(())
@@ -1141,8 +1141,8 @@ impl AwsStorageController {
             source: "abac".to_string(),
             reason: HeartbeatCollectionIssueReason::Forbidden,
             severity: HeartbeatIssueSeverity::Warning,
-            message: "ABAC is not enabled on this bucket: the deployment's setup does not grant \
-                      s3:PutBucketAbac. Update the setup to enable it."
+            message: "ABAC is not enabled on this bucket: s3:PutBucketAbac was denied. \
+                      Review or update the setup permissions or applicable access policy."
                 .to_string(),
         })
     }
