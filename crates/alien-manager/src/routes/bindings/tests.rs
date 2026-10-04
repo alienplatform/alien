@@ -1036,6 +1036,7 @@ fn remote_binding_deployment_status_gate_is_post_handoff_only() {
         "initial-setup-failed",
         "provisioning",
         "waiting-for-machines",
+        "waiting-for-secrets",
         "provisioning-failed",
         "delete-pending",
         "deleting",

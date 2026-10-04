@@ -11,12 +11,13 @@ use crate::output;
 use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
 use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{
-    parse_public_endpoint_assignment, validate_public_endpoint_urls, ClientConfig, ComputeSettings,
-    Container, Daemon, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
-    EnvironmentInfo, KubernetesClusterOwnership, KubernetesClusterSettings,
-    KubernetesExposureSettings, KubernetesSettings, ManagementConfig, NetworkSettings, Platform,
-    PublicEndpointUrls, ReleaseInfo, ResourceLifecycle, Stack, StackInputDefinition,
-    StackInputKind, StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker,
+    deployer_secret_value_refusal, is_deployer_secret_input, parse_public_endpoint_assignment,
+    validate_public_endpoint_urls, ClientConfig, ComputeSettings, Container, Daemon,
+    DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentInfo,
+    KubernetesClusterOwnership, KubernetesClusterSettings, KubernetesExposureSettings,
+    KubernetesSettings, ManagementConfig, NetworkSettings, Platform, PublicEndpointUrls,
+    ReleaseInfo, ResourceLifecycle, Stack, StackInputDefinition, StackInputKind,
+    StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker,
 };
 use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
@@ -174,8 +175,9 @@ pub struct UpArgs {
     #[arg(long = "input")]
     pub input_values: Vec<String>,
 
-    /// Secret stack input value for setup (id=value).
-    #[arg(long = "secret-input")]
+    /// Refused: deployer secrets are written into your own secret store, never
+    /// passed to Alien. Kept so an old invocation fails with what to do instead.
+    #[arg(long = "secret-input", hide = true)]
     pub secret_input_values: Vec<String>,
 
     /// Public URL for an exposed endpoint in <resource-id>.<endpoint-name>=<absolute-url> form.
@@ -210,7 +212,7 @@ struct DeployConfigFile {
     public_endpoints: Option<PublicEndpointUrls>,
     /// Deployer-provided stack inputs.
     inputs: Option<HashMap<String, String>>,
-    /// Secret deployer-provided stack inputs.
+    /// Refused: deployer secrets are written into your own secret store.
     secret_inputs: Option<HashMap<String, String>>,
 }
 
@@ -416,6 +418,7 @@ mod tests {
             "initial-setup-failed",
             "provisioning",
             "waiting-for-machines",
+            "waiting-for-secrets",
             "provisioning-failed",
         ] {
             assert!(supports_hosted_compute_update(status), "{status}");
@@ -440,6 +443,7 @@ mod tests {
             "initial-setup-failed",
             "provisioning",
             "waiting-for-machines",
+            "waiting-for-secrets",
             "provisioning-failed",
         ] {
             assert!(hosted_compute_update_required(status, false), "{status}");
@@ -1513,21 +1517,57 @@ apiKey = "secret-value"
         let config = load_deploy_config(&args)
             .expect("config should load")
             .expect("config should exist");
-        let values = collect_deployer_input_values(
-            &[
-                stack_input("region", StackInputKind::String, true),
-                stack_input("apiKey", StackInputKind::Secret, true),
-            ],
-            &[],
-            &[],
-            Some(&config),
-        )
-        .expect("input values should parse");
+        let inputs = [
+            stack_input("region", StackInputKind::String, true),
+            stack_input("apiKey", StackInputKind::Secret, true),
+        ];
+        let error = collect_deployer_input_values(&inputs, &[], &[], Some(&config))
+            .expect_err("a deployer secret value in the config is refused");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(
+            error.message.contains("'apiKey' is a deployer secret"),
+            "{}",
+            error.message
+        );
 
-        assert_eq!(values.get("region"), Some(&serde_json::json!("us-east-1")));
+        // Without the secret, a required deployer secret is neither asked for
+        // nor sent: only the plain input reaches the platform.
+        let config = DeployConfigFile {
+            secret_inputs: None,
+            ..config
+        };
+        let values = collect_deployer_input_values(&inputs, &[], &[], Some(&config))
+            .expect("input values should parse");
         assert_eq!(
-            values.get("apiKey"),
-            Some(&serde_json::json!("secret-value"))
+            values,
+            HashMap::from([("region".to_string(), serde_json::json!("us-east-1"))])
+        );
+    }
+
+    #[test]
+    fn deployer_secret_values_are_refused_on_every_flag() {
+        let inputs = [stack_input("apiKey", StackInputKind::Secret, true)];
+        for (input_values, secret_input_values) in [
+            (vec!["apiKey=secret-value".to_string()], vec![]),
+            (vec![], vec!["apiKey=secret-value".to_string()]),
+        ] {
+            let error =
+                collect_deployer_input_values(&inputs, &input_values, &secret_input_values, None)
+                    .expect_err("a deployer secret value is refused");
+            assert!(
+                error.message.contains("'apiKey' is a deployer secret"),
+                "{}",
+                error.message
+            );
+        }
+        // Even without stack metadata to recognise the input.
+        let error =
+            collect_deployer_input_values(&[], &[], &["apiKey=secret-value".to_string()], None)
+                .expect_err("a secret value is refused without metadata");
+        assert!(
+            error.message.contains("deployer secret"),
+            "{}",
+            error.message
         );
     }
 
@@ -1569,7 +1609,7 @@ region = "old"
     #[test]
     fn required_stack_inputs_fail_non_interactively() {
         let error = collect_deployer_input_values(
-            &[stack_input("apiKey", StackInputKind::Secret, true)],
+            &[stack_input("region", StackInputKind::String, true)],
             &[],
             &[],
             None,
@@ -3096,24 +3136,28 @@ fn collect_deployer_input_values(
     secret_input_values: &[String],
     deploy_config: Option<&DeployConfigFile>,
 ) -> Result<HashMap<String, serde_json::Value>> {
-    let mut raw_values = HashMap::<String, String>::new();
-
-    if let Some(config_inputs) = deploy_config.and_then(|config| config.inputs.as_ref()) {
-        for (id, value) in config_inputs {
-            raw_values.insert(id.clone(), value.clone());
-        }
+    // No deployer secret value may reach the platform, so refuse every way of
+    // passing one before reading anything else.
+    let config_secret_ids = deploy_config
+        .and_then(|config| config.secret_inputs.as_ref())
+        .into_iter()
+        .flat_map(|secret_inputs| secret_inputs.keys().cloned());
+    let flag_secret_ids = secret_input_values
+        .iter()
+        .map(|input| parse_stack_input_arg(input, "--secret-input").map(|(id, _)| id))
+        .collect::<Result<Vec<_>>>()?;
+    if let Some(id) = config_secret_ids.chain(flag_secret_ids).next() {
+        return Err(deployer_secret_value_error(inputs, &id));
     }
-    if let Some(config_inputs) = deploy_config.and_then(|config| config.secret_inputs.as_ref()) {
+
+    let mut raw_values = HashMap::<String, String>::new();
+    if let Some(config_inputs) = deploy_config.and_then(|config| config.inputs.as_ref()) {
         for (id, value) in config_inputs {
             raw_values.insert(id.clone(), value.clone());
         }
     }
     for input in input_values {
         let (id, value) = parse_stack_input_arg(input, "--input")?;
-        raw_values.insert(id, value);
-    }
-    for input in secret_input_values {
-        let (id, value) = parse_stack_input_arg(input, "--secret-input")?;
         raw_values.insert(id, value);
     }
 
@@ -3125,15 +3169,26 @@ fn collect_deployer_input_values(
     }
 
     for id in raw_values.keys() {
-        if !inputs.iter().any(|input| input.id == *id) {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "input".to_string(),
-                message: format!("Unknown or unavailable deployer stack input '{id}'."),
-            }));
+        match inputs.iter().find(|input| input.id == *id) {
+            None => {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "input".to_string(),
+                    message: format!("Unknown or unavailable deployer stack input '{id}'."),
+                }));
+            }
+            Some(input) if is_deployer_secret_input(input) => {
+                return Err(deployer_secret_value_error(inputs, id));
+            }
+            Some(_) => {}
         }
     }
 
-    for input in inputs.iter().filter(|input| input.required) {
+    // Deployer secrets are never asked for: the deployment reports them
+    // missing until they are written into the secret store.
+    for input in inputs
+        .iter()
+        .filter(|input| input.required && !is_deployer_secret_input(input))
+    {
         if raw_values.contains_key(&input.id) {
             continue;
         }
@@ -3141,19 +3196,8 @@ fn collect_deployer_input_values(
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "input".to_string(),
                 message: format!(
-                    "Missing deployer input: {}. Pass {} {}=... or add [{}] to deployment.toml.",
-                    input.label,
-                    if matches!(input.kind, StackInputKind::Secret) {
-                        "--secret-input"
-                    } else {
-                        "--input"
-                    },
-                    input.id,
-                    if matches!(input.kind, StackInputKind::Secret) {
-                        "secretInputs"
-                    } else {
-                        "inputs"
-                    }
+                    "Missing deployer input: {}. Pass --input {}=... or add [inputs] to deployment.toml.",
+                    input.label, input.id,
                 ),
             }));
         }
@@ -3169,6 +3213,17 @@ fn collect_deployer_input_values(
         values.insert(input.id.clone(), parse_stack_input_value(input, raw_value)?);
     }
     Ok(values)
+}
+
+fn deployer_secret_value_error(inputs: &[StackInputDefinition], id: &str) -> AlienError<ErrorData> {
+    let name = inputs
+        .iter()
+        .find(|input| input.id == id)
+        .map_or(id, |input| input.label.as_str());
+    AlienError::new(ErrorData::ValidationError {
+        field: "input".to_string(),
+        message: deployer_secret_value_refusal(name),
+    })
 }
 
 fn parse_stack_input_arg(input: &str, flag: &str) -> Result<(String, String)> {
@@ -3514,6 +3569,7 @@ fn supports_hosted_compute_update(status: &str) -> bool {
             | "initial-setup-failed"
             | "provisioning"
             | "waiting-for-machines"
+            | "waiting-for-secrets"
             | "provisioning-failed"
     )
 }
@@ -3694,6 +3750,7 @@ fn parse_deployment_status(raw_status: &str) -> Result<DeploymentStatus> {
         "initial-setup-failed" => Ok(DeploymentStatus::InitialSetupFailed),
         "provisioning" => Ok(DeploymentStatus::Provisioning),
         "waiting-for-machines" => Ok(DeploymentStatus::WaitingForMachines),
+        "waiting-for-secrets" => Ok(DeploymentStatus::WaitingForSecrets),
         "provisioning-failed" => Ok(DeploymentStatus::ProvisioningFailed),
         "running" => Ok(DeploymentStatus::Running),
         "refresh-failed" => Ok(DeploymentStatus::RefreshFailed),
@@ -3721,6 +3778,7 @@ fn deployment_status_str(status: DeploymentStatus) -> &'static str {
         DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
         DeploymentStatus::Provisioning => "provisioning",
         DeploymentStatus::WaitingForMachines => "waiting-for-machines",
+        DeploymentStatus::WaitingForSecrets => "waiting-for-secrets",
         DeploymentStatus::ProvisioningFailed => "provisioning-failed",
         DeploymentStatus::Running => "running",
         DeploymentStatus::RefreshFailed => "refresh-failed",

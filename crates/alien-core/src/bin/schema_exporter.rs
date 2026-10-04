@@ -142,6 +142,11 @@ use utoipa::OpenApi;
     AlienEvent,
     EventChange,
     DeploymentModel,
+    // Vault-native deployer secret reports (deployment runtime metadata)
+    DeployerSecretReport,
+    DeployerSecretLocation,
+    DeployerSecretStatus,
+    DeployerSecretStore,
     UpdatesMode,
     TelemetryMode,
     HeartbeatsMode,

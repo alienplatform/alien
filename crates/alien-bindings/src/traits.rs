@@ -427,6 +427,11 @@ pub trait Vault: Binding {
     /// Gets a secret value by name.
     async fn get_secret(&self, secret_name: &str) -> Result<String>;
 
+    /// Whether a secret exists and can be read, learned from metadata only:
+    /// the value is never fetched, so a control plane may call this without
+    /// ever seeing the secret.
+    async fn secret_presence(&self, secret_name: &str) -> Result<SecretPresence>;
+
     /// Sets a secret value, creating it if it doesn't exist or updating it if it does.
     async fn set_secret(&self, secret_name: &str, value: &str) -> Result<()>;
 
@@ -446,6 +451,20 @@ pub trait Vault: Binding {
     /// aliasing across vaults. Such providers should return
     /// `OperationNotSupported` rather than list under this hazard.
     async fn list_secrets(&self) -> Result<Vec<String>>;
+}
+
+/// Whether a vault secret can be used, from [`Vault::secret_presence`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SecretPresence {
+    /// The secret exists and a workload with read access can use it.
+    Present,
+    /// No secret by that name exists.
+    Missing,
+    /// The secret exists but cannot be used as is.
+    Invalid {
+        /// What is wrong with it, for the person who wrote it.
+        reason: String,
+    },
 }
 
 /// TLS policy used when building a Postgres connection string.

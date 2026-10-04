@@ -287,6 +287,8 @@ impl LocalContainerController {
         ) {
             env_vars.insert(var.name.clone(), var.value.clone());
         }
+        crate::core::environment_variables::resolve_local_deployer_secrets(ctx, &mut env_vars)
+            .await?;
         // Monitoring credentials are controller-owned and must win over a
         // same-name value from the deployment environment snapshot.
         env_vars.extend(crate::core::direct_monitoring_auth_headers(ctx));

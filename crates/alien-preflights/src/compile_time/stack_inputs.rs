@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
@@ -24,9 +24,22 @@ impl CompileTimeCheck for StackInputsDefinitionCheck {
     async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
         let mut errors = Vec::new();
         let mut ids = HashSet::new();
+        let mut deployer_secret_keys = HashMap::new();
 
         for input in stack.inputs() {
             validate_input(input, stack, &mut ids, &mut errors);
+            // Each deployer secret owns one slot in the secrets vault; two
+            // inputs sharing a slot would read each other's value.
+            if alien_core::is_deployer_secret_input(input) {
+                let key = alien_core::deployer_secret_vault_key(&input.id);
+                if let Some(other) = deployer_secret_keys.insert(key.clone(), input.id.as_str()) {
+                    errors.push(format!(
+                        "Stack input '{}': deployer secrets '{other}' and '{}' both use the \
+                         secrets vault key '{key}'; rename one so each has its own slot",
+                        input.id, input.id
+                    ));
+                }
+            }
         }
 
         if errors.is_empty() {
@@ -484,6 +497,42 @@ mod tests {
             .errors
             .iter()
             .any(|error| error.contains("not portable")));
+    }
+
+    #[tokio::test]
+    async fn rejects_deployer_secrets_that_share_a_vault_slot() {
+        let secret = |id: &str| StackInputDefinition {
+            kind: StackInputKind::Secret,
+            validation: None,
+            ..string_input(id)
+        };
+
+        let check = StackInputsDefinitionCheck;
+        let result = check
+            .check(
+                &test_stack(vec![secret("apiKey"), secret("api_key")]),
+                Platform::Aws,
+            )
+            .await
+            .expect("check should run");
+        assert!(!result.success);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.contains("both use the secrets vault key 'input-api-key'")),
+            "{:?}",
+            result.errors
+        );
+
+        let result = check
+            .check(
+                &test_stack(vec![secret("apiKey"), secret("apiToken")]),
+                Platform::Aws,
+            )
+            .await
+            .expect("check should run");
+        assert!(result.success, "errors: {:?}", result.errors);
     }
 
     #[tokio::test]

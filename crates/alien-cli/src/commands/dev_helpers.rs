@@ -1043,6 +1043,7 @@ fn parse_deployment_status(status: &str) -> Result<DeploymentStatus> {
         "initial-setup-failed" => Ok(DeploymentStatus::InitialSetupFailed),
         "provisioning" => Ok(DeploymentStatus::Provisioning),
         "waiting-for-machines" => Ok(DeploymentStatus::WaitingForMachines),
+        "waiting-for-secrets" => Ok(DeploymentStatus::WaitingForSecrets),
         "provisioning-failed" => Ok(DeploymentStatus::ProvisioningFailed),
         "running" => Ok(DeploymentStatus::Running),
         "refresh-failed" => Ok(DeploymentStatus::RefreshFailed),
