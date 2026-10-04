@@ -14,9 +14,7 @@ pub use error::{Error, Result};
 pub use traits::{Request, Response};
 
 // Re-export runtime
-pub use runtime::{
-    get_control_server, get_wait_until_server, run, setup_shutdown_on_signals, RuntimeDependencies,
-};
+pub use runtime::{get_wait_until_server, run, setup_shutdown_on_signals, RuntimeDependencies};
 
 // Re-export config types
 pub use config::{AppLogLine, Cli, LambdaMode, LogExporter, RuntimeConfig, TransportType};

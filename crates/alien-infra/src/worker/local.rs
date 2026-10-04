@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 use crate::core::{
     environment_variables::{applicable_secret_environment_variables, EnvironmentVariableBuilder},
@@ -16,13 +16,6 @@ use alien_core::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
-
-/// Shared trigger service shutdown handle. The controller is Clone+Serialize
-/// (required by the macro), so we can't store JoinHandle/broadcast::Sender directly.
-/// Instead, this static holds the shutdown sender keyed by worker ID.
-static TRIGGER_SHUTDOWNS: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<String, tokio::sync::broadcast::Sender<()>>>,
-> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 #[controller]
 pub struct LocalWorkerController {
@@ -183,49 +176,14 @@ impl LocalWorkerController {
             "Worker runtime started successfully"
         );
 
-        // Start trigger service if the worker has triggers configured.
-        // This mirrors what cloud platforms do natively (SQS event source mapping,
-        // Pub/Sub subscriptions, etc.) — delivering events to the worker externally.
-        if !config.triggers.is_empty() {
-            if let Some(local_bindings) = ctx.service_provider.get_local_bindings_provider() {
-                let state_dir = if let alien_core::ClientConfig::Local {
-                    state_directory, ..
-                } = &ctx.client_config
-                {
-                    PathBuf::from(state_directory)
-                } else {
-                    PathBuf::from(".alien")
-                };
-
-                let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
-                let triggers = config.triggers.clone();
-                let worker_id = config.id.clone();
-
-                // Store shutdown sender in static map (controller struct is Clone+Serialize)
-                TRIGGER_SHUTDOWNS
-                    .lock()
-                    .unwrap()
-                    .insert(worker_id.clone(), shutdown_tx);
-
-                let service = alien_local::trigger_service::LocalTriggerService::new(
-                    triggers.clone(),
-                    local_bindings,
-                    state_dir,
-                    shutdown_rx,
-                );
-
-                tokio::spawn(async move {
-                    if let Err(e) = service.run().await {
-                        error!(error = %e, "Local trigger service error");
-                    }
-                });
-
-                info!(
-                    worker_id = %worker_id,
-                    trigger_count = triggers.len(),
-                    "Local trigger service started"
-                );
-            }
+        if let Some(provider) = ctx.service_provider.get_local_bindings_provider() {
+            func_mgr
+                .ensure_triggers(&config.id, config.triggers.clone(), provider)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to start Worker triggers".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
         }
 
         Ok(HandlerAction::Continue {
@@ -277,6 +235,16 @@ impl LocalWorkerController {
                 state: LocalWorkerState::StartingProcess,
                 suggested_delay: None,
             });
+        }
+
+        if let Some(provider) = ctx.service_provider.get_local_bindings_provider() {
+            func_mgr
+                .ensure_triggers(&config.id, config.triggers.clone(), provider)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to restore Worker triggers".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
         }
 
         func_mgr
@@ -375,11 +343,6 @@ impl LocalWorkerController {
     )]
     async fn deleting(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Worker>()?;
-
-        // Stop trigger service before deleting worker
-        if let Some(tx) = TRIGGER_SHUTDOWNS.lock().unwrap().remove(&config.id) {
-            let _ = tx.send(());
-        }
 
         let func_mgr = ctx
             .service_provider
