@@ -9,12 +9,47 @@ use crate::error::Result;
 use crate::{CheckResult, DeploymentPrerequisiteCheck};
 use alien_core::{
     validate_binding_type, ComputeBackend, ComputeCluster, Container, Daemon, DeploymentConfig,
-    EnvironmentVariable, ExposeProtocol, KubernetesCluster, PermissionProfile, PermissionSet,
-    Platform, ResourceEntry, ResourceLifecycle, Stack, StackState, Worker,
+    EndpointAccess, EnvironmentVariable, ExposeProtocol, KubernetesCluster, PermissionProfile,
+    PermissionSet, Platform, ResourceEntry, ResourceLifecycle, Stack, StackState, Worker,
 };
 use alien_permissions::{
     generators::AwsRuntimePermissionsGenerator, BindingTarget, PermissionContext,
 };
+
+/// Private endpoints must never silently become internet-facing on unsupported targets.
+pub struct PrivateEndpointAccessCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for PrivateEndpointAccessCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("PRIVATE_ENDPOINT_ACCESS_UNSUPPORTED")
+    }
+
+    fn description(&self) -> &'static str {
+        "Private endpoint access requires AWS managed containers"
+    }
+
+    fn should_run(&self, _stack: &Stack, _state: &StackState, config: &DeploymentConfig) -> bool {
+        config.stack_settings.endpoint_access == EndpointAccess::Private
+    }
+
+    async fn check(
+        &self,
+        _stack: &Stack,
+        state: &StackState,
+        config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        if state.platform == Platform::Aws
+            && matches!(config.compute_backend, Some(ComputeBackend::Horizon(_)))
+        {
+            Ok(CheckResult::success())
+        } else {
+            Ok(CheckResult::failed(vec![
+                "Private endpoint access is supported only for AWS managed containers. Choose internet access or deploy to AWS with a managed container backend.".to_string(),
+            ]))
+        }
+    }
+}
 
 fn is_cloud_platform(platform: Platform) -> bool {
     matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
@@ -702,6 +737,36 @@ mod tests {
             deployment_token: None,
             native_image_host: None,
         }
+    }
+
+    #[tokio::test]
+    async fn private_endpoints_reject_unsupported_targets() {
+        let stack = create_stack(IndexMap::new());
+        let mut config = deployment_config();
+        config.stack_settings.endpoint_access = EndpointAccess::Private;
+        config.compute_backend = Some(horizon_backend());
+        let check = PrivateEndpointAccessCheck;
+        for platform in [
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Kubernetes,
+            Platform::Machines,
+        ] {
+            let state = stack_state(platform);
+            assert!(check.should_run(&stack, &state, &config));
+            let result = check.check(&stack, &state, &config).await.unwrap();
+            assert!(
+                !result.success,
+                "private access must be rejected on {platform}"
+            );
+            assert!(result.errors[0].contains("only for AWS"));
+        }
+        let state = stack_state(Platform::Aws);
+        assert!(check.check(&stack, &state, &config).await.unwrap().success);
+        config.compute_backend = None;
+        assert!(!check.check(&stack, &state, &config).await.unwrap().success);
+        config.stack_settings.endpoint_access = EndpointAccess::Internet;
+        assert!(!check.should_run(&stack, &state, &config));
     }
 
     fn targeted_env(name: &str, target_resources: Option<Vec<&str>>) -> EnvironmentVariable {

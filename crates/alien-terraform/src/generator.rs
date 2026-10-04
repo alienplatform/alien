@@ -1663,6 +1663,12 @@ fn variables_body(
             true,
         )));
         blocks.push(nested(string_enum_variable_block(
+            "endpoint_access",
+            "Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup.",
+            stack_settings.endpoint_access.as_str(),
+            &["internet", "private"],
+        )));
+        blocks.push(nested(string_enum_variable_block(
             "updates_mode",
             "How application updates are delivered after setup.",
             updates_mode(stack_settings.updates),
@@ -2075,6 +2081,7 @@ fn advanced_settings_default_json(
         object.remove("updates");
         object.remove("telemetry");
         object.remove("heartbeats");
+        object.remove("endpointAccess");
         if (matches!(target.cloud_platform(), alien_core::Platform::Aws)
             && has_dynamic_aws_network_settings(stack_settings.network.as_ref()))
             || (matches!(target.cloud_platform(), alien_core::Platform::Gcp)
@@ -3084,6 +3091,7 @@ fn stack_settings_expression(
   updates    = var.updates_mode
   telemetry  = var.telemetry_mode
   heartbeats = var.heartbeats_mode
+  endpointAccess = var.endpoint_access
   network = jsondecode(
     var.network_mode == "create-new" ? jsonencode({{
       type              = "create"
@@ -3117,6 +3125,7 @@ fn stack_settings_expression(
   updates    = var.updates_mode
   telemetry  = var.telemetry_mode
   heartbeats = var.heartbeats_mode
+  endpointAccess = var.endpoint_access
   network = jsondecode(
     var.network_mode == "create-new" ? jsonencode({{
       type              = "create"
@@ -3142,6 +3151,7 @@ fn stack_settings_expression(
   updates    = var.updates_mode
   telemetry  = var.telemetry_mode
   heartbeats = var.heartbeats_mode
+  endpointAccess = var.endpoint_access
   kubernetes = local.deployment_kubernetes_settings
 })"#,
             );
@@ -3153,6 +3163,7 @@ fn stack_settings_expression(
   updates    = var.updates_mode
   telemetry  = var.telemetry_mode
   heartbeats = var.heartbeats_mode
+  endpointAccess = var.endpoint_access
 })"#,
             );
         }

@@ -274,6 +274,13 @@ pub async fn stack_import(
                 return ErrorData::forbidden("Cannot update imported deployment in this group")
                     .into_response();
             }
+            if existing.stack_settings.as_ref().is_some_and(|settings| {
+                settings.endpoint_access != req.stack_settings.endpoint_access
+            }) {
+                return ErrorData::bad_request(
+                    "Endpoint access cannot change after setup. Create a new deployment to change endpoint access.",
+                ).into_response();
+            }
             // This write replaces the stored map and the request never carries
             // a generated secret, so keep the value the deployment holds.
             crate::generated_inputs::carry_stored_generated_input_values(

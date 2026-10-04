@@ -61,6 +61,7 @@ use utoipa::OpenApi;
     StackStatus,
     StackResourceState,
     StackSettings,
+    EndpointAccess,
     NetworkSettings,
     ComputeSettings,
     FailureDomainSelection,

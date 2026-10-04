@@ -27,6 +27,7 @@ const LANGUAGE_EXTENSIONS_TRANSFORM: &str = "AWS::LanguageExtensions";
 const PARAM_TOKEN: &str = "Token";
 const PARAM_MANAGING_ROLE_ARN: &str = "ManagingRoleArn";
 const PARAM_MANAGING_ACCOUNT_ID: &str = "ManagingAccountId";
+const PARAM_ENDPOINT_ACCESS: &str = "EndpointAccess";
 const PARAM_NETWORK_MODE: &str = "NetworkMode";
 const PARAM_VPC_CIDR: &str = "VpcCidr";
 const PARAM_AVAILABILITY_ZONES: &str = "AvailabilityZones";
@@ -1198,6 +1199,15 @@ fn add_standard_parameters(
     }
 
     template.parameters.insert(
+        PARAM_ENDPOINT_ACCESS.to_string(),
+        string_parameter(
+            "Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup.",
+            Some(settings.endpoint_access.as_str().to_string()),
+            Some(vec![CfExpression::from("internet"), CfExpression::from("private")]),
+            false,
+        ),
+    );
+    template.parameters.insert(
         PARAM_UPDATES_MODE.to_string(),
         string_parameter(
             "How updates are applied after setup registration.",
@@ -2296,6 +2306,7 @@ fn stack_settings_expression(
     }
     let mut values = vec![
         ("deploymentModel", CfExpression::from("push")),
+        ("endpointAccess", CfExpression::ref_(PARAM_ENDPOINT_ACCESS)),
         ("updates", CfExpression::ref_(PARAM_UPDATES_MODE)),
         ("telemetry", CfExpression::ref_(PARAM_TELEMETRY_MODE)),
         ("heartbeats", CfExpression::ref_(PARAM_HEARTBEATS_MODE)),
