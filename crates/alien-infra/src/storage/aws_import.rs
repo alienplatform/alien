@@ -29,6 +29,7 @@ impl ResourceImporter for AwsStorageImporter {
             state: AwsStorageState::Ready,
             bucket_name: Some(data.bucket_name),
             abac_enabled: false,
+            abac_denied_at: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

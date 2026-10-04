@@ -22,6 +22,9 @@ pub trait S3Api: Send + Sync + std::fmt::Debug {
     /// API, which works whether or not the bucket has ABAC enabled. `PutBucketTagging` is
     /// rejected once ABAC is enabled.
     async fn tag_bucket(&self, bucket: &str, tags: &HashMap<String, String>) -> Result<()>;
+    /// Replaces a bucket's tags with `PutBucketTagging`. S3 rejects this call once the bucket
+    /// has ABAC enabled; use [`S3Api::tag_bucket`] there.
+    async fn put_bucket_tagging(&self, bucket: &str, tags: &HashMap<String, String>) -> Result<()>;
     /// Enables attribute-based access control, so IAM evaluates `aws:ResourceTag` conditions
     /// against the bucket's tags for bucket and object requests.
     async fn enable_bucket_abac(&self, bucket: &str) -> Result<()>;
@@ -139,13 +142,12 @@ impl S3Client {
             .replace('\'', "&apos;")
     }
 
-    fn tag_resource_xml(tags: &HashMap<String, String>) -> String {
+    /// `<Tag>` elements in key order, shared by the `PutBucketTagging` and `TagResource` bodies.
+    fn tag_list_xml(tags: &HashMap<String, String>) -> String {
         let mut sorted_tags = tags.iter().collect::<Vec<_>>();
         sorted_tags.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
 
-        let mut xml = String::from(
-            "<TagResourceRequest xmlns=\"http://awss3control.amazonaws.com/doc/2018-08-20/\"><Tags>",
-        );
+        let mut xml = String::new();
         for (key, value) in sorted_tags {
             xml.push_str("<Tag><Key>");
             xml.push_str(&Self::escape_xml(key));
@@ -153,7 +155,6 @@ impl S3Client {
             xml.push_str(&Self::escape_xml(value));
             xml.push_str("</Value></Tag>");
         }
-        xml.push_str("</Tags></TagResourceRequest>");
         xml
     }
 
@@ -519,7 +520,10 @@ impl S3Api for S3Client {
 
     async fn tag_bucket(&self, bucket: &str, tags: &HashMap<String, String>) -> Result<()> {
         self.credentials.ensure_fresh().await?;
-        let body = Self::tag_resource_xml(tags);
+        let body = format!(
+            "<TagResourceRequest xmlns=\"http://awss3control.amazonaws.com/doc/2018-08-20/\"><Tags>{}</Tags></TagResourceRequest>",
+            Self::tag_list_xml(tags)
+        );
         let builder = self
             .client
             .request(Method::POST, self.tag_resource_url(bucket))
@@ -533,6 +537,30 @@ impl S3Api for S3Client {
                 .await;
 
         Self::map_result(result, "TagResource", bucket, Some(&body))
+    }
+
+    async fn put_bucket_tagging(&self, bucket: &str, tags: &HashMap<String, String>) -> Result<()> {
+        self.credentials.ensure_fresh().await?;
+        let host = self.host(bucket);
+        let body = format!(
+            "<Tagging><TagSet>{}</TagSet></Tagging>",
+            Self::tag_list_xml(tags)
+        );
+        let content_md5 = STANDARD.encode(md5::compute(body.as_bytes()).0);
+        let builder = self
+            .client
+            .request(Method::PUT, self.url(bucket, "?tagging"))
+            .host(&host)
+            .content_type_xml()
+            .header("content-md5", &content_md5)
+            .content_sha256(&body)
+            .body(body.clone());
+
+        let result =
+            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
+                .await;
+
+        Self::map_result(result, "PutBucketTagging", bucket, Some(&body))
     }
 
     async fn enable_bucket_abac(&self, bucket: &str) -> Result<()> {
