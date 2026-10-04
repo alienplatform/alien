@@ -35,10 +35,24 @@ impl DeploymentPrerequisiteCheck for PrivateEndpointAccessCheck {
 
     async fn check(
         &self,
-        _stack: &Stack,
+        stack: &Stack,
         state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<CheckResult> {
+        if stack.resources().any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Worker>()
+                .is_some_and(|worker| !worker.public_endpoints.is_empty())
+                || entry
+                    .config
+                    .downcast_ref::<Daemon>()
+                    .is_some_and(|daemon| !daemon.public_endpoints.is_empty())
+        }) {
+            return Ok(CheckResult::failed(vec![
+                "Private endpoint access is supported only for Container endpoints. Worker and Daemon endpoints require internet access.".to_string(),
+            ]));
+        }
         if state.platform == Platform::Aws
             && matches!(config.compute_backend, Some(ComputeBackend::Horizon(_)))
         {

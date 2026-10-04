@@ -236,6 +236,7 @@ export type {
   // Stack resource state types
   StackResourceState,
   // Stack settings
+  EndpointAccess,
   StackSettings,
   StackState,
   StorageEvent,
@@ -462,6 +463,7 @@ export {
   StackInputValidationSchema,
   // Stack resource state types
   StackResourceStateSchema,
+  EndpointAccessSchema,
   StackSettingsSchema,
   StackStateSchema,
   StorageEventSchema,

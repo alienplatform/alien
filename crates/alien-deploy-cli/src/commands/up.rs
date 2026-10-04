@@ -2911,6 +2911,10 @@ fn load_stack_settings(
         }
     }
 
+    if let Some(access) = args.network.endpoint_access {
+        settings.endpoint_access = access;
+    }
+
     if args.network.network_mode != NetworkMode::Auto {
         let network_override =
             network::parse_network_settings(&args.network, network_platform.as_str()).map_err(
@@ -4793,6 +4797,9 @@ pub async fn push_initial_setup(
 
     // Override network settings if the customer provided CLI flags
     if let Some(net_args) = network_args {
+        if let Some(access) = net_args.endpoint_access {
+            stack_settings.endpoint_access = access;
+        }
         let network_platform = base_platform.unwrap_or(platform);
         let network_override = network::parse_network_settings(net_args, network_platform.as_str())
             .map_err(|e| {
@@ -4860,6 +4867,9 @@ pub async fn push_initial_setup(
                 })?;
 
             if let Some(net_args) = network_args {
+                if let Some(access) = net_args.endpoint_access {
+                    config.stack_settings.endpoint_access = access;
+                }
                 let network_platform = base_platform.unwrap_or(platform);
                 let network_override =
                     network::parse_network_settings(net_args, network_platform.as_str()).map_err(

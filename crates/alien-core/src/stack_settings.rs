@@ -395,7 +395,6 @@ impl HeartbeatsMode {
 /// Reachability of the deployment's public endpoints, fixed at setup.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "camelCase")]
 pub enum EndpointAccess {
     /// Endpoints are reachable from the internet.
