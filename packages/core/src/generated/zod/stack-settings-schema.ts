@@ -7,6 +7,7 @@ import * as z from "zod";
 import { ComputeSettingsSchema } from "./compute-settings-schema.js";
 import { DeploymentModelSchema } from "./deployment-model-schema.js";
 import { DomainSettingsSchema } from "./domain-settings-schema.js";
+import { ExternalBindingsSchema } from "./external-bindings-schema.js";
 import { HeartbeatsModeSchema } from "./heartbeats-mode-schema.js";
 import { KubernetesSettingsSchema } from "./kubernetes-settings-schema.js";
 import { NetworkSettingsSchema } from "./network-settings-schema.js";
@@ -26,9 +27,9 @@ get "deploymentModel"(){
 get "domains"(){
                 return z.union([DomainSettingsSchema, z.null()]).optional()
               },
-"externalBindings": z.object({
-    
-    }).describe("External bindings for pre-existing infrastructure.\nAllows using existing resources (MinIO, Redis, shared Container Apps\nEnvironment, etc.) instead of having Alien provision them.\nRequired for Kubernetes platform, optional for cloud platforms.").nullish(),
+get "externalBindings"(){
+                return z.union([ExternalBindingsSchema, z.null()]).optional()
+              },
 get "heartbeats"(){
                 return HeartbeatsModeSchema.describe("How heartbeat health checks are handled.").optional()
               },

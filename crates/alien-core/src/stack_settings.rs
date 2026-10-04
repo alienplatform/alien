@@ -771,7 +771,6 @@ pub struct StackSettings {
     /// Environment, etc.) instead of having Alien provision them.
     /// Required for Kubernetes platform, optional for cloud platforms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "openapi", schema(value_type = Option<Object>))]
     pub external_bindings: Option<crate::ExternalBindings>,
 }
 
