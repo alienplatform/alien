@@ -76,6 +76,17 @@ variable "advanced_settings_overlay_json" {
   sensitive   = true
 }
 
+variable "endpoint_access" {
+  type        = string
+  description = "Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup."
+  default     = "internet"
+
+  validation {
+    condition     = contains(["internet", "private"], var.endpoint_access)
+    error_message = "endpoint_access must be one of: internet, private."
+  }
+}
+
 variable "updates_mode" {
   type        = string
   description = "How application updates are delivered after setup."
@@ -172,7 +183,7 @@ locals {
   deployment_region            = var.azure_location
   deployment_management_config = var.deployment_model == "push" ? { platform = "azure", managingTenantId = var.azure_managing_tenant_id, oidcIssuer = var.azure_oidc_issuer, oidcSubject = var.azure_oidc_subject } : null
   advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
-  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode })
+  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access })
   deployment_resources = [
     {
       id   = "default-resource-group"

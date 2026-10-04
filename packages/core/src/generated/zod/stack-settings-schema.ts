@@ -7,6 +7,7 @@ import * as z from "zod";
 import { ComputeSettingsSchema } from "./compute-settings-schema.js";
 import { DeploymentModelSchema } from "./deployment-model-schema.js";
 import { DomainSettingsSchema } from "./domain-settings-schema.js";
+import { EndpointAccessSchema } from "./endpoint-access-schema.js";
 import { HeartbeatsModeSchema } from "./heartbeats-mode-schema.js";
 import { KubernetesSettingsSchema } from "./kubernetes-settings-schema.js";
 import { NetworkSettingsSchema } from "./network-settings-schema.js";
@@ -25,6 +26,9 @@ get "deploymentModel"(){
               },
 get "domains"(){
                 return z.union([DomainSettingsSchema, z.null()]).optional()
+              },
+get "endpointAccess"(){
+                return EndpointAccessSchema.describe("Reachability of the deployment's public endpoints, fixed at setup.").optional()
               },
 "externalBindings": z.object({
     

@@ -2366,6 +2366,14 @@ async fn create_deployment_task(
         .transpose()?;
 
     let stack_settings = alien_platform_api::types::NewDeploymentRequestStackSettings {
+        endpoint_access: network_args
+            .endpoint_access
+            .map(|access| serde_json::from_value(serde_json::json!(access)))
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to convert endpoint access to SDK type".to_string(),
+            })?,
         compute: None,
         deployment_model: Some(if no_push {
             alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Pull

@@ -13,11 +13,11 @@ use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{
     deployer_secret_value_refusal, is_deployer_secret_input, parse_public_endpoint_assignment,
     validate_public_endpoint_urls, ClientConfig, ComputeSettings, Container, Daemon,
-    DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentInfo,
-    KubernetesClusterOwnership, KubernetesClusterSettings, KubernetesExposureSettings,
-    KubernetesSettings, ManagementConfig, NetworkSettings, Platform, PublicEndpointUrls,
-    ReleaseInfo, ResourceLifecycle, Stack, StackInputDefinition, StackInputKind,
-    StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker,
+    DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EndpointAccess,
+    EnvironmentInfo, KubernetesClusterOwnership, KubernetesClusterSettings,
+    KubernetesExposureSettings, KubernetesSettings, ManagementConfig, NetworkSettings, Platform,
+    PublicEndpointUrls, ReleaseInfo, ResourceLifecycle, Stack, StackInputDefinition,
+    StackInputKind, StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker,
 };
 use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
@@ -552,6 +552,86 @@ mod tests {
             .await
             .expect_err("untracked update must fail before contacting a manager");
         assert!(error.to_string().contains("No tracked deployment named"));
+    }
+
+    #[test]
+    fn endpoint_access_can_be_selected_during_initial_setup() {
+        for status in [
+            DeploymentStatus::Pending,
+            DeploymentStatus::PreflightsFailed,
+            DeploymentStatus::InitialSetup,
+            DeploymentStatus::InitialSetupFailed,
+        ] {
+            let mut settings = StackSettings::default();
+            apply_endpoint_access_override(
+                &mut settings,
+                Some(EndpointAccess::Private),
+                status,
+                false,
+            )
+            .expect("initial setup can select private access");
+            assert_eq!(settings.endpoint_access, EndpointAccess::Private);
+        }
+    }
+
+    #[test]
+    fn endpoint_access_is_fixed_before_the_first_release_finishes_provisioning() {
+        let mut settings = StackSettings {
+            endpoint_access: EndpointAccess::Private,
+            ..Default::default()
+        };
+        for status in [
+            DeploymentStatus::Provisioning,
+            DeploymentStatus::ProvisioningFailed,
+        ] {
+            apply_endpoint_access_override(
+                &mut settings,
+                Some(EndpointAccess::Internet),
+                status,
+                false,
+            )
+            .expect_err("completed setup is fixed even without a running release");
+            assert_eq!(settings.endpoint_access, EndpointAccess::Private);
+        }
+    }
+
+    #[test]
+    fn endpoint_access_refresh_preserves_the_stored_choice() {
+        for status in [
+            DeploymentStatus::InitialSetup,
+            DeploymentStatus::InitialSetupFailed,
+            DeploymentStatus::Provisioning,
+            DeploymentStatus::ProvisioningFailed,
+            DeploymentStatus::WaitingForMachines,
+            DeploymentStatus::WaitingForSecrets,
+            DeploymentStatus::Running,
+            DeploymentStatus::RefreshFailed,
+            DeploymentStatus::UpdatePending,
+            DeploymentStatus::Updating,
+            DeploymentStatus::UpdateFailed,
+        ] {
+            for (stored, requested) in [
+                (EndpointAccess::Private, EndpointAccess::Internet),
+                (EndpointAccess::Internet, EndpointAccess::Private),
+            ] {
+                let mut settings = StackSettings {
+                    endpoint_access: stored,
+                    ..Default::default()
+                };
+                let error =
+                    apply_endpoint_access_override(&mut settings, Some(requested), status, true)
+                        .expect_err("completed setup cannot change endpoint access");
+                assert!(error
+                    .to_string()
+                    .contains("Endpoint access cannot change after setup"));
+                assert_eq!(settings.endpoint_access, stored);
+                apply_endpoint_access_override(&mut settings, Some(stored), status, true)
+                    .expect("refresh accepts the stored choice");
+                apply_endpoint_access_override(&mut settings, None, status, true)
+                    .expect("refresh can omit the choice");
+                assert_eq!(settings.endpoint_access, stored);
+            }
+        }
     }
 
     #[test]
@@ -2951,6 +3031,10 @@ fn load_stack_settings(
         }
     }
 
+    if let Some(access) = args.network.endpoint_access {
+        settings.endpoint_access = access;
+    }
+
     if args.network.network_mode != NetworkMode::Auto {
         let network_override =
             network::parse_network_settings(&args.network, network_platform.as_str()).map_err(
@@ -4958,6 +5042,15 @@ pub async fn push_initial_setup(
 
         let status = parse_deployment_status(&deployment.status)?;
 
+        // Apply the choice only after acquiring the lock and refreshing status,
+        // so a setup that completed while we waited cannot change reachability.
+        apply_endpoint_access_override(
+            &mut config.stack_settings,
+            network_args.and_then(|args| args.endpoint_access),
+            status,
+            deployment.current_release_id.is_some(),
+        )?;
+
         // Reconstruct release identity from the state protected by the acquired
         // lock. Setup refreshes of an existing deployment must preserve the
         // current release while using desired-or-current as their setup target;
@@ -5143,6 +5236,33 @@ pub async fn push_initial_setup(
             Ok(())
         }
     }
+}
+
+fn apply_endpoint_access_override(
+    settings: &mut StackSettings,
+    requested: Option<EndpointAccess>,
+    status: DeploymentStatus,
+    has_current_release: bool,
+) -> Result<()> {
+    let Some(access) = requested else {
+        return Ok(());
+    };
+    let initial_setup = !has_current_release
+        && matches!(
+            status,
+            DeploymentStatus::Pending
+                | DeploymentStatus::PreflightsFailed
+                | DeploymentStatus::InitialSetup
+                | DeploymentStatus::InitialSetupFailed
+        );
+    if access != settings.endpoint_access && !initial_setup {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "endpoint-access".to_string(),
+            message: "Endpoint access cannot change after setup. Create a new deployment to change endpoint access.".to_string(),
+        }));
+    }
+    settings.endpoint_access = access;
+    Ok(())
 }
 
 fn requires_direct_setup_preparation(status: &DeploymentStatus) -> bool {
