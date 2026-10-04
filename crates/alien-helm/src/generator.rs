@@ -8150,7 +8150,7 @@ mod tests {
 
         assert_eq!(
             operator_env_value(&deployment, "STACK_SETTINGS"),
-            Some(r#"{"updates":"approval-required"}"#)
+            Some(r#"{"endpointAccess":"internet","updates":"approval-required"}"#)
         );
         assert!(docs_by_kind(&docs, "DaemonSet").is_empty());
     }
