@@ -149,7 +149,7 @@ impl StackMutation for SecretsVaultMutation {
             stack_state.platform,
             Platform::Aws | Platform::Gcp | Platform::Azure
         ) {
-            let slots = deployer_secret_keys_by_profile(&stack, stack_state.platform)?;
+            let slots = deployer_secret_keys_by_profile(&stack, config, stack_state.platform)?;
             add_deployer_secret_read_permissions(&mut stack, secrets_vault_id, slots)?;
         }
         add_vault_dependency_to_compute_clusters(
@@ -282,7 +282,7 @@ fn compute_profiles(
 }
 
 /// For each permission profile of a Container or Daemon, the vault keys of the
-/// deployer secrets available on `platform` that map into it.
+/// deployer secret slots on `platform` that map into it.
 ///
 /// Every workload that uses a profile runs with that profile's cloud identity,
 /// so a profile can only read the secrets all of its workloads receive. Two
@@ -290,20 +290,13 @@ fn compute_profiles(
 /// secrets are refused rather than letting one read the other's.
 fn deployer_secret_keys_by_profile(
     stack: &Stack,
+    config: &DeploymentConfig,
     platform: Platform,
 ) -> Result<BTreeMap<String, BTreeSet<String>>> {
-    let inputs: Vec<_> = stack
-        .inputs
-        .iter()
-        .filter(|input| alien_core::is_deployer_secret_input(input))
-        .filter(|input| {
-            input
-                .platforms
-                .as_ref()
-                .is_none_or(|platforms| platforms.is_empty() || platforms.contains(&platform))
-        })
-        .collect();
-    if inputs.is_empty() {
+    // The same slots delivery reads: a secret the developer may also provide
+    // and has a stored developer value is not a slot.
+    let slots = alien_core::deployer_secret_slots(&stack.inputs, &config.input_values, platform);
+    if slots.is_empty() {
         return Ok(BTreeMap::new());
     }
 
@@ -317,10 +310,15 @@ fn deployer_secret_keys_by_profile(
         } else {
             continue;
         };
-        let keys: BTreeSet<String> = inputs
+        let keys: BTreeSet<String> = slots
             .iter()
-            .filter(|input| input.env.iter().any(|mapping| mapping.targets(resource_id)))
-            .map(|input| alien_core::deployer_secret_vault_key(&input.id))
+            .filter(|slot| {
+                slot.input
+                    .env
+                    .iter()
+                    .any(|mapping| mapping.targets(resource_id))
+            })
+            .map(|slot| slot.vault_key.clone())
             .collect();
         match by_profile.get(profile) {
             None => {
@@ -1390,6 +1388,29 @@ mod tests {
             message.contains("share permission profile 'shared'"),
             "{message}"
         );
+
+        // A secret the developer may also provide, with a stored developer
+        // value, is not a slot: nothing reads it from the vault, so it neither
+        // blocks the shared profile nor grants anything.
+        let mut developer_valued =
+            deployer_secret_stack(&[("api", "shared"), ("web", "shared")], &["api"]);
+        developer_valued.inputs[0].provided_by =
+            vec![StackInputProvider::Developer, StackInputProvider::Deployer];
+        let mut with_value = deployer_secret_config();
+        with_value.input_values.insert(
+            "apiKey".to_string(),
+            serde_json::json!("from-the-developer"),
+        );
+        let result = SecretsVaultMutation
+            .mutate(developer_valued.clone(), &state, &with_value)
+            .await
+            .expect("a developer-valued secret is no slot and cannot block the profile");
+        assert!(deployer_secrets_read_set(&result, "shared").is_none());
+        // Without the developer value it is a slot again, so it is refused.
+        assert!(SecretsVaultMutation
+            .mutate(developer_valued, &state, &config)
+            .await
+            .is_err());
 
         let same = deployer_secret_stack(&[("api", "shared"), ("web", "shared")], &["api", "web"]);
         let result = SecretsVaultMutation
