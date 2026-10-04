@@ -134,19 +134,33 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v6
+      - name: Install development tools
+        id: mise
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
+        with:
+          version: 2026.10.1
+          install_args: node pnpm bun
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
           cache-dependency-path: |
             pnpm-lock.yaml
             examples/pnpm-lock.yaml
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
         with:
-          components: rustfmt, clippy
+          version: 2026.10.1
+          install_args: rust
+          cache: false
 
       - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
@@ -154,10 +168,6 @@ jobs:
           version: v0.16.0
 
       - uses: taiki-e/install-action@nextest
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.2"
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -349,28 +359,38 @@ jobs:
               - 'crates/alien-bindings/**'
               - 'crates/alien-build/**'
 
-      - uses: pnpm/action-setup@v6
+      - name: Install development tools
+        id: mise
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
+        with:
+          version: 2026.10.1
+          install_args: node pnpm bun
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
           cache-dependency-path: |
             pnpm-lock.yaml
             examples/pnpm-lock.yaml
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
         with:
-          components: rustfmt, clippy
+          version: 2026.10.1
+          install_args: rust
+          cache: false
 
       - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
         with:
           version: v0.16.0
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.2"
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -454,9 +474,9 @@ jobs:
 
       - name: Install operation compiler generation tools
         run: |
-          rustup toolchain install 1.97.1 --profile minimal --target wasm32-unknown-unknown
+          MISE_DATA_DIR="$RUNNER_TEMP/mise-rust" mise -E release-prepare install rust
           VERSION=$(node -e 'const fs = require("node:fs"); console.log(fs.readFileSync("Cargo.lock", "utf8").match(/name = "wasm-bindgen"\nversion = "([^"]+)"/)[1])')
-          cargo +1.97.1 install --locked --version "$VERSION" wasm-bindgen-cli
+          MISE_DATA_DIR="$RUNNER_TEMP/mise-rust" mise -E release-prepare exec -- cargo install --locked --version "$VERSION" wasm-bindgen-cli
 
       - name: Regenerate local TypeScript APIs
         run: pnpm generate

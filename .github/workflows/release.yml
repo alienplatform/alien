@@ -309,18 +309,30 @@ jobs:
         if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
         run: cargo metadata --format-version 1 >/dev/null
 
-      - name: Install permission compiler toolchain
-        if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
-        uses: dtolnay/rust-toolchain@stable
+      - if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
+        name: Install Rust toolchain
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+          MISE_ENV: release-prepare
         with:
-          toolchain: 1.97.1
-          targets: wasm32-unknown-unknown
+          version: 2026.10.1
+          install_args: rust
+          cache: false
+      - name: Install Rust targets
+        shell: bash
+        env:
+          RUST_TARGETS: wasm32-unknown-unknown
+        run: |
+          read -r -a targets <<< "${RUST_TARGETS//$'\n'/ }"
+          rustup target add "${targets[@]}"
+        if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
 
       - name: Regenerate versioned permission compiler
         if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
         run: |
           VERSION=$(node -e 'const fs = require("node:fs"); console.log(fs.readFileSync("Cargo.lock", "utf8").match(/name = "wasm-bindgen"\nversion = "([^"]+)"/)[1])')
-          cargo +1.97.1 install --locked --version "$VERSION" wasm-bindgen-cli
+          MISE_DATA_DIR="$RUNNER_TEMP/mise-rust" mise -E release-prepare exec -- cargo install --locked --version "$VERSION" wasm-bindgen-cli
           node packages/permissions/scripts/generate.mjs
 
       # Dry-run build jobs start from the untagged commit, so carry the exact
@@ -495,7 +507,14 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          install_args: rust
+          cache: false
 
       - name: Configure git credentials
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
@@ -691,18 +710,33 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
-      - uses: pnpm/action-setup@v6
+      - name: Install development tools
+        id: mise
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
+        with:
+          version: 2026.10.1
+          install_args: node pnpm
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
-      - uses: oven-sh/setup-bun@v2
-        if: ${{ inputs.stable_action == 'qualification' }}
+      - if: ${{ inputs.stable_action == 'qualification' }}
+        name: Install development tools
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
         with:
-          bun-version: "1.4.2"
+          version: 2026.10.1
+          install_args: bun
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
       - name: Validate npm auth
         if: ${{ inputs.stable_action == 'publish' }}
@@ -783,9 +817,19 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
+      - name: Install development tools
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
+        with:
+          version: 2026.10.1
+          install_args: node
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
+        id: mise
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: ${{ steps.mise.outputs.node }}
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
@@ -905,7 +949,15 @@ jobs:
         with:
           python-version: "3.10"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+          MISE_ENV: stable
+        with:
+          version: 2026.10.1
+          install_args: rust
+          cache: false
 
       - name: Build Python wheel (${{ matrix.artifact }})
         uses: PyO3/maturin-action@v1
@@ -1034,7 +1086,7 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: node packages/ai-gateway/scripts/validate-release-version.mjs "$VERSION"
 
-      # Rust toolchain: Linux via the shared composite; macOS uses dtolnay +
+      # Rust toolchain: Linux via the shared composite; macOS uses mise +
       # brew protoc directly (plain `napi build`, not `depot cargo`, so no
       # Depot/sccache setup here). The addon depends on alien-bindings, whose
       # build.rs needs protoc.
@@ -1046,8 +1098,15 @@ jobs:
           repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
           install-protoc: "true"
 
-      - uses: dtolnay/rust-toolchain@nightly
-        if: matrix.os == 'macos'
+      - if: matrix.os == 'macos'
+        name: Install Rust toolchain
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          install_args: rust
+          cache: false
 
       - name: Configure git credentials for cargo (macos)
         if: matrix.os == 'macos'
@@ -1061,11 +1120,20 @@ jobs:
         if: matrix.target == 'x86_64-apple-darwin'
         run: rustup target add x86_64-apple-darwin
 
-      - uses: pnpm/action-setup@v6
+      - name: Install development tools
+        id: mise
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
+        with:
+          version: 2026.10.1
+          install_args: node pnpm
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
 
       - name: Install dependencies
@@ -1166,17 +1234,32 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: node packages/ai-gateway/scripts/validate-release-version.mjs "$VERSION"
 
-      - uses: pnpm/action-setup@v6
+      - name: Install development tools
+        id: mise
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
+        with:
+          version: 2026.10.1
+          install_args: node pnpm
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
 
-      - uses: oven-sh/setup-bun@v2
-        if: matrix.execute
+      - if: matrix.execute
+        name: Install development tools
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
         with:
-          bun-version: "1.4.2"
+          version: 2026.10.1
+          install_args: bun
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
@@ -1229,11 +1312,20 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: node packages/ai-gateway/scripts/validate-release-version.mjs "$VERSION"
 
-      - uses: pnpm/action-setup@v6
+      - name: Install development tools
+        id: mise
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
+        with:
+          version: 2026.10.1
+          install_args: node pnpm
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
@@ -1291,9 +1383,24 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@v7
+        with:
+          path: .ci-tool-versions
+          persist-credentials: false
+      - name: Install development tools
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
+        with:
+          version: 2026.10.1
+          install_args: node
+          working_directory: .ci-tool-versions
+          cache_key: "{{default}}-${{ hashFiles('.ci-tool-versions/package.json') }}"
+        id: mise
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: ${{ steps.mise.outputs.node }}
           registry-url: https://registry.npmjs.org
 
       - name: Validate npm auth
@@ -1364,11 +1471,20 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: node packages/ai-gateway/scripts/validate-release-version.mjs "$VERSION"
 
-      - uses: pnpm/action-setup@v6
+      - name: Install development tools
+        id: mise
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
+        with:
+          version: 2026.10.1
+          install_args: node pnpm
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
@@ -1440,9 +1556,24 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@v7
+        with:
+          path: .ci-tool-versions
+          persist-credentials: false
+      - name: Install development tools
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
+        with:
+          version: 2026.10.1
+          install_args: node
+          working_directory: .ci-tool-versions
+          cache_key: "{{default}}-${{ hashFiles('.ci-tool-versions/package.json') }}"
+        id: mise
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: ${{ steps.mise.outputs.node }}
           registry-url: https://registry.npmjs.org
 
       - name: Validate npm auth
@@ -1528,7 +1659,7 @@ jobs:
             target/x86_64-unknown-linux-musl/release/alien-sandbox-agent
             platform/crates/alien-clix/target/x86_64-unknown-linux-musl/release/alien
           # Bump the -bN suffix whenever the set of cached binaries changes.
-          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1
+          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1-${{ hashFiles('rust-toolchain.toml', 'mise.*.toml') }}
 
       - uses: ./.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1601,7 +1732,7 @@ jobs:
             target/aarch64-unknown-linux-musl/release/alien-sandbox-agent
             platform/crates/alien-clix/target/aarch64-unknown-linux-musl/release/alien
           # Bump the -bN suffix whenever the set of cached binaries changes.
-          key: release-linux-aarch64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1
+          key: release-linux-aarch64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1-${{ hashFiles('rust-toolchain.toml', 'mise.*.toml') }}
 
       - uses: ./.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1672,10 +1803,17 @@ jobs:
             target/aarch64-apple-darwin/release/alien-deploy
             target/aarch64-apple-darwin/release/alien-operator
             platform/crates/alien-clix/target/aarch64-apple-darwin/release/alien
-          key: release-darwin-aarch64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1
+          key: release-darwin-aarch64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1-${{ hashFiles('rust-toolchain.toml', 'mise.*.toml') }}
 
-      - uses: dtolnay/rust-toolchain@nightly
-        if: steps.binary-cache.outputs.cache-hit != 'true'
+      - if: steps.binary-cache.outputs.cache-hit != 'true'
+        name: Install Rust toolchain
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          install_args: rust
+          cache: false
 
       - name: Configure git credentials for cargo
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1758,10 +1896,17 @@ jobs:
             target/x86_64-pc-windows-msvc/release/alien-deploy.exe
             target/x86_64-pc-windows-msvc/release/alien-operator.exe
             platform/crates/alien-clix/target/x86_64-pc-windows-msvc/release/alien.exe
-          key: release-windows-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1
+          key: release-windows-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1-${{ hashFiles('rust-toolchain.toml', 'mise.*.toml') }}
 
-      - uses: dtolnay/rust-toolchain@nightly
-        if: steps.binary-cache.outputs.cache-hit != 'true'
+      - if: steps.binary-cache.outputs.cache-hit != 'true'
+        name: Install Rust toolchain
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          install_args: rust
+          cache: false
 
       - name: Configure git credentials for cargo
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -2693,9 +2838,19 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
+      - name: Install development tools
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
+        with:
+          version: 2026.10.1
+          install_args: node
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
+        id: mise
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: ${{ steps.mise.outputs.node }}
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
@@ -2731,9 +2886,19 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.release_commit }}
 
+      - name: Install development tools
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
+        with:
+          version: 2026.10.1
+          install_args: node
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
+        id: mise
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: ${{ steps.mise.outputs.node }}
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 

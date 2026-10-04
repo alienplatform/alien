@@ -36,7 +36,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+          MISE_ENV: stable
+        with:
+          version: 2026.10.1
+          install_args: rust
+          cache: false
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
@@ -72,7 +80,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+          MISE_ENV: stable
+        with:
+          version: 2026.10.1
+          install_args: rust
+          cache: false
       - uses: PyO3/maturin-action@v1
         with:
           command: build

@@ -20,8 +20,15 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Setup Rust nightly
-      uses: dtolnay/rust-toolchain@nightly
+    - name: Install Rust toolchain
+      uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+      env:
+        MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+      with:
+        version: 2026.10.1
+        install_args: rust
+        working_directory: ${{ github.action_path }}/../../..
+        cache: false
 
     - name: Setup Depot
       uses: depot/setup-action@v1
