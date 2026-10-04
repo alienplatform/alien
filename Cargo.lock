@@ -686,6 +686,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-cloudformation",
  "base64 0.22.1",
+ "bon",
  "chrono",
  "clap",
  "dirs 6.0.0",

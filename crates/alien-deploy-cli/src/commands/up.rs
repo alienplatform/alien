@@ -5,6 +5,8 @@
 //!
 //! Pull model (Local, Kubernetes): installs and starts the alien-operator service.
 
+mod setup_update;
+
 use crate::deployment_tracking::{DeploymentTracker, TrackedLocalDeployment};
 use crate::error::{ErrorData, Result};
 use crate::output;
@@ -114,6 +116,18 @@ pub struct UpArgs {
     /// Rerun setup for the existing deployment's requested release, using setup credentials.
     #[arg(long)]
     pub setup_update: bool,
+
+    /// Existing deployment ID for setup from a fresh runner.
+    #[arg(long, requires_all = ["setup_update", "update_operation_id", "release_id"], conflicts_with = "name")]
+    pub deployment_id: Option<String>,
+
+    /// Exact pending update operation to configure and apply setup for.
+    #[arg(long, requires = "deployment_id")]
+    pub update_operation_id: Option<String>,
+
+    /// Exact release expected by the setup update.
+    #[arg(long, requires = "deployment_id")]
+    pub release_id: Option<String>,
 
     /// Skip confirmation prompt
     #[arg(long, short = 'y')]
@@ -598,7 +612,6 @@ mod tests {
             DeploymentStatus::UpdateFailed,
             DeploymentStatus::RefreshFailed,
             DeploymentStatus::InitialSetupFailed,
-            DeploymentStatus::ProvisioningFailed,
         ] {
             assert!(requires_direct_setup_preparation(&status), "{status:?}");
         }
@@ -1731,6 +1744,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         validate_deploy_config(&args, embedded_config, deploy_config.as_ref())?;
         output::success("Deployment config is valid.");
         return Ok(());
+    }
+    if args.setup_update && args.deployment_id.is_some() {
+        return setup_update::run(&args, embedded_config, deploy_config.as_ref()).await;
     }
     // Resolve token and platform from args, embedded config, or tracked deployment
     let resolved = resolve_deployment_info(&args, embedded_config, deploy_config.as_ref())?;
@@ -4750,6 +4766,37 @@ pub async fn push_initial_setup(
     on_progress: Option<alien_deployment::runner::ProgressCallback>,
     setup_revision: Option<&str>,
 ) -> Result<()> {
+    push_initial_setup_targeted()
+        .client(client)
+        .deployment_id(deployment_id)
+        .platform(platform)
+        .maybe_base_platform(base_platform)
+        .client_config(client_config)
+        .maybe_management_config(management_config)
+        .manager_base_url(manager_base_url)
+        .deployment_token(deployment_token)
+        .maybe_network_args(network_args)
+        .maybe_on_progress(on_progress)
+        .maybe_setup_revision(setup_revision)
+        .call()
+        .await
+}
+
+#[bon::builder]
+async fn push_initial_setup_targeted(
+    client: &ServerClient,
+    deployment_id: &str,
+    platform: Platform,
+    base_platform: Option<Platform>,
+    client_config: ClientConfig,
+    management_config: Option<alien_core::ManagementConfig>,
+    manager_base_url: &str,
+    deployment_token: &str,
+    network_args: Option<&NetworkArgs>,
+    on_progress: Option<alien_deployment::runner::ProgressCallback>,
+    setup_revision: Option<&str>,
+    expected_target: Option<&setup_update::SetupUpdateTarget>,
+) -> Result<()> {
     let setup_management_config = management_config.clone();
 
     // Get deployment from manager
@@ -4892,6 +4939,14 @@ pub async fn push_initial_setup(
     })?;
 
     let setup_attempt = async {
+        if let Some(target) = expected_target {
+            target.validate_claim(&acquired_deployment)?;
+            if acquired_deployment.deployment.get("deploymentConfig").is_none() {
+                return Err(AlienError::new(ErrorData::ConfigurationError {
+                    message: "The exact setup claim did not include authoritative deployment configuration".to_string(),
+                }));
+            }
+        }
         if let Some(acquired_config) = acquired_deployment
             .deployment
             .get("deploymentConfig")
@@ -4921,7 +4976,9 @@ pub async fn push_initial_setup(
             }
 
             config.manager_url = Some(manager_base_url.to_string());
-            config.deployment_token = Some(deployment_token.to_string());
+            if expected_target.is_none() {
+                config.deployment_token = Some(deployment_token.to_string());
+            }
             if let Some(management_config) = &setup_management_config {
                 config.management_config = Some(management_config.clone());
             }
@@ -4942,6 +4999,10 @@ pub async fn push_initial_setup(
                 message: "Failed to get deployment from manager".to_string(),
             })?
             .into_inner();
+
+        if let Some(target) = expected_target {
+            target.validate_release(deployment.desired_release_id.as_deref())?;
+        }
 
         let status = parse_deployment_status(&deployment.status)?;
 
@@ -5141,7 +5202,6 @@ fn requires_direct_setup_preparation(status: &DeploymentStatus) -> bool {
             | DeploymentStatus::UpdateFailed
             | DeploymentStatus::RefreshFailed
             | DeploymentStatus::InitialSetupFailed
-            | DeploymentStatus::ProvisioningFailed
     )
 }
 
