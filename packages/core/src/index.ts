@@ -476,6 +476,7 @@ export {
   UpdatesModeSchema,
   UploadCompleteRequestSchema,
   UploadCompleteResponseSchema,
+  ValueSchema,
   VaultHeartbeatDataSchema,
   VaultHeartbeatStatusSchema,
   WorkerHeartbeatDataSchema,
