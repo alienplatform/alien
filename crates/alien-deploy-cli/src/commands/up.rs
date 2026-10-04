@@ -555,7 +555,8 @@ mod tests {
 
     #[test]
     fn deploy_config_passes_typed_external_storage_to_settings() {
-        let config: DeployConfigFile = toml::from_str(r#"
+        let config: DeployConfigFile = toml::from_str(
+            r#"
             platform = "machines"
             [externalBindings.archive]
             type = "storage"
@@ -564,11 +565,12 @@ mod tests {
             endpoint = "http://127.0.0.1:9000"
             region = "us-east-1"
             forcePathStyle = true
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         let args = UpArgs::parse_from(["democtl"]);
-        let settings = load_stack_settings(
-            &args, Platform::Machines, Platform::Machines, Some(&config),
-        ).unwrap();
+        let settings =
+            load_stack_settings(&args, Platform::Machines, Platform::Machines, Some(&config)).unwrap();
         let binding = settings.external_bindings.unwrap();
         let storage = binding.get_storage("archive").unwrap().unwrap();
         let alien_core::bindings::StorageBinding::S3(storage) = storage else {
@@ -1688,6 +1690,35 @@ private_subnet_ids = ["subnet-private"]
     }
 
     #[test]
+    fn validate_only_accepts_exact_setup_config_without_tracking_name() {
+        let config: DeployConfigFile = toml::from_str(
+            r#"
+            platform = "machines"
+            [externalBindings.archive]
+            type = "storage"
+            service = "s3"
+            bucketName = "customer-archive"
+        "#,
+        )
+        .unwrap();
+        let args = UpArgs::parse_from([
+            "democtl",
+            "--setup-update",
+            "--deployment-id",
+            "dep_demo",
+            "--update-operation-id",
+            "op_demo",
+            "--release-id",
+            "rel_demo",
+            "--config",
+            "deployment.toml",
+            "--validate-only",
+        ]);
+        validate_deploy_config(&args, None, Some(&config))
+            .expect("an exact existing target needs no local tracking name");
+    }
+
+    #[test]
     fn validate_only_rejects_missing_non_local_name() {
         let config: DeployConfigFile = toml::from_str(
             r#"
@@ -2266,7 +2297,11 @@ fn validate_deploy_config(
         .as_deref()
         .or(config.base_platform.as_deref());
     let base_platform = parse_base_platform(platform, base_platform)?;
-    if platform != Platform::Local && args.name.as_deref().or(config.name.as_deref()).is_none() {
+    let existing_target = args.setup_update && args.deployment_id.is_some();
+    if platform != Platform::Local
+        && !existing_target
+        && args.name.as_deref().or(config.name.as_deref()).is_none()
+    {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "name".to_string(),
             message: "--name or config field `name` is required for non-local deployments."
