@@ -4,7 +4,7 @@ Deployment CLI for customer admins. Deploys, manages, and tears down Alien appli
 
 ## Commands
 
-- **`alien-deploy deploy`** — Deploy an application to a target environment. Supports AWS, GCP, Azure, Kubernetes, and Local platforms.
+- **`alien-deploy deploy`** — Deploy an application to a target environment. Supports AWS, GCP, Azure, Kubernetes, Machines, and Local platforms.
 - **`alien-deploy destroy`** — Tear down a deployment and clean up all cloud resources.
 - **`alien-deploy status`** — Show deployment status.
 - **`alien-deploy list`** — List all tracked deployments.
@@ -25,3 +25,40 @@ For Kubernetes and Local platforms, `deploy` installs the alien-operator as a ba
 ## Deployment Tracking
 
 Deployments are tracked in a local database (name → deployment ID, token, manager URL, platform), so subsequent commands work without repeating credentials.
+
+## Machines setup updates from automation
+
+When an update changes Frozen resources, setup must run before the manager can continue. A fresh runner can target the existing deployment without a local tracking entry:
+
+```sh
+./democtl deploy --setup-update \
+  --deployment-id "$DEPLOYMENT_ID" \
+  --update-operation-id "$UPDATE_OPERATION_ID" \
+  --release-id "$RELEASE_ID" \
+  --platform machines \
+  --token-file /run/secrets/setup-token \
+  --base-url "$PLATFORM_API_URL" \
+  --config deployment.toml
+```
+
+Use the generated installer's command name in place of `democtl`. Supply the exact blocked update operation and release from the authorized setup session, and a deployment-group setup token. A runtime deployment token does not authorize setup preparation.
+
+For externally owned S3-compatible storage, `deployment.toml` can contain:
+
+```toml
+platform = "machines"
+
+[externalBindings.archive]
+type = "storage"
+service = "s3"
+bucketName = "customer-archive"
+endpoint = "https://storage.example.com"
+region = "us-east-1"
+forcePathStyle = true
+```
+
+`archive` must identify a Storage resource in the target release. Keep secret credentials out of this file; configure workload credentials through the deployment's secret environment settings. Ordinary external bindings do not require `remoteAccess: true`, and setup does not create or delete their underlying storage.
+
+The command preserves unrelated target settings, saves explicit choices, follows the returned operation ID, and verifies the acquired target before setup runs. It never initializes a new deployment. If setup is interrupted after saving, resume with the operation ID printed by the command; the old operation ID is deliberately refused. Stack input edits must already be saved through the authorized setup configuration; this command rejects input overrides it cannot persist.
+
+A successful setup command means the manager may continue provisioning. Verify the exact release reaches Running and exercise storage read/write from the workload before treating the update as complete.

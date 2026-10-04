@@ -242,14 +242,26 @@ fn patch_settings(
         );
     }
     if let Some(endpoints) = load_public_endpoints(args, Platform::Machines, config)? {
-        patch.insert(
-            "publicEndpoints".into(),
-            serde_json::to_value(endpoints).into_alien_error().context(
-                ErrorData::ConfigurationError {
-                    message: "Invalid public endpoints".into(),
-                },
-            )?,
-        );
+        let existing = target
+            .stack_settings
+            .entry("publicEndpoints")
+            .or_insert_with(|| Value::Object(Map::new()));
+        let existing = existing
+            .as_object_mut()
+            .ok_or_else(|| invalid_target("The target public endpoints are not an object."))?;
+        for (resource, endpoints) in endpoints {
+            let values = existing
+                .entry(resource)
+                .or_insert_with(|| Value::Object(Map::new()));
+            let values = values.as_object_mut().ok_or_else(|| {
+                invalid_target("The target resource endpoints are not an object.")
+            })?;
+            values.extend(
+                endpoints
+                    .into_iter()
+                    .map(|(name, url)| (name, Value::String(url))),
+            );
+        }
     }
     target.stack_settings.extend(patch);
     Ok(())
@@ -280,6 +292,14 @@ pub(super) async fn run(
     {
         return Err(invalid_target(
             "Explicit setup targeting currently requires --platform machines.",
+        ));
+    }
+    if args.base_platform.is_some()
+        || config.is_some_and(|config| config.base_platform.is_some())
+        || args.setup_item.is_some()
+    {
+        return Err(invalid_target(
+            "An exact Machines setup target cannot select a base platform or setup item.",
         ));
     }
     if !args.input_values.is_empty()
@@ -335,6 +355,10 @@ pub(super) async fn run(
             "Preparation did not return an exact Machines operation.",
         ));
     }
+    output::info(&format!(
+        "Setup choices saved for update operation '{}'. Use this operation ID when resuming interrupted setup.",
+        prepared.update_operation_id
+    ));
     let info = fetch_target()
         .client(&http)
         .base_url(&base_url)
@@ -471,6 +495,28 @@ mod tests {
         assert_eq!(
             target.stack_settings["externalBindings"]["archive"]["bucketName"],
             "customer-archive"
+        );
+    }
+
+    #[test]
+    fn endpoint_patch_keeps_other_resources_and_named_endpoints() {
+        let mut target = target("op_blocked");
+        target.stack_settings.insert("publicEndpoints".into(), json!({
+            "api": { "http": "https://old.example.com", "metrics": "https://metrics.example.com" },
+            "worker": { "http": "https://worker.example.com" }
+        }));
+        let args = UpArgs::parse_from([
+            "democtl",
+            "--public-endpoint",
+            "api.http=https://new.example.com",
+        ]);
+        patch_settings(&mut target, &args, None).unwrap();
+        assert_eq!(
+            target.stack_settings["publicEndpoints"],
+            json!({
+                "api": { "http": "https://new.example.com", "metrics": "https://metrics.example.com" },
+                "worker": { "http": "https://worker.example.com" }
+            })
         );
     }
 

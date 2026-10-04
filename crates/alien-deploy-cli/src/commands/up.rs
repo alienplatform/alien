@@ -1764,6 +1764,23 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     let print_progress = should_print_deploy_progress(platform);
     let base_platform = parse_base_platform(platform, base_platform_str.as_deref())?;
     if args.setup_update {
+        if deploy_config.as_ref().is_some_and(|config| {
+            config.external_bindings.is_some()
+                || config.inputs.is_some()
+                || config.secret_inputs.is_some()
+                || config.network.is_some()
+                || config.compute.is_some()
+                || config.updates.is_some()
+                || config.telemetry.is_some()
+                || config.public_endpoints.is_some()
+        }) || !args.input_values.is_empty()
+            || !args.secret_input_values.is_empty()
+        {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "setup-update".to_string(),
+                message: "Saving setup choices requires explicit --deployment-id, --update-operation-id, and --release-id targeting.".to_string(),
+            }));
+        }
         // An update must address an installed identity. Never initialize a new
         // deployment or resolve today's default manager for this command.
         let tracker = DeploymentTracker::new()?;
