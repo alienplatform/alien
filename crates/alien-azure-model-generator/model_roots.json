@@ -371,6 +371,7 @@
     "Attributes",
     "Error",
     "SecretBundle",
+    "SecretListResult",
     "SecretSetParameters",
     "SecretUpdateParameters"
   ],

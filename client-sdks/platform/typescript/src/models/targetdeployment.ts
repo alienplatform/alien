@@ -11,13 +11,16 @@ import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
-  ReleaseInfoTypeBoolean,
-  ReleaseInfoTypeBoolean$inboundSchema,
   TargetDeploymentConfig,
   TargetDeploymentConfig$inboundSchema,
   TargetDeploymentDefaultStringList,
   TargetDeploymentDefaultStringList$inboundSchema,
-} from "./releaseinfotypeboolean.js";
+} from "./targetdeploymentdefaultstringlist.js";
+
+export const ReleaseInfoTypeBoolean = {
+  Boolean: "boolean",
+} as const;
+export type ReleaseInfoTypeBoolean = ClosedEnum<typeof ReleaseInfoTypeBoolean>;
 
 export type TargetDeploymentDefaultBoolean = {
   type: ReleaseInfoTypeBoolean;
@@ -1583,6 +1586,11 @@ export type TargetDeployment = {
    */
   releaseInfo: ReleaseInfo;
 };
+
+/** @internal */
+export const ReleaseInfoTypeBoolean$inboundSchema: z.ZodEnum<
+  typeof ReleaseInfoTypeBoolean
+> = z.enum(ReleaseInfoTypeBoolean);
 
 /** @internal */
 export const TargetDeploymentDefaultBoolean$inboundSchema: z.ZodType<

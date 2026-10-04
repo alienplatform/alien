@@ -55,6 +55,13 @@ Parameters:
     - create-new
     - use-existing
     - use-default
+  EndpointAccess:
+    Type: String
+    Description: Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup.
+    Default: internet
+    AllowedValues:
+    - internet
+    - private
   UpdatesMode:
     Type: String
     Description: How updates are applied after setup registration.
@@ -105,6 +112,8 @@ Resources:
           Ref: ManagingRoleArn
       StackSettings:
         deploymentModel: push
+        endpointAccess:
+          Ref: EndpointAccess
         updates:
           Ref: UpdatesMode
         telemetry:
@@ -169,6 +178,8 @@ Outputs:
     Value:
       Fn::ToJsonString:
         deploymentModel: push
+        endpointAccess:
+          Ref: EndpointAccess
         updates:
           Ref: UpdatesMode
         telemetry:

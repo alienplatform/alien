@@ -108,6 +108,26 @@ USER 0:0
 /// The archive is flat on purpose — `CreateMicrovmImage` looks for the Dockerfile at the root,
 /// and a nested directory produces a build failure minutes in rather than a rejected request.
 pub fn write_bundle(destination: &Path, base_image: &str, agent: &AgentSource) -> Result<()> {
+    write_bundle_inner(destination, base_image, agent, None)
+}
+
+/// Writes a bundle preserving the base image's OCI command for unprivileged startup.
+/// `image_command` must come from inspecting the declared base image, not an exec request.
+pub fn write_supervised_bundle(
+    destination: &Path,
+    base_image: &str,
+    agent: &AgentSource,
+    image_command: &alien_core::sandbox_image::SandboxImageCommand,
+) -> Result<()> {
+    write_bundle_inner(destination, base_image, agent, Some(image_command))
+}
+
+fn write_bundle_inner(
+    destination: &Path,
+    base_image: &str,
+    agent: &AgentSource,
+    image_command: Option<&alien_core::sandbox_image::SandboxImageCommand>,
+) -> Result<()> {
     let failed = |operation: &str, path: &Path| ErrorData::FileOperationFailed {
         operation: operation.to_string(),
         file_path: path.display().to_string(),
@@ -116,7 +136,18 @@ pub fn write_bundle(destination: &Path, base_image: &str, agent: &AgentSource) -
 
     // Every fallible input resolves before the archive exists, so no failure — a bad reference
     // or an unreadable agent binary — leaves a truncated zip behind.
-    let dockerfile = dockerfile(base_image, agent)?;
+    let mut dockerfile = dockerfile(base_image, agent)?;
+    let command_bytes = image_command
+        .map(serde_json::to_vec)
+        .transpose()
+        .into_alien_error()
+        .context(failed("serialize image command", destination))?;
+    if image_command.is_some() {
+        dockerfile.push_str(&format!(
+            "\nCOPY --chown=0:0 --chmod=0444 image-command.json {}\n",
+            alien_core::sandbox_image::IMAGE_COMMAND_PATH
+        ));
+    }
     let agent_bytes = match agent {
         AgentSource::Binary(agent_binary) => Some(
             std::fs::read(agent_binary)
@@ -143,6 +174,17 @@ pub fn write_bundle(destination: &Path, base_image: &str, agent: &AgentSource) -
             .context(failed("write", destination))?;
     }
 
+    if let Some(bytes) = command_bytes {
+        zip.start_file(
+            "image-command.json",
+            SimpleFileOptions::default().unix_permissions(0o444),
+        )
+        .into_alien_error()
+        .context(failed("write image command", destination))?;
+        zip.write_all(&bytes)
+            .into_alien_error()
+            .context(failed("write image command", destination))?;
+    }
     zip.start_file(
         "Dockerfile",
         SimpleFileOptions::default().unix_permissions(0o644),

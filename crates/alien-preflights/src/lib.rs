@@ -376,6 +376,9 @@ impl PreflightRegistry {
         // deployment target/config, so they run only after deployment-time
         // mutations have produced the final stack shape.
         registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::PrivateEndpointAccessCheck,
+        ));
+        registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::ManagedContainerBackendRequiredCheck,
         ));
         registry.add_deployment_prerequisite_check(Box::new(

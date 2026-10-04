@@ -5,7 +5,10 @@
 
 use std::collections::HashSet;
 
-use crate::core::{azure_permissions_helper::AzurePermissionsHelper, ResourceControllerContext};
+use crate::core::{
+    azure_permissions_helper::AzurePermissionsHelper, GcpCustomRoleNaming,
+    ResourceControllerContext,
+};
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::authorization::Scope;
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -232,6 +235,7 @@ impl ResourcePermissionsHelper {
 
         let mut permission_context = PermissionContext::new()
             .with_stack_prefix(ctx.resource_prefix.to_string())
+            .with_gcp_custom_role_namespace(Self::gcp_custom_role_namespace(ctx)?)
             .with_project_name(project_id)
             .with_region(region)
             .with_resource_name(Self::kubernetes_cluster_name_for_permissions(
@@ -454,21 +458,30 @@ impl ResourcePermissionsHelper {
         Ok(())
     }
 
-    /// Setup-delete: delete the GCP custom roles generated for the selected permission sets.
+    /// Setup-delete: delete every GCP custom role this deployment created.
+    ///
+    /// A role belongs to this deployment when its ID is in one of the
+    /// deployment's namespaces and its description names the deployment's
+    /// resource prefix. The ID alone does not prove it: `role_acme_` also
+    /// starts every role of a deployment with prefix `acme-prod`. Listing the
+    /// project's roles, rather than regenerating IDs from the current stack,
+    /// also finds the roles of permission sets an earlier update removed.
     ///
     /// Project IAM/resource IAM bindings must be removed before this runs. Missing
     /// roles are tolerated so delete stays idempotent.
-    pub async fn delete_gcp_custom_roles(
-        ctx: &ResourceControllerContext<'_>,
-        permission_context: &PermissionContext,
-    ) -> Result<()> {
+    pub async fn delete_gcp_custom_roles(ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let gcp_config = ctx.get_gcp_config()?;
         let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
-        let role_name_prefix = format!(
-            "projects/{}/roles/{}",
-            gcp_config.project_id,
-            custom_role_prefix(permission_context)
-        );
+        let mut namespaces = vec![
+            GcpCustomRoleNaming::HashedLongPrefix.namespace(ctx.resource_prefix),
+            GcpCustomRoleNaming::TruncatedPrefix.namespace(ctx.resource_prefix),
+        ];
+        namespaces.sort();
+        namespaces.dedup();
+        let role_name_prefixes: Vec<String> = namespaces
+            .iter()
+            .map(|namespace| format!("projects/{}/roles/role_{namespace}_", gcp_config.project_id))
+            .collect();
         let mut role_names = Vec::new();
         let mut page_token = None;
 
@@ -485,7 +498,21 @@ impl ResourcePermissionsHelper {
                 let Some(role_name) = role.name else {
                     continue;
                 };
-                if role_name.starts_with(&role_name_prefix) {
+                if !role_name_prefixes
+                    .iter()
+                    .any(|prefix| role_name.starts_with(prefix))
+                {
+                    continue;
+                }
+                let Some(description) = role.description else {
+                    warn!(
+                        role_name = %role_name,
+                        resource_prefix = %ctx.resource_prefix,
+                        "Skipping GCP custom role without a description; ownership cannot be verified"
+                    );
+                    continue;
+                };
+                if custom_role_description_names_prefix(&description, ctx.resource_prefix) {
                     role_names.push(role_name);
                 }
             }
@@ -909,13 +936,20 @@ impl ResourcePermissionsHelper {
         ctx: &ResourceControllerContext<'_>,
         resource_name: &str,
     ) -> Result<PermissionContext> {
+        Ok(Self::gcp_permission_context(ctx)?.with_resource_name(resource_name.to_string()))
+    }
+
+    /// Build the deployment-wide GCP permission context.
+    pub(crate) fn gcp_permission_context(
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<PermissionContext> {
         let gcp_config = ctx.get_gcp_config()?;
 
         let mut permission_ctx = PermissionContext::new()
             .with_project_name(gcp_config.project_id.clone())
             .with_region(gcp_config.region.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_resource_name(resource_name.to_string());
+            .with_gcp_custom_role_namespace(Self::gcp_custom_role_namespace(ctx)?);
         if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
             permission_ctx = permission_ctx.with_deployment_name(deployment_name.to_string());
         }
@@ -923,6 +957,11 @@ impl ResourcePermissionsHelper {
             permission_ctx = permission_ctx.with_project_number(project_number.clone());
         }
         Ok(permission_ctx)
+    }
+
+    /// Return the namespace of this deployment's GCP custom role IDs.
+    pub fn gcp_custom_role_namespace(ctx: &ResourceControllerContext<'_>) -> Result<String> {
+        Ok(GcpCustomRoleNaming::for_deployment(ctx.state)?.namespace(ctx.resource_prefix))
     }
 
     /// Process GCP permissions for a specific profile

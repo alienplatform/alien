@@ -122,9 +122,9 @@ describe("StackSettings external bindings", () => {
       "archive-primary": { type: "storage", service: "s3", bucketName: "demo-primary" },
       "archive.secondary": { type: "storage", service: "s3", bucketName: "demo-secondary" },
     }
-    expect(StackSettingsSchema.parse({ externalBindings }).externalBindings).toEqual(
-      externalBindings,
-    )
+    const parsed = StackSettingsSchema.parse({ externalBindings, endpointAccess: "private" })
+    expect(parsed.externalBindings).toEqual(externalBindings)
+    expect(parsed.endpointAccess).toBe("private")
   })
 
   it.each(bindings)("preserves every field of $type / $service", binding => {

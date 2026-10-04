@@ -688,3 +688,108 @@ fn is_resource_data_permission_set(permission_set_id: &str) -> bool {
         || permission_set_id.starts_with("kv/")
         || permission_set_id.starts_with("queue/")
 }
+
+fn custom_role_ids(resource_prefix: &str, permission_set_id: &str) -> Vec<String> {
+    let permission_set = get_permission_set(permission_set_id).expect("permission set exists");
+    GcpRuntimePermissionsGenerator::new()
+        .generate_custom_roles(
+            permission_set,
+            &create_test_context().with_stack_prefix(resource_prefix),
+        )
+        .expect("GCP custom roles should compile")
+        .into_iter()
+        .map(|role| role.role_id)
+        .collect()
+}
+
+#[test]
+fn gcp_custom_role_ids_differ_for_prefixes_sharing_their_first_18_characters() {
+    for permission_set_id in list_permission_set_ids() {
+        let permission_set = get_permission_set(permission_set_id).expect("permission set exists");
+        if permission_set.platforms.gcp.is_none() {
+            continue;
+        }
+        let eu = custom_role_ids("customer-acme-prod-eu", permission_set_id);
+        let us = custom_role_ids("customer-acme-prod-us", permission_set_id);
+
+        assert_eq!(eu.len(), us.len());
+        for role_id in &eu {
+            assert!(
+                !us.contains(role_id),
+                "'{permission_set_id}' gives both deployments the role ID '{role_id}'"
+            );
+        }
+    }
+}
+
+/// Expected namespaces were produced by `terraform console` evaluating the
+/// generated module's `gcp_custom_role_prefix` local with each `resource_prefix`.
+#[rstest]
+#[case::short("acme", "acme")]
+#[case::hyphenated("acme-prod", "acme_prod")]
+#[case::exactly_18("customer-acme-prod", "customer_acme_prod")]
+#[case::nineteen("acme-platform-eu-12", "acme_plat_20cb2504")]
+#[case::hyphen_at_cut("customer-acme-prod-eu", "customer__2e6bb8cf")]
+#[case::forty("abcdefgh-ijklmnopqrs-tuvwxyz0123-456789", "abcdefgh__10cdde91")]
+fn gcp_custom_role_namespace_matches_terraform(
+    #[case] resource_prefix: &str,
+    #[case] expected: &str,
+) {
+    assert_eq!(
+        alien_permissions::generators::custom_role_namespace_for_prefix(resource_prefix),
+        expected
+    );
+    let role_ids = custom_role_ids(resource_prefix, "storage/data-read");
+    assert!(!role_ids.is_empty());
+    for role_id in role_ids {
+        assert!(
+            role_id.starts_with(&format!("role_{expected}_")),
+            "{role_id}"
+        );
+    }
+}
+
+#[test]
+fn gcp_custom_role_namespace_override_keeps_existing_role_ids() {
+    let permission_set = get_permission_set("storage/data-read").expect("permission set exists");
+    let context = create_test_context()
+        .with_stack_prefix("customer-acme-prod-eu")
+        .with_gcp_custom_role_namespace("customer_acme_prod");
+
+    let roles = GcpRuntimePermissionsGenerator::new()
+        .generate_custom_roles(permission_set, &context)
+        .expect("GCP custom roles should compile");
+
+    // The IDs runtime setup created for this prefix before long prefixes were hashed.
+    assert_eq!(
+        roles
+            .iter()
+            .map(|role| role.name.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "projects/my-project/roles/role_customer_acme_prod_read_cloud_storage_objects",
+            "projects/my-project/roles/role_customer_acme_prod_sign_cloud_storage_download_urls",
+        ]
+    );
+    assert_eq!(
+        alien_permissions::generators::legacy_custom_role_namespace_for_prefix(
+            "customer-acme-prod-eu"
+        ),
+        "customer_acme_prod"
+    );
+}
+
+#[test]
+fn gcp_custom_role_description_names_only_its_exact_prefix() {
+    use alien_permissions::generators::custom_role_description_names_prefix as names;
+
+    let description = "Used by Acme. Allows reading data. Resource prefix: acme-prod.";
+    assert!(names(description, "acme-prod"));
+    assert!(!names(description, "acme"));
+    assert!(!names(description, "prod"));
+    assert!(!names("Allows reading data. Resource prefix: acme.", "cme"));
+    assert!(!names(
+        "Allows reading data. Resource prefix: acme.extra.",
+        "acme"
+    ));
+}

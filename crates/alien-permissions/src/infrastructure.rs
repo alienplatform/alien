@@ -37,6 +37,10 @@ pub struct PermissionContext {
     pub external_id: Option<String>,
     pub managing_role_arn: Option<String>,
     pub managing_account_id: Option<String>,
+
+    /// GCP custom-role namespace to use instead of the one derived from
+    /// `stack_prefix`, for deployments whose roles already use another one.
+    pub gcp_custom_role_namespace: Option<String>,
 }
 
 impl PermissionContext {
@@ -64,6 +68,7 @@ impl PermissionContext {
             external_id: None,
             managing_role_arn: None,
             managing_account_id: None,
+            gcp_custom_role_namespace: None,
         }
     }
 
@@ -190,6 +195,12 @@ impl PermissionContext {
     /// Builder pattern for managing account ID
     pub fn with_managing_account_id(mut self, managing_account_id: impl Into<String>) -> Self {
         self.managing_account_id = Some(managing_account_id.into());
+        self
+    }
+
+    /// Builder pattern for the GCP custom-role namespace override
+    pub fn with_gcp_custom_role_namespace(mut self, namespace: impl Into<String>) -> Self {
+        self.gcp_custom_role_namespace = Some(namespace.into());
         self
     }
 

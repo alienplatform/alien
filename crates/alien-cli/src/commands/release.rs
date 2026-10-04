@@ -6,9 +6,9 @@ use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
 use alien_build::settings::PushSettings;
 use alien_core::{
-    alien_event, AlienEvent, Container, ContainerCode, Daemon, DaemonCode, Platform, Sandbox,
-    SandboxCode, Stack, StackInputDefinition, StackInputKind, StackInputProvider, Worker,
-    WorkerCode,
+    alien_event, is_deployer_secret_input, AlienEvent, Container, ContainerCode, Daemon,
+    DaemonCode, Platform, Sandbox, SandboxCode, Stack, StackInputDefinition, StackInputKind,
+    StackInputProvider, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::{
@@ -1552,6 +1552,7 @@ fn onboard_command_hint(config: &ReleaseConfig) -> String {
         .iter()
         .filter(|input| input.required)
         .filter(|input| input.provided_by.contains(&StackInputProvider::Developer))
+        .filter(|input| !is_deployer_secret_input(input))
         .filter(|input| input_applies_to_any_platform(input, &selected_platforms))
         .collect::<Vec<_>>();
 

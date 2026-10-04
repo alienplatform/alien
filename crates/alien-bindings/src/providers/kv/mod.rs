@@ -84,24 +84,16 @@ pub(crate) fn decode_version(key: &str, encoded: &str) -> Result<DecodedVersion>
     })
 }
 
-/// Maximum value size in bytes for KV storage (24 KiB = 24,576 bytes)
-///
-/// This limit ensures compatibility across all KV backends, accounting for encoding overhead:
-/// - **AWS DynamoDB**: 400KB item limit (much higher, not constraining)
-/// - **GCP Firestore**: 1MiB document limit (much higher, not constraining)  
-/// - **Azure Table Storage**: 64KB UTF-16 string limit, accounting for base64 + UTF-16 encoding
-///
-/// The 24KB limit accounts for Azure Table Storage's most restrictive constraint:
-/// - 24KB raw data → ~32KB base64 → ~64KB UTF-16, fitting within Azure's 64KB limit
-/// - Still supports reasonably sized data structures and JSON payloads
-/// - Ensures fast network transfer and low latency
-/// - Maintains consistent behavior across all cloud providers
-///
-/// Applications needing larger values should consider:
-/// 1. Compressing data before storage (e.g., gzip JSON)
-/// 2. Splitting data across multiple keys with a common prefix
-/// 3. Using the Storage API for large objects (designed for multi-MB/GB files)
-pub const MAX_VALUE_BYTES: usize = 24_576; // 24 KiB
+/// Portable value limit, used by Azure Table Storage and the local provider.
+/// Base64 plus UTF-16 expands 24 KiB to Azure's 64 KiB property limit.
+pub const MAX_VALUE_BYTES: usize = 24_576;
+
+/// DynamoDB's 400 KiB item limit minus space for the key and metadata.
+pub const DYNAMODB_MAX_VALUE_BYTES: usize = 399 * 1024;
+
+/// Firestore's 1 MiB document limit, reserving 4 KiB for names and metadata,
+/// then accounting for the base64 string used to store the value.
+pub const FIRESTORE_MAX_VALUE_BYTES: usize = (1024 * 1024 - 4096) / 4 * 3;
 
 /// Maximum key size in bytes (512 bytes)
 ///
@@ -171,15 +163,22 @@ pub fn validate_key(key: &str) -> crate::error::Result<()> {
     Ok(())
 }
 
-/// Global value validation for all KV providers
+/// Validate a value against the portable Azure/local limit.
 pub fn validate_value(value: &[u8]) -> crate::error::Result<()> {
+    validate_value_with_limit(value, MAX_VALUE_BYTES)
+}
+
+pub(crate) fn validate_value_with_limit(
+    value: &[u8],
+    max_bytes: usize,
+) -> crate::error::Result<()> {
     use crate::error::ErrorData;
     use alien_error::AlienError;
 
-    if value.len() > MAX_VALUE_BYTES {
+    if value.len() > max_bytes {
         return Err(AlienError::new(ErrorData::InvalidInput {
             operation_context: "KV value validation".to_string(),
-            details: format!("Value exceeds {} bytes", MAX_VALUE_BYTES),
+            details: format!("Value exceeds {max_bytes} bytes"),
             field_name: Some("value".to_string()),
         }));
     }

@@ -119,7 +119,7 @@ Parameters:
     Default: ''
   DomainName:
     Type: String
-    Description: Optional custom domain for public endpoints. Leave unset to expose through the generated load balancer DNS name over HTTP.
+    Description: Optional custom domain. Leave unset to use the deployment-managed endpoint.
     Default: ''
   HostedZoneId:
     Type: String
@@ -130,6 +130,13 @@ Parameters:
     Description: ACM certificate ARN for the custom domain. Required when DomainName is set.
     Default: ''
     AllowedPattern: ^$|^arn:aws(-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$
+  EndpointAccess:
+    Type: String
+    Description: Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup.
+    Default: internet
+    AllowedValues:
+    - internet
+    - private
   UpdatesMode:
     Type: String
     Description: How updates are applied after setup registration.
@@ -594,6 +601,8 @@ Resources:
       ManagementConfig: null
       StackSettings:
         deploymentModel: push
+        endpointAccess:
+          Ref: EndpointAccess
         updates:
           Ref: UpdatesMode
         telemetry:

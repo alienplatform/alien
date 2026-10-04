@@ -12,6 +12,8 @@ import { Result as SafeParseResult } from "../types/fp.js";
 import {
   DeploymentBasePlatform,
   DeploymentBasePlatform$inboundSchema,
+  DeploymentDeployerSecret,
+  DeploymentDeployerSecret$inboundSchema,
   DeploymentEnvironmentInfoUnion,
   DeploymentEnvironmentInfoUnion$inboundSchema,
   DeploymentInitialSetupAuthority,
@@ -24,7 +26,7 @@ import {
   DeploymentStackState$inboundSchema,
   DeploymentStatus,
   DeploymentStatus$inboundSchema,
-} from "./deploymentpendingpreparedstackplatform.js";
+} from "./deploymentpendingpreparedstacktypeunion.js";
 import {
   DeploymentPendingPreparedStackUnion,
   DeploymentPendingPreparedStackUnion$inboundSchema,
@@ -32,15 +34,17 @@ import {
   DeploymentPreparedStackExtendAw$inboundSchema,
   DeploymentPreparedStackExtendAzure,
   DeploymentPreparedStackExtendAzure$inboundSchema,
-  DeploymentPreparedStackExtendGcp,
-  DeploymentPreparedStackExtendGcp$inboundSchema,
+  DeploymentPreparedStackExtendConditionStack,
+  DeploymentPreparedStackExtendConditionStack$inboundSchema,
+  DeploymentPreparedStackExtendGcpResource,
+  DeploymentPreparedStackExtendGcpResource$inboundSchema,
   DeploymentPreparedStackInput,
   DeploymentPreparedStackInput$inboundSchema,
   DeploymentPreparedStackManagement2,
   DeploymentPreparedStackManagement2$inboundSchema,
   DeploymentPreparedStackManagementEnum,
   DeploymentPreparedStackManagementEnum$inboundSchema,
-} from "./deploymentpreparedstackextendgcp.js";
+} from "./deploymentpreparedstackextendconditionstack.js";
 import {
   DeploymentPurpose,
   DeploymentPurpose$inboundSchema,
@@ -58,6 +62,87 @@ import {
   ReportedOperation,
   ReportedOperation$inboundSchema,
 } from "./reportedoperation.js";
+
+export type DeploymentPreparedStackExtendStackConditionUnion =
+  | DeploymentPreparedStackExtendConditionStack
+  | string;
+
+/**
+ * GCP-specific binding specification
+ */
+export type DeploymentPreparedStackExtendGcpStack = {
+  condition?:
+    | DeploymentPreparedStackExtendConditionStack
+    | string
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type DeploymentPreparedStackExtendGcpBinding = {
+  /**
+   * GCP-specific binding specification
+   */
+  resource?: DeploymentPreparedStackExtendGcpResource | undefined;
+  /**
+   * GCP-specific binding specification
+   */
+  stack?: DeploymentPreparedStackExtendGcpStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type DeploymentPreparedStackExtendGcpGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * GCP-specific platform permission configuration
+ */
+export type DeploymentPreparedStackExtendGcp = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: DeploymentPreparedStackExtendGcpBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: DeploymentPreparedStackExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
 
 /**
  * Platform-specific permission configurations
@@ -769,6 +854,14 @@ export type DeploymentSetupUpdateAuthorizationUnion =
  */
 export type DeploymentRuntimeMetadata = {
   /**
+   * Whether each vault-native deployer secret is in the customer's secret
+   *
+   * @remarks
+   * store, with where it goes. Checked from metadata only; no value is ever
+   * read or recorded here.
+   */
+  deployerSecrets?: Array<DeploymentDeployerSecret> | undefined;
+  /**
    * Last generated CLI package revision whose direct setup was applied.
    *
    * @remarks
@@ -1103,6 +1196,125 @@ export type Deployment = {
 };
 
 /** @internal */
+export const DeploymentPreparedStackExtendStackConditionUnion$inboundSchema:
+  z.ZodType<DeploymentPreparedStackExtendStackConditionUnion, unknown> = z
+    .union([
+      DeploymentPreparedStackExtendConditionStack$inboundSchema,
+      z.string(),
+    ]);
+
+export function deploymentPreparedStackExtendStackConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentPreparedStackExtendStackConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentPreparedStackExtendStackConditionUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentPreparedStackExtendStackConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPreparedStackExtendGcpStack$inboundSchema: z.ZodType<
+  DeploymentPreparedStackExtendGcpStack,
+  unknown
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      DeploymentPreparedStackExtendConditionStack$inboundSchema,
+      z.string(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
+
+export function deploymentPreparedStackExtendGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPreparedStackExtendGcpStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentPreparedStackExtendGcpStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPreparedStackExtendGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPreparedStackExtendGcpBinding$inboundSchema: z.ZodType<
+  DeploymentPreparedStackExtendGcpBinding,
+  unknown
+> = z.object({
+  resource: DeploymentPreparedStackExtendGcpResource$inboundSchema.optional(),
+  stack: z.lazy(() => DeploymentPreparedStackExtendGcpStack$inboundSchema)
+    .optional(),
+});
+
+export function deploymentPreparedStackExtendGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentPreparedStackExtendGcpBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentPreparedStackExtendGcpBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentPreparedStackExtendGcpBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPreparedStackExtendGcpGrant$inboundSchema: z.ZodType<
+  DeploymentPreparedStackExtendGcpGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function deploymentPreparedStackExtendGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPreparedStackExtendGcpGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentPreparedStackExtendGcpGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPreparedStackExtendGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPreparedStackExtendGcp$inboundSchema: z.ZodType<
+  DeploymentPreparedStackExtendGcp,
+  unknown
+> = z.object({
+  binding: z.lazy(() => DeploymentPreparedStackExtendGcpBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => DeploymentPreparedStackExtendGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function deploymentPreparedStackExtendGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPreparedStackExtendGcp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentPreparedStackExtendGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPreparedStackExtendGcp' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentPreparedStackExtendPlatforms$inboundSchema: z.ZodType<
   DeploymentPreparedStackExtendPlatforms,
   unknown
@@ -1111,8 +1323,9 @@ export const DeploymentPreparedStackExtendPlatforms$inboundSchema: z.ZodType<
     .optional(),
   azure: z.nullable(z.array(DeploymentPreparedStackExtendAzure$inboundSchema))
     .optional(),
-  gcp: z.nullable(z.array(DeploymentPreparedStackExtendGcp$inboundSchema))
-    .optional(),
+  gcp: z.nullable(
+    z.array(z.lazy(() => DeploymentPreparedStackExtendGcp$inboundSchema)),
+  ).optional(),
 });
 
 export function deploymentPreparedStackExtendPlatformsFromJSON(
@@ -2074,6 +2287,7 @@ export const DeploymentRuntimeMetadata$inboundSchema: z.ZodType<
   DeploymentRuntimeMetadata,
   unknown
 > = z.object({
+  deployerSecrets: z.array(DeploymentDeployerSecret$inboundSchema).optional(),
   directSetupRevision: z.nullable(z.string()).optional(),
   initialSetupAuthority: DeploymentInitialSetupAuthority$inboundSchema
     .optional(),

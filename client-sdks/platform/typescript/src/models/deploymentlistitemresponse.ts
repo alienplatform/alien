@@ -44,6 +44,7 @@ export const DeploymentListItemResponseStatus = {
   InitialSetupFailed: "initial-setup-failed",
   Provisioning: "provisioning",
   WaitingForMachines: "waiting-for-machines",
+  WaitingForSecrets: "waiting-for-secrets",
   ProvisioningFailed: "provisioning-failed",
   Running: "running",
   RefreshFailed: "refresh-failed",

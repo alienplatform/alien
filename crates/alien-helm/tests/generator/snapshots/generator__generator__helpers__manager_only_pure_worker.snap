@@ -3120,4 +3120,6 @@ Use an Operator image built with this chart version for that transition.
 }
 
 === files/stack-settings.json ===
-{}
+{
+  "endpointAccess": "internet"
+}

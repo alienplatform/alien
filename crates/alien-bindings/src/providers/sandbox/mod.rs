@@ -264,6 +264,31 @@ fn timeout_seconds(timeout: std::time::Duration) -> String {
     }
 }
 
+/// Refuses a variable name `env` would not take as one.
+///
+/// Kept even though the whole `NAME=value` pair is one quoted argument: a name outside this set
+/// either fails the exec or silently becomes something else, and the other backends bound it the
+/// same way.
+#[cfg(any(feature = "azure", feature = "local"))]
+pub(crate) fn checked_env_name(operation: &str, name: &str) -> crate::error::Result<()> {
+    let usable = !name.is_empty()
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if usable {
+        return Ok(());
+    }
+    Err(alien_error::AlienError::new(
+        crate::error::ErrorData::InvalidInput {
+            operation_context: operation.to_string(),
+            details: format!(
+                "environment variable name '{name}' is not a shell name: letters, digits and \
+                 underscores only, and not starting with a digit"
+            ),
+            field_name: Some("env".to_string()),
+        },
+    ))
+}
+
 /// Refuses a timeout these backends cannot honour, and returns the guard the caller waits on.
 ///
 /// Both ends are refused rather than quietly adjusted, as the agent-supervised backends refuse a

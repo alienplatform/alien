@@ -103,6 +103,8 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
     decrypt: async ciphertext => ciphertext,
   }
   const queueHandle: RawQueueHandle = {
+    sendBatchJson: async () => "[]",
+    sendBatchText: async () => "[]",
     sendJson: async () => {},
     sendText: async () => {},
     receive: async () => [],
@@ -499,6 +501,8 @@ describe("createFactories method mapping", () => {
   it("serializes queue.send payloads as JSON via the bound queue handle", async () => {
     const sendJson = vi.fn(async () => {})
     const queueHandle: RawQueueHandle = {
+      sendBatchJson: async () => "[]",
+      sendBatchText: async () => "[]",
       sendJson,
       sendText: async () => {},
       receive: async () => [],

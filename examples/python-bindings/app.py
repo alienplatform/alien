@@ -47,16 +47,19 @@ async def main() -> None:
     assert response.status < 500
 
     runtime = sandbox("runtime")
-    instance, _ = await runtime.get_or_create(tenant_key="python-bindings-smoke")
-    command = await runtime.run_command(
-        instance.sandbox_id,
-        "python",
-        ["-c", "print('ready')"],
-        timeout_ms=30_000,
-    )
-    async for frame in command:
-        if frame.exit_code is not None:
-            assert frame.exit_code == 0
+    instance = await runtime.create()
+    try:
+        command = await runtime.run_command(
+            instance.sandbox_id,
+            "python",
+            ["-c", "print('ready')"],
+            timeout_ms=30_000,
+        )
+        async for frame in command:
+            if frame.exit_code is not None:
+                assert frame.exit_code == 0
+    finally:
+        await runtime.terminate(instance.sandbox_id)
 
 
 if __name__ == "__main__":

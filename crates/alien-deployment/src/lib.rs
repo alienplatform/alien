@@ -220,7 +220,7 @@ pub async fn step(
             provisioning::handle_provisioning(current, config, client_config, service_provider)
                 .await?
         }
-        DeploymentStatus::WaitingForMachines => {
+        DeploymentStatus::WaitingForMachines | DeploymentStatus::WaitingForSecrets => {
             // An update can replace the initial target before any release has settled.
             let has_pending_target = current
                 .runtime_metadata

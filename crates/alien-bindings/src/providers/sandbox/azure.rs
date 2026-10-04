@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use futures::stream::{self, BoxStream};
 
 use crate::error::{ErrorData, Result};
-use crate::providers::sandbox::{guard_for, Bounded, TimeoutReport};
+use crate::providers::sandbox::{checked_env_name, guard_for, Bounded, TimeoutReport};
 use crate::traits::{
     Binding, CommandOutput, CreateSandboxRequest, JobPoll, JobStart, PreviewCapability,
     ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
@@ -1225,28 +1225,6 @@ fn checked_sandbox_env(operation: &str, env: &BTreeMap<String, String>) -> Resul
         }
     }
     Ok(())
-}
-
-/// Refuses a variable name `env` would not take as one.
-///
-/// Kept even though the whole `NAME=value` pair is one quoted argument: a name outside this set
-/// either fails the exec or silently becomes something else, and the other backends bound it the
-/// same way.
-fn checked_env_name(operation: &str, name: &str) -> Result<()> {
-    let usable = !name.is_empty()
-        && !name.starts_with(|c: char| c.is_ascii_digit())
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-    if usable {
-        return Ok(());
-    }
-    Err(AlienError::new(ErrorData::InvalidInput {
-        operation_context: operation.to_string(),
-        details: format!(
-            "environment variable name '{name}' is not a shell name: letters, digits and \
-             underscores only, and not starting with a digit"
-        ),
-        field_name: Some("env".to_string()),
-    }))
 }
 
 /// Refuses a caller's path before it reaches the data plane, and returns what to send.

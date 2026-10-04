@@ -136,6 +136,7 @@ pub async fn handle_pending(
         &mut mutated_stack_with_env,
         &config,
         current.platform,
+        &runtime_metadata.deployer_secrets,
     )?;
     if let Some(monitoring) = &config.monitoring {
         crate::helpers::inject_monitoring_environment_variables(

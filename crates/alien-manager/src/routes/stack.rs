@@ -197,6 +197,20 @@ pub async fn stack_import(
     // values, which must not contradict what the template actually created:
     // a live resource sharing a frozen gate would otherwise follow the
     // contradicting value instead of the frozen answer.
+    // A deployer secret lives only in the customer's own secret store; the
+    // import never carries its value.
+    if let Some(input) = source_stack.inputs.iter().find(|input| {
+        alien_core::is_deployer_secret_input(input)
+            && req
+                .input_values
+                .get(&input.id)
+                .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+    }) {
+        return AlienError::new(ErrorData::BadRequest {
+            reason: alien_core::deployer_secret_value_refusal(&input.label),
+        })
+        .into_response();
+    }
     let delivered_resource_ids: std::collections::HashSet<String> = req
         .resources
         .iter()
@@ -273,6 +287,13 @@ pub async fn stack_import(
             if !state.authz.can_update_deployment(&subject, &existing) {
                 return ErrorData::forbidden("Cannot update imported deployment in this group")
                     .into_response();
+            }
+            if existing.stack_settings.as_ref().is_some_and(|settings| {
+                settings.endpoint_access != req.stack_settings.endpoint_access
+            }) {
+                return ErrorData::bad_request(
+                    "Endpoint access cannot change after setup. Create a new deployment to change endpoint access.",
+                ).into_response();
             }
             // This write replaces the stored map and the request never carries
             // a generated secret, so keep the value the deployment holds.
@@ -1072,6 +1093,7 @@ fn deployment_status_string(status: DeploymentStatus) -> String {
         DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
         DeploymentStatus::Provisioning => "provisioning",
         DeploymentStatus::WaitingForMachines => "waiting-for-machines",
+        DeploymentStatus::WaitingForSecrets => "waiting-for-secrets",
         DeploymentStatus::ProvisioningFailed => "provisioning-failed",
         DeploymentStatus::Running => "running",
         DeploymentStatus::RefreshFailed => "refresh-failed",

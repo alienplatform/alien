@@ -1,8 +1,9 @@
 use crate::error::{ErrorData, Result};
+use crate::traits::SecretPresence;
 use alien_error::{Context, ContextError};
 use alien_gcp_clients::secret_manager::{
     AddSecretVersionRequest, AutomaticReplication, Replication, ReplicationPolicy, Secret,
-    SecretManagerApi, SecretManagerClient, SecretPayload,
+    SecretManagerApi, SecretManagerClient, SecretPayload, SecretVersionState,
 };
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as base64_standard, Engine as _};
@@ -29,7 +30,7 @@ impl GcpSecretManagerVault {
 
     /// Generate the full secret name with vault prefix
     fn full_secret_name(&self, secret_name: &str) -> String {
-        format!("{}-{}", self.vault_prefix, secret_name)
+        alien_core::vault_naming::secret_manager_secret_id(&self.vault_prefix, secret_name)
     }
 
     /// Generate the secret resource name for GCP API
@@ -47,6 +48,48 @@ impl crate::traits::Binding for GcpSecretManagerVault {}
 
 #[async_trait]
 impl crate::traits::Vault for GcpSecretManagerVault {
+    /// Reads the latest version's metadata (`versions.get`, not `access`), so
+    /// the payload never leaves Secret Manager. The workload reads `latest`,
+    /// so that version must be enabled.
+    async fn secret_presence(&self, secret_name: &str) -> Result<SecretPresence> {
+        let full_name = self.full_secret_name(secret_name);
+
+        let version = match self
+            .client
+            .get_secret_version(format!("{full_name}/versions/latest"))
+            .await
+        {
+            Ok(version) => version,
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                return Ok(SecretPresence::Missing);
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to read the latest version of secret '{full_name}'"),
+                    resource_id: None,
+                }))
+            }
+        };
+
+        match version.state {
+            Some(SecretVersionState::Enabled) => Ok(SecretPresence::Present),
+            Some(SecretVersionState::Disabled) => Ok(SecretPresence::Invalid {
+                reason: format!("the latest version of secret '{full_name}' is disabled"),
+            }),
+            Some(SecretVersionState::Destroyed) => Ok(SecretPresence::Invalid {
+                reason: format!("the latest version of secret '{full_name}' is destroyed"),
+            }),
+            Some(SecretVersionState::StateUnspecified) | None => Ok(SecretPresence::Invalid {
+                reason: format!("the latest version of secret '{full_name}' has no state"),
+            }),
+        }
+    }
+
     /// Get a secret value by name
     async fn get_secret(&self, secret_name: &str) -> Result<String> {
         let secret_resource = self.secret_resource_name(secret_name);
@@ -59,9 +102,13 @@ impl crate::traits::Vault for GcpSecretManagerVault {
                 self.full_secret_name(secret_name)
             ))
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to access secret version '{}'", secret_resource),
-                resource_id: None,
+            .map_err(|error| {
+                super::secret_read_error(
+                    error,
+                    &self.vault_prefix,
+                    secret_name,
+                    format!("Failed to access secret version '{}'", secret_resource),
+                )
             })?;
 
         // Extract the payload from the response

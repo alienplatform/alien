@@ -1,0 +1,4 @@
+# Established compiler for release permission artifacts.
+# Select locally with: mise -E release-prepare exec -- cargo <command>
+[tools]
+rust = { version = "1.97.1", profile = "minimal", targets = ["wasm32-unknown-unknown"] }

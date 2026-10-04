@@ -12,6 +12,8 @@ import { Result as SafeParseResult } from "../types/fp.js";
 import {
   DeploymentDetailResponseBasePlatform,
   DeploymentDetailResponseBasePlatform$inboundSchema,
+  DeploymentDetailResponseDeployerSecret,
+  DeploymentDetailResponseDeployerSecret$inboundSchema,
   DeploymentDetailResponseEnvironmentInfoUnion,
   DeploymentDetailResponseEnvironmentInfoUnion$inboundSchema,
   DeploymentDetailResponseInitialSetupAuthority,
@@ -24,7 +26,7 @@ import {
   DeploymentDetailResponseStackState$inboundSchema,
   DeploymentDetailResponseStatus,
   DeploymentDetailResponseStatus$inboundSchema,
-} from "./deploymentdetailresponsependingpreparedstackplatform.js";
+} from "./deploymentdetailresponsependingpreparedstacktypeunion.js";
 import {
   DeploymentDetailResponsePendingPreparedStackUnion,
   DeploymentDetailResponsePendingPreparedStackUnion$inboundSchema,
@@ -32,15 +34,17 @@ import {
   DeploymentDetailResponsePreparedStackExtendAw$inboundSchema,
   DeploymentDetailResponsePreparedStackExtendAzure,
   DeploymentDetailResponsePreparedStackExtendAzure$inboundSchema,
-  DeploymentDetailResponsePreparedStackExtendGcp,
-  DeploymentDetailResponsePreparedStackExtendGcp$inboundSchema,
+  DeploymentDetailResponsePreparedStackExtendConditionStack,
+  DeploymentDetailResponsePreparedStackExtendConditionStack$inboundSchema,
+  DeploymentDetailResponsePreparedStackExtendGcpResource,
+  DeploymentDetailResponsePreparedStackExtendGcpResource$inboundSchema,
   DeploymentDetailResponsePreparedStackInput,
   DeploymentDetailResponsePreparedStackInput$inboundSchema,
   DeploymentDetailResponsePreparedStackManagement2,
   DeploymentDetailResponsePreparedStackManagement2$inboundSchema,
   DeploymentDetailResponsePreparedStackManagementEnum,
   DeploymentDetailResponsePreparedStackManagementEnum$inboundSchema,
-} from "./deploymentdetailresponsepreparedstackextendgcp.js";
+} from "./deploymentdetailresponsepreparedstackextendconditionstack.js";
 import {
   DeploymentGroupInfo,
   DeploymentGroupInfo$inboundSchema,
@@ -82,6 +86,87 @@ import {
   ReportedOperation,
   ReportedOperation$inboundSchema,
 } from "./reportedoperation.js";
+
+export type DeploymentDetailResponsePreparedStackExtendStackConditionUnion =
+  | DeploymentDetailResponsePreparedStackExtendConditionStack
+  | string;
+
+/**
+ * GCP-specific binding specification
+ */
+export type DeploymentDetailResponsePreparedStackExtendGcpStack = {
+  condition?:
+    | DeploymentDetailResponsePreparedStackExtendConditionStack
+    | string
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type DeploymentDetailResponsePreparedStackExtendGcpBinding = {
+  /**
+   * GCP-specific binding specification
+   */
+  resource?: DeploymentDetailResponsePreparedStackExtendGcpResource | undefined;
+  /**
+   * GCP-specific binding specification
+   */
+  stack?: DeploymentDetailResponsePreparedStackExtendGcpStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type DeploymentDetailResponsePreparedStackExtendGcpGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * GCP-specific platform permission configuration
+ */
+export type DeploymentDetailResponsePreparedStackExtendGcp = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: DeploymentDetailResponsePreparedStackExtendGcpBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: DeploymentDetailResponsePreparedStackExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
 
 /**
  * Platform-specific permission configurations
@@ -820,6 +905,14 @@ export type DeploymentDetailResponseSetupUpdateAuthorizationUnion =
  */
 export type DeploymentDetailResponseRuntimeMetadata = {
   /**
+   * Whether each vault-native deployer secret is in the customer's secret
+   *
+   * @remarks
+   * store, with where it goes. Checked from metadata only; no value is ever
+   * read or recorded here.
+   */
+  deployerSecrets?: Array<DeploymentDetailResponseDeployerSecret> | undefined;
+  /**
    * Last generated CLI package revision whose direct setup was applied.
    *
    * @remarks
@@ -1214,6 +1307,146 @@ export type DeploymentDetailResponse = {
 };
 
 /** @internal */
+export const DeploymentDetailResponsePreparedStackExtendStackConditionUnion$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePreparedStackExtendStackConditionUnion,
+    unknown
+  > = z.union([
+    DeploymentDetailResponsePreparedStackExtendConditionStack$inboundSchema,
+    z.string(),
+  ]);
+
+export function deploymentDetailResponsePreparedStackExtendStackConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendStackConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendStackConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendStackConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendGcpStack$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendGcpStack, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.union([
+          DeploymentDetailResponsePreparedStackExtendConditionStack$inboundSchema,
+          z.string(),
+        ]),
+      ).optional(),
+      scope: z.string(),
+    });
+
+export function deploymentDetailResponsePreparedStackExtendGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendGcpStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendGcpStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendGcpBinding$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendGcpBinding, unknown> = z
+    .object({
+      resource:
+        DeploymentDetailResponsePreparedStackExtendGcpResource$inboundSchema
+          .optional(),
+      stack: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackExtendGcpStack$inboundSchema
+      ).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackExtendGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendGcpBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendGcpBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendGcpBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendGcpGrant$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendGcpGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackExtendGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendGcpGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendGcpGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendGcp$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendGcp, unknown> = z.object(
+    {
+      binding: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackExtendGcpBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      grant: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackExtendGcpGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    },
+  );
+
+export function deploymentDetailResponsePreparedStackExtendGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendGcp,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendGcp$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendGcp' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentDetailResponsePreparedStackExtendPlatforms$inboundSchema:
   z.ZodType<DeploymentDetailResponsePreparedStackExtendPlatforms, unknown> = z
     .object({
@@ -1224,7 +1457,9 @@ export const DeploymentDetailResponsePreparedStackExtendPlatforms$inboundSchema:
         z.array(DeploymentDetailResponsePreparedStackExtendAzure$inboundSchema),
       ).optional(),
       gcp: z.nullable(
-        z.array(DeploymentDetailResponsePreparedStackExtendGcp$inboundSchema),
+        z.array(z.lazy(() =>
+          DeploymentDetailResponsePreparedStackExtendGcp$inboundSchema
+        )),
       ).optional(),
     });
 
@@ -2341,6 +2576,8 @@ export const DeploymentDetailResponseRuntimeMetadata$inboundSchema: z.ZodType<
   DeploymentDetailResponseRuntimeMetadata,
   unknown
 > = z.object({
+  deployerSecrets: z.array(DeploymentDetailResponseDeployerSecret$inboundSchema)
+    .optional(),
   directSetupRevision: z.nullable(z.string()).optional(),
   initialSetupAuthority:
     DeploymentDetailResponseInitialSetupAuthority$inboundSchema.optional(),

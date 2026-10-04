@@ -22,6 +22,11 @@ import {
   DomainSettings$Outbound,
   DomainSettings$outboundSchema,
 } from "./domainsettings.js";
+import {
+  EndpointAccess,
+  EndpointAccess$inboundSchema,
+  EndpointAccess$outboundSchema,
+} from "./endpointaccess.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   HeartbeatsMode,
@@ -80,6 +85,10 @@ export type StackSettings = {
    */
   deploymentModel?: DeploymentModel | undefined;
   domains?: DomainSettings | null | undefined;
+  /**
+   * Reachability of the deployment's public endpoints, fixed at setup.
+   */
+  endpointAccess?: EndpointAccess | undefined;
   /**
    * External bindings for pre-existing infrastructure.
    *
@@ -152,6 +161,7 @@ export const StackSettings$inboundSchema: z.ZodType<StackSettings, unknown> = z
     compute: z.nullable(ComputeSettings$inboundSchema).optional(),
     deploymentModel: DeploymentModel$inboundSchema.optional(),
     domains: z.nullable(DomainSettings$inboundSchema).optional(),
+    endpointAccess: EndpointAccess$inboundSchema.optional(),
     externalBindings: z.nullable(z.lazy(() => ExternalBindings$inboundSchema))
       .optional(),
     heartbeats: HeartbeatsMode$inboundSchema.optional(),
@@ -168,6 +178,7 @@ export type StackSettings$Outbound = {
   compute?: ComputeSettings$Outbound | null | undefined;
   deploymentModel?: string | undefined;
   domains?: DomainSettings$Outbound | null | undefined;
+  endpointAccess?: string | undefined;
   externalBindings?: ExternalBindings$Outbound | null | undefined;
   heartbeats?: string | undefined;
   kubernetes?: KubernetesSettings$Outbound | null | undefined;
@@ -185,6 +196,7 @@ export const StackSettings$outboundSchema: z.ZodType<
   compute: z.nullable(ComputeSettings$outboundSchema).optional(),
   deploymentModel: DeploymentModel$outboundSchema.optional(),
   domains: z.nullable(DomainSettings$outboundSchema).optional(),
+  endpointAccess: EndpointAccess$outboundSchema.optional(),
   externalBindings: z.nullable(z.lazy(() => ExternalBindings$outboundSchema))
     .optional(),
   heartbeats: HeartbeatsMode$outboundSchema.optional(),

@@ -1,10 +1,13 @@
 use crate::{
     block::{attr, data_block, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::azure::helpers::{downcast, required_label, tags},
+    emitters::azure::helpers::{
+        downcast, emit_remote_bindings_role_definitions, required_label, tags,
+    },
     expr,
 };
-use alien_core::{import::EmitContext, RemoteBindings, Result};
+use alien_core::{import::EmitContext, ErrorData, Kv, RemoteBindings, Result};
+use alien_error::AlienError;
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -70,6 +73,24 @@ impl TfEmitter for AzureRemoteBindingsEmitter {
                 attr("subject", expr::raw("var.azure_oidc_subject")),
             ],
         ));
+        // One shared role definition belongs to the access identity, even when several
+        // published tables each emit their own table-scoped assignment.
+        if let Some(definition) = ctx.stack.resources().find_map(|(_, entry)| {
+            (entry.config.resource_type() == Kv::RESOURCE_TYPE)
+                .then(|| alien_core::remote_bindings::remote_binding_for_entry(entry))
+                .flatten()
+        }) {
+            let permission_set = alien_permissions::get_permission_set(definition.permission_set)
+                .ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: format!(
+                        "Remote KV permission set {} is not registered",
+                        definition.permission_set
+                    ),
+                })
+            })?;
+            emit_remote_bindings_role_definitions(&mut fragment, permission_set)?;
+        }
         Ok(fragment)
     }
 

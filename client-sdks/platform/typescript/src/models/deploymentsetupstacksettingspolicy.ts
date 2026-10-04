@@ -280,6 +280,20 @@ export type DeploymentSetupStackSettingsPolicyDomainsUnion =
   | string;
 
 /**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export const DeploymentSetupStackSettingsPolicyEndpointAccess = {
+  Internet: "internet",
+  Private: "private",
+} as const;
+/**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export type DeploymentSetupStackSettingsPolicyEndpointAccess = ClosedEnum<
+  typeof DeploymentSetupStackSettingsPolicyEndpointAccess
+>;
+
+/**
  * How heartbeat health checks are handled.
  */
 export const DeploymentSetupStackSettingsPolicyHeartbeats = {
@@ -1188,6 +1202,10 @@ export type Defaults = {
     | string
     | null
     | undefined;
+  /**
+   * Reachability of the deployment's public endpoints, fixed at setup.
+   */
+  endpointAccess?: DeploymentSetupStackSettingsPolicyEndpointAccess | undefined;
   externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
   /**
    * How heartbeat health checks are handled.
@@ -2730,6 +2748,16 @@ export function deploymentSetupStackSettingsPolicyDomainsUnionFromJSON(
     `Failed to parse 'DeploymentSetupStackSettingsPolicyDomainsUnion' from JSON`,
   );
 }
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyEndpointAccess$inboundSchema:
+  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyEndpointAccess> = z.enum(
+    DeploymentSetupStackSettingsPolicyEndpointAccess,
+  );
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyEndpointAccess$outboundSchema:
+  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyEndpointAccess> =
+    DeploymentSetupStackSettingsPolicyEndpointAccess$inboundSchema;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyHeartbeats$inboundSchema:
@@ -6164,6 +6192,8 @@ export const Defaults$inboundSchema: z.ZodType<Defaults, unknown> = z.object({
       z.string(),
     ]),
   ).optional(),
+  endpointAccess: DeploymentSetupStackSettingsPolicyEndpointAccess$inboundSchema
+    .optional(),
   externalBindings: z.nullable(
     z.record(z.string(), ExternalBindingUnion$inboundSchema),
   ).optional(),
@@ -6215,6 +6245,7 @@ export type Defaults$Outbound = {
     | string
     | null
     | undefined;
+  endpointAccess?: string | undefined;
   externalBindings?:
     | { [k: string]: ExternalBindingUnion$Outbound }
     | null
@@ -6257,6 +6288,9 @@ export const Defaults$outboundSchema: z.ZodType<Defaults$Outbound, Defaults> = z
         z.string(),
       ]),
     ).optional(),
+    endpointAccess:
+      DeploymentSetupStackSettingsPolicyEndpointAccess$outboundSchema
+        .optional(),
     externalBindings: z.nullable(
       z.record(z.string(), ExternalBindingUnion$outboundSchema),
     ).optional(),

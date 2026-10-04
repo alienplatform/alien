@@ -1,5 +1,6 @@
-use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
+use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsRequestSigner, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
+use alien_client_core::request_utils::RequestBuilderExt;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::ContextError;
@@ -45,6 +46,12 @@ pub trait SqsApi: Send + Sync + std::fmt::Debug {
         queue_url: &str,
         request: SendMessageRequest,
     ) -> Result<SendMessageResponse>;
+    /// Send up to ten entries; inspect both successful and failed results.
+    async fn send_message_batch(
+        &self,
+        queue_url: &str,
+        entries: Vec<SendMessageBatchEntry>,
+    ) -> Result<SendMessageBatchResponse>;
     async fn get_queue_url(&self, request: GetQueueUrlRequest) -> Result<GetQueueUrlResponse>;
     async fn get_queue_attributes(
         &self,
@@ -135,8 +142,16 @@ impl SqsClient {
             .content_sha256(&form_body)
             .body(form_body.clone());
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await;
+        // A batch may have been accepted even if the response is lost. Never
+        // retry it inside the transport; callers receive an unknown outcome.
+        let result = if operation == "SendMessageBatch" {
+            builder
+                .sign_aws_request(&self.sign_config())?
+                .send_xml()
+                .await
+        } else {
+            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await
+        };
 
         Self::map_result(result, operation, resource, Some(&form_body))
     }
@@ -391,6 +406,25 @@ impl SqsApi for SqsClient {
         form_data.insert("Version".to_string(), "2012-11-05".to_string());
 
         self.send_form_no_body(Method::POST, "/", form_data, "DeleteMessage", queue_url)
+            .await
+    }
+
+    async fn send_message_batch(
+        &self,
+        queue_url: &str,
+        entries: Vec<SendMessageBatchEntry>,
+    ) -> Result<SendMessageBatchResponse> {
+        let mut form = HashMap::from([
+            ("Action".to_string(), "SendMessageBatch".to_string()),
+            ("Version".to_string(), "2012-11-05".to_string()),
+            ("QueueUrl".to_string(), queue_url.to_string()),
+        ]);
+        for (index, entry) in entries.into_iter().enumerate() {
+            let prefix = format!("SendMessageBatchRequestEntry.{}", index + 1);
+            form.insert(format!("{prefix}.Id"), entry.id);
+            form.insert(format!("{prefix}.MessageBody"), entry.message_body);
+        }
+        self.send_form(Method::POST, "/", form, "SendMessageBatch", queue_url)
             .await
     }
 
@@ -844,6 +878,41 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::{AwsClientConfig, AwsCredentials, AwsServiceOverrides};
+    use httpmock::{Method::POST, MockServer};
+
+    #[tokio::test]
+    async fn batch_send_does_not_retry_an_ambiguous_failure() {
+        let server = MockServer::start_async().await;
+        let credentials = AwsCredentialProvider::from_config_sync(AwsClientConfig {
+            account_id: "123456789012".into(),
+            region: "us-east-1".into(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "test-access".into(),
+                secret_access_key: "test-secret".into(),
+                session_token: None,
+            },
+            service_overrides: Some(AwsServiceOverrides {
+                endpoints: HashMap::from([("sqs".into(), server.base_url())]),
+            }),
+        });
+        let client = SqsClient::new(Client::new(), credentials);
+        let failure = server.mock_async(|when, then| {
+            when.method(POST).body_contains("Action=SendMessageBatch").body_contains("SendMessageBatchRequestEntry.1.MessageBody=payload");
+            then.status(503).body("<ErrorResponse><Error><Code>ServiceUnavailable</Code><Message>unavailable</Message></Error></ErrorResponse>");
+        }).await;
+        assert!(client
+            .send_message_batch(
+                "https://example.test/events",
+                vec![SendMessageBatchEntry {
+                    id: "0".into(),
+                    message_body: "payload".into()
+                }]
+            )
+            .await
+            .is_err());
+        failure.assert_hits_async(1).await;
+    }
 
     #[test]
     fn receive_message_decodes_repeated_sqs_system_attributes() {
@@ -878,4 +947,41 @@ mod tests {
             .attributes
             .is_none());
     }
+}
+
+/// A message in an SQS batch. IDs must be unique within the request.
+#[derive(Debug, Clone)]
+pub struct SendMessageBatchEntry {
+    pub id: String,
+    pub message_body: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct SendMessageBatchResponse {
+    pub send_message_batch_result: SendMessageBatchResult,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SendMessageBatchResult {
+    #[serde(rename = "SendMessageBatchResultEntry", default)]
+    pub successful: Vec<SendMessageBatchSuccess>,
+    #[serde(rename = "BatchResultErrorEntry", default)]
+    pub failed: Vec<SendMessageBatchFailure>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct SendMessageBatchSuccess {
+    pub id: String,
+    pub message_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct SendMessageBatchFailure {
+    pub id: String,
+    pub code: String,
+    pub message: Option<String>,
+    pub sender_fault: bool,
 }

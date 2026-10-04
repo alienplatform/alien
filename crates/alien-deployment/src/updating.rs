@@ -324,7 +324,8 @@ pub async fn handle_updating(
     // not be deleted by an ordinary update. Keep their installed definitions
     // in the execution target while allowing explicitly runtime-managed frozen
     // resources (ComputeCluster capacity and, on AWS, a same-architecture machine
-    // type) to reconcile changed configuration through their management controller.
+    // type) to reconcile changed configuration through their management
+    // controller.
     if let Some(installed_stack) = runtime_metadata.prepared_stack.as_ref() {
         for (resource_id, entry) in installed_stack.resources() {
             if entry.lifecycle == ResourceLifecycle::Frozen
@@ -340,8 +341,24 @@ pub async fn handle_updating(
     // executor-only environment injection so a second release that also omits
     // a setup-owned resource cannot lose ownership information and delete it.
     runtime_metadata.pending_prepared_stack = Some(target_stack.clone());
+    // Check the deployer secret slots first: which are filled decides how
+    // workloads read them (see inject_environment_variables).
+    runtime_metadata.deployer_secrets = crate::helpers::check_deployer_secrets(
+        &target_stack,
+        &stack_state,
+        &client_config,
+        &config,
+        current.platform,
+    )
+    .await?;
+
     // Inject environment variables into the prepared stack
-    crate::helpers::inject_environment_variables(&mut target_stack, &config, current.platform)?;
+    crate::helpers::inject_environment_variables(
+        &mut target_stack,
+        &config,
+        current.platform,
+        &runtime_metadata.deployer_secrets,
+    )?;
 
     // Inject OTLP monitoring env vars if monitoring is configured
     if let Some(monitoring) = &config.monitoring {
@@ -369,6 +386,36 @@ pub async fn handle_updating(
         info!("Secrets synced successfully");
     } else {
         debug!("Secrets already synced, continuing with update");
+    }
+
+    // A required deployer secret the customer has not written blocks every
+    // workload start. Nothing is deployed until it is; the reports above say
+    // what is missing and where it goes.
+    let blocking = crate::helpers::deployer_secrets_blocking_start(
+        &target_stack,
+        &config,
+        current.platform,
+        &runtime_metadata.deployer_secrets,
+    );
+    if !blocking.is_empty() {
+        let summary = blocking
+            .iter()
+            .map(|report| report.summary())
+            .collect::<Vec<_>>()
+            .join(", ");
+        info!(%summary, "Waiting for deployer secrets before starting workloads");
+
+        next.status = DeploymentStatus::WaitingForSecrets;
+        next.error =
+            Some(AlienError::new(ErrorData::DeployerSecretsMissing { summary }).into_generic());
+        next.runtime_metadata = Some(runtime_metadata);
+        return Ok(DeploymentStepResult {
+            state: next,
+            suggested_delay_ms: Some(30_000),
+            update_heartbeat: false,
+            heartbeats: vec![],
+            observed_inventory_batches: vec![],
+        });
     }
 
     let executor = StackExecutor::builder(&target_stack, client_config)

@@ -41,7 +41,7 @@ function preparation(externalBindings: unknown): PrepareDeploymentStackRequest {
     saveForSetup: true,
     deploymentId: "dep_demo",
     updateOperationId: "op_demo",
-    stackSettings: { externalBindings },
+    stackSettings: { externalBindings, endpointAccess: "private" },
   } as PrepareDeploymentStackRequest
 }
 

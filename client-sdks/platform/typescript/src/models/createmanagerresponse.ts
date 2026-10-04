@@ -14,7 +14,7 @@ import {
   CreateManagerResponseSetupStatus$inboundSchema,
   CreateManagerResponseSetupTerraform,
   CreateManagerResponseSetupTerraform$inboundSchema,
-} from "./createmanagerresponseheartbeats2.js";
+} from "./createmanagerresponsedomainsunion2.js";
 import {
   CreateManagerResponseCertificateUnion1,
   CreateManagerResponseCertificateUnion1$inboundSchema,
@@ -26,24 +26,78 @@ import {
   CreateManagerResponseDeploymentModel1$inboundSchema,
   CreateManagerResponseDomainsUnion1,
   CreateManagerResponseDomainsUnion1$inboundSchema,
+  CreateManagerResponseEndpointAccess1,
+  CreateManagerResponseEndpointAccess1$inboundSchema,
   CreateManagerResponseExposureCustom1,
   CreateManagerResponseExposureCustom1$inboundSchema,
   CreateManagerResponseHeartbeats1,
   CreateManagerResponseHeartbeats1$inboundSchema,
   CreateManagerResponseModeGenerated1,
   CreateManagerResponseModeGenerated1$inboundSchema,
-  CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum1,
-  CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum1$inboundSchema,
-  CreateManagerResponseRouteGateway1,
-  CreateManagerResponseRouteGateway1$inboundSchema,
+  CreateManagerResponseProviderAwsAlb2,
+  CreateManagerResponseProviderAwsAlb2$inboundSchema,
+  CreateManagerResponseProviderAzureApplicationGatewayForContainers2,
+  CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema,
+  CreateManagerResponseProviderGkeGateway2,
+  CreateManagerResponseProviderGkeGateway2$inboundSchema,
   CreateManagerResponseSetupGoogleOauth,
   CreateManagerResponseSetupGoogleOauth$inboundSchema,
-} from "./createmanagerresponseproviderazureapplicationgatewayforcontainersenum1.js";
+} from "./createmanagerresponseproviderawsalb2.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   ExternalBindingUnion,
   ExternalBindingUnion$inboundSchema,
 } from "./externalbindingunion.js";
+
+export type CreateManagerResponseProviderUnion2 =
+  | CreateManagerResponseProviderAwsAlb2
+  | CreateManagerResponseProviderAzureApplicationGatewayForContainers2
+  | CreateManagerResponseProviderGkeGateway2
+  | string;
+
+/**
+ * Shared Gateway API route profile values.
+ */
+export type CreateManagerResponseRouteGateway1 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example a cloud Gateway controller.
+   */
+  controller?: string | null | undefined;
+  /**
+   * GatewayClass selected for generated Gateways.
+   */
+  gatewayClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  /**
+   * Listener port, usually 443.
+   */
+  listenerPort: number;
+  provider?:
+    | CreateManagerResponseProviderAwsAlb2
+    | CreateManagerResponseProviderAzureApplicationGatewayForContainers2
+    | CreateManagerResponseProviderGkeGateway2
+    | string
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+export const CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum1 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum1 =
+  ClosedEnum<
+    typeof CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum1
+  >;
 
 export type CreateManagerResponseProviderAzureApplicationGatewayForContainers1 =
   {
@@ -380,6 +434,10 @@ export type CreateManagerResponseStackSettings1 = {
    */
   deploymentModel?: CreateManagerResponseDeploymentModel1 | undefined;
   domains?: CreateManagerResponseDomainsUnion1 | null | undefined;
+  /**
+   * Reachability of the deployment's public endpoints, fixed at setup.
+   */
+  endpointAccess?: CreateManagerResponseEndpointAccess1 | undefined;
   externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
   /**
    * How heartbeat health checks are handled.
@@ -454,6 +512,68 @@ export type CreateManagerResponse = {
     | CreateManagerResponseSetupGoogleOauth
     | CreateManagerResponseSetupTerraform;
 };
+
+/** @internal */
+export const CreateManagerResponseProviderUnion2$inboundSchema: z.ZodType<
+  CreateManagerResponseProviderUnion2,
+  unknown
+> = z.union([
+  CreateManagerResponseProviderAwsAlb2$inboundSchema,
+  CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema,
+  CreateManagerResponseProviderGkeGateway2$inboundSchema,
+  z.string(),
+]);
+
+export function createManagerResponseProviderUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseProviderUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseProviderUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseProviderUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseRouteGateway1$inboundSchema: z.ZodType<
+  CreateManagerResponseRouteGateway1,
+  unknown
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  gatewayClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  listenerPort: z.int(),
+  provider: z.nullable(
+    z.union([
+      CreateManagerResponseProviderAwsAlb2$inboundSchema,
+      CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema,
+      CreateManagerResponseProviderGkeGateway2$inboundSchema,
+      z.string(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("gateway"),
+});
+
+export function createManagerResponseRouteGateway1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseRouteGateway1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseRouteGateway1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseRouteGateway1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum1$inboundSchema:
+  z.ZodEnum<
+    typeof CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum1
+  > = z.enum(
+    CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum1,
+  );
 
 /** @internal */
 export const CreateManagerResponseProviderAzureApplicationGatewayForContainers1$inboundSchema:
@@ -605,7 +725,7 @@ export const CreateManagerResponseRouteUnion1$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => CreateManagerResponseRouteIngress1$inboundSchema),
-  CreateManagerResponseRouteGateway1$inboundSchema,
+  z.lazy(() => CreateManagerResponseRouteGateway1$inboundSchema),
 ]);
 
 export function createManagerResponseRouteUnion1FromJSON(
@@ -627,7 +747,7 @@ export const CreateManagerResponseExposureGenerated1$inboundSchema: z.ZodType<
   mode: CreateManagerResponseModeGenerated1$inboundSchema,
   route: z.union([
     z.lazy(() => CreateManagerResponseRouteIngress1$inboundSchema),
-    CreateManagerResponseRouteGateway1$inboundSchema,
+    z.lazy(() => CreateManagerResponseRouteGateway1$inboundSchema),
   ]),
 });
 
@@ -953,6 +1073,7 @@ export const CreateManagerResponseStackSettings1$inboundSchema: z.ZodType<
     .optional(),
   domains: z.nullable(CreateManagerResponseDomainsUnion1$inboundSchema)
     .optional(),
+  endpointAccess: CreateManagerResponseEndpointAccess1$inboundSchema.optional(),
   externalBindings: z.nullable(
     z.record(z.string(), ExternalBindingUnion$inboundSchema),
   ).optional(),

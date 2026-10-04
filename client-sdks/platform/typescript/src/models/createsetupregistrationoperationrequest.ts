@@ -326,6 +326,20 @@ export type CreateSetupRegistrationOperationRequestDomainsUnion =
   | string;
 
 /**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export const CreateSetupRegistrationOperationRequestEndpointAccess = {
+  Internet: "internet",
+  Private: "private",
+} as const;
+/**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export type CreateSetupRegistrationOperationRequestEndpointAccess = ClosedEnum<
+  typeof CreateSetupRegistrationOperationRequestEndpointAccess
+>;
+
+/**
  * How heartbeat health checks are handled.
  */
 export const CreateSetupRegistrationOperationRequestHeartbeats = {
@@ -1244,6 +1258,12 @@ export type CreateSetupRegistrationOperationRequestStackSettings = {
     | CreateSetupRegistrationOperationRequestDomains
     | string
     | null
+    | undefined;
+  /**
+   * Reachability of the deployment's public endpoints, fixed at setup.
+   */
+  endpointAccess?:
+    | CreateSetupRegistrationOperationRequestEndpointAccess
     | undefined;
   externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
   /**
@@ -2279,6 +2299,11 @@ export function createSetupRegistrationOperationRequestDomainsUnionToJSON(
     ),
   );
 }
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestEndpointAccess$outboundSchema:
+  z.ZodEnum<typeof CreateSetupRegistrationOperationRequestEndpointAccess> = z
+    .enum(CreateSetupRegistrationOperationRequestEndpointAccess);
 
 /** @internal */
 export const CreateSetupRegistrationOperationRequestHeartbeats$outboundSchema:
@@ -4219,6 +4244,7 @@ export type CreateSetupRegistrationOperationRequestStackSettings$Outbound = {
     | string
     | null
     | undefined;
+  endpointAccess?: string | undefined;
   externalBindings?:
     | { [k: string]: ExternalBindingUnion$Outbound }
     | null
@@ -4268,6 +4294,9 @@ export const CreateSetupRegistrationOperationRequestStackSettings$outboundSchema
         z.string(),
       ]),
     ).optional(),
+    endpointAccess:
+      CreateSetupRegistrationOperationRequestEndpointAccess$outboundSchema
+        .optional(),
     externalBindings: z.nullable(
       z.record(z.string(), ExternalBindingUnion$outboundSchema),
     ).optional(),

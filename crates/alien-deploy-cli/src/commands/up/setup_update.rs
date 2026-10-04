@@ -508,6 +508,7 @@ pub(super) async fn run(
         .manager_base_url(&original_manager)
         .deployment_token(&token)
         .expected_target(&info.setup_update)
+        .network_args(&args.network)
         .maybe_setup_revision(embedded.and_then(|config| config.setup_revision.as_deref()))
         .call()
         .await?;
@@ -593,23 +594,43 @@ mod tests {
 
     #[test]
     fn input_patch_only_contains_explicit_typed_values() {
-        let args = UpArgs::parse_from([
-            "democtl",
-            "--input",
-            "archiveEnabled=true",
-            "--secret-input",
-            "storageSecret=test-secret",
-        ]);
+        let args = UpArgs::parse_from(["democtl", "--input", "archiveEnabled=true"]);
         let definitions: DeploymentInfoSetupConfig =
             serde_json::from_value(input_definitions()).unwrap();
         let values = explicit_input_values(&args, None, Some(&definitions)).unwrap();
-        assert_eq!(values.len(), 2);
+        assert_eq!(values.len(), 1);
         assert_eq!(values["archiveEnabled"], true);
-        assert_eq!(values["storageSecret"], "test-secret");
+        assert!(!values.contains_key("storageSecret"));
         assert!(!values.contains_key("alreadyConfigured"));
         let malformed = UpArgs::parse_from(["democtl", "--secret-input", "sensitive-test-marker"]);
         let error = explicit_input_values(&malformed, None, Some(&definitions)).unwrap_err();
         assert!(!format!("{error:?}").contains("sensitive-test-marker"));
+    }
+
+    #[test]
+    fn exact_input_patch_refuses_deployer_secret_values() {
+        let definitions: DeploymentInfoSetupConfig =
+            serde_json::from_value(input_definitions()).unwrap();
+        for flag in ["--input", "--secret-input"] {
+            let args = UpArgs::parse_from(["democtl", flag, "storageSecret=canary-secret"]);
+            let error = explicit_input_values(&args, None, Some(&definitions)).unwrap_err();
+            assert!(error.to_string().contains("Storage secret"));
+            assert!(!format!("{error:?}").contains("canary-secret"));
+        }
+        let config: DeployConfigFile = toml::from_str(
+            r#"[secretInputs]
+storageSecret = "canary-secret"
+"#,
+        )
+        .unwrap();
+        let error = explicit_input_values(
+            &UpArgs::parse_from(["democtl"]),
+            Some(&config),
+            Some(&definitions),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("Storage secret"));
+        assert!(!format!("{error:?}").contains("canary-secret"));
     }
 
     #[test]
@@ -645,7 +666,7 @@ mod tests {
             let inputs = server.mock_async(|when, then| {
                 when.method(PATCH).path("/v1/deployments/dep_demo/inputs").json_body(json!({
                     "expectedBaseOperationId":"op_blocked",
-                    "inputValues":{"archiveEnabled":true,"storageSecret":"test-secret"}
+                    "inputValues":{"archiveEnabled":true}
                 }));
                 if outcome == "stale" { then.status(409).body("test-secret"); }
                 else { then.status(200).json_body(json!({
@@ -676,7 +697,6 @@ mod tests {
                 .await;
             let mut args = args(&server);
             args.input_values = vec!["archiveEnabled=true".into()];
-            args.secret_input_values = vec!["storageSecret=test-secret".into()];
             let error = super::super::up_command(args, None).await.unwrap_err();
             assert!(error.to_string().contains("409"), "{error}");
             assert!(!format!("{error:?}").contains("test-secret"));
@@ -825,6 +845,15 @@ mod tests {
 
     #[tokio::test]
     async fn fresh_runner_uses_acquired_bindings_and_hands_off_at_provisioning() {
+        run_fresh_runner(false).await;
+    }
+
+    #[tokio::test]
+    async fn fresh_runner_rejects_endpoint_access_change_under_claim() {
+        run_fresh_runner(true).await;
+    }
+
+    async fn run_fresh_runner(change_endpoint_access: bool) {
         let server = MockServer::start_async().await;
         let mut bindings = ExternalBindings::new();
         bindings.insert(
@@ -858,7 +887,9 @@ mod tests {
                 when.method(GET)
                     .path("/v1/deployment-info")
                     .query_param("updateOperationId", "op_blocked");
-                then.status(200).json_body(info(&server, "op_blocked"));
+                let mut value = info(&server, "op_blocked");
+                value["setupUpdate"]["stackSettings"] = json!({"endpointAccess": "internet"});
+                then.status(200).json_body(value);
             })
             .await;
         let save = server
@@ -939,21 +970,38 @@ mod tests {
         write!(file, "[externalBindings.archive]\ntype = \"storage\"\nservice = \"s3\"\nbucketName = \"customer-archive\"\n").unwrap();
         let mut args = args(&server);
         args.config = Some(file.path().to_path_buf());
-        tokio::time::timeout(
+        if change_endpoint_access {
+            args.network.endpoint_access = Some(alien_core::EndpointAccess::Private);
+        }
+        let result = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             super::super::up_command(args, None),
         )
         .await
-        .expect("setup handoff should finish promptly")
-        .expect("exact setup should hand off to manager");
+        .expect("setup handoff should finish promptly");
+        if change_endpoint_access {
+            let error = result.expect_err("existing endpoint access must remain fixed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("Endpoint access cannot change after setup"),
+                "{error}"
+            );
+        } else {
+            result.expect("exact setup should hand off to manager");
+        }
         for mock in [&original, &save, &saved, &acquire, &release] {
             mock.assert_hits_async(1).await;
         }
         deployment.assert_hits_async(2).await;
         for release in releases {
-            release.assert_hits_async(1).await;
+            release
+                .assert_hits_async(if change_endpoint_access { 0 } else { 1 })
+                .await;
         }
-        reconcile.assert_hits_async(2).await;
+        reconcile
+            .assert_hits_async(if change_endpoint_access { 0 } else { 2 })
+            .await;
         init.assert_hits_async(0).await;
     }
 

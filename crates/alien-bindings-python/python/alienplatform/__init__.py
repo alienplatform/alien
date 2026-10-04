@@ -3,6 +3,7 @@
 from .bindings import (
     Ai,
     AiConnection,
+    Bindings,
     CommandFrame,
     CommandStream,
     Container,
@@ -16,6 +17,7 @@ from .bindings import (
     PostgresConnection,
     Queue,
     QueueMessage,
+    RemoteQueue,
     Sandbox,
     SandboxInfo,
     SandboxPreview,
@@ -40,6 +42,7 @@ from .errors import AlienError
 __all__ = [
     "Ai",
     "AiConnection",
+    "Bindings",
     "AlienError",
     "Container",
     "Key",
@@ -51,6 +54,7 @@ __all__ = [
     "Postgres",
     "PostgresConnection",
     "Queue",
+    "RemoteQueue",
     "QueueMessage",
     "Sandbox",
     "SandboxInfo",

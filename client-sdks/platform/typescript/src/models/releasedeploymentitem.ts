@@ -28,6 +28,7 @@ export const ReleaseDeploymentItemStatus = {
   InitialSetupFailed: "initial-setup-failed",
   Provisioning: "provisioning",
   WaitingForMachines: "waiting-for-machines",
+  WaitingForSecrets: "waiting-for-secrets",
   ProvisioningFailed: "provisioning-failed",
   Running: "running",
   RefreshFailed: "refresh-failed",
@@ -201,7 +202,7 @@ export type ReleaseDeploymentItemEnvironmentInfoUnion =
   | ReleaseDeploymentItemEnvironmentInfoLocal
   | ReleaseDeploymentItemEnvironmentInfoAws
   | ReleaseDeploymentItemEnvironmentInfoTest
-  | any;
+  | string;
 
 /**
  * Deployment group this deployment belongs to
@@ -328,7 +329,7 @@ export type ReleaseDeploymentItem = {
     | ReleaseDeploymentItemEnvironmentInfoLocal
     | ReleaseDeploymentItemEnvironmentInfoAws
     | ReleaseDeploymentItemEnvironmentInfoTest
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -543,7 +544,7 @@ export const ReleaseDeploymentItemEnvironmentInfoUnion$inboundSchema: z.ZodType<
   z.lazy(() => ReleaseDeploymentItemEnvironmentInfoLocal$inboundSchema),
   z.lazy(() => ReleaseDeploymentItemEnvironmentInfoAws$inboundSchema),
   z.lazy(() => ReleaseDeploymentItemEnvironmentInfoTest$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function releaseDeploymentItemEnvironmentInfoUnionFromJSON(
@@ -624,7 +625,7 @@ export const ReleaseDeploymentItem$inboundSchema: z.ZodType<
       z.lazy(() => ReleaseDeploymentItemEnvironmentInfoLocal$inboundSchema),
       z.lazy(() => ReleaseDeploymentItemEnvironmentInfoAws$inboundSchema),
       z.lazy(() => ReleaseDeploymentItemEnvironmentInfoTest$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   deploymentGroup: z.nullable(

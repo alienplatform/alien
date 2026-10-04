@@ -1,7 +1,7 @@
 use std::time::Duration;
 use tracing::info;
 
-use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
+use crate::core::{GcpCustomRoleNaming, ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     permissions::PermissionSetReference, GcpServiceAccountHeartbeatData, HeartbeatBackend,
@@ -31,6 +31,9 @@ pub struct GcpServiceAccountController {
     pub service_account_email: Option<String>,
     /// The unique ID of the created service account.
     pub(crate) service_account_unique_id: Option<String>,
+    /// How the deployment names its custom roles, recorded with the service
+    /// account. `None` for a service account created before it was recorded.
+    pub(crate) custom_role_naming: Option<GcpCustomRoleNaming>,
 }
 
 #[controller]
@@ -48,6 +51,7 @@ impl GcpServiceAccountController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<ServiceAccount>()?;
+        let custom_role_naming = GcpCustomRoleNaming::for_deployment(ctx.state)?;
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
 
@@ -116,6 +120,7 @@ impl GcpServiceAccountController {
 
         self.service_account_email = Some(email);
         self.service_account_unique_id = Some(unique_id);
+        self.custom_role_naming = Some(custom_role_naming);
 
         Ok(HandlerAction::Continue {
             state: BindingStackRoles,
@@ -417,18 +422,8 @@ impl GcpServiceAccountController {
             .next()
             .unwrap_or(service_account_email);
 
-        let mut permission_context = PermissionContext::new()
-            .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_project_name(gcp_config.project_id.clone())
-            .with_region(gcp_config.region.clone())
+        let permission_context = ResourcePermissionsHelper::gcp_permission_context(ctx)?
             .with_service_account_name(service_account_id.to_string());
-        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
-            permission_context =
-                permission_context.with_deployment_name(deployment_name.to_string());
-        }
-        if let Some(ref project_number) = gcp_config.project_number {
-            permission_context = permission_context.with_project_number(project_number.clone());
-        }
 
         let mut new_bindings = Vec::new();
 
@@ -732,6 +727,7 @@ impl GcpServiceAccountController {
                 role_name
             )),
             service_account_unique_id: Some("123456789012345678901".to_string()),
+            custom_role_naming: Some(GcpCustomRoleNaming::HashedLongPrefix),
             _internal_stay_count: None,
         }
     }

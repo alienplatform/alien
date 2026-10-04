@@ -17,7 +17,10 @@ use crate::{
     },
     template::{CfExpression, CfResource},
 };
-use alien_core::{import::EmitContext, ErrorData, Queue, Result, Worker, WorkerTrigger};
+use alien_core::{
+    import::EmitContext, ErrorData, PermissionSetReference, Queue, RemoteBindings, Result, Worker,
+    WorkerTrigger,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
 
@@ -112,11 +115,20 @@ fn queue_iam_policies(
     let context =
         permission_context().with_resource_name(format!("${{AWS::StackName}}-{}", queue.id()));
 
-    for (owner_index, (role_id, permission_refs)) in
-        resource_permission_owners(ctx, PERMISSION_SET_PREFIX)
-            .into_iter()
-            .enumerate()
-    {
+    let mut owners = resource_permission_owners(ctx, PERMISSION_SET_PREFIX);
+    if let Some(definition) = alien_core::remote_bindings::remote_binding_for_entry(ctx.resource) {
+        if let Some(role_id) = ctx.stack.resources().find_map(|(id, entry)| {
+            (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
+                .then(|| ctx.name_for(id).map(|label| format!("{label}Role")))
+                .flatten()
+        }) {
+            owners.push((
+                role_id,
+                vec![PermissionSetReference::from_name(definition.permission_set)],
+            ));
+        }
+    }
+    for (owner_index, (role_id, permission_refs)) in owners.into_iter().enumerate() {
         for (permission_index, permission_ref) in permission_refs.iter().enumerate() {
             let Some(permission_set) =
                 permission_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())

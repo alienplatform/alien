@@ -277,6 +277,20 @@ export type ImportSourceDomains = {
 export type ImportSourceDomainsUnion = ImportSourceDomains | string;
 
 /**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export const ImportSourceEndpointAccess = {
+  Internet: "internet",
+  Private: "private",
+} as const;
+/**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export type ImportSourceEndpointAccess = ClosedEnum<
+  typeof ImportSourceEndpointAccess
+>;
+
+/**
  * How heartbeat health checks are handled.
  */
 export const ImportSourceHeartbeats = {
@@ -1137,6 +1151,10 @@ export type ImportSourceStackSettings = {
    */
   deploymentModel?: ImportSourceDeploymentModel | undefined;
   domains?: ImportSourceDomains | string | null | undefined;
+  /**
+   * Reachability of the deployment's public endpoints, fixed at setup.
+   */
+  endpointAccess?: ImportSourceEndpointAccess | undefined;
   externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
   /**
    * How heartbeat health checks are handled.
@@ -1992,6 +2010,11 @@ export function importSourceDomainsUnionToJSON(
     ImportSourceDomainsUnion$outboundSchema.parse(importSourceDomainsUnion),
   );
 }
+
+/** @internal */
+export const ImportSourceEndpointAccess$outboundSchema: z.ZodEnum<
+  typeof ImportSourceEndpointAccess
+> = z.enum(ImportSourceEndpointAccess);
 
 /** @internal */
 export const ImportSourceHeartbeats$outboundSchema: z.ZodEnum<
@@ -3623,6 +3646,7 @@ export type ImportSourceStackSettings$Outbound = {
   compute?: ImportSourceCompute$Outbound | string | null | undefined;
   deploymentModel?: string | undefined;
   domains?: ImportSourceDomains$Outbound | string | null | undefined;
+  endpointAccess?: string | undefined;
   externalBindings?:
     | { [k: string]: ExternalBindingUnion$Outbound }
     | null
@@ -3655,6 +3679,7 @@ export const ImportSourceStackSettings$outboundSchema: z.ZodType<
   domains: z.nullable(
     z.union([z.lazy(() => ImportSourceDomains$outboundSchema), z.string()]),
   ).optional(),
+  endpointAccess: ImportSourceEndpointAccess$outboundSchema.optional(),
   externalBindings: z.nullable(
     z.record(z.string(), ExternalBindingUnion$outboundSchema),
   ).optional(),

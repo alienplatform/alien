@@ -2,6 +2,7 @@
 //!
 //! These tests exercise the full alien_deployment::step() lifecycle with no cloud I/O.
 
+use alien_bindings::Vault as _;
 use alien_core::{
     ClientConfig, ComputeCluster, ComputeClusterOutputs, DeploymentConfig, DeploymentState,
     DeploymentStatus, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
@@ -23,6 +24,17 @@ static TEST_VAULT_ENV_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 struct TestVaultEnv {
     _guard: MutexGuard<'static, ()>,
     _temp_dir: TempDir,
+}
+
+impl TestVaultEnv {
+    /// The customer's side of the test vault: what they write with their
+    /// cloud's CLI, outside Alien.
+    fn customer_vault(&self) -> alien_bindings::providers::vault::LocalVault {
+        alien_bindings::providers::vault::LocalVault::new(
+            "secrets".to_string(),
+            self._temp_dir.path().to_path_buf(),
+        )
+    }
 }
 
 impl Drop for TestVaultEnv {
@@ -288,7 +300,7 @@ fn create_initial_state(stack: Stack) -> DeploymentState {
 
 #[tokio::test]
 async fn test_pending_to_running_happy_path_promotes_release() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", false);
@@ -332,7 +344,7 @@ async fn test_pending_to_running_happy_path_promotes_release() {
 
 #[tokio::test]
 async fn test_initial_setup_creates_only_frozen_resources() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack = create_test_stack_with_storage("test-stack", "test-storage", "test-function");
     let config = create_test_config("hash_v1", false);
@@ -771,7 +783,7 @@ async fn test_provisioning_resyncs_when_hash_changes() {
 
 #[tokio::test]
 async fn test_running_updates_heartbeat_when_healthy() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", false);
@@ -921,7 +933,7 @@ async fn explicit_retry_after_health_failure_preserves_the_running_resource() {
 
 #[tokio::test]
 async fn persistent_worker_failure_surfaces_during_provisioning() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     // Create a function configured to fail persistently
     let function = Worker::new("test-function".to_string())
@@ -988,7 +1000,7 @@ async fn persistent_worker_failure_surfaces_during_provisioning() {
 
 #[tokio::test]
 async fn test_update_flow_happy_path_promotes_release() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack_v1 = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", false);
@@ -1283,7 +1295,7 @@ async fn stale_waiting_for_machines_returns_to_updating() {
 
 #[tokio::test]
 async fn test_update_failed_retry_gate_returns_to_update_pending() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack_v1 = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", false);
@@ -1598,7 +1610,7 @@ async fn test_delete_failed_retry_gate_returns_to_deleting() {
 
 #[tokio::test]
 async fn test_delete_flow_happy_path_reaches_teardown_required() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", false);
@@ -1624,7 +1636,7 @@ async fn test_delete_runtime_cleanup_reaches_teardown_required() {
     // In practice, TestWorkerController doesn't easily simulate delete failures,
     // but we can test the pattern conceptually by checking the handler exists
 
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", false);
@@ -1781,7 +1793,7 @@ fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
 /// accurate statuses instead of stale "Provisioning" or "Pending" indicators.
 #[tokio::test]
 async fn test_partial_failure_interrupts_in_progress_resources() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack = create_two_function_stack_one_fails("test-stack");
     let config = create_test_config("hash_v1", false);
@@ -1848,7 +1860,7 @@ async fn test_partial_failure_interrupts_in_progress_resources() {
 /// - On retry, reset cleanly to Pending so it starts fresh
 #[tokio::test]
 async fn test_partial_failure_pending_resource_retries_from_pending() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     // sibling-fn depends on failing-fn — it will be stuck in Pending when failing-fn fails
     let stack = create_two_function_stack_dependent_one_fails("test-stack");
@@ -1918,7 +1930,7 @@ async fn test_partial_failure_pending_resource_retries_from_pending() {
 
 #[tokio::test]
 async fn test_deleted_is_noop() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", false);
@@ -2003,7 +2015,7 @@ fn release_of(release_id: &str, stack: Stack) -> ReleaseInfo {
 /// true answer on a later update recreates it.
 #[tokio::test]
 async fn live_gate_flip_deprovisions_and_reprovisions_across_updates() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack = create_live_gated_stack("gated-stack", "cache", "test-function");
     let config = create_test_config("hash_v1", false);
@@ -2051,7 +2063,7 @@ async fn live_gate_flip_deprovisions_and_reprovisions_across_updates() {
 /// gone rather than finishing on the step that scrubs the link.
 #[tokio::test]
 async fn declining_a_linked_gate_deprovisions_the_store_before_the_update_completes() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack = create_live_gated_stack_with_linking_worker("linked-gate-stack", "cache", "api");
     let config = create_test_config("hash_v1", false);
@@ -2140,7 +2152,7 @@ fn create_live_gated_stack_with_linking_worker(
 /// every later conflicting input value.
 #[tokio::test]
 async fn a_frozen_gate_answer_is_fixed_for_the_deployment_lifetime() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     // A frozen store gated with a declared default of true.
     let mut stack = create_test_stack("fixed-stack", "test-function");
@@ -2204,7 +2216,7 @@ async fn a_frozen_gate_answer_is_fixed_for_the_deployment_lifetime() {
 /// the worker.
 #[tokio::test]
 async fn a_declined_live_worker_keeps_its_derived_baseline_across_updates() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let mut stack = create_test_stack("gated-stack", "proxy");
     stack
@@ -2304,7 +2316,7 @@ async fn a_declined_live_worker_keeps_its_derived_baseline_across_updates() {
 /// and the live function still deploy.
 #[tokio::test]
 async fn a_declined_gated_import_is_not_created_by_the_runner() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let mut stack = create_test_stack_with_storage("test-stack", "assets", "test-function");
     stack.resources.insert(
@@ -2431,5 +2443,271 @@ async fn an_update_introducing_a_gated_frozen_resource_refuses_instead_of_droppi
     assert!(
         rendered.contains("archive"),
         "the refusal should name the resource that needs setup: {rendered}"
+    );
+}
+
+fn database_password_input() -> alien_core::StackInputDefinition {
+    alien_core::StackInputDefinition {
+        id: "databasePassword".to_string(),
+        kind: alien_core::StackInputKind::Secret,
+        provided_by: vec![alien_core::StackInputProvider::Deployer],
+        required: true,
+        label: "Database password".to_string(),
+        description: "Password of the customer's database".to_string(),
+        placeholder: None,
+        default: None,
+        platforms: None,
+        validation: None,
+        generate: None,
+        env: vec![alien_core::StackInputEnvironmentMapping {
+            name: "DATABASE_PASSWORD".to_string(),
+            target_resources: None,
+            var_type: None,
+        }],
+    }
+}
+
+fn worker_environment(state: &DeploymentState, worker_id: &str) -> HashMap<String, String> {
+    state.stack_state.as_ref().unwrap().resources[worker_id]
+        .config
+        .downcast_ref::<Worker>()
+        .unwrap()
+        .environment
+        .clone()
+}
+
+fn deployer_reports(state: &DeploymentState) -> Vec<alien_core::DeployerSecretReport> {
+    state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .deployer_secrets
+        .clone()
+}
+
+#[tokio::test]
+async fn initial_update_resumes_prepared_target_after_waiting_for_secrets() {
+    let vault_env = test_vault_env().await;
+    let config = create_test_config("target-env", false);
+    let old_stack = create_test_stack_with_storage("test-stack", "archive", "old-worker");
+    let mut state = run_until_status(
+        create_initial_state(old_stack),
+        config.clone(),
+        &[DeploymentStatus::Provisioning],
+    )
+    .await;
+    assert!(state.current_release.is_none());
+    let frozen = state.stack_state.as_ref().unwrap().resources["archive"].clone();
+    let baseline = state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .prepared_stack
+        .clone();
+    let mut target = create_test_stack_with_storage("test-stack", "archive", "new-worker");
+    target.inputs = vec![database_password_input()];
+    let target_release = ReleaseInfo {
+        release_id: Some("rel_target".into()),
+        version: Some("2.0.0".into()),
+        description: None,
+        stack: target,
+    };
+    start_update(&mut state, target_release.clone());
+    let blocked = run_until_status(
+        state,
+        config.clone(),
+        &[
+            DeploymentStatus::WaitingForSecrets,
+            DeploymentStatus::Running,
+        ],
+    )
+    .await;
+    assert_eq!(blocked.status, DeploymentStatus::WaitingForSecrets);
+    assert!(blocked.current_release.is_none());
+    assert_eq!(
+        blocked.runtime_metadata.as_ref().unwrap().prepared_stack,
+        baseline
+    );
+    assert!(blocked
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .pending_prepared_stack
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("new-worker"));
+    assert_eq!(
+        deployer_reports(&blocked)[0].status,
+        alien_core::DeployerSecretStatus::Missing
+    );
+
+    vault_env
+        .customer_vault()
+        .set_secret("input-database-password", "demo-secret")
+        .await
+        .unwrap();
+    let checkpoint = serde_json::from_value(serde_json::to_value(&blocked).unwrap()).unwrap();
+    let running = run_to_completion(checkpoint, config).await;
+    assert_eq!(running.status, DeploymentStatus::Running);
+    assert_eq!(running.current_release, Some(target_release));
+    assert!(running.target_release.is_none());
+    let metadata = running.runtime_metadata.as_ref().unwrap();
+    assert!(metadata.pending_prepared_stack.is_none());
+    assert!(metadata
+        .prepared_stack
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("new-worker"));
+    let resources = &running.stack_state.as_ref().unwrap().resources;
+    assert!(!resources.contains_key("old-worker"));
+    assert_eq!(
+        resources["new-worker"].status,
+        alien_core::ResourceStatus::Running
+    );
+    assert_eq!(
+        serde_json::to_value(&resources["archive"]).unwrap(),
+        serde_json::to_value(frozen).unwrap()
+    );
+    assert_eq!(
+        deployer_reports(&running)[0].status,
+        alien_core::DeployerSecretStatus::Present
+    );
+    assert!(!serde_json::to_string(&running)
+        .unwrap()
+        .contains("demo-secret"));
+}
+
+#[tokio::test]
+async fn test_missing_deployer_secret_blocks_workloads_until_written() {
+    use alien_bindings::Vault as _;
+
+    let vault_env = test_vault_env().await;
+    let mut stack = create_test_stack("test-stack", "test-function");
+    stack.inputs = vec![database_password_input()];
+    let config = create_test_config("hash_v1", false);
+    let state = create_initial_state(stack);
+
+    let blocked = run_until_status(
+        state,
+        config.clone(),
+        &[
+            DeploymentStatus::WaitingForSecrets,
+            DeploymentStatus::Running,
+            DeploymentStatus::ProvisioningFailed,
+        ],
+    )
+    .await;
+
+    assert_eq!(blocked.status, DeploymentStatus::WaitingForSecrets);
+    let error = blocked
+        .error
+        .as_ref()
+        .expect("the wait names what is missing");
+    assert!(
+        error.message.contains("missing: Database password"),
+        "{}",
+        error.message
+    );
+    let reports = deployer_reports(&blocked);
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].status, alien_core::DeployerSecretStatus::Missing);
+    assert_eq!(reports[0].location.name, "input-database-password");
+    assert!(reports[0].location.cli_command.contains("'<VALUE>'"));
+    let worker = blocked
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .get("test-function");
+    assert!(
+        worker.is_none_or(|worker| worker.status != alien_core::ResourceStatus::Running),
+        "no workload starts while a required deployer secret is missing"
+    );
+
+    vault_env
+        .customer_vault()
+        .set_secret("input-database-password", "customer-only-value")
+        .await
+        .unwrap();
+
+    let running = run_until_status(blocked, config, &[DeploymentStatus::Running]).await;
+
+    assert_eq!(running.status, DeploymentStatus::Running);
+    assert_eq!(
+        deployer_reports(&running)[0].status,
+        alien_core::DeployerSecretStatus::Present
+    );
+    let alien_secrets: serde_json::Value = serde_json::from_str(
+        &worker_environment(&running, "test-function")[alien_core::ENV_ALIEN_SECRETS],
+    )
+    .unwrap();
+    assert_eq!(
+        alien_secrets["deployerSecrets"],
+        serde_json::json!([{
+            "name": "DATABASE_PASSWORD",
+            "vaultKey": "input-database-password",
+            "secretName": "input-database-password",
+            "label": "Database password",
+            "required": true,
+        }])
+    );
+    assert!(
+        !serde_json::to_string(&running)
+            .unwrap()
+            .contains("customer-only-value"),
+        "the deployment state never carries the deployer's secret"
+    );
+}
+
+#[tokio::test]
+async fn test_stored_deployer_secret_keeps_working_until_the_slot_is_filled() {
+    use alien_bindings::Vault as _;
+
+    let vault_env = test_vault_env().await;
+    let mut stack = create_test_stack("test-stack", "test-function");
+    stack.inputs = vec![database_password_input()];
+    let mut config = create_test_config("hash_v1", false);
+    config.input_values = HashMap::from([(
+        "databasePassword".to_string(),
+        serde_json::json!("stored-before-vault-native"),
+    )]);
+    let state = create_initial_state(stack);
+
+    let running = run_until_status(
+        state,
+        config.clone(),
+        &[
+            DeploymentStatus::WaitingForSecrets,
+            DeploymentStatus::Running,
+        ],
+    )
+    .await;
+
+    assert_eq!(running.status, DeploymentStatus::Running);
+    assert_eq!(
+        deployer_reports(&running)[0].status,
+        alien_core::DeployerSecretStatus::Missing
+    );
+    assert!(
+        !worker_environment(&running, "test-function").contains_key(alien_core::ENV_ALIEN_SECRETS),
+        "the stored value keeps today's path until the slot is filled"
+    );
+
+    vault_env
+        .customer_vault()
+        .set_secret("input-database-password", "customer-only-value")
+        .await
+        .unwrap();
+    let result = alien_deployment::step(running, config, ClientConfig::Test, None)
+        .await
+        .unwrap();
+
+    assert_eq!(result.state.status, DeploymentStatus::Running);
+    assert_eq!(
+        deployer_reports(&result.state)[0].status,
+        alien_core::DeployerSecretStatus::Present,
+        "a running deployment reports the slot once it is filled"
     );
 }

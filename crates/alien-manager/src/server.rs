@@ -56,6 +56,23 @@ impl AlienManager {
     /// This method spawns the deployment loop and heartbeat loop as background
     /// tasks, then runs the axum HTTP server. It blocks until the server shuts down.
     pub async fn start(self, addr: SocketAddr) -> crate::error::Result<()> {
+        let listener = TcpListener::bind(addr).await.into_alien_error().context(
+            ErrorData::ServerInitFailed {
+                reason: format!("Failed to bind to {}", addr),
+            },
+        )?;
+        self.start_with_listener(listener).await
+    }
+
+    /// Start using an already-bound listener, retaining ownership of its reserved port.
+    pub async fn start_with_listener(self, listener: TcpListener) -> crate::error::Result<()> {
+        let addr =
+            listener
+                .local_addr()
+                .into_alien_error()
+                .context(ErrorData::ServerInitFailed {
+                    reason: "Failed to read the manager listener address".to_string(),
+                })?;
         let deployment_loop =
             if !self.config.disable_deployment_loop || !self.config.disable_heartbeat_loop {
                 Some(Arc::new(DeploymentLoop::new(
@@ -116,13 +133,6 @@ impl AlienManager {
                 }
             });
         }
-
-        // Start the HTTP server
-        let listener = TcpListener::bind(addr).await.into_alien_error().context(
-            ErrorData::ServerInitFailed {
-                reason: format!("Failed to bind to {}", addr),
-            },
-        )?;
 
         info!(%addr, "alien-manager listening");
 

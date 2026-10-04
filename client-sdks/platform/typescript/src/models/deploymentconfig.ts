@@ -953,6 +953,20 @@ export type DeploymentConfigDomains = {
 export type DeploymentConfigDomainsUnion = DeploymentConfigDomains | string;
 
 /**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export const DeploymentConfigEndpointAccess = {
+  Internet: "internet",
+  Private: "private",
+} as const;
+/**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export type DeploymentConfigEndpointAccess = ClosedEnum<
+  typeof DeploymentConfigEndpointAccess
+>;
+
+/**
  * How heartbeat health checks are handled.
  */
 export const DeploymentConfigHeartbeats = {
@@ -1835,6 +1849,10 @@ export type DeploymentConfigStackSettings = {
    */
   deploymentModel?: DeploymentConfigDeploymentModel | undefined;
   domains?: DeploymentConfigDomains | string | null | undefined;
+  /**
+   * Reachability of the deployment's public endpoints, fixed at setup.
+   */
+  endpointAccess?: DeploymentConfigEndpointAccess | undefined;
   externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
   /**
    * How heartbeat health checks are handled.
@@ -3351,6 +3369,11 @@ export function deploymentConfigDomainsUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentConfigEndpointAccess$inboundSchema: z.ZodEnum<
+  typeof DeploymentConfigEndpointAccess
+> = z.enum(DeploymentConfigEndpointAccess);
+
+/** @internal */
 export const DeploymentConfigHeartbeats$inboundSchema: z.ZodEnum<
   typeof DeploymentConfigHeartbeats
 > = z.enum(DeploymentConfigHeartbeats);
@@ -4667,6 +4690,7 @@ export const DeploymentConfigStackSettings$inboundSchema: z.ZodType<
   domains: z.nullable(
     z.union([z.lazy(() => DeploymentConfigDomains$inboundSchema), z.string()]),
   ).optional(),
+  endpointAccess: DeploymentConfigEndpointAccess$inboundSchema.optional(),
   externalBindings: z.nullable(
     z.record(z.string(), ExternalBindingUnion$inboundSchema),
   ).optional(),

@@ -430,6 +430,20 @@ export type NewDeploymentRequestDomainsUnion =
   | string;
 
 /**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export const NewDeploymentRequestEndpointAccess = {
+  Internet: "internet",
+  Private: "private",
+} as const;
+/**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export type NewDeploymentRequestEndpointAccess = ClosedEnum<
+  typeof NewDeploymentRequestEndpointAccess
+>;
+
+/**
  * How heartbeat health checks are handled.
  */
 export const NewDeploymentRequestHeartbeats = {
@@ -1313,6 +1327,10 @@ export type NewDeploymentRequestStackSettings = {
    */
   deploymentModel?: NewDeploymentRequestDeploymentModel | undefined;
   domains?: NewDeploymentRequestDomains | string | null | undefined;
+  /**
+   * Reachability of the deployment's public endpoints, fixed at setup.
+   */
+  endpointAccess?: NewDeploymentRequestEndpointAccess | undefined;
   externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
   /**
    * How heartbeat health checks are handled.
@@ -2399,6 +2417,11 @@ export function newDeploymentRequestDomainsUnionToJSON(
     ),
   );
 }
+
+/** @internal */
+export const NewDeploymentRequestEndpointAccess$outboundSchema: z.ZodEnum<
+  typeof NewDeploymentRequestEndpointAccess
+> = z.enum(NewDeploymentRequestEndpointAccess);
 
 /** @internal */
 export const NewDeploymentRequestHeartbeats$outboundSchema: z.ZodEnum<
@@ -4118,6 +4141,7 @@ export type NewDeploymentRequestStackSettings$Outbound = {
   compute?: NewDeploymentRequestCompute$Outbound | string | null | undefined;
   deploymentModel?: string | undefined;
   domains?: NewDeploymentRequestDomains$Outbound | string | null | undefined;
+  endpointAccess?: string | undefined;
   externalBindings?:
     | { [k: string]: ExternalBindingUnion$Outbound }
     | null
@@ -4161,6 +4185,7 @@ export const NewDeploymentRequestStackSettings$outboundSchema: z.ZodType<
       z.string(),
     ]),
   ).optional(),
+  endpointAccess: NewDeploymentRequestEndpointAccess$outboundSchema.optional(),
   externalBindings: z.nullable(
     z.record(z.string(), ExternalBindingUnion$outboundSchema),
   ).optional(),
