@@ -50,18 +50,25 @@ pub struct StackInputEnvironmentMapping {
 }
 
 impl StackInputEnvironmentMapping {
-    /// Whether this mapping reaches `resource_id`: every resource when no
-    /// targets are set, else an exact id or a `prefix*` pattern.
+    /// Whether this mapping reaches `resource_id` (see [`targets_resource`]).
     pub fn targets(&self, resource_id: &str) -> bool {
-        match &self.target_resources {
-            None => true,
-            Some(patterns) => patterns
-                .iter()
-                .any(|pattern| match pattern.strip_suffix('*') {
-                    Some(prefix) => resource_id.starts_with(prefix),
-                    None => resource_id == pattern,
-                }),
-        }
+        targets_resource(&self.target_resources, resource_id)
+    }
+}
+
+/// Whether an environment variable with these `target_resources` reaches
+/// `resource_id`: every resource when unset, else an exact id or a `prefix*`
+/// pattern. Env delivery and the permissions that follow from it (such as
+/// reading a deployer secret) share this one rule.
+pub fn targets_resource(target_resources: &Option<Vec<String>>, resource_id: &str) -> bool {
+    match target_resources {
+        None => true,
+        Some(patterns) => patterns
+            .iter()
+            .any(|pattern| match pattern.strip_suffix('*') {
+                Some(prefix) => resource_id.starts_with(prefix),
+                None => resource_id == pattern,
+            }),
     }
 }
 
@@ -352,6 +359,8 @@ mod environment_tests {
         assert!(!mapping(Some(vec!["api"])).targets("api-worker"));
         assert!(mapping(Some(vec!["api-*"])).targets("api-worker"));
         assert!(!mapping(Some(vec!["api-*"])).targets("web"));
+        assert!(mapping(Some(vec!["api-*", "worker"])).targets("worker"));
+        assert!(!mapping(Some(vec!["api-*", "worker"])).targets("scheduler"));
         assert!(!mapping(Some(vec![])).targets("api"));
     }
 

@@ -211,7 +211,7 @@ pub fn inject_environment_variables(
         {
             let deployer_secrets: Vec<DeployerSecretEnv> = deployer_environment
                 .iter()
-                .filter(|(_, targets)| matches_resource_pattern(resource_name, targets))
+                .filter(|(_, targets)| alien_core::targets_resource(targets, resource_name))
                 .map(|(variable, _)| variable.clone())
                 .collect();
             inject_into_compute_resource(
@@ -497,7 +497,7 @@ fn inject_into_environment(
     let applicable_vars: Vec<&EnvironmentVariable> = snapshot
         .variables
         .iter()
-        .filter(|v| matches_resource_pattern(resource_name, &v.target_resources))
+        .filter(|v| alien_core::targets_resource(&v.target_resources, resource_name))
         .filter(|v| !deployer_secrets.iter().any(|secret| secret.name == v.name))
         .collect();
 
@@ -578,27 +578,6 @@ fn inject_into_environment(
     }
 
     Ok(())
-}
-
-/// Check if a resource name matches the target patterns
-fn matches_resource_pattern(resource_name: &str, target_resources: &Option<Vec<String>>) -> bool {
-    match target_resources {
-        // None means apply to all resources
-        None => true,
-        // Empty list means no resources (shouldn't happen, but handle gracefully)
-        Some(patterns) if patterns.is_empty() => false,
-        // Check if resource name matches any pattern
-        Some(patterns) => patterns.iter().any(|pattern| {
-            if pattern.ends_with('*') {
-                // Wildcard suffix match: "api-*" matches "api-handler", "api-auth", etc.
-                let prefix = &pattern[..pattern.len() - 1];
-                resource_name.starts_with(prefix)
-            } else {
-                // Exact match
-                resource_name == pattern
-            }
-        }),
-    }
 }
 
 /// Sync secret-type environment variables to the vault
@@ -959,7 +938,7 @@ fn desired_vault_secrets(
         .filter(|var| {
             vault_backed_workers
                 .iter()
-                .any(|resource_id| matches_resource_pattern(resource_id, &var.target_resources))
+                .any(|resource_id| alien_core::targets_resource(&var.target_resources, resource_id))
         })
         .map(|var| (var.name.clone(), var.value.clone()))
         .collect::<BTreeMap<_, _>>();
@@ -1207,52 +1186,6 @@ mod tests {
 
     const OTEL_EXPORTER_OTLP_HEADERS: &str = "OTEL_EXPORTER_OTLP_HEADERS";
     const OTEL_EXPORTER_OTLP_METRICS_HEADERS: &str = "OTEL_EXPORTER_OTLP_METRICS_HEADERS";
-
-    #[test]
-    fn test_matches_resource_pattern_null() {
-        // None means all resources
-        assert!(matches_resource_pattern("api-handler", &None));
-        assert!(matches_resource_pattern("worker", &None));
-        assert!(matches_resource_pattern("anything", &None));
-    }
-
-    #[test]
-    fn test_matches_resource_pattern_exact() {
-        let patterns = Some(vec!["api-handler".to_string()]);
-
-        assert!(matches_resource_pattern("api-handler", &patterns));
-        assert!(!matches_resource_pattern("api-auth", &patterns));
-        assert!(!matches_resource_pattern("worker", &patterns));
-    }
-
-    #[test]
-    fn test_matches_resource_pattern_wildcard() {
-        let patterns = Some(vec!["api-*".to_string()]);
-
-        assert!(matches_resource_pattern("api-handler", &patterns));
-        assert!(matches_resource_pattern("api-auth", &patterns));
-        assert!(matches_resource_pattern("api-", &patterns));
-        assert!(!matches_resource_pattern("api", &patterns));
-        assert!(!matches_resource_pattern("worker", &patterns));
-    }
-
-    #[test]
-    fn test_matches_resource_pattern_multiple() {
-        let patterns = Some(vec!["api-*".to_string(), "worker".to_string()]);
-
-        assert!(matches_resource_pattern("api-handler", &patterns));
-        assert!(matches_resource_pattern("api-auth", &patterns));
-        assert!(matches_resource_pattern("worker", &patterns));
-        assert!(!matches_resource_pattern("scheduler", &patterns));
-    }
-
-    #[test]
-    fn test_matches_resource_pattern_empty() {
-        let patterns = Some(vec![]);
-
-        assert!(!matches_resource_pattern("api-handler", &patterns));
-        assert!(!matches_resource_pattern("worker", &patterns));
-    }
 
     // ── inject_environment_variables tests ──────────────────────────
 

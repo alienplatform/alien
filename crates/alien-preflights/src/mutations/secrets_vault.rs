@@ -3,17 +3,19 @@
 //! runtime secrets, and cloud-hosted Containers and Daemons whose hosting
 //! layer reads their deployer secrets with the workload's own identity.
 
-use crate::error::Result;
+use crate::error::{ErrorData, Result};
 use crate::mutations::runs_on_platform_or_base;
 use crate::StackMutation;
-use alien_core::permissions::{PermissionProfile, PermissionSetReference};
+use alien_core::permissions::{PermissionProfile, PermissionSet, PermissionSetReference};
+use alien_core::vault_naming;
 use alien_core::{
     ComputeCluster, ComputeKind, Container, Daemon, DeploymentConfig, ExposeProtocol, Platform,
     Postgres, RemoteStackManagement, ResourceEntry, ResourceLifecycle, ResourceRef, SecretDelivery,
     Stack, StackState, Vault, Worker,
 };
+use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use tracing::{debug, info};
 
 /// Adds secrets vault for environment variable storage.
@@ -141,13 +143,14 @@ impl StackMutation for SecretsVaultMutation {
         }
         // On these platforms the hosting layer resolves a Container's or
         // Daemon's deployer secrets as it starts the workload, with the
-        // workload's own cloud identity.
+        // workload's own cloud identity. That identity may read exactly those
+        // slots.
         if matches!(
             stack_state.platform,
             Platform::Aws | Platform::Gcp | Platform::Azure
         ) {
-            let profiles = deployer_secret_workload_profiles(&stack, stack_state.platform);
-            add_vault_read_permissions_to_profiles(&mut stack, secrets_vault_id, profiles);
+            let slots = deployer_secret_keys_by_profile(&stack, stack_state.platform)?;
+            add_deployer_secret_read_permissions(&mut stack, secrets_vault_id, slots)?;
         }
         add_vault_dependency_to_compute_clusters(
             &mut stack,
@@ -278,10 +281,18 @@ fn compute_profiles(
         .collect()
 }
 
-/// Profiles of the Containers and Daemons that a deployer secret available on
-/// `platform` maps into.
-fn deployer_secret_workload_profiles(stack: &Stack, platform: Platform) -> BTreeSet<String> {
-    let mappings: Vec<_> = stack
+/// For each permission profile of a Container or Daemon, the vault keys of the
+/// deployer secrets available on `platform` that map into it.
+///
+/// Every workload that uses a profile runs with that profile's cloud identity,
+/// so a profile can only read the secrets all of its workloads receive. Two
+/// Containers or Daemons that share a profile but receive different deployer
+/// secrets are refused rather than letting one read the other's.
+fn deployer_secret_keys_by_profile(
+    stack: &Stack,
+    platform: Platform,
+) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let inputs: Vec<_> = stack
         .inputs
         .iter()
         .filter(|input| alien_core::is_deployer_secret_input(input))
@@ -291,30 +302,151 @@ fn deployer_secret_workload_profiles(stack: &Stack, platform: Platform) -> BTree
                 .as_ref()
                 .is_none_or(|platforms| platforms.is_empty() || platforms.contains(&platform))
         })
-        .flat_map(|input| input.env.iter())
         .collect();
-    if mappings.is_empty() {
-        return BTreeSet::new();
+    if inputs.is_empty() {
+        return Ok(BTreeMap::new());
     }
 
-    stack
-        .resources
+    // profile -> (first workload seen with it, the keys that workload receives)
+    let mut by_profile: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
+    for (resource_id, entry) in &stack.resources {
+        let profile = if let Some(container) = entry.config.downcast_ref::<Container>() {
+            &container.permissions
+        } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
+            &daemon.permissions
+        } else {
+            continue;
+        };
+        let keys: BTreeSet<String> = inputs
+            .iter()
+            .filter(|input| input.env.iter().any(|mapping| mapping.targets(resource_id)))
+            .map(|input| alien_core::deployer_secret_vault_key(&input.id))
+            .collect();
+        match by_profile.get(profile) {
+            None => {
+                by_profile.insert(profile.clone(), (resource_id.clone(), keys));
+            }
+            Some((other, other_keys)) if *other_keys != keys => {
+                return Err(AlienError::new(ErrorData::ResourceValidationFailed {
+                    resource_id: resource_id.clone(),
+                    message: format!(
+                        "'{resource_id}' and '{other}' share permission profile '{profile}' \
+                         but receive different deployer secrets. Workloads that share a \
+                         profile share one cloud identity, so either could read the other's \
+                         secrets: give them separate permission profiles, or map the same \
+                         deployer secrets into both."
+                    ),
+                }));
+            }
+            Some(_) => {}
+        }
+    }
+
+    Ok(by_profile
+        .into_iter()
+        .filter(|(_, (_, keys))| !keys.is_empty())
+        .map(|(profile, (_, keys))| (profile, keys))
+        .collect())
+}
+
+/// Id of the inline permission set that reads a profile's deployer secret slots.
+const DEPLOYER_SECRETS_READ_ID: &str = "vault/deployer-secrets-read";
+
+/// Lets each profile read exactly its deployer secret slots in `vault_name`.
+fn add_deployer_secret_read_permissions(
+    stack: &mut Stack,
+    vault_name: &str,
+    keys_by_profile: BTreeMap<String, BTreeSet<String>>,
+) -> Result<()> {
+    for (profile_name, keys) in keys_by_profile {
+        let Some(profile) = stack.permissions.profiles.get_mut(&profile_name) else {
+            // PermissionProfilesExistCheck reports a missing profile.
+            debug!(
+                "Skipping deployer secret read for nonexistent profile '{}'",
+                profile_name
+            );
+            continue;
+        };
+        let vault_permissions = profile.0.entry(vault_name.to_string()).or_default();
+        vault_permissions.retain(|set| set.id() != DEPLOYER_SECRETS_READ_ID);
+        vault_permissions.push(PermissionSetReference::from_inline(
+            deployer_secrets_read_permission_set(&keys)?,
+        ));
+        debug!(
+            "Profile '{}' may read {} deployer secret slot(s) in vault '{}'",
+            profile_name,
+            keys.len(),
+            vault_name
+        );
+    }
+    Ok(())
+}
+
+/// Read access to exactly these `secrets` vault keys, with `${resourceName}`
+/// standing for the vault (its prefix on AWS and GCP, its name on Azure).
+fn deployer_secrets_read_permission_set(keys: &BTreeSet<String>) -> Result<PermissionSet> {
+    const VAULT: &str = "${resourceName}";
+
+    let aws_parameters: Vec<String> = keys
         .iter()
-        .filter(|(resource_id, _)| mappings.iter().any(|mapping| mapping.targets(resource_id)))
-        .filter_map(|(_, entry)| {
-            entry
-                .config
-                .downcast_ref::<Container>()
-                .map(|container| &container.permissions)
-                .or_else(|| {
-                    entry
-                        .config
-                        .downcast_ref::<Daemon>()
-                        .map(|daemon| &daemon.permissions)
-                })
+        .map(|key| {
+            format!(
+                "arn:aws:ssm:${{awsRegion}}:${{awsAccountId}}:parameter/{}",
+                vault_naming::parameter_store_parameter_name(VAULT, key)
+            )
         })
-        .cloned()
-        .collect()
+        .collect();
+    let gcp_condition = keys
+        .iter()
+        .map(|key| {
+            let secret = format!(
+                "projects/${{projectNumber}}/secrets/{}",
+                vault_naming::secret_manager_secret_id(VAULT, key)
+            );
+            format!("resource.name == \"{secret}\" || resource.name.startsWith(\"{secret}/\")")
+        })
+        .collect::<Vec<_>>()
+        .join(" || ");
+    let azure: Vec<serde_json::Value> = keys
+        .iter()
+        .map(|key| {
+            serde_json::json!({
+                "grant": { "predefinedRoles": ["Key Vault Secrets User"] },
+                "binding": { "resource": { "scope": format!(
+                    "/subscriptions/${{subscriptionId}}/resourceGroups/${{resourceGroup}}/providers/Microsoft.KeyVault/vaults/{VAULT}/secrets/{}",
+                    vault_naming::key_vault_secret_name(key)
+                ) } }
+            })
+        })
+        .collect();
+
+    serde_json::from_value(serde_json::json!({
+        "id": DEPLOYER_SECRETS_READ_ID,
+        "description": "Reads the deployer secrets mapped into this workload",
+        "platforms": {
+            "aws": [{
+                "grant": { "actions": ["ssm:GetParameter"] },
+                "binding": { "resource": { "resources": aws_parameters } }
+            }],
+            "gcp": [{
+                "grant": { "predefinedRoles": ["roles/secretmanager.secretAccessor"] },
+                "binding": { "resource": {
+                    "scope": "projects/${projectName}",
+                    "condition": {
+                        "title": "DeployerSecretsRead",
+                        "expression": gcp_condition
+                    }
+                } }
+            }],
+            "azure": azure
+        }
+    }))
+    .into_alien_error()
+    .context(ErrorData::StackMutationFailed {
+        mutation_name: "SecretsVaultMutation".to_string(),
+        message: "Failed to build the deployer secrets read permission set".to_string(),
+        resource_id: None,
+    })
 }
 
 /// Add vault/data-read on `vault_name` to each of `profile_names`.
@@ -989,97 +1121,229 @@ mod tests {
         );
     }
 
-    /// The hosting layer reads a cloud-hosted workload's deployer secrets with
-    /// the workload's own identity, so exactly the profiles of the Containers and
-    /// Daemons a deployer secret maps into may read the vault. Kubernetes and
-    /// Local deliver them without the workload reading the vault.
-    #[tokio::test]
-    async fn cloud_workloads_receiving_a_deployer_secret_may_read_the_vault() {
-        fn container(id: &str, profile: &str) -> ResourceEntry {
-            ResourceEntry {
-                config: alien_core::Resource::new(
-                    Container::new(id.to_string())
-                        .code(ContainerCode::Image {
-                            image: "test:latest".to_string(),
-                        })
-                        .cpu(ResourceSpec {
-                            min: "1".to_string(),
-                            desired: "1".to_string(),
-                        })
-                        .memory(ResourceSpec {
-                            min: "1Gi".to_string(),
-                            desired: "1Gi".to_string(),
-                        })
-                        .port(8080)
-                        .permissions(profile.to_string())
-                        .build(),
-                ),
-                lifecycle: ResourceLifecycle::Live,
-                dependencies: Vec::new(),
-                remote_access: false,
-                enabled_when: None,
-            }
+    fn deployer_secret_container(id: &str, profile: &str) -> ResourceEntry {
+        ResourceEntry {
+            config: alien_core::Resource::new(
+                Container::new(id.to_string())
+                    .code(ContainerCode::Image {
+                        image: "test:latest".to_string(),
+                    })
+                    .cpu(ResourceSpec {
+                        min: "1".to_string(),
+                        desired: "1".to_string(),
+                    })
+                    .memory(ResourceSpec {
+                        min: "1Gi".to_string(),
+                        desired: "1Gi".to_string(),
+                    })
+                    .port(8080)
+                    .permissions(profile.to_string())
+                    .build(),
+            ),
+            lifecycle: ResourceLifecycle::Live,
+            dependencies: Vec::new(),
+            remote_access: false,
+            enabled_when: None,
         }
-        fn stack() -> Stack {
-            let mut resources = IndexMap::new();
-            resources.insert("api".to_string(), container("api", "api-profile"));
-            resources.insert("web".to_string(), container("web", "web-profile"));
-            let mut profiles = IndexMap::new();
-            profiles.insert("api-profile".to_string(), PermissionProfile::new());
-            profiles.insert("web-profile".to_string(), PermissionProfile::new());
-            Stack {
-                dynamic_container_repositories: Vec::new(),
-                dynamic_container_image_resources: Vec::new(),
-                id: "test-stack".to_string(),
-                resources,
-                permissions: PermissionsConfig {
-                    profiles,
-                    management: ManagementPermissions::Auto,
-                },
-                supported_platforms: None,
-                inputs: vec![StackInputDefinition {
-                    id: "apiKey".to_string(),
-                    kind: StackInputKind::Secret,
-                    provided_by: vec![StackInputProvider::Deployer],
-                    required: true,
-                    label: "API key".to_string(),
-                    description: String::new(),
-                    placeholder: None,
-                    default: None,
-                    platforms: None,
-                    validation: None,
-                    generate: None,
-                    env: vec![StackInputEnvironmentMapping {
-                        name: "API_KEY".to_string(),
-                        target_resources: Some(vec!["api".to_string()]),
-                        var_type: None,
-                    }],
+    }
+
+    /// A stack with containers `(id, profile)` and an `apiKey` deployer secret
+    /// mapped into `targets`.
+    fn deployer_secret_stack(containers: &[(&str, &str)], targets: &[&str]) -> Stack {
+        let mut resources = IndexMap::new();
+        let mut profiles = IndexMap::new();
+        for (id, profile) in containers {
+            resources.insert(id.to_string(), deployer_secret_container(id, profile));
+            profiles.insert(profile.to_string(), PermissionProfile::new());
+        }
+        Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
+            id: "test-stack".to_string(),
+            resources,
+            permissions: PermissionsConfig {
+                profiles,
+                management: ManagementPermissions::Auto,
+            },
+            supported_platforms: None,
+            inputs: vec![StackInputDefinition {
+                id: "apiKey".to_string(),
+                kind: StackInputKind::Secret,
+                provided_by: vec![StackInputProvider::Deployer],
+                required: true,
+                label: "API key".to_string(),
+                description: String::new(),
+                placeholder: None,
+                default: None,
+                platforms: None,
+                validation: None,
+                generate: None,
+                env: vec![StackInputEnvironmentMapping {
+                    name: "API_KEY".to_string(),
+                    target_resources: Some(targets.iter().map(|t| t.to_string()).collect()),
+                    var_type: None,
                 }],
-            }
+            }],
         }
-        let config = DeploymentConfig::builder()
+    }
+
+    fn deployer_secret_config() -> DeploymentConfig {
+        DeploymentConfig::builder()
             .stack_settings(StackSettings::default())
             .environment_variables(empty_env_snapshot())
             .allow_frozen_changes(false)
             .external_bindings(ExternalBindings::default())
-            .build();
-        let reads_vault = |stack: &Stack, profile: &str| {
-            stack.permissions.profiles[profile]
-                .0
-                .get(SECRETS_VAULT_ID)
-                .is_some_and(|sets| sets.iter().any(|set| set.id() == "vault/data-read"))
-        };
+            .build()
+    }
+
+    /// Every string value under a `key` field anywhere in `value`.
+    fn collect_strings_under(value: &serde_json::Value, key: &str, out: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (k, v) in map {
+                    match v {
+                        serde_json::Value::String(text) if k == key => out.push(text.clone()),
+                        _ => collect_strings_under(v, key, out),
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    collect_strings_under(item, key, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The inline read set a profile got on the secrets vault, if any.
+    fn deployer_secrets_read_set(stack: &Stack, profile: &str) -> Option<PermissionSet> {
+        stack.permissions.profiles[profile]
+            .0
+            .get(SECRETS_VAULT_ID)?
+            .iter()
+            .find(|set| set.id() == DEPLOYER_SECRETS_READ_ID)
+            .and_then(|set| set.resolve(|_| None))
+    }
+
+    /// The hosting layer reads a cloud-hosted workload's deployer secrets with
+    /// the workload's own identity. That identity may read exactly the slots
+    /// mapped into it: rendered for each cloud, the grant names those slots,
+    /// spelled as the location the deployer writes to, and nothing else in
+    /// the vault. Kubernetes and Local deliver them without the workload
+    /// reading the vault.
+    #[tokio::test]
+    async fn cloud_workloads_may_read_exactly_their_deployer_secret_slots() {
+        let stack =
+            || deployer_secret_stack(&[("api", "api-profile"), ("web", "web-profile")], &["api"]);
+        let config = deployer_secret_config();
+        let key = alien_core::deployer_secret_vault_key("apiKey");
+        let location_context = alien_core::DeployerSecretLocationContext::default();
+
+        // AWS: ssm:GetParameter on exactly the slot's parameter.
+        let aws = SecretsVaultMutation
+            .mutate(stack(), &StackState::new(Platform::Aws), &config)
+            .await
+            .unwrap();
+        assert!(deployer_secrets_read_set(&aws, "web-profile").is_none());
+        let set = deployer_secrets_read_set(&aws, "api-profile").expect("api reads its slot");
+        let context = alien_permissions::PermissionContext::new()
+            .with_aws_account_id("123456789012")
+            .with_aws_region("us-east-1")
+            .with_resource_name("acme-secrets");
+        let policy = alien_permissions::generators::AwsRuntimePermissionsGenerator::new()
+            .generate_policy(&set, alien_permissions::BindingTarget::Resource, &context)
+            .unwrap();
+        let location = alien_core::deployer_secret_location(
+            &alien_core::VaultBinding::parameter_store("acme-secrets"),
+            &key,
+            &location_context,
+        )
+        .unwrap();
+        let policy = serde_json::to_value(&policy).unwrap();
+        let statement = &policy["Statement"][0];
+        assert_eq!(statement["Action"], serde_json::json!(["ssm:GetParameter"]));
+        assert_eq!(
+            statement["Resource"],
+            serde_json::json!([format!(
+                "arn:aws:ssm:us-east-1:123456789012:parameter/{}",
+                location.name
+            )])
+        );
+
+        // GCP: Secret Manager accessor conditioned on exactly the slot.
+        let gcp = SecretsVaultMutation
+            .mutate(stack(), &StackState::new(Platform::Gcp), &config)
+            .await
+            .unwrap();
+        let set = deployer_secrets_read_set(&gcp, "api-profile").expect("api reads its slot");
+        let context = alien_permissions::PermissionContext::new()
+            .with_project_name("acme-prod")
+            .with_project_number("424242")
+            .with_resource_name("acme-secrets");
+        let plan = alien_permissions::generators::GcpRuntimePermissionsGenerator::new()
+            .generate_grant_plan(&set, alien_permissions::BindingTarget::Resource, &context)
+            .unwrap();
+        let secret = format!(
+            "projects/424242/secrets/{}",
+            alien_core::deployer_secret_location(
+                &alien_core::VaultBinding::secret_manager("acme-secrets"),
+                &key,
+                &location_context,
+            )
+            .unwrap()
+            .name
+        );
+        let plan = serde_json::to_value(&plan).unwrap();
+        let mut expressions = Vec::new();
+        collect_strings_under(&plan, "expression", &mut expressions);
+        assert_eq!(
+            expressions,
+            vec![format!(
+                "resource.name == \"{secret}\" || resource.name.startsWith(\"{secret}/\")"
+            )],
+            "the condition names exactly the slot: {plan}"
+        );
+        let plan = plan.to_string();
+        assert!(
+            plan.contains("roles/secretmanager.secretAccessor"),
+            "{plan}"
+        );
+        assert!(!plan.contains("roles/secretmanager.viewer"), "{plan}");
+
+        // Azure: Key Vault Secrets User on exactly the slot's secret.
+        let azure = SecretsVaultMutation
+            .mutate(stack(), &StackState::new(Platform::Azure), &config)
+            .await
+            .unwrap();
+        let set = deployer_secrets_read_set(&azure, "api-profile").expect("api reads its slot");
+        let context = alien_permissions::PermissionContext::new()
+            .with_subscription_id("sub-1")
+            .with_resource_group("rg-1")
+            .with_resource_name("acmesecrets7f3a");
+        let plan = alien_permissions::generators::AzureRuntimePermissionsGenerator::new()
+            .generate_grant_plan(&set, alien_permissions::BindingTarget::Resource, &context)
+            .unwrap();
+        let secret_name = alien_core::deployer_secret_location(
+            &alien_core::VaultBinding::key_vault("acmesecrets7f3a"),
+            &key,
+            &location_context,
+        )
+        .unwrap()
+        .name;
+        let plan = serde_json::to_string(&plan).unwrap();
+        assert!(
+            plan.contains(&format!(
+                "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.KeyVault/vaults/acmesecrets7f3a/secrets/{secret_name}\""
+            )),
+            "{plan}"
+        );
 
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
-            let stack_state = StackState::new(platform);
-            assert!(SecretsVaultMutation.should_run(&stack(), &stack_state, &config));
             let result = SecretsVaultMutation
-                .mutate(stack(), &stack_state, &config)
+                .mutate(stack(), &StackState::new(platform), &config)
                 .await
                 .unwrap();
-
-            assert!(reads_vault(&result, "api-profile"), "{platform:?}");
-            assert!(!reads_vault(&result, "web-profile"), "{platform:?}");
             let api = result.resources["api"]
                 .config
                 .downcast_ref::<Container>()
@@ -1088,6 +1352,12 @@ mod tests {
                 api.links.iter().all(|link| link.id() != SECRETS_VAULT_ID),
                 "the hosting layer reads the slot; the container needs no vault binding"
             );
+            assert!(
+                result.permissions.profiles["api-profile"].0[SECRETS_VAULT_ID]
+                    .iter()
+                    .all(|set| set.id() != "vault/data-read"),
+                "{platform:?}: no whole-vault read"
+            );
         }
 
         for platform in [Platform::Kubernetes, Platform::Local] {
@@ -1095,8 +1365,38 @@ mod tests {
                 .mutate(stack(), &StackState::new(platform), &config)
                 .await
                 .unwrap();
-            assert!(!reads_vault(&result, "api-profile"), "{platform:?}");
+            assert!(
+                deployer_secrets_read_set(&result, "api-profile").is_none(),
+                "{platform:?}"
+            );
         }
+    }
+
+    /// Workloads that share a permission profile share one cloud identity, so
+    /// two that receive different deployer secrets cannot share a profile.
+    #[tokio::test]
+    async fn workloads_sharing_a_profile_must_receive_the_same_deployer_secrets() {
+        let config = deployer_secret_config();
+        let state = StackState::new(Platform::Aws);
+
+        let mixed = deployer_secret_stack(&[("api", "shared"), ("web", "shared")], &["api"]);
+        let error = SecretsVaultMutation
+            .mutate(mixed, &state, &config)
+            .await
+            .expect_err("a profile shared with a workload that gets no secret must be refused");
+        assert_eq!(error.code, "RESOURCE_VALIDATION_FAILED");
+        let message = error.to_string();
+        assert!(
+            message.contains("share permission profile 'shared'"),
+            "{message}"
+        );
+
+        let same = deployer_secret_stack(&[("api", "shared"), ("web", "shared")], &["api", "web"]);
+        let result = SecretsVaultMutation
+            .mutate(same, &state, &config)
+            .await
+            .unwrap();
+        assert!(deployer_secrets_read_set(&result, "shared").is_some());
     }
 
     #[tokio::test]
