@@ -639,6 +639,7 @@ pub struct SingleControllerExecutorBuilder {
     resource_lifecycle: ResourceLifecycle,
     initial_setup_authority: alien_core::InitialSetupAuthority,
     resource_prefix: String,
+    permission_profiles: Vec<(String, alien_core::permissions::PermissionProfile)>,
 }
 
 impl SingleControllerExecutorBuilder {
@@ -666,6 +667,7 @@ impl SingleControllerExecutorBuilder {
             resource_lifecycle: ResourceLifecycle::Live,
             initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
             resource_prefix: "test".to_string(),
+            permission_profiles: Vec::new(),
         }
     }
 
@@ -686,6 +688,16 @@ impl SingleControllerExecutorBuilder {
     /// that branches on ownership needs the Frozen shape to be constructible too.
     pub fn resource_lifecycle(mut self, lifecycle: ResourceLifecycle) -> Self {
         self.resource_lifecycle = lifecycle;
+        self
+    }
+
+    /// Adds a permission profile to the stack, next to the default one every test stack has.
+    pub fn permission_profile(
+        mut self,
+        name: impl Into<String>,
+        profile: alien_core::permissions::PermissionProfile,
+    ) -> Self {
+        self.permission_profiles.push((name.into(), profile));
         self
     }
 
@@ -1086,6 +1098,7 @@ impl SingleControllerExecutorBuilder {
 
         let mut permissions = IndexMap::new();
         permissions.insert("default-profile".to_string(), default_profile);
+        permissions.extend(self.permission_profiles.clone());
 
         let mut stack = Stack {
             id: "test-stack".to_string(),
