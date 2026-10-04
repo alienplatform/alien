@@ -10,6 +10,7 @@ on:
 permissions:
   contents: read
 
+# CI timing experiment (ALIEN-1216, not for merge): terraform plugin cache
 env:
   # Fall back to local compilation when the shared sccache backend returns a
   # transient error (e.g. webdav 403) instead of failing the whole build.
@@ -218,10 +219,13 @@ jobs:
 
       - name: Rust fast tests (non-cloud)
         env:
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/terraform-plugin-cache
+          TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE: "true"
           AXIOM_OTLP_ENDPOINT: https://api.axiom.co/v1/logs
           AXIOM_TOKEN: ${{ secrets.AXIOM_CI_API_KEY }}
           AXIOM_DATASET: dev
         run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
           # Never use `--exclude` here. It drops a package from *compilation*, not just
           # from the test run, so the package rots silently until something else builds
           # it. Skip tests with `--filter-expr` instead: the package still compiles, so
