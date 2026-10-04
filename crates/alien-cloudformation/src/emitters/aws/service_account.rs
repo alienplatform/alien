@@ -173,9 +173,19 @@ fn service_account_trust_policy(
         ("Effect", CfExpression::from("Allow")),
         (
             "Principal",
-            CfExpression::object([("AWS", CfExpression::list(compute_role_arns))]),
+            CfExpression::object([(
+                "AWS",
+                CfExpression::sub("arn:${AWS::Partition}:iam::${AWS::AccountId}:root"),
+            )]),
         ),
         ("Action", CfExpression::from("sts:AssumeRole")),
+        (
+            "Condition",
+            CfExpression::object([(
+                "ArnEquals",
+                CfExpression::object([("aws:PrincipalArn", CfExpression::list(compute_role_arns))]),
+            )]),
+        ),
     ]));
 
     CfExpression::object([

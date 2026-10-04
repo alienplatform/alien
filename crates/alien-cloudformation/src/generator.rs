@@ -10,11 +10,11 @@ use crate::{
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
     ownership_policy_for_resource_type, CapacityGroup, CapacityGroupScalePolicy, ComputeCluster,
-    ComputePoolSelection, DeploymentModel, DomainSettings, ErrorData, HeartbeatsMode,
-    KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, RemoteBindings,
-    ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue, StackInputDefinition,
-    StackInputKind, StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker,
-    WorkerCode,
+    ComputePoolSelection, Container, Daemon, DeploymentModel, DomainSettings, ErrorData,
+    ExposeProtocol, HeartbeatsMode, KubernetesCluster, KubernetesSettings, Network,
+    NetworkSettings, Platform, RemoteBindings, ResourceLifecycle, Result, Sandbox, Stack,
+    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
+    StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -36,6 +36,7 @@ const PARAM_PUBLIC_SUBNET_IDS: &str = "PublicSubnetIds";
 const PARAM_PRIVATE_SUBNET_IDS: &str = "PrivateSubnetIds";
 const PARAM_SECURITY_GROUP_IDS: &str = "SecurityGroupIds";
 const PARAM_DOMAIN_NAME: &str = "DomainName";
+const PARAM_DOMAIN_RESOURCE: &str = "DomainResource";
 const PARAM_HOSTED_ZONE_ID: &str = "HostedZoneId";
 const PARAM_CERTIFICATE_ARN: &str = "CertificateArn";
 const PARAM_UPDATES_MODE: &str = "UpdatesMode";
@@ -320,6 +321,34 @@ pub fn generate_cloudformation_template(
         outputs: IndexMap::new(),
     };
 
+    // CloudFormation exposes one DomainName/CertificateArn pair and registers it under the
+    // selected public resource. Reject settings it cannot represent instead of moving a
+    // configured hostname onto a different workload.
+    if let Some(custom_domains) = stack_settings
+        .domains
+        .as_ref()
+        .and_then(|domains| domains.custom_domains.as_ref())
+        .filter(|_| !options.target.is_kubernetes())
+    {
+        if custom_domains.len() > 1 {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate CloudFormation custom domain settings".to_string(),
+                reason: "CloudFormation exposes one DomainName/CertificateArn pair. Configure one custom-domain resource or use Terraform for multiple domains.".to_string(),
+            }));
+        }
+        let public_resources = public_http_resource_ids(stack);
+        if let Some(id) = custom_domains
+            .keys()
+            .find(|id| !public_resources.contains(id))
+        {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate CloudFormation custom domain settings".to_string(),
+                reason: format!(
+                    "Custom domain resource '{id}' must name a public HTTP resource in this stack."
+                ),
+            }));
+        }
+    }
     let supports_custom_domain = stack_supports_custom_domain(stack, options.target);
     let access_only = stack
         .resources
@@ -537,14 +566,38 @@ pub fn generate_cloudformation_template(
     Ok(template)
 }
 
-fn stack_supports_custom_domain(stack: &Stack, target: CloudFormationTarget) -> bool {
-    target.is_kubernetes()
-        || stack.resources().any(|(_resource_id, resource)| {
-            resource
+fn public_http_resource_ids(stack: &Stack) -> Vec<String> {
+    let mut ids: Vec<_> = stack
+        .resources()
+        .filter_map(|(id, entry)| {
+            let public = entry
                 .config
                 .downcast_ref::<Worker>()
                 .is_some_and(|worker| !worker.public_endpoints.is_empty())
+                || entry
+                    .config
+                    .downcast_ref::<Container>()
+                    .is_some_and(|container| {
+                        container
+                            .public_endpoints
+                            .iter()
+                            .any(|endpoint| endpoint.protocol == ExposeProtocol::Http)
+                    })
+                || entry.config.downcast_ref::<Daemon>().is_some_and(|daemon| {
+                    daemon
+                        .public_endpoints
+                        .iter()
+                        .any(|endpoint| endpoint.protocol == ExposeProtocol::Http)
+                });
+            public.then(|| id.to_string())
         })
+        .collect();
+    ids.sort();
+    ids
+}
+
+fn stack_supports_custom_domain(stack: &Stack, target: CloudFormationTarget) -> bool {
+    target.is_kubernetes() || !public_http_resource_ids(stack).is_empty()
 }
 
 fn stack_inputs_for_cloudformation(
@@ -1270,10 +1323,27 @@ fn add_standard_parameters(
 
     if supports_custom_domain {
         let domain_defaults = DomainParameterDefaults::from_settings(settings.domains.as_ref());
+        if !target.is_kubernetes() && public_http_resource_ids(stack).len() > 1 {
+            let ids = public_http_resource_ids(stack);
+            let default = domain_defaults
+                .resource_id
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| ids[0].clone());
+            template.parameters.insert(
+                PARAM_DOMAIN_RESOURCE.to_string(),
+                string_parameter(
+                    "Public HTTP resource that will use DomainName and CertificateArn.",
+                    Some(default),
+                    Some(ids.into_iter().map(CfExpression::from).collect()),
+                    false,
+                ),
+            );
+        }
         template.parameters.insert(
             PARAM_DOMAIN_NAME.to_string(),
             string_parameter(
-                "Optional custom domain for public endpoints. Leave unset to expose through the generated load balancer DNS name over HTTP.",
+                "Optional custom domain. Leave unset to use the deployment-managed endpoint.",
                 Some(domain_defaults.domain_name.unwrap_or_default()),
                 None,
                 false,
@@ -1672,6 +1742,15 @@ fn add_standard_conditions(
             CONDITION_HAS_DOMAIN_NAME.to_string(),
             CfExpression::not(equals_ref(PARAM_DOMAIN_NAME, "")),
         );
+        if !target.is_kubernetes() && public_http_resource_ids(stack).len() > 1 {
+            let ids = public_http_resource_ids(stack);
+            for (index, id) in ids.iter().enumerate().take(ids.len() - 1) {
+                template.conditions.insert(
+                    format!("CustomDomainResource{index}"),
+                    equals_ref(PARAM_DOMAIN_RESOURCE, id),
+                );
+            }
+        }
     }
 }
 
@@ -1728,9 +1807,17 @@ fn add_console_interface_metadata(
         }));
     }
     if supports_custom_domain {
+        let mut parameters = vec![
+            PARAM_DOMAIN_NAME,
+            PARAM_HOSTED_ZONE_ID,
+            PARAM_CERTIFICATE_ARN,
+        ];
+        if template.parameters.contains_key(PARAM_DOMAIN_RESOURCE) {
+            parameters.insert(0, PARAM_DOMAIN_RESOURCE);
+        }
         parameter_groups.push(json!({
             "Label": { "default": "Custom domain" },
-            "Parameters": [PARAM_DOMAIN_NAME, PARAM_HOSTED_ZONE_ID, PARAM_CERTIFICATE_ARN]
+            "Parameters": parameters
         }));
     }
     if !stack_inputs.is_empty() {
@@ -2418,7 +2505,7 @@ fn stack_settings_expression(
         ),
     ];
     if supports_custom_domain {
-        values.push(("domains", domains_expression()));
+        values.push(("domains", domains_expression(stack, target)));
     }
     if target.is_kubernetes() {
         values.push((
@@ -2653,28 +2740,38 @@ fn network_expression(
     }
 }
 
-fn domains_expression() -> CfExpression {
+fn domains_expression(stack: &Stack, target: CloudFormationTarget) -> CfExpression {
+    let domain = CfExpression::object([
+        ("domain", CfExpression::ref_(PARAM_DOMAIN_NAME)),
+        (
+            "certificate",
+            CfExpression::object([(
+                "aws",
+                CfExpression::object([(
+                    "certificateArn",
+                    CfExpression::ref_(PARAM_CERTIFICATE_ARN),
+                )]),
+            )]),
+        ),
+    ]);
+    let custom_domains = if target.is_kubernetes() {
+        CfExpression::object([("default", domain)])
+    } else {
+        let ids = public_http_resource_ids(stack);
+        let mut selected =
+            CfExpression::object([(ids.last().expect("public resource").clone(), domain.clone())]);
+        for (index, id) in ids.iter().enumerate().rev().skip(1) {
+            selected = CfExpression::if_(
+                format!("CustomDomainResource{index}"),
+                CfExpression::object([(id.clone(), domain.clone())]),
+                selected,
+            );
+        }
+        selected
+    };
     CfExpression::if_(
         CONDITION_HAS_DOMAIN_NAME,
-        CfExpression::object([(
-            "customDomains",
-            CfExpression::object([(
-                "default",
-                CfExpression::object([
-                    ("domain", CfExpression::ref_(PARAM_DOMAIN_NAME)),
-                    (
-                        "certificate",
-                        CfExpression::object([(
-                            "aws",
-                            CfExpression::object([(
-                                "certificateArn",
-                                CfExpression::ref_(PARAM_CERTIFICATE_ARN),
-                            )]),
-                        )]),
-                    ),
-                ]),
-            )]),
-        )]),
+        CfExpression::object([("customDomains", custom_domains)]),
         CfExpression::no_value(),
     )
 }
@@ -2861,6 +2958,7 @@ impl NetworkParameterDefaults {
 
 #[derive(Debug)]
 struct DomainParameterDefaults {
+    resource_id: Option<String>,
     domain_name: Option<String>,
     certificate_arn: Option<String>,
 }
@@ -2873,11 +2971,12 @@ impl DomainParameterDefaults {
         let Some(custom_domains) = &domains.custom_domains else {
             return Self::empty();
         };
-        let Some((_resource_id, domain)) = custom_domains.iter().next() else {
+        let Some((resource_id, domain)) = custom_domains.iter().min_by_key(|(id, _)| *id) else {
             return Self::empty();
         };
 
         Self {
+            resource_id: Some(resource_id.clone()),
             domain_name: Some(domain.domain.clone()),
             certificate_arn: domain
                 .certificate
@@ -2889,6 +2988,7 @@ impl DomainParameterDefaults {
 
     fn empty() -> Self {
         Self {
+            resource_id: None,
             domain_name: None,
             certificate_arn: None,
         }

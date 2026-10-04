@@ -160,7 +160,7 @@ fn trust_assume_role_policy(services: &[&str], compute_role_arns: Vec<Expression
         (
             "Condition",
             expr::object([(
-                "StringEquals",
+                "ArnEquals",
                 expr::object([("aws:PrincipalArn", Expression::Array(compute_role_arns))]),
             )]),
         ),
