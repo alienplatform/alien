@@ -1883,11 +1883,13 @@ async fn deploy_task_with_environment(
         "Deployment loop finished"
     );
 
-    // Handle runner outcome
-    match loop_result.outcome {
+    // Handle runner outcome. `handed_off` means this run finished setup and the
+    // manager now provisions the deployment, so it is not running yet.
+    let handed_off = match loop_result.outcome {
         LoopOutcome::Success => {
             steps.complete(2, Some("Resources ready".to_string()));
             steps.complete(3, Some("Running".to_string()));
+            false
         }
         LoopOutcome::Failure => {
             steps.fail(2, Some(format!("{:?}", loop_result.final_status)));
@@ -1906,8 +1908,11 @@ async fn deploy_task_with_environment(
             );
         }
         LoopOutcome::Neutral if loop_result.stop_reason == LoopStopReason::Handoff => {
-            steps.complete(2, Some("Resources ready".to_string()));
-            steps.complete(3, Some("Running".to_string()));
+            // Provisioning can still block after the handoff (for example on a
+            // deployer secret that is not written yet), so do not report running.
+            steps.complete(2, Some("Handed off to the manager".to_string()));
+            steps.skip(3, Some("The manager provisions the deployment".to_string()));
+            true
         }
         LoopOutcome::Neutral => {
             steps.fail(2, Some(format!("{:?}", loop_result.final_status)));
@@ -1918,8 +1923,39 @@ async fn deploy_task_with_environment(
                 ),
             }));
         }
-    }
+    };
     drop(steps);
+
+    if handed_off {
+        // Setup only gets the deployment to the handoff. Report what the manager
+        // makes of it: running, failed, or blocked on the deployer.
+        println!(
+            "{}",
+            dim_label("Setup complete. Waiting for the manager to provision the deployment...")
+        );
+        let deployment_id = tracked_deployment.deployment_id.clone();
+        wait_for_handed_off_deployment(
+            || observe_deployment(&manager_client, &deployment_id),
+            HANDOFF_POLL_INTERVAL,
+            HANDOFF_TIMEOUT,
+            |observed| {
+                if matches!(
+                    observed.status,
+                    DeploymentStatus::WaitingForSecrets | DeploymentStatus::WaitingForMachines
+                ) {
+                    println!(
+                        "{} {}",
+                        dim_label("Blocked:"),
+                        observed
+                            .error_message
+                            .as_deref()
+                            .unwrap_or(describe_waiting_status(&observed.status))
+                    );
+                }
+            },
+        )
+        .await?;
+    }
 
     println!("{}", success_line("Deployment is running."));
     println!(
@@ -1938,6 +1974,124 @@ async fn deploy_task_with_environment(
     );
 
     Ok(())
+}
+
+/// How often `alien deploy` polls the deployment after handing it to the manager.
+const HANDOFF_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long `alien deploy` waits for the manager after the handoff. A deployment
+/// waiting for a deployer secret stays blocked until someone writes it.
+const HANDOFF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// A deployment's status and headline error, as observed after the handoff.
+#[derive(Debug, Clone)]
+struct ObservedDeployment {
+    status: DeploymentStatus,
+    error_message: Option<String>,
+}
+
+async fn observe_deployment(
+    manager_client: &alien_manager_api::Client,
+    deployment_id: &str,
+) -> Result<ObservedDeployment> {
+    let deployment = manager_client
+        .get_deployment()
+        .id(deployment_id)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to read deployment '{deployment_id}' after setup"),
+        })?
+        .into_inner();
+    let status = serde_json::from_value(serde_json::Value::String(deployment.status.clone()))
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Unknown deployment status: {}", deployment.status),
+        })?;
+    let error_message = deployment
+        .error
+        .map(serde_json::from_value::<AlienError>)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to decode the error of deployment '{deployment_id}'"),
+        })?
+        .map(|error| error.message);
+    Ok(ObservedDeployment {
+        status,
+        error_message,
+    })
+}
+
+/// Wait until the manager reports a handed-off deployment running.
+///
+/// A failed or deleted deployment, or the timeout, is an error, so `alien deploy`
+/// never exits successfully for a deployment that is not running. `on_change`
+/// sees each newly observed status and error, for example to say what a blocked
+/// deployment needs from the deployer.
+async fn wait_for_handed_off_deployment<F, Fut>(
+    mut observe: F,
+    interval: std::time::Duration,
+    timeout: std::time::Duration,
+    mut on_change: impl FnMut(&ObservedDeployment),
+) -> Result<()>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<ObservedDeployment>>,
+{
+    let started = tokio::time::Instant::now();
+    let mut last: Option<(DeploymentStatus, Option<String>)> = None;
+    loop {
+        let observed = observe().await?;
+        let key = (observed.status, observed.error_message.clone());
+        if last.as_ref() != Some(&key) {
+            on_change(&observed);
+            last = Some(key);
+        }
+
+        if observed.status == DeploymentStatus::Running {
+            return Ok(());
+        }
+        if observed.status.is_failed()
+            || matches!(
+                observed.status,
+                DeploymentStatus::DeletePending
+                    | DeploymentStatus::Deleting
+                    | DeploymentStatus::Deleted
+                    | DeploymentStatus::TeardownRequired
+                    | DeploymentStatus::Error
+            )
+        {
+            let phase = describe_failed_status(&observed.status);
+            return Err(AlienError::new(ErrorData::DeploymentFailed {
+                message: match observed.error_message {
+                    Some(cause) => format!("{phase} failed ({:?}): {cause}", observed.status),
+                    None => format!("{phase} failed ({:?})", observed.status),
+                },
+            }));
+        }
+        if started.elapsed() >= timeout {
+            let state = match observed.error_message {
+                Some(cause) => format!("{:?}: {cause}", observed.status),
+                None => format!("{:?}", observed.status),
+            };
+            return Err(AlienError::new(ErrorData::DeploymentFailed {
+                message: format!(
+                    "the deployment is still not running after {}s ({state})",
+                    timeout.as_secs()
+                ),
+            }));
+        }
+        tokio::time::sleep(interval).await;
+    }
+}
+
+fn describe_waiting_status(status: &DeploymentStatus) -> &'static str {
+    match status {
+        DeploymentStatus::WaitingForSecrets => "waiting for deployer secrets",
+        DeploymentStatus::WaitingForMachines => "waiting for machines to join",
+        _ => "waiting",
+    }
 }
 
 /// Validate a deployment file without constructing an authenticated execution context.
@@ -2515,5 +2669,113 @@ max = 1
                 None => assert!(!request_lower.contains("x-alien-workspace:")),
             }
         }
+    }
+
+    fn scripted_observer(
+        script: Vec<(DeploymentStatus, Option<&'static str>)>,
+    ) -> impl FnMut() -> std::future::Ready<Result<ObservedDeployment>> {
+        let mut script = script.into_iter();
+        let mut last = None;
+        move || {
+            // Once the script runs out, the deployment stays in its last status.
+            let (status, error) = script.next().or(last).expect("script is not empty");
+            last = Some((status, error));
+            std::future::ready(Ok(ObservedDeployment {
+                status,
+                error_message: error.map(str::to_string),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn handoff_wait_reports_a_blocked_deployment_once_and_succeeds_when_running() {
+        let mut seen = Vec::new();
+        wait_for_handed_off_deployment(
+            scripted_observer(vec![
+                (DeploymentStatus::Provisioning, None),
+                (
+                    DeploymentStatus::WaitingForSecrets,
+                    Some("missing: API key"),
+                ),
+                (
+                    DeploymentStatus::WaitingForSecrets,
+                    Some("missing: API key"),
+                ),
+                (DeploymentStatus::Provisioning, None),
+                (DeploymentStatus::Running, None),
+            ]),
+            Duration::from_millis(1),
+            Duration::from_secs(5),
+            |observed| seen.push((observed.status, observed.error_message.clone())),
+        )
+        .await
+        .expect("a deployment that reaches running succeeds");
+
+        assert_eq!(
+            seen,
+            vec![
+                (DeploymentStatus::Provisioning, None),
+                (
+                    DeploymentStatus::WaitingForSecrets,
+                    Some("missing: API key".to_string())
+                ),
+                (DeploymentStatus::Provisioning, None),
+                (DeploymentStatus::Running, None),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn handoff_wait_fails_with_the_deployment_error_after_the_handoff() {
+        let error = wait_for_handed_off_deployment(
+            scripted_observer(vec![
+                (DeploymentStatus::Provisioning, None),
+                (
+                    DeploymentStatus::InitialSetupFailed,
+                    Some("role trust policy rejected the manager"),
+                ),
+            ]),
+            Duration::from_millis(1),
+            Duration::from_secs(5),
+            |_| {},
+        )
+        .await
+        .expect_err("a failed deployment must not exit successfully");
+
+        assert!(
+            error
+                .message
+                .contains("role trust policy rejected the manager"),
+            "unexpected error: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains("InitialSetupFailed"),
+            "unexpected error: {}",
+            error.message
+        );
+    }
+
+    #[tokio::test]
+    async fn handoff_wait_times_out_naming_the_blocked_status() {
+        let error = wait_for_handed_off_deployment(
+            scripted_observer(vec![(
+                DeploymentStatus::WaitingForSecrets,
+                Some("missing: API key"),
+            )]),
+            Duration::from_millis(1),
+            Duration::from_millis(20),
+            |_| {},
+        )
+        .await
+        .expect_err("a deployment still blocked at the timeout is an error");
+
+        assert!(
+            error
+                .message
+                .contains("WaitingForSecrets: missing: API key"),
+            "unexpected error: {}",
+            error.message
+        );
     }
 }
