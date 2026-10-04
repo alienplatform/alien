@@ -570,7 +570,8 @@ mod tests {
         .unwrap();
         let args = UpArgs::parse_from(["democtl"]);
         let settings =
-            load_stack_settings(&args, Platform::Machines, Platform::Machines, Some(&config)).unwrap();
+            load_stack_settings(&args, Platform::Machines, Platform::Machines, Some(&config))
+                .unwrap();
         let binding = settings.external_bindings.unwrap();
         let storage = binding.get_storage("archive").unwrap().unwrap();
         let alien_core::bindings::StorageBinding::S3(storage) = storage else {
@@ -1634,6 +1635,48 @@ region = "old"
         assert!(error.message.contains("Missing deployer input"));
     }
 
+    #[tokio::test]
+    async fn config_errors_do_not_expose_secret_values() {
+        for text in [
+            "[secretInputs]\npassword = \"canary-secret\" trailing\n",
+            "[secretInputs]\npassword = [\"canary-secret\"]\n",
+        ] {
+            let mut file = tempfile::NamedTempFile::new().expect("create config");
+            file.write_all(text.as_bytes()).expect("write config");
+            let args = UpArgs::parse_from([
+                "democtl",
+                "--setup-update",
+                "--deployment-id",
+                "dep_demo",
+                "--update-operation-id",
+                "op_demo",
+                "--release-id",
+                "rel_demo",
+                "--config",
+                file.path().to_str().expect("UTF-8 path"),
+                "--validate-only",
+            ]);
+
+            let error = up_command(args, None).await.expect_err("invalid config");
+            assert_eq!(error.code, "CONFIGURATION_ERROR");
+            assert!(!error.retryable);
+            assert!(error.source.is_none(), "raw parser cause must be discarded");
+            assert!(error.message.contains(file.path().to_str().unwrap()));
+            assert!(error.message.contains("line 2, column"));
+            assert!(error
+                .message
+                .contains("secretInputs values must be strings"));
+            for rendered in [
+                error.to_string(),
+                format!("{error:?}"),
+                serde_json::to_string(&error).expect("serialize error"),
+            ] {
+                assert!(!rendered.contains("canary-secret"));
+                assert!(!rendered.contains("password ="));
+            }
+        }
+    }
+
     #[test]
     fn validate_only_needs_no_token_and_rejects_cross_provider_network() {
         let config: DeployConfigFile = toml::from_str(
@@ -2678,16 +2721,26 @@ fn load_deploy_config(args: &UpArgs) -> Result<Option<DeployConfigFile>> {
             ),
         },
     )?;
-    let config =
-        toml::from_str(&text)
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: format!(
-                    "Failed to parse deployment config '{}' (resolved as '{}')",
-                    path.display(),
-                    resolved_path.display()
-                ),
-            })?;
+    let config = toml::from_str(&text).map_err(|error: toml::de::Error| {
+        let location = error
+            .span()
+            .and_then(|span| text.get(..span.start))
+            .map(|prefix| {
+                let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
+                let column = prefix.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+                format!(" at line {line}, column {column}")
+            })
+            .unwrap_or_default();
+        // Parser errors retain source excerpts and can quote secret values even in
+        // their message. Discard the cause at this boundary, including for Debug/JSON.
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "Invalid deployment config '{}' (resolved as '{}'){location}. Check TOML syntax (quotes, delimiters, and table headers) and field types; secretInputs values must be strings. Source details are omitted to protect secrets.",
+                path.display(),
+                resolved_path.display()
+            ),
+        })
+    })?;
     Ok(Some(config))
 }
 
