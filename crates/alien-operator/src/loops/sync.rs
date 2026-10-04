@@ -250,6 +250,11 @@ async fn sync_with_manager(
         capabilities: report_operator_capabilities(state, operations_command_address_v1),
         operator_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         operations_report,
+        operations_config: state
+            .config
+            .operations
+            .as_ref()
+            .map(alien_core::OperationsConfig::without_settings),
     };
     let mut sync_input = SyncInput::builder(sync_request);
     if let Some(operator_image) = operator_image.cloned() {

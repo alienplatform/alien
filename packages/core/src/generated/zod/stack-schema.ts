@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { OperationsConfigSchema } from "./operations-config-schema.js";
 import { PermissionsConfigSchema } from "./permissions-config-schema.js";
 import { PlatformSchema } from "./platform-schema.js";
 import { ResourceEntrySchema } from "./resource-entry-schema.js";
@@ -19,7 +20,9 @@ export const StackSchema = z.object({
 get "inputs"(){
                 return z.array(StackInputDefinitionSchema.describe("Stack input definition serialized into a release stack.")).describe("Input definitions required before setup or deployment can proceed.").optional()
               },
-"operationsEnabled": z.optional(z.boolean().describe("Whether deployments of this stack run operations. Deployments without an\nOperator get an operations worker and its permission profile only when set.")),
+get "operations"(){
+                return z.union([OperationsConfigSchema, z.null()]).optional()
+              },
 get "permissions"(){
                 return PermissionsConfigSchema.describe("Combined permissions configuration that contains both profiles and management").optional()
               },

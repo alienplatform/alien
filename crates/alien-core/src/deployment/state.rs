@@ -340,7 +340,7 @@ mod tests {
             inputs: vec![],
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             permissions: crate::PermissionsConfig::default(),
             supported_platforms: None,
         }

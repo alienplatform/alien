@@ -848,7 +848,7 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "s".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -861,7 +861,7 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "s".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -904,7 +904,7 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: permissions_config.clone(),
@@ -915,7 +915,7 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: permissions_config,
@@ -952,7 +952,7 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -966,7 +966,7 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -999,7 +999,7 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -1013,7 +1013,7 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {

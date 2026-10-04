@@ -1590,7 +1590,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -1680,7 +1680,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -1730,7 +1730,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -1789,7 +1789,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -1871,7 +1871,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -1941,7 +1941,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -2023,7 +2023,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -2082,7 +2082,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -2142,7 +2142,7 @@ mod tests {
             let stack = Stack {
                 dynamic_container_repositories: Vec::new(),
                 dynamic_container_image_resources: Vec::new(),
-                operations_enabled: false,
+                operations: None,
                 id: "test-stack".to_string(),
                 resources,
                 permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -2262,7 +2262,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -2385,7 +2385,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -2465,7 +2465,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -2563,7 +2563,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -2657,7 +2657,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),

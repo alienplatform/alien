@@ -164,6 +164,13 @@ pub struct Args {
     #[arg(long, env = "STACK_SETTINGS")]
     pub stack_settings: Option<String>,
 
+    /// Operations this Operator runs when it is installed on its own (no
+    /// release declares them): the same JSON a stack declares. Setting values
+    /// are literals or `{ "env": "NAME" }`, read from this process's
+    /// environment, and never leave it.
+    #[arg(long, env = "OPERATOR_OPERATIONS")]
+    pub operations: Option<String>,
+
     #[arg(long, env = "STACK_SETTINGS_FILE")]
     pub stack_settings_file: Option<PathBuf>,
 
@@ -268,14 +275,20 @@ pub type OperationsExecLoopHook = fn() -> Option<std::sync::Arc<dyn OperationsEx
 /// rather than independently re-deriving it from `DATA_DIR`/a hardcoded
 /// default and risking a mismatch with `--data-dir`. Defaults to `None`, so
 /// the OSS operator reports nothing.
-pub type OperationsSyncHandlerHook =
-    fn(data_dir: &str) -> Option<std::sync::Arc<dyn OperationsSyncHandler>>;
+///
+/// Also takes the operations this Operator declares through
+/// `OPERATOR_OPERATIONS`, so the handler can resolve their setting values
+/// from the local environment.
+pub type OperationsSyncHandlerHook = fn(
+    data_dir: &str,
+    operations: Option<&alien_core::OperationsConfig>,
+) -> Option<std::sync::Arc<dyn OperationsSyncHandler>>;
 
 const NOOP_INIT: InitHook = || {};
 const NOOP_DEBUG_LOOP_HOOK: DebugLoopHook = || None;
 const NOOP_ACCESS_REQUEST_LOOP_HOOK: AccessRequestSyncLoopHook = || None;
 const NOOP_OPERATIONS_EXEC_LOOP_HOOK: OperationsExecLoopHook = || None;
-const NOOP_OPERATIONS_SYNC_HANDLER_HOOK: OperationsSyncHandlerHook = |_data_dir| None;
+const NOOP_OPERATIONS_SYNC_HANDLER_HOOK: OperationsSyncHandlerHook = |_data_dir, _operations| None;
 
 #[derive(Debug, PartialEq, Eq)]
 enum StartupDeploymentId {
@@ -669,6 +682,7 @@ async fn run_operator_cli(
     if let Some(bindings) = external_bindings {
         stack_settings.external_bindings = Some(bindings);
     }
+    let operations = parse_operator_operations(args.operations)?;
 
     let operator_config = OperatorConfig::builder()
         .platform(args.platform)
@@ -706,6 +720,7 @@ async fn run_operator_cli(
         .maybe_collector_token(collector_token)
         .maybe_public_endpoints(public_endpoints)
         .stack_settings(stack_settings)
+        .maybe_operations(operations)
         .local_debug_enabled(args.enable_local_debug)
         .tunnel_enabled(args.tunnel_enabled)
         .maybe_self_update_deployment(args.self_update_deployment)
@@ -739,7 +754,10 @@ async fn run_operator_cli(
             None
         };
 
-    let operations_sync_handler = operations_sync_handler_hook(&operator_config.data_dir);
+    let operations_sync_handler = operations_sync_handler_hook(
+        &operator_config.data_dir,
+        operator_config.operations.as_ref(),
+    );
     let runtime_options = OperatorRuntimeOptions {
         readiness_server_port: crate::readiness_server_port_from_env()?,
         identity_initialized_config_map: crate::identity_initialized_config_map_from_env()?,
@@ -1151,6 +1169,40 @@ fn parse_platform(s: &str) -> std::result::Result<Platform, String> {
     }
 }
 
+/// Parse `OPERATOR_OPERATIONS`. An Operator installed on its own has no stack,
+/// so setting values must be literals or local environment variables.
+fn parse_operator_operations(json: Option<String>) -> Result<Option<alien_core::OperationsConfig>> {
+    let Some(config) = parse_json_opt::<alien_core::OperationsConfig>(json, "operations")? else {
+        return Ok(None);
+    };
+    let plugins = config
+        .plugins
+        .iter()
+        .map(|(name, plugin)| (name.as_str(), plugin))
+        .chain(
+            config
+                .custom
+                .iter()
+                .map(|plugin| (plugin.name.as_str(), &plugin.config)),
+        );
+    for (plugin, plugin_config) in plugins {
+        for (key, value) in &plugin_config.settings {
+            if !matches!(
+                value,
+                alien_core::OperationSettingValue::Literal(_)
+                    | alien_core::OperationSettingValue::Env { .. }
+            ) {
+                return Err(AlienError::new(ErrorData::ConfigurationError {
+                    message: format!(
+                        "Operations setting '{plugin}.{key}' must be a string or {{ \"env\": \"NAME\" }}: an Operator without a release has no stack inputs or resources"
+                    ),
+                }));
+            }
+        }
+    }
+    Ok((!config.is_empty()).then_some(config))
+}
+
 fn parse_json_opt<T: serde::de::DeserializeOwned>(
     json_str: Option<String>,
     label: &str,
@@ -1388,7 +1440,7 @@ async fn load_collector_token(file: Option<&std::path::Path>) -> Result<Option<S
 mod tests {
     use super::{
         has_deployment_token_prefix, is_secret_file_mode_allowed, load_operator_package_config,
-        observe_only_initial_state, parse_operator_image_report,
+        observe_only_initial_state, parse_operator_image_report, parse_operator_operations,
         persist_initialized_manager_identity, run_operator_cli, select_startup_deployment_id, Args,
         InitialDesiredReleaseArg, OperatorCliArgs, StartupDeploymentId,
         NOOP_ACCESS_REQUEST_LOOP_HOOK, NOOP_DEBUG_LOOP_HOOK, NOOP_INIT,
@@ -1543,6 +1595,32 @@ mod tests {
             InitialDesiredReleaseArg::Active
         );
         assert_eq!(args.operator_permission.as_deref(), Some("observe"));
+    }
+
+    #[test]
+    fn operator_operations_accept_only_local_setting_values() {
+        let parsed = parse_operator_operations(Some(
+            r#"{"plugins":{"db":{"settings":{"url":"https://db:8443","password":{"env":"DB_PASSWORD"}},"approval":{"*":"auto"}}}}"#
+                .to_string(),
+        ))
+        .expect("literal and env settings are accepted")
+        .expect("a declared plugin yields a config");
+        assert_eq!(parsed.plugins["db"].settings.len(), 2);
+        let reported = parsed.without_settings();
+        assert!(reported.plugins["db"].settings.is_empty());
+        assert_eq!(
+            reported.plugins["db"].approval,
+            parsed.plugins["db"].approval
+        );
+
+        let error = parse_operator_operations(Some(
+            r#"{"plugins":{"db":{"settings":{"url":{"input":"dbUrl"}}}}}"#.to_string(),
+        ))
+        .expect_err("stack inputs need a release");
+        assert_eq!(error.code, "CONFIGURATION_ERROR");
+        assert!(parse_operator_operations(Some("{}".to_string()))
+            .expect("an empty declaration parses")
+            .is_none());
     }
 
     #[test]

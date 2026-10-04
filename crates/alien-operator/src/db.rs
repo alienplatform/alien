@@ -2309,6 +2309,7 @@ mod tests {
                 plugin: "s3".to_string(),
                 plugin_version: "1.0.0".to_string(),
                 url: "https://storage.example.com/bundle.zip?sig=abc".to_string(),
+                env: Default::default(),
             }],
         };
 

@@ -94,11 +94,11 @@ pub struct Stack {
     #[builder(field)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dynamic_container_image_resources: Vec<String>,
-    /// Whether deployments of this stack run operations. Deployments without an
-    /// Operator get an operations worker and its permission profile only when set.
+    /// Operations this stack's deployments run. A deployment without an Operator
+    /// gets an operations worker and its permission profile only when set.
     #[builder(field)]
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub operations_enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operations: Option<crate::OperationsConfig>,
 }
 
 impl Stack {
@@ -331,9 +331,9 @@ impl StackBuilder {
         self
     }
 
-    /// Lets deployments of this stack run operations.
-    pub fn enable_operations(mut self) -> Self {
-        self.operations_enabled = true;
+    /// Declares the operations this stack's deployments run.
+    pub fn operations(mut self, operations: crate::OperationsConfig) -> Self {
+        self.operations = Some(operations);
         self
     }
 

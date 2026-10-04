@@ -917,7 +917,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1321,7 +1321,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1388,7 +1388,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1491,7 +1491,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1598,7 +1598,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1658,7 +1658,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1721,7 +1721,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1792,7 +1792,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -1848,7 +1848,7 @@ mod tests {
         let stack_gcp = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack-gcp".to_string(),
             resources: {
                 let mut resources = IndexMap::new();
@@ -1932,7 +1932,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -2001,7 +2001,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -2071,7 +2071,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {

@@ -3247,6 +3247,16 @@ fn operator_deployment_doc(
     if options.format == OperatorOutputFormat::HelmTemplate {
         yaml.push_str("            - name: SYNC_TOKEN_REVISION\n");
         yaml.push_str("              value: {{ default 0 .Values.remoteOperator.syncTokenRevision | quote }}\n");
+        // An Operator installed on its own declares its operations here.
+        // Settings written as `{ "env": "NAME" }` read `operationsEnv`
+        // entries, so secrets can come from Kubernetes Secrets.
+        yaml.push_str("            {{- with .Values.remoteOperator.operations }}\n");
+        yaml.push_str("            - name: OPERATOR_OPERATIONS\n");
+        yaml.push_str("              value: {{ toJson . | quote }}\n");
+        yaml.push_str("            {{- end }}\n");
+        yaml.push_str("            {{- with .Values.remoteOperator.operationsEnv }}\n");
+        yaml.push_str("            {{- toYaml . | nindent 12 }}\n");
+        yaml.push_str("            {{- end }}\n");
     }
     append_env_value(
         &mut yaml,
@@ -8239,6 +8249,102 @@ mod tests {
                 "clear the previous strategy when upgrading an existing Deployment"
             );
         }
+    }
+
+    #[test]
+    fn operator_helm_template_passes_operations_and_their_secret_env() {
+        let manifest = generate_operator_manifest(OperatorManifestOptions {
+            custom_operation_permissions: &[],
+            manager_url: "https://manager.example.com",
+            group_token: "ax_dg_test",
+            encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
+            image: "registry.example.com/operator:test",
+            log_collector: None,
+            stack_settings: None,
+            project_name: "my-saas",
+            environment_name: None,
+            install_namespace: None,
+            label_domain: None,
+            scope: OperatorScope::Namespace,
+            label_selector: None,
+            permission: OperatorPermission::Diagnostics,
+            format: OperatorOutputFormat::HelmTemplate,
+        })
+        .expect("helm template should render");
+        let files = indexmap::IndexMap::from([
+            (
+                "Chart.yaml".to_string(),
+                "apiVersion: v2\nname: operator-test\nversion: 0.1.0\n".to_string(),
+            ),
+            (
+                "values.yaml".to_string(),
+                "remoteOperator: {}\n".to_string(),
+            ),
+            ("templates/operator.yaml".to_string(), manifest),
+        ]);
+        let env_of = |values: Option<&str>| {
+            let rendered = crate::test_utils::helm_template(&files, values);
+            rendered.assert_ok("operations values");
+            let docs = parse_manifest_docs(&rendered.stdout);
+            let deployment = docs_by_kind(&docs, "Deployment")
+                .into_iter()
+                .next()
+                .expect("rendered Deployment");
+            deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+                .as_sequence()
+                .expect("operator env")
+                .clone()
+        };
+
+        let without = env_of(None);
+        assert!(
+            without
+                .iter()
+                .all(|entry| yaml_str(entry, "name") != Some("OPERATOR_OPERATIONS")),
+            "no operations are declared unless the values set them"
+        );
+
+        let with = env_of(Some(
+            r#"remoteOperator:
+  operations:
+    plugins:
+      clickhouse:
+        settings:
+          url: https://clickhouse:8443
+          password: { env: CLICKHOUSE_PASSWORD }
+        approval: { "*": auto }
+  operationsEnv:
+    - name: CLICKHOUSE_PASSWORD
+      valueFrom:
+        secretKeyRef: { name: clickhouse, key: password }
+"#,
+        ));
+        let operations = with
+            .iter()
+            .find(|entry| yaml_str(entry, "name") == Some("OPERATOR_OPERATIONS"))
+            .and_then(|entry| yaml_str(entry, "value"))
+            .expect("OPERATOR_OPERATIONS is set");
+        let parsed: alien_core::OperationsConfig =
+            serde_json::from_str(operations).expect("the value is the operations JSON");
+        let clickhouse = &parsed.plugins["clickhouse"];
+        assert_eq!(
+            clickhouse.settings["password"],
+            alien_core::OperationSettingValue::Env {
+                env: "CLICKHOUSE_PASSWORD".to_string()
+            }
+        );
+        assert_eq!(
+            clickhouse.approval["*"].decision(),
+            alien_core::OperationApprovalDecision::Auto
+        );
+        let secret = with
+            .iter()
+            .find(|entry| yaml_str(entry, "name") == Some("CLICKHOUSE_PASSWORD"))
+            .expect("operationsEnv entries are added to the Operator");
+        assert_eq!(
+            secret["valueFrom"]["secretKeyRef"]["name"].as_str(),
+            Some("clickhouse")
+        );
     }
 
     #[test]

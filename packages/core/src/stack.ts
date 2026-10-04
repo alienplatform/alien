@@ -8,6 +8,7 @@ import {
   StackSchema,
 } from "./generated/index.js"
 import { getStackInputDefinitions, type StackInputCollection } from "./input.js"
+import { type OperationsInput, toOperationsConfig } from "./operations.js"
 import type { Resource } from "./resource.js"
 
 function isRepositoryName(repository: string): boolean {
@@ -131,12 +132,13 @@ export class Stack {
   }
 
   /**
-   * Let deployments of this stack run operations. Deployments without an
-   * Operator then get an operations worker and its permission profile.
+   * Declare the operations this stack's deployments run: built-in plugins by
+   * name with their settings and `approval` rules, and published custom
+   * plugins under `plugins`. Changing them takes a new release.
    * @returns The Stack builder instance.
    */
-  public enableOperations(): this {
-    this._config.operationsEnabled = true
+  public operations(operations: OperationsInput): this {
+    this._config.operations = toOperationsConfig(operations)
     return this
   }
 

@@ -187,6 +187,10 @@ struct AgentSyncWireRequest {
     /// Absent for older Operators. This report has no secret values.
     #[serde(default)]
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
+    /// Operations an Operator installed without a release declares, without
+    /// setting values. Opaque to OSS beyond forwarding it.
+    #[serde(default)]
+    operations_config: Option<alien_core::OperationsConfig>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1474,8 +1478,13 @@ async fn reconcile_agent_report(
     operator_image: Option<OperatorImageReport>,
     application: Option<ObservedApplicationReport>,
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
+    operations_config: Option<alien_core::OperationsConfig>,
 ) -> Result<crate::traits::ReconcileOutcome, AlienError> {
-    if operator_image.is_none() && application.is_none() && dynamic_containers.is_none() {
+    if operator_image.is_none()
+        && application.is_none()
+        && dynamic_containers.is_none()
+        && operations_config.is_none()
+    {
         return store.reconcile(subject, data).await;
     }
     let mut request = ReconcileInput::builder(data);
@@ -1487,6 +1496,9 @@ async fn reconcile_agent_report(
     }
     if let Some(reports) = dynamic_containers {
         request = request.dynamic_containers(reports);
+    }
+    if let Some(config) = operations_config {
+        request = request.operations_config(config);
     }
     store.reconcile_request(subject, request.build()).await
 }
@@ -1514,6 +1526,7 @@ async fn agent_sync(
         operator_image,
         application,
         dynamic_containers,
+        operations_config,
     }): Json<AgentSyncWireRequest>,
 ) -> Response {
     let subject = match auth::require_auth(&state, &headers).await {
@@ -1620,6 +1633,7 @@ async fn agent_sync(
                         operator_image.clone(),
                         application.clone(),
                         dynamic_containers.clone(),
+                        operations_config.clone(),
                     )
                     .await;
 
@@ -1838,6 +1852,7 @@ async fn agent_sync(
                         || req.operator_version.is_some()
                         || operator_image.is_some()
                         || application.is_some()
+                        || operations_config.is_some()
                         || req.operations_report.is_some())
                 {
                     let reconcile_data = ReconcileData {
@@ -1860,6 +1875,7 @@ async fn agent_sync(
                         operator_image.clone(),
                         application.clone(),
                         dynamic_containers.clone(),
+                        operations_config.clone(),
                     )
                     .await;
 

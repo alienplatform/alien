@@ -540,7 +540,7 @@ mod setup_update_authorization_tests {
         Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "stack".to_string(),
             resources: IndexMap::new(),
             inputs: vec![],

@@ -6,6 +6,9 @@ mod stack_commands;
 mod stack_input;
 pub use stack_input::*;
 
+mod operations_config;
+pub use operations_config::*;
+
 pub mod permissions;
 pub use permissions::*;
 

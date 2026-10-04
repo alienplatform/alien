@@ -351,6 +351,7 @@ pub struct ReconcileInput {
     operator_image: Option<OperatorImageReport>,
     application: Option<ObservedApplicationReport>,
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
+    operations_config: Option<alien_core::OperationsConfig>,
 }
 
 impl ReconcileInput {
@@ -360,7 +361,14 @@ impl ReconcileInput {
             operator_image: None,
             application: None,
             dynamic_containers: None,
+            operations_config: None,
         }
+    }
+
+    /// Operations an Operator installed without a release declares, without
+    /// setting values. Opaque to OSS beyond forwarding it.
+    pub fn operations_config(&self) -> Option<&alien_core::OperationsConfig> {
+        self.operations_config.as_ref()
     }
 
     /// Application release the Operator observed in its environment, opaque
@@ -385,9 +393,15 @@ pub struct ReconcileInputBuilder {
     operator_image: Option<OperatorImageReport>,
     application: Option<ObservedApplicationReport>,
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
+    operations_config: Option<alien_core::OperationsConfig>,
 }
 
 impl ReconcileInputBuilder {
+    pub fn operations_config(mut self, config: alien_core::OperationsConfig) -> Self {
+        self.operations_config = Some(config);
+        self
+    }
+
     pub fn operator_image(mut self, operator_image: OperatorImageReport) -> Self {
         self.operator_image = Some(operator_image);
         self
@@ -412,6 +426,7 @@ impl ReconcileInputBuilder {
             operator_image: self.operator_image,
             application: self.application,
             dynamic_containers: self.dynamic_containers,
+            operations_config: self.operations_config,
         }
     }
 }

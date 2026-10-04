@@ -337,7 +337,7 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
@@ -348,7 +348,7 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
@@ -406,7 +406,7 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
@@ -417,7 +417,7 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
@@ -471,7 +471,7 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
@@ -482,7 +482,7 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
@@ -531,7 +531,7 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
@@ -542,7 +542,7 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
@@ -581,7 +581,7 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
@@ -592,7 +592,7 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
@@ -624,7 +624,7 @@ mod tests {
         Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            operations_enabled: false,
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig::new(),

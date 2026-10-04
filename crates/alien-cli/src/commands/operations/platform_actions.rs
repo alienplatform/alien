@@ -833,9 +833,13 @@ pub async fn list_task(
     auth: &crate::auth::AuthHttp,
     workspace: &str,
     project: &str,
+    deployment_id: Option<&str>,
     json: bool,
 ) -> Result<()> {
-    let url = api_url(&auth.base_url, "/v1/operations/plugins", workspace, project)?;
+    let mut url = api_url(&auth.base_url, "/v1/operations/plugins", workspace, project)?;
+    if let Some(deployment_id) = deployment_id {
+        url.query_pairs_mut().append_pair("deployment", deployment_id);
+    }
     let response = auth
         .reqwest_client()
         .request(Method::GET, url.clone())
