@@ -150,6 +150,7 @@ struct ResolvedDeployArgs {
     platform_enum: Platform,
     network_settings: Option<NetworkSettings>,
     compute_settings: Option<ComputeSettings>,
+    domain_settings: Option<alien_core::DomainSettings>,
     input_values: HashMap<String, serde_json::Value>,
     public_subdomain: Option<String>,
 }
@@ -161,6 +162,7 @@ struct DeployConfigFile {
     platform: Option<String>,
     network: Option<DeployConfigNetwork>,
     compute: Option<ComputeSettings>,
+    domains: Option<alien_core::DomainSettings>,
     inputs: Option<HashMap<String, String>>,
     secret_inputs: Option<HashMap<String, String>>,
 }
@@ -315,6 +317,7 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
         platform_enum,
         network_settings,
         compute_settings,
+        domain_settings: config.as_ref().and_then(|config| config.domains.clone()),
         input_values,
         public_subdomain: args.public_subdomain.clone(),
     })
@@ -959,6 +962,14 @@ fn deployment_stack_settings_json(
             })?;
     }
 
+    if let Some(domains) = resolved_args.domain_settings.as_ref() {
+        settings["domains"] = serde_json::to_value(domains).into_alien_error().context(
+            ErrorData::ConfigurationError {
+                message: "Failed to serialize domain settings".to_string(),
+            },
+        )?;
+    }
+
     Ok(settings)
 }
 
@@ -1384,7 +1395,12 @@ async fn deploy_task_with_environment(
                         }),
                         updates: Some(alien_platform_api::types::NewDeploymentRequestStackSettingsUpdates::Auto),
                         network: sdk_network,
-                        domains: None,
+                        domains: resolved_args.domain_settings.clone().map(|domains| {
+                            let value = serde_json::to_value(domains).into_alien_error()
+                                .context(ErrorData::ConfigurationError { message: "Failed to serialize domain settings".to_string() })?;
+                            serde_json::from_value(value).into_alien_error()
+                                .context(ErrorData::ConfigurationError { message: "Failed to convert domain settings to SDK type".to_string() })
+                        }).transpose()?,
                         external_bindings: None,
                         kubernetes: None,
                         public_endpoints: None,
@@ -1695,6 +1711,15 @@ async fn deploy_task_with_environment(
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "compute".to_string(),
                 message: "Compute settings cannot be changed while resuming an existing deployment. Use the deployment setup flow to change compute, or retry with the deployment's current compute settings.".to_string(),
+            }));
+        }
+    }
+
+    if let Some(requested_domains) = resolved_args.domain_settings.as_ref() {
+        if stack_settings.domains.as_ref() != Some(requested_domains) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "domains".to_string(),
+                message: "Domain settings differ from the existing deployment. Update its stack settings before resuming setup.".to_string(),
             }));
         }
     }
@@ -2287,6 +2312,7 @@ machine = "m8i.2xlarge"
             platform_enum: Platform::Aws,
             network_settings: None,
             compute_settings: config.compute,
+            domain_settings: config.domains,
             input_values: HashMap::new(),
             public_subdomain: None,
         };
@@ -2303,6 +2329,41 @@ machine = "m8i.2xlarge"
                 "machines": 1,
                 "machine": "m8i.2xlarge"
             })
+        );
+    }
+
+    #[test]
+    fn deploy_config_preserves_custom_domains_in_both_creation_payloads() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("deploy.toml");
+        std::fs::write(
+            &path,
+            r#"
+name = "staging"
+platform = "aws"
+[domains.customDomains.gateway]
+domain = "api.example.com"
+[domains.customDomains.gateway.certificate.aws]
+certificateArn = "arn:aws:acm:us-west-2:123456789012:certificate/customer"
+"#,
+        )
+        .expect("write config");
+        let args = DeployArgs::try_parse_from(["deploy", "--config", path.to_str().expect("path")])
+            .expect("parse deploy arguments");
+        let resolved = resolve_deploy_args(&args).expect("resolve custom domain config");
+        let settings =
+            deployment_stack_settings_json(&resolved, &args).expect("group creation payload");
+        let expected = serde_json::json!({ "customDomains": { "gateway": {
+            "domain": "api.example.com",
+            "certificate": { "aws": { "certificateArn": "arn:aws:acm:us-west-2:123456789012:certificate/customer" }}
+        }}});
+        assert_eq!(settings["domains"], expected);
+        let sdk_settings: alien_platform_api::types::NewDeploymentRequestStackSettings =
+            serde_json::from_value(settings)
+                .expect("normal creation SDK accepts the same settings");
+        assert_eq!(
+            serde_json::to_value(sdk_settings).expect("SDK serialization")["domains"],
+            expected
         );
     }
 
@@ -2418,6 +2479,7 @@ max = 1
             platform_enum: Platform::Aws,
             network_settings: None,
             compute_settings: None,
+            domain_settings: None,
             input_values: HashMap::new(),
             public_subdomain: None,
         };

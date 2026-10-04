@@ -62,7 +62,7 @@ Parameters:
     - use-default
   DomainName:
     Type: String
-    Description: Optional custom domain for public endpoints. Leave unset to expose through the generated load balancer DNS name over HTTP.
+    Description: Optional custom domain. Leave unset to use the deployment-managed endpoint.
     Default: ''
   HostedZoneId:
     Type: String
@@ -163,7 +163,7 @@ Outputs:
           Fn::If:
           - HasDomainName
           - customDomains:
-              default:
+              public-api:
                 domain:
                   Ref: DomainName
                 certificate:
