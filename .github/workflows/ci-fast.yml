@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 
-# CI timing experiment (ALIEN-1216, not for merge): baseline
+# CI timing experiment (ALIEN-1216, not for merge): later steps reuse the nextest build
 env:
   # Fall back to local compilation when the shared sccache backend returns a
   # transient error (e.g. webdav 403) instead of failing the whole build.
@@ -299,16 +299,19 @@ jobs:
           docker pull "$image"
           docker tag "$image" docker.io/library/memcached:alien-kind-test
           kind load docker-image docker.io/library/memcached:alien-kind-test --name alien-product-lifecycle
-          cargo test -p alien-operator --locked --test dynamic_containers_kind -- \
-            --ignored --nocapture --test-threads=1
+          # Same package set and features as the nextest step, so nothing recompiles.
+          cargo nextest run --workspace --features alien-manager/openapi,alien-bindings/platform-sdk --locked \
+            --run-ignored only --no-capture \
+            --filter-expr 'binary_id(alien-operator::dynamic_containers_kind)'
 
       - name: Product Remote Operator Helm and Terraform lifecycle
         if: needs.changes.outputs.product_lifecycle == 'true'
         env:
           ALIEN_RUN_PRODUCT_LIFECYCLE_E2E: "1"
         run: |
-          cargo test -p alien-helm --locked --test product_remote_operator_lifecycle -- \
-            --ignored --nocapture --test-threads=1
+          cargo nextest run --workspace --features alien-manager/openapi,alien-bindings/platform-sdk --locked \
+            --run-ignored only --no-capture \
+            --filter-expr 'binary_id(alien-helm::product_remote_operator_lifecycle)'
 
       - name: Sandbox agent privileged tests
         # The agent runs as root and drops to a different uid before every spawn.
@@ -318,7 +321,7 @@ jobs:
         # and only the test binary re-run under sudo: a root `cargo` would leave
         # root-owned artifacts behind for the cache upload.
         run: |
-          binary=$(cargo test -p alien-sandbox-agent --test privileged --no-run --message-format=json \
+          binary=$(cargo test --workspace --features alien-manager/openapi,alien-bindings/platform-sdk --no-run --message-format=json \
             | sed -n 's/.*"executable":"\([^"]*privileged-[^"]*\)".*/\1/p' | head -1)
           test -x "$binary"
           sudo "$binary" --ignored
@@ -328,7 +331,8 @@ jobs:
         # compares the two. Named here so a Dockerfile-only change still fails
         # visibly rather than inside the workspace run.
         run: |
-          cargo test -p alien-core --lib sandbox_image
+          cargo nextest run --workspace --features alien-manager/openapi,alien-bindings/platform-sdk \
+            --filter-expr 'package(alien-core) and kind(lib) and test(sandbox_image)'
 
       - name: Sandbox agent smoke test harness
         # Drives the release smoke test against a stub docker, once per failure
