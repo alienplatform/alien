@@ -777,6 +777,13 @@ mod tests {
         }
         let state = stack_state(Platform::Aws);
         assert!(check.check(&stack, &state, &config).await.unwrap().success);
+        let worker_stack = create_stack(IndexMap::from([(
+            "worker".to_string(),
+            create_public_function_entry("worker"),
+        )]));
+        let result = check.check(&worker_stack, &state, &config).await.unwrap();
+        assert!(!result.success);
+        assert!(result.errors[0].contains("Worker and Daemon"));
         config.compute_backend = None;
         assert!(!check.check(&stack, &state, &config).await.unwrap().success);
         config.stack_settings.endpoint_access = EndpointAccess::Internet;
