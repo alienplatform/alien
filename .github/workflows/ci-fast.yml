@@ -146,6 +146,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@nightly
         with:
+          toolchain: nightly-2026-10-03
           components: rustfmt, clippy
 
       - uses: mozilla-actions/sccache-action@v0.0.11
@@ -361,6 +362,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@nightly
         with:
+          toolchain: nightly-2026-10-03
           components: rustfmt, clippy
 
       - uses: mozilla-actions/sccache-action@v0.0.11
