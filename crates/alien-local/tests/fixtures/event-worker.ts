@@ -1,6 +1,6 @@
 import { appendFileSync } from "node:fs"
-import { onCronEvent, onStorageEvent } from "../../../../packages/sdk/src/worker-runtime/registry"
 import { runWorker } from "../../../../packages/sdk/src/worker-runtime/index"
+import { onCronEvent, onStorageEvent } from "../../../../packages/sdk/src/worker-runtime/registry"
 
 const events: string[] = []
 let cron = 0
