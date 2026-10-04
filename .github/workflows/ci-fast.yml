@@ -152,9 +152,9 @@ jobs:
           install_args: node pnpm bun
           cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
-      - uses: actions/setup-node@v7
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
           cache-dependency-path: |
             pnpm-lock.yaml
@@ -383,9 +383,9 @@ jobs:
           install_args: node pnpm bun
           cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
-      - uses: actions/setup-node@v7
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
           cache-dependency-path: |
             pnpm-lock.yaml

@@ -36,10 +36,6 @@ jobs:
           install_args: node pnpm
           cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: ${{ steps.mise.outputs.node }}
-
       - name: Regenerate pnpm lockfiles
         run: |
           pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts

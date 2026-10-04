@@ -65,9 +65,9 @@ jobs:
           install_args: node pnpm
           cache_key: "{{default}}-${{ hashFiles('.npm-dev-tools/package.json') }}"
 
-      - uses: actions/setup-node@v7
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
 
       - name: Test version and dependency rewriting
@@ -173,9 +173,9 @@ jobs:
           install_args: node pnpm
           cache_key: "{{default}}-${{ hashFiles('.npm-dev-tools/package.json') }}"
 
-      - uses: actions/setup-node@v7
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
 
       - name: Install dependencies
@@ -264,9 +264,9 @@ jobs:
           install_args: node pnpm
           cache_key: "{{default}}-${{ hashFiles('.npm-dev-tools/package.json') }}"
 
-      - uses: actions/setup-node@v7
+      - name: Cache pnpm dependencies and configure npm registry
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
           registry-url: https://registry.npmjs.org
 

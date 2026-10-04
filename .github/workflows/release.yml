@@ -745,9 +745,9 @@ jobs:
           install_args: node pnpm
           cache_key: "{{default}}-${{ hashFiles('.ci-tool-versions/package.json') }}"
 
-      - uses: actions/setup-node@v7
+      - name: Cache pnpm dependencies and configure npm registry
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
@@ -861,9 +861,9 @@ jobs:
           install_args: node
           cache_key: "{{default}}-${{ hashFiles('.ci-tool-versions/package.json') }}"
         id: mise
-      - uses: actions/setup-node@v7
+      - name: Configure npm registry
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
@@ -1184,9 +1184,9 @@ jobs:
           install_args: node pnpm
           cache_key: "{{default}}-${{ hashFiles('.ci-tool-versions/package.json') }}"
 
-      - uses: actions/setup-node@v7
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
 
       - name: Install dependencies
@@ -1306,9 +1306,9 @@ jobs:
           install_args: node pnpm
           cache_key: "{{default}}-${{ hashFiles('.ci-tool-versions/package.json') }}"
 
-      - uses: actions/setup-node@v7
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
 
       - if: matrix.execute
@@ -1394,9 +1394,9 @@ jobs:
           install_args: node pnpm
           cache_key: "{{default}}-${{ hashFiles('.ci-tool-versions/package.json') }}"
 
-      - uses: actions/setup-node@v7
+      - name: Cache pnpm dependencies and configure npm registry
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
@@ -1470,9 +1470,9 @@ jobs:
           working_directory: .ci-tool-versions
           cache_key: "{{default}}-${{ hashFiles('.ci-tool-versions/package.json') }}"
         id: mise
-      - uses: actions/setup-node@v7
+      - name: Configure npm registry
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           registry-url: https://registry.npmjs.org
 
       - name: Validate npm auth
@@ -1562,9 +1562,9 @@ jobs:
           install_args: node pnpm
           cache_key: "{{default}}-${{ hashFiles('.ci-tool-versions/package.json') }}"
 
-      - uses: actions/setup-node@v7
+      - name: Cache pnpm dependencies and configure npm registry
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
@@ -1652,9 +1652,9 @@ jobs:
           working_directory: .ci-tool-versions
           cache_key: "{{default}}-${{ hashFiles('.ci-tool-versions/package.json') }}"
         id: mise
-      - uses: actions/setup-node@v7
+      - name: Configure npm registry
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           registry-url: https://registry.npmjs.org
 
       - name: Validate npm auth
@@ -2965,9 +2965,9 @@ jobs:
           install_args: node
           cache_key: "{{default}}-${{ hashFiles('.ci-tool-versions/package.json') }}"
         id: mise
-      - uses: actions/setup-node@v7
+      - name: Configure npm registry
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
@@ -3021,9 +3021,9 @@ jobs:
           install_args: node
           cache_key: "{{default}}-${{ hashFiles('.ci-tool-versions/package.json') }}"
         id: mise
-      - uses: actions/setup-node@v7
+      - name: Configure npm registry
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 

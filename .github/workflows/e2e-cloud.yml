@@ -519,10 +519,10 @@ jobs:
           install_args: node pnpm bun
           cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
-      - uses: actions/setup-node@v7
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
         if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
 
       - name: Install JS dependencies
@@ -620,10 +620,10 @@ jobs:
           install_args: node pnpm bun
           cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
-      - uses: actions/setup-node@v7
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
         if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
 
       - name: Install JS dependencies
@@ -1313,9 +1313,9 @@ jobs:
           cache_key: "{{default}}-${{ hashFiles('package.json') }}"
         id: mise
 
-      - uses: actions/setup-node@v7
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
 
       - name: Install JS dependencies and build packages
@@ -1424,9 +1424,9 @@ jobs:
           cache_key: "{{default}}-${{ hashFiles('package.json') }}"
         id: mise
 
-      - uses: actions/setup-node@v7
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
 
       - uses: hashicorp/setup-terraform@v4
@@ -1585,9 +1585,9 @@ jobs:
           cache_key: "{{default}}-${{ hashFiles('package.json') }}"
         id: mise
 
-      - uses: actions/setup-node@v7
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
 
       - uses: hashicorp/setup-terraform@v4
@@ -1776,9 +1776,9 @@ jobs:
           cache_key: "{{default}}-${{ hashFiles('package.json') }}"
         id: mise
 
-      - uses: actions/setup-node@v7
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ steps.mise.outputs.node }}
           cache: pnpm
 
       - name: Install JS dependencies and build packages
