@@ -413,8 +413,11 @@ async fn watch_storage(
             _ = fs_rx.recv() => {},
         }
         // One scan covers every hint queued so far, so a write burst costs one scan
-        // instead of one per hint, and the timer restarts after each scan.
-        while fs_rx.try_recv().is_ok() {}
+        // instead of one per hint, and the timer restarts after each scan. Only the hints
+        // already queued are drained, so a steady stream of new ones cannot delay the scan.
+        for _ in 0..fs_rx.len() {
+            let _ = fs_rx.try_recv();
+        }
         reconcile.reset();
         let root = canonical_storage_path.clone();
         let current = match tokio::task::spawn_blocking(move || storage_snapshot(&root))
