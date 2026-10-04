@@ -19,6 +19,7 @@
 //!
 //! See docs/02-manager/10-deployment-protocol.md for the full protocol.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -278,7 +279,7 @@ async fn poll_queue_once(
                 receipt_handle: msg.receipt_handle.clone(),
                 attempt_count: msg.attempt,
                 timestamp: Some(now_timestamp()),
-                attributes: std::collections::HashMap::new(),
+                attributes: HashMap::new(),
             })),
         };
 
@@ -397,34 +398,53 @@ async fn watch_storage(
     // Recursive inotify registration races writes into new directories. Notifications only
     // wake reconciliation; committed objects remain pending until their handler succeeds.
     // A recovered Worker replays existing objects, matching at-least-once cloud delivery.
-    let mut delivered: std::collections::HashMap<PathBuf, (std::time::SystemTime, u64)> =
-        std::collections::HashMap::new();
+    //
+    // `known` holds every committed object seen since start, with the version whose
+    // creation event succeeded (`None` while that creation is still pending). Deletion is
+    // derived from `known`, so an object whose creation handler failed still gets its
+    // deletion event.
+    let mut known: HashMap<PathBuf, Option<ObjectVersion>> = HashMap::new();
     let mut reconcile = tokio::time::interval(Duration::from_secs(1));
+    reconcile.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             _ = shutdown.recv() => return Ok(()),
             _ = reconcile.tick() => {},
             _ = fs_rx.recv() => {},
         }
+        // One scan covers every hint queued so far, so a write burst costs one scan
+        // instead of one per hint, and the timer restarts after each scan.
+        while fs_rx.try_recv().is_ok() {}
+        reconcile.reset();
         let root = canonical_storage_path.clone();
-        let current = tokio::task::spawn_blocking(move || storage_snapshot(&root))
+        let current = match tokio::task::spawn_blocking(move || storage_snapshot(&root))
             .await
             .into_alien_error()
             .context(ErrorData::TriggerServiceError {
                 trigger_type: "storage".to_string(),
                 trigger_id: binding_name.to_string(),
                 reason: "Storage scan task failed".to_string(),
-            })??;
-        let changes = current
+            })? {
+            Ok(current) => current,
+            Err(error) => {
+                // Pending objects stay pending and the next tick rescans. Returning would
+                // stop the Worker's queue and cron triggers along with this watcher.
+                warn!(storage = %binding_name, %error, "Storage scan failed; retrying on the next reconciliation");
+                continue;
+            }
+        };
+        for path in current.keys() {
+            known.entry(path.clone()).or_insert(None);
+        }
+        let changes = known
             .iter()
-            .filter(|(path, version)| delivered.get(*path) != Some(*version))
-            .map(|(path, version)| (path.clone(), "created", Some(*version)))
-            .chain(
-                delivered
-                    .keys()
-                    .filter(|path| !current.contains_key(*path))
-                    .map(|path| (path.clone(), "deleted", None)),
-            )
+            .filter_map(|(path, delivered)| match current.get(path) {
+                Some(version) if *delivered != Some(*version) => {
+                    Some((path.clone(), "created", Some(*version)))
+                }
+                Some(_) => None,
+                None => Some((path.clone(), "deleted", None)),
+            })
             .collect::<Vec<_>>();
         for (path, event_type, version) in changes {
             if event_types.iter().any(|event| event == event_type) {
@@ -461,19 +481,20 @@ async fn watch_storage(
                     }
                 }
             }
-            if let Some(version) = version {
-                delivered.insert(path, version);
+            if version.is_some() {
+                known.insert(path, version);
             } else {
-                delivered.remove(&path);
+                known.remove(&path);
             }
         }
     }
 }
 
-fn storage_snapshot(
-    root: &Path,
-) -> Result<std::collections::HashMap<PathBuf, (std::time::SystemTime, u64)>> {
-    let mut objects = std::collections::HashMap::new();
+/// Modification time and size of a committed storage object.
+type ObjectVersion = (std::time::SystemTime, u64);
+
+fn storage_snapshot(root: &Path) -> Result<HashMap<PathBuf, ObjectVersion>> {
+    let mut objects = HashMap::new();
     let mut directories = vec![root.to_path_buf()];
     while let Some(directory) = directories.pop() {
         let entries = match std::fs::read_dir(&directory) {
@@ -832,6 +853,120 @@ mod tests {
             .unwrap()
             .unwrap();
         acknowledge(&replacement, &replay).await;
+        shutdown.send(()).unwrap();
+        watcher.await.unwrap().unwrap();
+    }
+
+    async fn next_storage_event(
+        stream: &mut (impl futures_util::Stream<Item = std::result::Result<Task, tonic::Status>>
+                  + Unpin),
+    ) -> (Task, ProtoStorageEvent) {
+        let task = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("storage event delivered")
+            .unwrap()
+            .unwrap();
+        let Some(control::task::Payload::StorageEvent(event)) = task.payload.clone() else {
+            panic!("expected storage task");
+        };
+        (task, event)
+    }
+
+    async fn fail(server: &ControlGrpcServer, task: &Task) {
+        server
+            .send_task_result(Request::new(SendTaskResultRequest {
+                task_id: task.task_id.clone(),
+                result: Some(send_task_result_request::Result::Error(
+                    control::TaskError {
+                        code: "failed".to_string(),
+                        message: "handler failed".to_string(),
+                    },
+                )),
+            }))
+            .await
+            .expect("handler result accepted");
+    }
+
+    #[tokio::test]
+    async fn storage_deletion_is_delivered_after_failed_creation() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().to_path_buf();
+        let server = Arc::new(ControlGrpcServer::new());
+        let mut stream = server
+            .wait_for_tasks(Request::new(WaitForTasksRequest::default()))
+            .await
+            .unwrap()
+            .into_inner();
+        let (shutdown, mut receiver) = broadcast::channel(1);
+        let task_root = root.clone();
+        let task_server = server.clone();
+        let watcher = tokio::spawn(async move {
+            let events = ["created".to_string(), "deleted".to_string()];
+            watch_storage("objects", &task_root, &events, &task_server, &mut receiver).await
+        });
+
+        std::fs::write(root.join("doomed"), b"doomed").unwrap();
+        let (created, event) = next_storage_event(&mut stream).await;
+        assert_eq!(
+            (event.key.as_str(), event.event_type.as_str()),
+            ("doomed", "created")
+        );
+        // The object disappears before its creation handler fails.
+        std::fs::remove_file(root.join("doomed")).unwrap();
+        fail(&server, &created).await;
+
+        let (deleted, event) = next_storage_event(&mut stream).await;
+        assert_eq!(
+            (event.key.as_str(), event.event_type.as_str()),
+            ("doomed", "deleted")
+        );
+        acknowledge(&server, &deleted).await;
+        shutdown.send(()).unwrap();
+        watcher.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn storage_scan_failure_keeps_watching_and_recovers() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("bucket");
+        std::fs::create_dir(&root).unwrap();
+        let server = Arc::new(ControlGrpcServer::new());
+        let mut stream = server
+            .wait_for_tasks(Request::new(WaitForTasksRequest::default()))
+            .await
+            .unwrap()
+            .into_inner();
+        let (shutdown, mut receiver) = broadcast::channel(1);
+        let task_root = root.clone();
+        let task_server = server.clone();
+        let watcher = tokio::spawn(async move {
+            let events = ["created".to_string()];
+            watch_storage("objects", &task_root, &events, &task_server, &mut receiver).await
+        });
+        std::fs::write(root.join("before"), b"before").unwrap();
+        let (task, event) = next_storage_event(&mut stream).await;
+        assert_eq!(event.key, "before");
+        acknowledge(&server, &task).await;
+
+        // A file where the bucket directory belongs makes every scan fail.
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::write(&root, b"not a directory").unwrap();
+        assert!(std::fs::read_dir(&root).is_err());
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(
+            !watcher.is_finished(),
+            "a failed scan must not end the trigger service"
+        );
+
+        std::fs::remove_file(&root).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("after"), b"after").unwrap();
+        let (task, event) = next_storage_event(&mut stream).await;
+        assert_eq!(
+            (event.key.as_str(), event.event_type.as_str()),
+            ("after", "created")
+        );
+        acknowledge(&server, &task).await;
         shutdown.send(()).unwrap();
         watcher.await.unwrap().unwrap();
     }

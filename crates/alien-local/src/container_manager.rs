@@ -676,11 +676,12 @@ impl LocalContainerManager {
     /// 2. Daemon-side pull with `deployment:<token>` basic auth (the manager
     ///    registry proxy's pull credential) — proxies the daemon can reach
     ///    over HTTPS, e.g. the E2E harness's public manager URL.
-    /// 3. Host-side pull via dockdash with the same credential, then
-    ///    `docker load` — the dev server's proxy lives on the HOST's
-    ///    localhost, which the daemon cannot reach (and would refuse as a
-    ///    plain-HTTP registry anyway). The operator process CAN reach it,
-    ///    exactly like the local worker manager's image pulls.
+    /// 3. Host-side pull via dockdash with the same credential (anonymous
+    ///    when there is none), then `docker load` — the dev server's proxy
+    ///    lives on the HOST's localhost, which the daemon cannot reach (and
+    ///    would refuse as a plain-HTTP registry anyway). The operator process
+    ///    CAN reach it, exactly like the local worker manager's image pulls.
+    ///    Loopback registries skip steps 1 and 2.
     async fn pull_registry_image(
         &self,
         image: &str,
@@ -742,16 +743,14 @@ impl LocalContainerManager {
                 return Ok(image.to_string());
             }
         }
-        let token = proxy_token.ok_or_else(|| {
-            AlienError::new(ErrorData::DockerContainerError {
-                container: container_id.to_string(),
-                operation: "pull_image".to_string(),
-                reason: format!(
-                    "No deployment token available for host-side pull of '{}'",
-                    image
-                ),
-            })
-        })?;
+        // A remote registry without a token already returned above, so only a loopback
+        // registry pulls anonymously here; it may serve public images without credentials.
+        let auth = match proxy_token {
+            Some(token) => {
+                dockdash::RegistryAuth::Basic("deployment".to_string(), token.to_string())
+            }
+            None => dockdash::RegistryAuth::Anonymous,
+        };
 
         // 3. Host-side pull + docker load.
         info!(
@@ -774,10 +773,7 @@ impl LocalContainerManager {
             .pull_policy(dockdash::PullPolicy::Always)
             .protocol(protocol)
             .platform(container_target.oci_os(), &arch)
-            .auth(dockdash::RegistryAuth::Basic(
-                "deployment".to_string(),
-                token.to_string(),
-            ))
+            .auth(auth)
             .build()
             .await
             .into_alien_error()

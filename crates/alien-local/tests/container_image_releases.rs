@@ -1,4 +1,5 @@
-//! Real Docker coverage for repeated OCI tags and host-loopback registries.
+//! Real Docker coverage for repeated OCI tags and host-loopback registries,
+//! with and without a deployment token.
 //! cargo nextest run -p alien-local --test container_image_releases --run-ignored all
 
 use std::collections::HashMap;
@@ -6,6 +7,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use alien_local::{ContainerConfig, LocalBindingsProvider, LocalContainerManager};
+use container_registry::auth::{Anonymous, Permissions};
 use dockdash::{Arch, ClientProtocol, Image, PushOptions};
 use tempfile::TempDir;
 
@@ -132,6 +134,49 @@ async fn repeated_archive_tag_runs_new_content_and_loopback_pull_uses_host() {
     );
     manager.stop_container(&id).await.unwrap();
     assert!(!manager.is_running(&id).await);
+    manager.delete_container(&id).await.unwrap();
+
+    // A container without a deployment token still pulls from a public loopback registry.
+    std::fs::create_dir_all(temp.path().join("public-registry")).unwrap();
+    let public_registry_server = container_registry::ContainerRegistry::builder()
+        .storage(temp.path().join("public-registry"))
+        .auth_provider(std::sync::Arc::new(Anonymous::new(
+            Permissions::ReadWrite,
+            Permissions::NoAccess,
+        )))
+        .build_for_testing()
+        .run_in_background();
+    let public_remote = format!(
+        "localhost:{}/images/release:public",
+        public_registry_server.bound_addr().port()
+    );
+    images[1]
+        .push(
+            &public_remote,
+            &PushOptions {
+                auth: dockdash::RegistryAuth::Anonymous,
+                protocol: ClientProtocol::Http,
+                monolithic_push: dockdash::MonolithicPushPolicy::Always,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let tokenless = ContainerConfig {
+        proxy_token: None,
+        ..config(public_remote)
+    };
+    let info = tokio::time::timeout(
+        Duration::from_secs(20),
+        manager.start_container(&id, tokenless),
+    )
+    .await
+    .expect("tokenless loopback pull must avoid daemon-side timeouts")
+    .expect("public loopback image starts without a deployment token");
+    assert_eq!(
+        docker(&["exec", &info.docker_container_id, "cat", "/version"]),
+        "second"
+    );
     manager.delete_container(&id).await.unwrap();
     provider.shutdown().await;
     for image in images {
