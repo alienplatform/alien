@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 
-# CI timing experiment (ALIEN-1216, not for merge): all-in PR tier (build changes, reuse build, no worker tests, Kind lifecycle steps off)
+# CI timing experiment (ALIEN-1216, not for merge): all-in + TypeScript job gets no debug info and mold
 env:
   # Fall back to local compilation when the shared sccache backend returns a
   # transient error (e.g. webdav 403) instead of failing the whole build.
@@ -356,6 +356,7 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       CARGO_BUILD_JOBS: "6"
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@v7
 
@@ -411,6 +412,10 @@ jobs:
           add_shims_to_path: false
           install_args: rust
           cache: false
+
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # main
+        with:
+          mold-version: 2.42.1
 
       - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
