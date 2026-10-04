@@ -177,11 +177,6 @@ jobs:
           install_args: rust
           cache: false
 
-      # Rust on aarch64 Linux links with GNU ld by default; mold is much faster.
-      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # main
-        with:
-          mold-version: 2.42.1
-
       - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
         with:
@@ -422,6 +417,11 @@ jobs:
           add_shims_to_path: false
           install_args: rust
           cache: false
+
+      # Rust on aarch64 Linux links with GNU ld by default; mold is much faster.
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # main
+        with:
+          mold-version: 2.42.1
 
       - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
