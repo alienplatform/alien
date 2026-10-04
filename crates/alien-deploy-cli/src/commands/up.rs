@@ -210,6 +210,8 @@ struct DeployConfigFile {
     public_endpoints: Option<PublicEndpointUrls>,
     /// Deployer-provided stack inputs.
     inputs: Option<HashMap<String, String>>,
+    /// Typed bindings for externally owned resources.
+    external_bindings: Option<alien_core::ExternalBindings>,
     /// Secret deployer-provided stack inputs.
     secret_inputs: Option<HashMap<String, String>>,
 }
@@ -527,6 +529,43 @@ mod tests {
         }))
         .unwrap();
         assert!(validate_push_environment_identity(&azure, &wrong_azure).is_err());
+    }
+
+    #[tokio::test]
+    async fn machines_setup_does_not_require_cloud_credentials() {
+        assert!(matches!(
+            setup_client_config(Platform::Machines).await.unwrap(),
+            ClientConfig::Machines
+        ));
+    }
+
+    #[test]
+    fn deploy_config_passes_typed_external_storage_to_settings() {
+        let config: DeployConfigFile = toml::from_str(r#"
+            platform = "machines"
+            [externalBindings.archive]
+            type = "storage"
+            service = "s3"
+            bucketName = "customer-archive"
+            endpoint = "http://127.0.0.1:9000"
+            region = "us-east-1"
+            forcePathStyle = true
+        "#).unwrap();
+        let args = UpArgs::parse_from(["democtl"]);
+        let settings = load_stack_settings(
+            &args, Platform::Machines, Platform::Machines, Some(&config),
+        ).unwrap();
+        let binding = settings.external_bindings.unwrap();
+        let storage = binding.get_storage("archive").unwrap().unwrap();
+        let alien_core::bindings::StorageBinding::S3(storage) = storage else {
+            panic!("expected S3 binding");
+        };
+        assert_eq!(storage.bucket_name, "customer-archive".into());
+        assert_eq!(storage.endpoint, Some("http://127.0.0.1:9000".into()));
+        assert_eq!(storage.region, Some("us-east-1".into()));
+        assert_eq!(storage.force_path_style, Some(true));
+        assert!(storage.access_key_id.is_none());
+        assert!(storage.secret_access_key.is_none());
     }
 
     #[tokio::test]
@@ -2906,6 +2945,7 @@ fn load_stack_settings(
         if let Some(telemetry) = config.telemetry {
             settings.telemetry = telemetry;
         }
+        settings.external_bindings = config.external_bindings.clone();
         if let Some(compute) = config.compute.clone() {
             settings.compute = Some(compute);
         }
@@ -4650,15 +4690,7 @@ async fn run_push_model(
     on_progress: Option<alien_deployment::runner::ProgressCallback>,
     setup_revision: Option<&str>,
 ) -> Result<()> {
-    let credential_platform = base_platform.unwrap_or(platform);
-    let client_config = ClientConfig::from_std_env(credential_platform)
-        .await
-        .context(ErrorData::ConfigurationError {
-            message: format!(
-                "Failed to load {} credentials from environment. Ensure the required environment variables are set.",
-                credential_platform
-            ),
-        })?;
+    let client_config = setup_client_config(base_platform.unwrap_or(platform)).await?;
 
     push_initial_setup(
         client,
@@ -4674,6 +4706,19 @@ async fn run_push_model(
         setup_revision,
     )
     .await
+}
+
+async fn setup_client_config(platform: Platform) -> Result<ClientConfig> {
+    if platform == Platform::Machines {
+        return Ok(ClientConfig::Machines);
+    }
+    ClientConfig::from_std_env(platform)
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: format!(
+                "Failed to load {platform} credentials from environment. Ensure the required environment variables are set."
+            ),
+        })
 }
 
 fn apply_external_bindings_from_stack_settings(
