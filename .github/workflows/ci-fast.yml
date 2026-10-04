@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 
-# CI timing experiment (ALIEN-1216, not for merge): unwind + no debug info
+# CI timing experiment (ALIEN-1216, not for merge): unwind + no debug info + mold linker
 env:
   # Fall back to local compilation when the shared sccache backend returns a
   # transient error (e.g. webdav 403) instead of failing the whole build.
@@ -178,6 +178,10 @@ jobs:
           version: v0.16.0
 
       - uses: taiki-e/install-action@nextest
+
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # main
+        with:
+          mold-version: 2.42.1
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
