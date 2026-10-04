@@ -16327,6 +16327,47 @@
         },
         "additionalProperties": false
       },
+      "RemoteDynamodbKvBinding": {
+        "type": "object",
+        "description": "Concrete DynamoDB KV topology returned to remote clients.",
+        "required": [
+          "tableName",
+          "region"
+        ],
+        "properties": {
+          "region": {
+            "type": "string",
+            "description": "AWS region of the table."
+          },
+          "tableName": {
+            "type": "string",
+            "description": "DynamoDB table authorized by the credential lease."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteFirestoreKvBinding": {
+        "type": "object",
+        "description": "Concrete Firestore KV topology returned to remote clients.",
+        "required": [
+          "projectId",
+          "databaseId",
+          "collectionName"
+        ],
+        "properties": {
+          "collectionName": {
+            "type": "string",
+            "description": "Firestore collection holding this store's entries."
+          },
+          "databaseId": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "RemoteGcpClientConfig": {
         "type": "object",
         "description": "Response-safe GCP client configuration. Refreshable source credentials and\nservice endpoint overrides cannot be represented by this type.",
@@ -16462,6 +16503,22 @@
         },
         "additionalProperties": false
       },
+      "RemotePubsubQueueBinding": {
+        "type": "object",
+        "description": "Concrete send-only queue topology returned to remote clients.",
+        "required": [
+          "topic",
+          "subscription"
+        ],
+        "properties": {
+          "subscription": {
+            "type": "string"
+          },
+          "topic": {
+            "type": "string"
+          }
+        }
+      },
       "RemoteS3StorageBinding": {
         "type": "object",
         "description": "Concrete S3 topology returned to remote clients.",
@@ -16475,6 +16532,34 @@
           }
         },
         "additionalProperties": false
+      },
+      "RemoteServiceBusQueueBinding": {
+        "type": "object",
+        "description": "Concrete send-only queue topology returned to remote clients.",
+        "required": [
+          "namespace",
+          "queueName"
+        ],
+        "properties": {
+          "namespace": {
+            "type": "string"
+          },
+          "queueName": {
+            "type": "string"
+          }
+        }
+      },
+      "RemoteSqsQueueBinding": {
+        "type": "object",
+        "description": "Concrete send-only queue topology returned to remote clients.",
+        "required": [
+          "queueUrl"
+        ],
+        "properties": {
+          "queueUrl": {
+            "type": "string"
+          }
+        }
       },
       "RemoteStackManagementHeartbeatData": {
         "oneOf": [
@@ -16578,6 +16663,28 @@
             "type": "boolean"
           }
         }
+      },
+      "RemoteTableStorageKvBinding": {
+        "type": "object",
+        "description": "Concrete Azure Table Storage KV topology returned to remote clients.",
+        "required": [
+          "resourceGroupName",
+          "accountName",
+          "tableName"
+        ],
+        "properties": {
+          "accountName": {
+            "type": "string"
+          },
+          "resourceGroupName": {
+            "type": "string"
+          },
+          "tableName": {
+            "type": "string",
+            "description": "Table authorized by the credential lease."
+          }
+        },
+        "additionalProperties": false
       },
       "RenewRequest": {
         "type": "object",
@@ -16770,6 +16877,168 @@
                 "type": "string",
                 "enum": [
                   "gcs"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Send-only Sqs queue and a short-lived credential lease.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteSqsQueueBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAwsClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "sqs"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Send-only Pubsub queue and a short-lived credential lease.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemotePubsubQueueBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteGcpClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "pubsub"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Send-only Servicebus queue and a short-lived credential lease.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteServiceBusQueueBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAzureClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "servicebus"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "AWS DynamoDB KV table and an AWS session.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteDynamodbKvBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAwsClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "dynamodb"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "GCP Firestore KV collection and an access token.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteFirestoreKvBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteGcpClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "firestore"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Azure Table Storage KV table and a storage-audience access token.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteTableStorageKvBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAzureClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "tablestorage"
                 ]
               }
             }

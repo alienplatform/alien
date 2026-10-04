@@ -13,6 +13,8 @@ mod worker;
 
 use crate::error::map_alien_error;
 use alien_bindings::traits::{MessagePayload, PutCondition, PutOptions};
+#[cfg(feature = "platform-sdk")]
+use alien_bindings::RemoteBindings;
 use alien_bindings::{Bindings, BoundQueue, Container, Key, Kv, Postgres, Vault};
 use alien_core::bindings::{parse_binding_from_env, AiBinding};
 
@@ -81,6 +83,78 @@ struct QueueMessage {
     payload: String,
     receipt_handle: String,
     attempt: u32,
+}
+
+/// Remote credentials and providers are resolved by the shared Rust SDK.
+#[cfg(feature = "platform-sdk")]
+#[pyclass]
+struct RemoteBindingsHandle {
+    inner: Arc<RemoteBindings>,
+}
+
+#[cfg(feature = "platform-sdk")]
+#[pymethods]
+impl RemoteBindingsHandle {
+    #[staticmethod]
+    #[pyo3(signature = (project, external_id, token, api_base_url=None))]
+    fn for_customer<'py>(
+        py: Python<'py>,
+        project: String,
+        external_id: String,
+        token: String,
+        api_base_url: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        future_into_py(py, async move {
+            let bindings = RemoteBindings::for_environment(
+                &project,
+                &external_id,
+                &token,
+                api_base_url.as_deref(),
+            )
+            .await
+            .map_err(map_alien_error)?;
+            Ok(Self {
+                inner: Arc::new(bindings),
+            })
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (deployment_id, token, api_base_url=None))]
+    fn for_deployment<'py>(
+        py: Python<'py>,
+        deployment_id: String,
+        token: String,
+        api_base_url: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        future_into_py(py, async move {
+            let bindings =
+                RemoteBindings::for_deployment(&deployment_id, &token, api_base_url.as_deref())
+                    .await
+                    .map_err(map_alien_error)?;
+            Ok(Self {
+                inner: Arc::new(bindings),
+            })
+        })
+    }
+
+    fn queue<'py>(&self, py: Python<'py>, name: String) -> PyResult<Bound<'py, PyAny>> {
+        let bindings = self.inner.clone();
+        future_into_py(py, async move {
+            Ok(QueueHandle {
+                inner: bindings.queue(&name).await.map_err(map_alien_error)?,
+            })
+        })
+    }
+
+    fn kv<'py>(&self, py: Python<'py>, name: String) -> PyResult<Bound<'py, PyAny>> {
+        let bindings = self.inner.clone();
+        future_into_py(py, async move {
+            Ok(KvHandle {
+                inner: bindings.kv(&name).await.map_err(map_alien_error)?,
+            })
+        })
+    }
 }
 
 #[pyclass]
@@ -606,6 +680,8 @@ impl ContainerHandle {
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     module.add_class::<BindingsHandle>()?;
+    #[cfg(feature = "platform-sdk")]
+    module.add_class::<RemoteBindingsHandle>()?;
     module.add_class::<StorageHandle>()?;
     module.add_class::<KeyHandle>()?;
     module.add_class::<KvHandle>()?;

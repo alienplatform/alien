@@ -618,6 +618,38 @@ export function createRemoteStorageFactory(bindings: RawRemoteBindingsHandle) {
   }
 }
 
+/** Reuse the native queue implementation with a send-only public surface. */
+export function createRemoteQueueFactory(bindings: RawRemoteBindingsHandle) {
+  const queues = new Map<string, import("./types.js").RemoteQueue>()
+  return (name: string): import("./types.js").RemoteQueue => {
+    let queue = queues.get(name)
+    if (!queue) {
+      const full = makeQueue(lazyHandle(() => bindings.queue(name)))
+      queue = {
+        send: full.send,
+        sendText: full.sendText,
+        sendBatch: full.sendBatch,
+        sendBatchText: full.sendBatchText,
+      }
+      queues.set(name, queue)
+    }
+    return queue
+  }
+}
+
+/** Build the remote KV factory around one native bindings handle. */
+export function createRemoteKvFactory(bindings: RawRemoteBindingsHandle) {
+  const kvs = new Map<string, Kv>()
+  return (name: string): Kv => {
+    let kv = kvs.get(name)
+    if (!kv) {
+      kv = makeKv(lazyHandle(() => bindings.kv(name)))
+      kvs.set(name, kv)
+    }
+    return kv
+  }
+}
+
 /** Build the remote Key factory around one native bindings handle. */
 export function createRemoteKeyFactory(bindings: RawRemoteBindingsHandle) {
   const keys = new Map<string, Key>()

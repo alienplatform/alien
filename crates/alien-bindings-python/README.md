@@ -97,3 +97,21 @@ Long-running commands can use `start_job`, `poll_job`, and `cancel_job`. Call `c
 ## Errors
 
 `AlienError` includes stable `code`, `context`, `retryable`, `internal`, `http_status_code`, and `hint` fields. Branch on `code` rather than parsing the message. Errors from object storage are intentionally mapped without object paths or provider response bodies so application logs do not leak customer data.
+
+## Remote KV
+
+```python
+from alienplatform import Bindings
+
+bindings = await Bindings.for_remote_customer(
+    project=project, external_id=external_id, token=token
+)
+await bindings.kv("check-cache").put("status", b'{"ready":true}', ttl_seconds=86400)
+```
+
+Use a backend token with write access and enable `remoteAccess` on the KV
+resource before applying setup. Remote credentials refresh in the Rust core.
+AWS and Azure scope access to the selected table. Firestore access covers the
+project's documents because IAM cannot isolate collections in the shared
+default database. Raw value limits are 408,576 bytes for DynamoDB, 783,360 bytes
+for Firestore, and 24,576 bytes for Azure/local.

@@ -69,7 +69,7 @@ impl std::fmt::Debug for BoundQueue {
 }
 
 impl BoundQueue {
-    fn new(inner: Arc<dyn Queue>, name: impl Into<Arc<str>>) -> Self {
+    pub(crate) fn new(inner: Arc<dyn Queue>, name: impl Into<Arc<str>>) -> Self {
         Self {
             inner,
             name: name.into(),

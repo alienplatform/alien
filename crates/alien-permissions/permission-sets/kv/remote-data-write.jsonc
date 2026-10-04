@@ -1,0 +1,72 @@
+{
+  "id": "kv/remote-data-write",
+  "description": "Allows remote binding entry operations on one key-value store",
+  "platforms": {
+    "aws": [
+      {
+        "label": "read-write-table-items",
+        "description": "Read, write, delete, and query items in the selected DynamoDB table.",
+        "grant": {
+          "actions": [
+            "dynamodb:GetItem",
+            "dynamodb:PutItem",
+            "dynamodb:DeleteItem",
+            "dynamodb:Query"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "label": "read-write-firestore-documents",
+        // Firestore IAM cannot be scoped below the database, and the KV collections share the
+        // project's (default) database, so this reaches every Firestore document in the project.
+        "description": "Read, list, create, update, and delete Firestore documents in the project.",
+        "grant": {
+          "permissions": [
+            "datastore.entities.get",
+            "datastore.entities.list",
+            "datastore.entities.create",
+            "datastore.entities.update",
+            "datastore.entities.delete"
+          ]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "label": "read-write-table-entities",
+        "description": "Read, write, and delete entities in the selected Azure Storage table.",
+        "grant": {
+          "dataActions": [
+            "Microsoft.Storage/storageAccounts/tableServices/tables/entities/read",
+            "Microsoft.Storage/storageAccounts/tableServices/tables/entities/write",
+            "Microsoft.Storage/storageAccounts/tableServices/tables/entities/delete",
+            "Microsoft.Storage/storageAccounts/tableServices/tables/entities/add/action",
+            "Microsoft.Storage/storageAccounts/tableServices/tables/entities/update/action"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}/tableServices/default/tables/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

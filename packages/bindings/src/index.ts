@@ -75,6 +75,7 @@ export type {
   Queue,
   QueueMessage,
   QueueSendResult,
+  RemoteQueue,
   RemoteStorage,
   ResolvedSandbox,
   RunCommandOptions,

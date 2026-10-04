@@ -231,6 +231,9 @@ export type QueueSendResult =
   | { status: "rejected"; code: string; message: string }
   | { status: "unknown"; code: string; message: string }
 
+/** Remote queues have send-only cloud permissions. */
+export type RemoteQueue = Pick<Queue, "send" | "sendText" | "sendBatch" | "sendBatchText">
+
 /** A resolved queue binding. */
 export interface Queue {
   /** Send JSON messages using native batching. Results retain input order. */
