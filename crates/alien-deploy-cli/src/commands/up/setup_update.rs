@@ -518,7 +518,11 @@ pub(super) async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{StackInputDefinition, StackInputKind};
+    use alien_core::{
+        DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBinding, ExternalBindings,
+        ResourceLifecycle, RuntimeMetadata, Stack, StackInputDefinition, StackInputKind,
+        StackSettings, StackState, Storage, StorageBinding,
+    };
     use alien_deployment::manager_api_transport::ExecutionClaim;
     use clap::Parser;
     use httpmock::{
@@ -526,6 +530,7 @@ mod tests {
         MockServer,
     };
     use serde_json::json;
+    use std::io::Write;
 
     fn target(operation: &str) -> SetupUpdateTarget {
         serde_json::from_value(json!({
@@ -816,6 +821,140 @@ mod tests {
         assert!(!format!("{error:?}").contains("response body must not be logged"));
         get.assert_hits_async(1).await;
         writes.assert_hits_async(0).await;
+    }
+
+    #[tokio::test]
+    async fn fresh_runner_uses_acquired_bindings_and_hands_off_at_provisioning() {
+        let server = MockServer::start_async().await;
+        let mut bindings = ExternalBindings::new();
+        bindings.insert(
+            "archive",
+            ExternalBinding::Storage(StorageBinding::s3("customer-archive")),
+        );
+        let settings = StackSettings {
+            external_bindings: Some(bindings.clone()),
+            ..Default::default()
+        };
+        let mut config = DeploymentConfig::builder()
+            .allow_frozen_changes(false)
+            .stack_settings(settings.clone())
+            .external_bindings(bindings)
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .build();
+        config.deployment_token = Some("test-runtime-token".into());
+        let old_stack = Stack::new("demo".into()).build();
+        let target_stack = Stack::new("demo".into())
+            .add(
+                Storage::new("archive".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let original = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/v1/deployment-info")
+                    .query_param("updateOperationId", "op_blocked");
+                then.status(200).json_body(info(&server, "op_blocked"));
+            })
+            .await;
+        let save = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/deployment-info/prepare-stack").json_body(json!({
+                "deploymentId":"dep_demo", "updateOperationId":"op_blocked", "platform":"machines",
+                "setupMethod":"cli", "saveForSetup":true, "stackSettings":settings,
+            }));
+                then.status(200)
+                    .json_body(json!({"platform":"machines", "updateOperationId":"op_saved"}));
+            })
+            .await;
+        let saved = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/v1/deployment-info")
+                    .query_param("updateOperationId", "op_saved");
+                let mut value = info(&server, "op_saved");
+                value["setupUpdate"]["stackSettings"] = serde_json::to_value(&settings).unwrap();
+                then.status(200).json_body(value);
+            })
+            .await;
+        let deployment = server.mock_async(|when, then| {
+            when.method(GET).path("/v1/deployments/dep_demo");
+            then.status(200).json_body(json!({
+                "id":"dep_demo", "name":"demo", "platform":"machines", "status":"running",
+                "deploymentGroupId":"dg_demo", "deploymentProtocolVersion":1,
+                "projectId":"prj_demo", "workspaceId":"ws_demo", "retryRequested":false,
+                "createdAt":"2026-01-01T00:00:00Z", "currentReleaseId":"rel_installed", "desiredReleaseId":"rel_target",
+                "stackSettings":{}, "stackState":StackState::new(Platform::Machines),
+                "runtimeMetadata":RuntimeMetadata { prepared_stack:Some(old_stack.clone()), ..Default::default() }
+            }));
+        }).await;
+        let acquire = server.mock_async(|when, then| {
+            when.method(POST).path("/v1/sync/acquire")
+                .json_body_partial(json!({"deploymentIds":["dep_demo"],"acquireMode":"setup-run","setupMethod":"cli"}).to_string());
+            then.status(200).json_body(json!({"deployments":[{
+                "deployment":{"id":"dep_demo","desiredReleaseId":"rel_target","deploymentConfig":config},
+                "executionClaim":{"operationId":"op_saved","attemptId":"attempt_demo"}
+            }]}));
+        }).await;
+        let mut releases = Vec::new();
+        for (id, stack) in [("rel_installed", old_stack), ("rel_target", target_stack)] {
+            releases.push(server.mock_async(|when, then| {
+                when.method(GET).path(format!("/v1/releases/{id}"));
+                then.status(200).json_body(json!({
+                    "id":id,"workspaceId":"ws_demo","projectId":"prj_demo",
+                    "stack":{"machines":stack},"createdAt":"2026-01-01T00:00:00Z","setupFingerprints":{}
+                }));
+            }).await);
+        }
+        let _renew = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/renew");
+                then.status(200);
+            })
+            .await;
+        let reconcile = server.mock_async(|when, then| {
+            when.method(POST).path("/v1/sync/reconcile").json_body_partial(json!({
+                "deploymentId":"dep_demo", "executionClaim":{"operationId":"op_saved","attemptId":"attempt_demo"},
+                "state":{"status":"provisioning", "currentRelease":{"releaseId":"rel_installed"},
+                    "targetRelease":{"releaseId":"rel_target"}, "stackState":{"resources":{"archive":{"status":"running"}}}}
+            }).to_string());
+            then.status(200).json_body(json!({"success":true,"current":null}));
+        }).await;
+        let release = server.mock_async(|when, then| {
+            when.method(POST).path("/v1/sync/release").json_body_partial(json!({
+                "deploymentId":"dep_demo", "executionClaim":{"operationId":"op_saved","attemptId":"attempt_demo"}
+            }).to_string()); then.status(200);
+        }).await;
+        let init = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/deployments/init");
+                then.status(500);
+            })
+            .await;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        write!(file, "[externalBindings.archive]\ntype = \"storage\"\nservice = \"s3\"\nbucketName = \"customer-archive\"\n").unwrap();
+        let mut args = args(&server);
+        args.config = Some(file.path().to_path_buf());
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            super::super::up_command(args, None),
+        )
+        .await
+        .expect("setup handoff should finish promptly")
+        .expect("exact setup should hand off to manager");
+        for mock in [&original, &save, &saved, &acquire, &release] {
+            mock.assert_hits_async(1).await;
+        }
+        deployment.assert_hits_async(2).await;
+        for release in releases {
+            release.assert_hits_async(1).await;
+        }
+        reconcile.assert_hits_async(2).await;
+        init.assert_hits_async(0).await;
     }
 
     #[tokio::test]
