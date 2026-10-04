@@ -1408,9 +1408,7 @@ fn versions_body(
 
     let mut provider_attrs: Vec<Structure> = Vec::new();
     if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
-        // 6.23 adds `aws_s3_bucket_abac` and tags buckets through the S3 Control tagging API,
-        // which keeps working after ABAC is enabled.
-        provider_attrs.push(attr("aws", provider_decl_attr("hashicorp/aws", ">= 6.23")));
+        provider_attrs.push(attr("aws", provider_decl_attr("hashicorp/aws", ">= 5.0")));
         if include_awscc_provider {
             provider_attrs.push(attr(
                 "awscc",

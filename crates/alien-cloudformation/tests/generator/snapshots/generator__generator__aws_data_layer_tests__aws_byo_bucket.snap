@@ -60,7 +60,6 @@ Resources:
         Value: exports
       - Key: resource-type
         Value: storage
-      AbacStatus: Enabled
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
   ExportsBucketPolicy:
