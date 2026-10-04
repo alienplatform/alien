@@ -132,6 +132,8 @@ export type {
   DevResourceInfo,
   DevStatus,
   DevStatusState,
+  // Stack settings
+  EndpointAccess,
   Envelope,
   EventChange,
   EventState,
@@ -239,8 +241,6 @@ export type {
   ServiceActivationHeartbeatStatus,
   // Stack resource state types
   StackResourceState,
-  // Stack settings
-  EndpointAccess,
   StackSettings,
   StackState,
   StorageEvent,
@@ -357,6 +357,7 @@ export {
   DevResourceInfoSchema,
   DevStatusSchema,
   DevStatusStateSchema,
+  EndpointAccessSchema,
   EnvelopeSchema,
   EventChangeSchema,
   EventStateSchema,
@@ -471,7 +472,6 @@ export {
   StackInputValidationSchema,
   // Stack resource state types
   StackResourceStateSchema,
-  EndpointAccessSchema,
   StackSettingsSchema,
   StackStateSchema,
   StorageEventSchema,
