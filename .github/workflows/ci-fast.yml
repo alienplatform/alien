@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 
-# CI timing experiment (ALIEN-1216, not for merge): all-in, worker tests back in a max-threads=1 nextest group
+# CI timing experiment (ALIEN-1216, not for merge): all-in, worker tests back in a max-threads=1 nextest group, started first (priority)
 env:
   # Fall back to local compilation when the shared sccache backend returns a
   # transient error (e.g. webdav 403) instead of failing the whole build.

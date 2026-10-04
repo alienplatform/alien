@@ -37,3 +37,5 @@ test-group = 'e2e-tests'
 [[profile.default.overrides]]
 filter = 'binary_id(alien-local::worker_integration)'
 test-group = 'worker-build-tests'
+# Start them first so their cold build overlaps the rest of the run.
+priority = 100
