@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 
-# CI timing experiment (ALIEN-1216, not for merge): all-in PR tier (build changes, reuse build, no worker tests, Kind lifecycle steps off)
+# CI timing experiment (ALIEN-1216, not for merge): all-in, worker tests back in a max-threads=1 nextest group
 env:
   # Fall back to local compilation when the shared sccache backend returns a
   # transient error (e.g. webdav 403) instead of failing the whole build.
@@ -277,7 +277,6 @@ jobs:
             'and not binary_id(alien-ai-gateway::live_direct_providers)'
             'and not binary_id(alien-ai-gateway::live_foundry_claude)'
             'and not binary_id(alien-ai-gateway::live_vertex_claude)'
-            'and not binary_id(alien-local::worker_integration)'
           )
           # Compile non-default feature coverage in the same unified graph. Running
           # these as later `cargo test` commands adds two serial recompilation tails.
