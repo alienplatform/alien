@@ -61,6 +61,8 @@ jobs:
             rust:
               - 'Cargo.toml'
               - 'Cargo.lock'
+              - 'mise*.toml'
+              - 'rust-toolchain.toml'
               - '.cargo/**'
               - 'crates/**'
               - 'packages/**'
@@ -84,6 +86,10 @@ jobs:
               - 'crates/alien-terraform/**'
               - '.github/workflows/ci-fast.yml'
             typescript:
+              - 'mise*.toml'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/ci-fast.yml'
+              - '.github/workflows/ci-fork.yml'
               # `pnpm format-and-lint` runs Biome from the repository root.
               # Match its source formats repository-wide instead of trying to
               # enumerate every directory that may contain linted files.
@@ -134,19 +140,35 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
+      - name: Install development tools
+        id: mise
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
         with:
-          node-version: 24
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: node pnpm bun
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
+
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
+        with:
           cache: pnpm
           cache-dependency-path: |
             pnpm-lock.yaml
             examples/pnpm-lock.yaml
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
         with:
-          components: rustfmt, clippy
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: rust
+          cache: false
 
       - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
@@ -154,10 +176,6 @@ jobs:
           version: v0.16.0
 
       - uses: taiki-e/install-action@nextest
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.2"
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -336,6 +354,10 @@ jobs:
         with:
           filters: |
             examples:
+              - 'mise*.toml'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/ci-fast.yml'
+              - '.github/workflows/ci-fork.yml'
               - 'examples/**'
               - 'packages/**'
               # Changes to the generated Platform client can break the ordinary
@@ -349,28 +371,40 @@ jobs:
               - 'crates/alien-bindings/**'
               - 'crates/alien-build/**'
 
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
+      - name: Install development tools
+        id: mise
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
         with:
-          node-version: 24
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: node pnpm bun
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
+
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
+        with:
           cache: pnpm
           cache-dependency-path: |
             pnpm-lock.yaml
             examples/pnpm-lock.yaml
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
         with:
-          components: rustfmt, clippy
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: rust
+          cache: false
 
       - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
         with:
           version: v0.16.0
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.2"
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -454,9 +488,9 @@ jobs:
 
       - name: Install operation compiler generation tools
         run: |
-          rustup toolchain install 1.97.1 --profile minimal --target wasm32-unknown-unknown
+          MISE_DATA_DIR="$RUNNER_TEMP/mise-rust" mise -E release-prepare install rust
           VERSION=$(node -e 'const fs = require("node:fs"); console.log(fs.readFileSync("Cargo.lock", "utf8").match(/name = "wasm-bindgen"\nversion = "([^"]+)"/)[1])')
-          cargo +1.97.1 install --locked --version "$VERSION" wasm-bindgen-cli
+          MISE_DATA_DIR="$RUNNER_TEMP/mise-rust" mise -E release-prepare exec -- cargo install --locked --version "$VERSION" wasm-bindgen-cli
 
       - name: Regenerate local TypeScript APIs
         run: pnpm generate

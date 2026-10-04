@@ -1,7 +1,9 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::models::certificates::{CertificateBundle, CertificateImportParameters};
 use crate::azure::models::keyvault::{Vault, VaultCreateOrUpdateParameters};
-use crate::azure::models::secrets::{SecretBundle, SecretSetParameters, SecretUpdateParameters};
+use crate::azure::models::secrets::{
+    SecretBundle, SecretListResult, SecretSetParameters, SecretUpdateParameters,
+};
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
@@ -192,6 +194,13 @@ pub trait KeyVaultSecretsApi: Send + Sync + std::fmt::Debug {
         secret_name: String,
         secret_version: Option<String>,
     ) -> Result<SecretBundle>;
+
+    /// List a secret's versions: ids and attributes, never values
+    async fn list_secret_versions(
+        &self,
+        vault_base_url: String,
+        secret_name: String,
+    ) -> Result<SecretListResult>;
 
     /// Update a secret in the key vault
     async fn update_secret(
@@ -687,6 +696,49 @@ impl KeyVaultSecretsApi for AzureKeyVaultSecretsClient {
             .context(key_vault_parse_error("GetSecret", &url))?;
 
         Ok(secret)
+    }
+
+    /// List a secret's versions: ids and attributes, never values
+    async fn list_secret_versions(
+        &self,
+        vault_base_url: String,
+        secret_name: String,
+    ) -> Result<SecretListResult> {
+        let url = self.build_secrets_url(
+            &vault_base_url,
+            &format!("/secrets/{}/versions", secret_name),
+            Some(vec![("api-version", "7.4".into())]),
+        )?;
+
+        let resp = send_key_vault_request(
+            &self.token_cache,
+            self.client.get(url.to_string()),
+            "GetSecretVersions",
+        )
+        .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            return Err(key_vault_response_error(
+                status,
+                "GetSecretVersions",
+                "Azure Key Vault Secret",
+                &secret_name,
+                &url,
+            ));
+        }
+
+        let response_body =
+            resp.text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    message: "Azure GetSecretVersions: failed to read response body".to_string(),
+                })?;
+
+        serde_json::from_str(&response_body)
+            .into_alien_error()
+            .context(key_vault_parse_error("GetSecretVersions", &url))
     }
 
     /// Update a secret in the key vault

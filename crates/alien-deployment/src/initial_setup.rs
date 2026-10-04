@@ -62,7 +62,12 @@ pub async fn handle_initial_setup(
     // not need workload vault access. Secret values are synced below, between
     // the step where the vault becomes Running and the step where Workers can
     // consume it.
-    crate::helpers::inject_environment_variables(&mut target_stack, &config, current.platform)?;
+    crate::helpers::inject_environment_variables(
+        &mut target_stack,
+        &config,
+        current.platform,
+        &runtime_metadata.deployer_secrets,
+    )?;
 
     // Inject OTLP monitoring env vars if monitoring is configured
     if let Some(monitoring) = &config.monitoring {

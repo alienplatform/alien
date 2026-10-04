@@ -225,6 +225,20 @@ fn queue_permission_owners(
         }
     }
 
+    if let Some(definition) = alien_core::remote_bindings::remote_binding_for_entry(ctx.resource) {
+        if let Some(label) = ctx.stack.resources().find_map(|(id, entry)| {
+            (entry.config.resource_type() == alien_core::RemoteBindings::RESOURCE_TYPE)
+                .then(|| ctx.name_for(id))
+                .flatten()
+        }) {
+            owners.push((
+                label.to_string(),
+                vec![alien_core::PermissionSetReference::from_name(
+                    definition.permission_set,
+                )],
+            ));
+        }
+    }
     owners
 }
 

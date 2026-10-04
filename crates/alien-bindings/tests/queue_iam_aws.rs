@@ -13,7 +13,7 @@ use alien_aws_clients::{
     AwsClientConfig, AwsClientConfigExt, AwsCredentialProvider, AwsCredentials, ErrorData,
 };
 use alien_bindings::{
-    traits::{BindingsProviderApi, MessagePayload},
+    traits::{BindingsProviderApi, MessagePayload, QueueSendResult, MAX_MESSAGE_BYTES},
     BindingsProvider,
 };
 use alien_core::bindings::{self, QueueBinding};
@@ -362,6 +362,75 @@ impl AwsQueueContext {
         {
             return Err("acknowledged message was redelivered".to_string());
         }
+        // Exercise count chunking (>10 small entries) and byte chunking (>256KiB).
+        let mut payloads = (0..24)
+            .map(|index| {
+                MessagePayload::Text(format!(
+                    "batch-{index}-{}",
+                    "x".repeat(if index < 12 { 1 } else { 40000 })
+                ))
+            })
+            .collect::<Vec<_>>();
+        payloads.push(MessagePayload::Text("x".repeat(MAX_MESSAGE_BYTES + 1)));
+        payloads.push(MessagePayload::Text("invalid\u{0}body".to_string()));
+        let results = publisher
+            .send_batch("jobs", payloads)
+            .await
+            .map_err(|error| format!("batch send: {error}"))?;
+        if results.len() != 26
+            || results[..24]
+                .iter()
+                .any(|result| !matches!(result, QueueSendResult::Sent))
+        {
+            return Err(format!("valid batch entries not accepted: {results:?}"));
+        }
+        if !matches!(results[24], QueueSendResult::Rejected { .. })
+            || !matches!(results[25], QueueSendResult::Rejected { .. })
+        {
+            return Err(format!(
+                "oversize and invalid SQS body must be rejected individually: {results:?}"
+            ));
+        }
+        let mut received = std::collections::HashSet::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+        while received.len() < 24 && tokio::time::Instant::now() < deadline {
+            for message in consumer
+                .receive("jobs", 10)
+                .await
+                .map_err(|error| format!("batch receive: {error}"))?
+            {
+                let MessagePayload::Text(body) = message.payload else {
+                    return Err("unexpected batch payload type".to_string());
+                };
+                let parts = body.splitn(3, '-').collect::<Vec<_>>();
+                let index: usize = parts
+                    .get(1)
+                    .ok_or("missing index")?
+                    .parse()
+                    .map_err(|_| "invalid index")?;
+                if index >= 24
+                    || body
+                        != format!(
+                            "batch-{index}-{}",
+                            "x".repeat(if index < 12 { 1 } else { 40000 })
+                        )
+                {
+                    return Err("batch payload changed".to_string());
+                }
+                received.insert(index);
+                consumer
+                    .ack("jobs", &message.receipt_handle)
+                    .await
+                    .map_err(|error| format!("batch ack: {error}"))?;
+            }
+        }
+        if received.len() != 24 {
+            return Err(format!(
+                "received only {} of 24 batch messages",
+                received.len()
+            ));
+        }
+        println!("Scoped publisher batch: 24 messages delivered across count/byte chunks; oversize and provider rejection reported individually");
         Ok(())
     }
 

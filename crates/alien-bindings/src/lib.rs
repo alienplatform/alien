@@ -12,7 +12,8 @@ pub use traits::{
     AwsServiceAccountInfo, AzureServiceAccountInfo, Binding, BindingsProviderApi, Build, Container,
     GcpServiceAccountInfo, ImpersonationRequest, InvalidPostgresCaCertificates, Key, Kv, KvEntry,
     Postgres, PostgresConnectionParams, PostgresTlsPolicy, PutCondition, Queue, RegistryAuthMethod,
-    RepositoryResponse, ServiceAccount, ServiceAccountInfo, SslMode, Storage, Vault, Worker,
+    RepositoryResponse, SecretPresence, ServiceAccount, ServiceAccountInfo, SslMode, Storage,
+    Vault, Worker,
 };
 
 pub mod bindings;

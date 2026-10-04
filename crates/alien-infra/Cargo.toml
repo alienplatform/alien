@@ -13,7 +13,7 @@ aws = ["dep:alien-aws-clients", "dep:alien-preflights", "dep:urlencoding", "alie
 gcp = ["dep:alien-gcp-clients", "alien-client-config/gcp"]
 azure = ["dep:alien-azure-clients", "alien-client-config/azure", "dep:base64"]
 kubernetes = ["dep:alien-k8s-clients", "dep:axum", "dep:base64", "dep:dirs", "dep:ed25519-compact", "alien-core/sandbox-capability", "alien-client-config/kubernetes"]
-local = ["dep:alien-local"]  # Local platform support
+local = ["dep:alien-local", "dep:alien-bindings"]  # Local platform support
 test = []  # Test platform support - fast mock implementations without real cloud APIs
 openapi = ["dep:utoipa", "alien-core/openapi"]
 test-utils = [
@@ -40,6 +40,7 @@ alien-azure-clients = { workspace = true, optional = true }
 alien-k8s-clients = { workspace = true, optional = true }
 alien-helm = { workspace = true }
 alien-local = { workspace = true, optional = true }
+alien-bindings = { workspace = true, optional = true }
 alien-macros = { workspace = true }
 alien-permissions = { workspace = true }
 

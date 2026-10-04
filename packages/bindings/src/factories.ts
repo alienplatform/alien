@@ -416,6 +416,20 @@ function makeKv(handle: () => Promise<RawKvHandle>): Kv {
 // The native bound queue already carries its configured queue name.
 function makeQueue(handle: () => Promise<RawQueueHandle>): Queue {
   return {
+    sendBatch: messages =>
+      guard(
+        handle,
+        async raw =>
+          JSON.parse(
+            await raw.sendBatchJson(messages.map(message => JSON.stringify(message))),
+          ) as import("./types.js").QueueSendResult[],
+      ),
+    sendBatchText: messages =>
+      guard(
+        handle,
+        async raw =>
+          JSON.parse(await raw.sendBatchText(messages)) as import("./types.js").QueueSendResult[],
+      ),
     send: message => guard(handle, raw => raw.sendJson(JSON.stringify(message))),
     sendText: text => guard(handle, raw => raw.sendText(text)),
     receive: (max): Promise<QueueMessage[]> => guard(handle, raw => raw.receive(max)),
@@ -601,6 +615,38 @@ export function createRemoteStorageFactory(bindings: RawRemoteBindingsHandle) {
       storages.set(name, storage)
     }
     return storage
+  }
+}
+
+/** Reuse the native queue implementation with a send-only public surface. */
+export function createRemoteQueueFactory(bindings: RawRemoteBindingsHandle) {
+  const queues = new Map<string, import("./types.js").RemoteQueue>()
+  return (name: string): import("./types.js").RemoteQueue => {
+    let queue = queues.get(name)
+    if (!queue) {
+      const full = makeQueue(lazyHandle(() => bindings.queue(name)))
+      queue = {
+        send: full.send,
+        sendText: full.sendText,
+        sendBatch: full.sendBatch,
+        sendBatchText: full.sendBatchText,
+      }
+      queues.set(name, queue)
+    }
+    return queue
+  }
+}
+
+/** Build the remote KV factory around one native bindings handle. */
+export function createRemoteKvFactory(bindings: RawRemoteBindingsHandle) {
+  const kvs = new Map<string, Kv>()
+  return (name: string): Kv => {
+    let kv = kvs.get(name)
+    if (!kv) {
+      kv = makeKv(lazyHandle(() => bindings.kv(name)))
+      kvs.set(name, kv)
+    }
+    return kv
   }
 }
 

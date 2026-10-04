@@ -253,6 +253,21 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// A required deployer secret is not in the customer's secret store, so
+    /// the workload does not start.
+    #[error(
+        code = "DEPLOYER_SECRET_MISSING",
+        message = "missing: {label} (no value at '{secret_name}' in the deployment's secrets vault)",
+        retryable = "false",
+        internal = "false"
+    )]
+    DeployerSecretMissing {
+        /// The stack input's label
+        label: String,
+        /// Name the deployer writes the value under
+        secret_name: String,
+    },
+
     /// Application process failed or exited with error.
     #[error(
         code = "PROCESS_FAILED",

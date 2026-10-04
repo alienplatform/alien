@@ -35,7 +35,7 @@ pub fn aws_sandbox_egress_network_id<'a>(
     stack: &'a Stack,
     sandbox: &Sandbox,
 ) -> std::result::Result<Option<&'a str>, String> {
-    let network = match sandbox_egress_network(stack, &sandbox.egress) {
+    let network = match sandbox_egress_network(stack, sandbox.cloud_egress()) {
         Ok(Some(network)) => network,
         Ok(None) => return Ok(None),
         Err(refusal) => return Err(refusal.to_string()),

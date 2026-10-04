@@ -5,6 +5,7 @@ import {
   type SandboxEgress,
   type SandboxLifecyclePolicy,
   type SandboxLimits,
+  type SandboxPrivilegedSupervisor,
   SandboxSchema,
 } from "./generated/index.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
@@ -17,6 +18,7 @@ export type {
   SandboxLifecyclePolicy,
   SandboxLimits,
   SandboxOutputs,
+  SandboxPrivilegedSupervisor,
 } from "./generated/index.js"
 export { SandboxSchema as SandboxConfigSchema } from "./generated/index.js"
 
@@ -33,8 +35,7 @@ export { SandboxSchema as SandboxConfigSchema } from "./generated/index.js"
  *
  * Capabilities are not uniform. Call `capabilities()` on the binding and branch, or handle the
  * typed error — an unsupported capability never silently succeeds. Notably GCP cannot
- * reconnect to a sandbox (its id is scoped to one Cloud Run instance), only Azure
- * restricts egress to a hostname allowlist, no platform can snapshot a sandbox, and only AWS
+ * reconnect to a sandbox (its id is scoped to one Cloud Run instance), Azure matches egress hostnames and AWS can pin their IPv4 addresses with privilegedSupervisor, no platform can snapshot a sandbox, and only AWS
  * and Local run a command under a different identity than the process supervising it. Elsewhere the
  * command shares the supervisor's user, so it can read the supervisor's environment and
  * signal it, and the container is the isolation boundary.
@@ -84,6 +85,12 @@ export class Sandbox extends ResourceBuilder {
    */
   public egress(egress: SandboxEgress): this {
     this._config.egress = egress
+    return this
+  }
+
+  /** Fixes the unprivileged command identity and lets Alien's supervisor enforce egress. */
+  public privilegedSupervisor(supervisor: SandboxPrivilegedSupervisor): this {
+    this._config.privilegedSupervisor = supervisor
     return this
   }
 

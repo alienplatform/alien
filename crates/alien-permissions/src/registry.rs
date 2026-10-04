@@ -633,6 +633,7 @@ mod tests {
 
         for id in [
             "storage/remote-data-write",
+            "kv/remote-data-write",
             "key/remote-cryptography",
             "ai/invoke",
         ] {

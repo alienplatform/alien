@@ -28,6 +28,11 @@ use hcl::{
     structure::{Block, Structure},
 };
 
+/// Namespace the generator puts in role IDs, replaced in the rendered module
+/// by `local.gcp_custom_role_prefix`. It is 18 characters, the longest real
+/// namespace, so generated suffixes leave room for every real one.
+const CUSTOM_ROLE_NAMESPACE_PLACEHOLDER: &str = "local_resource_pre";
+
 /// Downcast `ctx.resource.config` to the typed resource definition or
 /// return a typed `UnexpectedResourceType` error.
 pub fn downcast<'a, T: ResourceDefinition>(
@@ -218,6 +223,7 @@ pub fn service_account_member_for_var(variable: &str) -> Expression {
 pub fn permission_context(label: &str, _stack_name: &str) -> PermissionContext {
     PermissionContext::new()
         .with_stack_prefix("${local.resource_prefix}".to_string())
+        .with_gcp_custom_role_namespace(CUSTOM_ROLE_NAMESPACE_PLACEHOLDER)
         .with_deployment_name("${local.deployment_name}".to_string())
         .with_project_name("${var.gcp_project}".to_string())
         .with_project_number("${data.google_project.current.number}".to_string())
@@ -419,7 +425,7 @@ fn custom_role_id_template(custom_role: &GcpCustomRole) -> Expression {
 fn custom_role_suffix(custom_role: &GcpCustomRole) -> String {
     custom_role
         .role_id
-        .strip_prefix("role_local_resource_pre_")
+        .strip_prefix(&format!("role_{CUSTOM_ROLE_NAMESPACE_PLACEHOLDER}_"))
         .unwrap_or(&custom_role.role_id)
         .to_string()
 }
