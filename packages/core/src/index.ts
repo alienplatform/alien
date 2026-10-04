@@ -351,6 +351,8 @@ export {
   EnvelopeSchema,
   EventChangeSchema,
   EventStateSchema,
+  ExternalBindingSchema,
+  ExternalBindingsSchema,
   FailureDomainSelectionSchema,
   GcpArtifactRegistryHeartbeatDataSchema,
   GcpArtifactRegistryImportDataSchema,
