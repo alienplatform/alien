@@ -278,7 +278,6 @@ debug = 1
 incremental = true
 codegen-units = 32
 opt-level = 0
-panic = "abort"
 
 [profile.release]
 # strip = true
