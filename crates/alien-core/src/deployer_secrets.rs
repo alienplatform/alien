@@ -138,6 +138,10 @@ pub struct DeployerSecretLocation {
     pub store: DeployerSecretStore,
     /// Full name of the secret in that store.
     pub name: String,
+    /// The Azure Key Vault that holds the secret. Other stores resolve `name`
+    /// in the stack's own account or project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_name: Option<String>,
     /// Cloud console page where the secret is created, when the store has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub console_url: Option<String>,
@@ -178,6 +182,7 @@ pub fn deployer_secret_location(
                 .unwrap_or_default();
             DeployerSecretLocation {
                 store: DeployerSecretStore::AwsParameterStore,
+                vault_name: None,
                 console_url: region.map(|region| {
                     format!(
                         "https://{region}.console.aws.amazon.com/systems-manager/parameters/create?region={region}"
@@ -198,6 +203,7 @@ pub fn deployer_secret_location(
                 .unwrap_or_default();
             DeployerSecretLocation {
                 store: DeployerSecretStore::GcpSecretManager,
+                vault_name: None,
                 console_url: project.map(|project| {
                     format!(
                         "https://console.cloud.google.com/security/secret-manager/create?project={project}"
@@ -216,6 +222,7 @@ pub fn deployer_secret_location(
             let name = vault_naming::key_vault_secret_name(vault_key);
             DeployerSecretLocation {
                 store: DeployerSecretStore::AzureKeyVault,
+                vault_name: Some(vault_name.clone()),
                 console_url: match (
                     context.azure_subscription_id.as_deref(),
                     context.azure_resource_group.as_deref(),
@@ -237,6 +244,7 @@ pub fn deployer_secret_location(
             let name = vault_naming::kubernetes_secret_name(&prefix, vault_key);
             DeployerSecretLocation {
                 store: DeployerSecretStore::KubernetesSecret,
+                vault_name: None,
                 console_url: None,
                 cli_command: format!(
                     "kubectl create secret generic {name} --namespace {namespace} --from-literal={}='{placeholder}'",
@@ -253,6 +261,7 @@ pub fn deployer_secret_location(
                 .unwrap_or_default();
             DeployerSecretLocation {
                 store: DeployerSecretStore::LocalVault,
+                vault_name: None,
                 console_url: None,
                 cli_command: format!(
                     "alien dev vault{deployment_flag} set {} {vault_key} '{placeholder}'",
@@ -341,6 +350,10 @@ pub struct DeployerSecretEnv {
     pub vault_key: String,
     /// Full name in the secret store (the Kubernetes Secret on Kubernetes).
     pub secret_name: String,
+    /// The Azure Key Vault that holds it. Other stores resolve `secret_name`
+    /// in the workload's own account or project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_name: Option<String>,
     /// The input's label, for the "missing: <label>" a failed start reports.
     pub label: String,
     /// Whether the workload must not start without it.
@@ -375,6 +388,7 @@ pub fn deployer_secret_environment(
                         name: mapping.name.clone(),
                         vault_key: slot.vault_key.clone(),
                         secret_name: report.location.name.clone(),
+                        vault_name: report.location.vault_name.clone(),
                         label: slot.input.label.clone(),
                         required: slot.input.required,
                     },
@@ -495,7 +509,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(gcp.name, "stack-secrets-input-database-password");
+        assert_eq!(gcp.vault_name, None);
         assert!(gcp.console_url.unwrap().contains("project=acme-prod"));
+
+        // A Key Vault secret name alone does not say which vault holds it, so
+        // the location carries the vault for whoever reads the slot.
+        let azure =
+            deployer_secret_location(&VaultBinding::key_vault("stacksecrets7f3a"), key, &context)
+                .unwrap();
+        assert_eq!(azure.store, DeployerSecretStore::AzureKeyVault);
+        assert_eq!(azure.vault_name.as_deref(), Some("stacksecrets7f3a"));
+        assert!(azure.cli_command.contains("--vault-name stacksecrets7f3a"));
 
         let kubernetes = deployer_secret_location(
             &VaultBinding::kubernetes_secret("apps", "Stack-Secrets"),
@@ -565,6 +589,7 @@ mod tests {
             location: DeployerSecretLocation {
                 store: DeployerSecretStore::AwsParameterStore,
                 name: "stack-secrets-input-database-password".to_string(),
+                vault_name: None,
                 console_url: None,
                 cli_command: String::new(),
             },
@@ -596,7 +621,31 @@ mod tests {
             "stack-secrets-input-database-password"
         );
         assert!(variable.required);
+        assert_eq!(variable.vault_name, None);
         assert_eq!(targets, &None);
+    }
+
+    #[test]
+    fn a_key_vault_slot_names_its_vault_for_the_workload() {
+        let inputs = vec![secret(
+            "databasePassword",
+            vec![StackInputProvider::Deployer],
+        )];
+        let location = deployer_secret_location(
+            &VaultBinding::key_vault("stacksecrets7f3a"),
+            "input-database-password",
+            &DeployerSecretLocationContext::default(),
+        )
+        .unwrap();
+        let mut azure_report = report("databasePassword", DeployerSecretStatus::Present);
+        azure_report.location = location;
+
+        let env =
+            deployer_secret_environment(&inputs, &HashMap::new(), Platform::Azure, &[azure_report]);
+
+        assert_eq!(env.len(), 1);
+        assert_eq!(env[0].0.secret_name, "input-database-password");
+        assert_eq!(env[0].0.vault_name.as_deref(), Some("stacksecrets7f3a"));
     }
 
     #[test]

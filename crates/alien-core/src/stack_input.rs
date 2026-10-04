@@ -49,6 +49,22 @@ pub struct StackInputEnvironmentMapping {
     pub var_type: Option<StackInputEnvironmentVariableType>,
 }
 
+impl StackInputEnvironmentMapping {
+    /// Whether this mapping reaches `resource_id`: every resource when no
+    /// targets are set, else an exact id or a `prefix*` pattern.
+    pub fn targets(&self, resource_id: &str) -> bool {
+        match &self.target_resources {
+            None => true,
+            Some(patterns) => patterns
+                .iter()
+                .any(|pattern| match pattern.strip_suffix('*') {
+                    Some(prefix) => resource_id.starts_with(prefix),
+                    None => resource_id == pattern,
+                }),
+        }
+    }
+}
+
 /// Environment variable handling for a stack input mapping.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -322,6 +338,22 @@ mod environment_tests {
 
     use super::*;
     use crate::EnvironmentVariableType;
+
+    #[test]
+    fn an_env_mapping_targets_every_resource_or_its_patterns() {
+        let mapping = |targets: Option<Vec<&str>>| StackInputEnvironmentMapping {
+            name: "API_KEY".to_string(),
+            target_resources: targets.map(|t| t.into_iter().map(String::from).collect()),
+            var_type: None,
+        };
+
+        assert!(mapping(None).targets("api"));
+        assert!(mapping(Some(vec!["api"])).targets("api"));
+        assert!(!mapping(Some(vec!["api"])).targets("api-worker"));
+        assert!(mapping(Some(vec!["api-*"])).targets("api-worker"));
+        assert!(!mapping(Some(vec!["api-*"])).targets("web"));
+        assert!(!mapping(Some(vec![])).targets("api"));
+    }
 
     fn input(id: &str, kind: StackInputKind, env: &str) -> StackInputDefinition {
         StackInputDefinition {

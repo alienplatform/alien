@@ -735,6 +735,7 @@ mod tests {
                 name: name.to_string(),
                 vault_key: vault_key.to_string(),
                 secret_name: format!("secrets/{vault_key}"),
+                vault_name: None,
                 label: label.to_string(),
                 required,
             }
