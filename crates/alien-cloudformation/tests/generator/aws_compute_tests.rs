@@ -269,6 +269,15 @@ fn aws_custom_domain_selection_registers_exactly_one_public_resource() {
             ResourceLifecycle::Live,
         );
     }
+    builder = builder.add(
+        Worker::new("internal".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/app:1".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build(),
+        ResourceLifecycle::Live,
+    );
     let stack = builder.build();
     let yaml = render_built_ins(
         &stack,
@@ -323,4 +332,41 @@ fn aws_custom_domain_selection_registers_exactly_one_public_resource() {
         error.error,
         Some(ErrorData::OperationNotSupported { .. })
     ));
+    let settings: StackSettings = serde_json::from_value(serde_json::json!({"domains": {"customDomains": {
+        "web": {"domain": "web.example.com", "certificate": {"aws": {"certificateArn": "certificate-web"}}}
+    }}})).expect("single domain settings");
+    let template = super::helpers::try_render_built_ins(
+        &stack,
+        settings,
+        RegistrationMode::OutputsFallback,
+        alien_cloudformation::CloudFormationTarget::Aws,
+        "aws",
+        "configured domain resource",
+    )
+    .expect("a configured public resource is a valid selection");
+    let template = serde_json::to_value(template).expect("template");
+    assert_eq!(template["Parameters"]["DomainResource"]["Default"], "web");
+    assert_eq!(
+        template["Parameters"]["DomainName"]["Default"],
+        "web.example.com"
+    );
+    assert_eq!(
+        template["Parameters"]["CertificateArn"]["Default"],
+        "certificate-web"
+    );
+    for invalid_id in ["internal", "missing"] {
+        let settings: StackSettings = serde_json::from_value(serde_json::json!({"domains": {"customDomains": {
+            invalid_id: {"domain": "api.example.com", "certificate": {"aws": {"certificateArn": "certificate-api"}}}
+        }}})).expect("custom domain settings");
+        let error = super::helpers::try_render_built_ins(
+            &stack,
+            settings,
+            RegistrationMode::OutputsFallback,
+            alien_cloudformation::CloudFormationTarget::Aws,
+            "aws",
+            "invalid domain resource",
+        )
+        .expect_err("custom domain must not be assigned to a different public resource");
+        assert!(error.message.contains(invalid_id));
+    }
 }

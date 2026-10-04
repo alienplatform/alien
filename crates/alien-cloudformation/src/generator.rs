@@ -320,17 +320,33 @@ pub fn generate_cloudformation_template(
         outputs: IndexMap::new(),
     };
 
-    if !options.target.is_kubernetes()
-        && stack_settings
-            .domains
-            .as_ref()
-            .and_then(|domains| domains.custom_domains.as_ref())
-            .is_some_and(|domains| domains.len() > 1)
+    // CloudFormation exposes one DomainName/CertificateArn pair and registers it under the
+    // selected public resource. Reject settings it cannot represent instead of moving a
+    // configured hostname onto a different workload.
+    if let Some(custom_domains) = stack_settings
+        .domains
+        .as_ref()
+        .and_then(|domains| domains.custom_domains.as_ref())
+        .filter(|_| !options.target.is_kubernetes())
     {
-        return Err(AlienError::new(ErrorData::OperationNotSupported {
-            operation: "generate CloudFormation custom domain settings".to_string(),
-            reason: "CloudFormation exposes one DomainName/CertificateArn pair. Configure one custom-domain resource or use Terraform for multiple domains.".to_string(),
-        }));
+        if custom_domains.len() > 1 {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate CloudFormation custom domain settings".to_string(),
+                reason: "CloudFormation exposes one DomainName/CertificateArn pair. Configure one custom-domain resource or use Terraform for multiple domains.".to_string(),
+            }));
+        }
+        let public_resources = public_http_resource_ids(stack);
+        if let Some(id) = custom_domains
+            .keys()
+            .find(|id| !public_resources.contains(id))
+        {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate CloudFormation custom domain settings".to_string(),
+                reason: format!(
+                    "Custom domain resource '{id}' must name a public HTTP resource in this stack."
+                ),
+            }));
+        }
     }
     let supports_custom_domain = stack_supports_custom_domain(stack, options.target);
     let access_only = stack
@@ -1311,7 +1327,6 @@ fn add_standard_parameters(
             let default = domain_defaults
                 .resource_id
                 .as_ref()
-                .filter(|id| ids.contains(id))
                 .cloned()
                 .unwrap_or_else(|| ids[0].clone());
             template.parameters.insert(
