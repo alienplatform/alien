@@ -293,7 +293,7 @@ jobs:
             --azure "${{ inputs.azure_target || 'azure-target-1' }}"
 
       - name: Install Rust toolchain
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
         with:

@@ -317,7 +317,7 @@ jobs:
 
       - if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
         name: Install Rust toolchain
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
           MISE_ENV: release-prepare
@@ -522,7 +522,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
         with:
@@ -734,7 +734,7 @@ jobs:
 
       - name: Install development tools
         id: mise
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
           MISE_DISABLE_TOOLS: rust
@@ -753,7 +753,7 @@ jobs:
 
       - if: ${{ inputs.stable_action == 'qualification' }}
         name: Install development tools
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
           MISE_DISABLE_TOOLS: rust
@@ -850,7 +850,7 @@ jobs:
           persist-credentials: false
 
       - name: Install development tools
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
           MISE_DISABLE_TOOLS: rust
@@ -990,7 +990,7 @@ jobs:
           python-version: "3.10"
 
       - name: Install Rust toolchain
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
           MISE_ENV: stable
@@ -1149,7 +1149,7 @@ jobs:
 
       - if: matrix.os == 'macos'
         name: Install Rust toolchain
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
         with:
@@ -1173,7 +1173,7 @@ jobs:
 
       - name: Install development tools
         id: mise
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
           MISE_DISABLE_TOOLS: rust
@@ -1295,7 +1295,7 @@ jobs:
 
       - name: Install development tools
         id: mise
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
           MISE_DISABLE_TOOLS: rust
@@ -1313,7 +1313,7 @@ jobs:
 
       - if: matrix.execute
         name: Install development tools
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
           MISE_DISABLE_TOOLS: rust
@@ -1383,7 +1383,7 @@ jobs:
 
       - name: Install development tools
         id: mise
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
           MISE_DISABLE_TOOLS: rust
@@ -1459,7 +1459,7 @@ jobs:
           path: .ci-tool-versions
           persist-credentials: false
       - name: Install development tools
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
           MISE_DISABLE_TOOLS: rust
@@ -1551,7 +1551,7 @@ jobs:
 
       - name: Install development tools
         id: mise
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
           MISE_DISABLE_TOOLS: rust
@@ -1641,7 +1641,7 @@ jobs:
           path: .ci-tool-versions
           persist-credentials: false
       - name: Install development tools
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
           MISE_DISABLE_TOOLS: rust
@@ -1906,7 +1906,7 @@ jobs:
 
       - if: steps.binary-cache.outputs.cache-hit != 'true'
         name: Install Rust toolchain
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
         with:
@@ -2007,7 +2007,7 @@ jobs:
 
       - if: steps.binary-cache.outputs.cache-hit != 'true'
         name: Install Rust toolchain
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
         with:
@@ -2954,7 +2954,7 @@ jobs:
           persist-credentials: false
 
       - name: Install development tools
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
           MISE_DISABLE_TOOLS: rust
@@ -3010,7 +3010,7 @@ jobs:
           persist-credentials: false
 
       - name: Install development tools
-        uses: jdx/mise-action@94c60b39bc2d90ab2f9bab27f38d3cc4812c1834 # v5
+        uses: jdx/mise-action@v5
         env:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
           MISE_DISABLE_TOOLS: rust
