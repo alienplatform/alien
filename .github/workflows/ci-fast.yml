@@ -290,14 +290,20 @@ jobs:
             --features alien-manager/openapi,alien-bindings/platform-sdk \
             --filter-expr "${FILTER_CLAUSES[*]}"
 
+      # The Kind steps below take ~35 min, so they run after merge (pushes to main)
+      # instead of on every PR push. A failure on main opens an issue (main-failure).
       - name: Start disposable Kubernetes cluster
-        if: needs.changes.outputs.product_lifecycle == 'true'
+        if: >-
+          github.event_name != 'pull_request' && github.event_name != 'merge_group' &&
+          needs.changes.outputs.product_lifecycle == 'true'
         uses: helm/kind-action@v1.14.0
         with:
           cluster_name: alien-product-lifecycle
 
       - name: Kubernetes compute pool dynamic container lifecycle
-        if: needs.changes.outputs.product_lifecycle == 'true'
+        if: >-
+          github.event_name != 'pull_request' && github.event_name != 'merge_group' &&
+          needs.changes.outputs.product_lifecycle == 'true'
         env:
           ALIEN_DYNAMIC_KIND_CONTEXT: kind-alien-product-lifecycle
           ALIEN_DYNAMIC_KIND_NAMESPACE: alien-dynamic-compute-ci
@@ -316,7 +322,9 @@ jobs:
             --filter-expr 'binary_id(alien-operator::dynamic_containers_kind)'
 
       - name: Product Remote Operator Helm and Terraform lifecycle
-        if: needs.changes.outputs.product_lifecycle == 'true'
+        if: >-
+          github.event_name != 'pull_request' && github.event_name != 'merge_group' &&
+          needs.changes.outputs.product_lifecycle == 'true'
         env:
           ALIEN_RUN_PRODUCT_LIFECYCLE_E2E: "1"
         run: |
@@ -540,3 +548,27 @@ jobs:
           for result in $RESULTS; do
             [[ "$result" == "success" || "$result" == "skipped" ]] || exit 1
           done
+
+  main-failure:
+    name: Report a failure on main
+    needs: [rust, typescript]
+    if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the main-failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          title="Tests are failing on main"
+          body="Run: $RUN_URL (commit $SHA)"
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [[ -n "$number" ]]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$title" --label bug --body "$body"
+          fi
