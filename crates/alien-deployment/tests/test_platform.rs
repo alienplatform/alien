@@ -3,11 +3,12 @@
 //! These tests exercise the full alien_deployment::step() lifecycle with no cloud I/O.
 
 use alien_core::{
-    ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
-    EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform, ReleaseInfo, ResourceEntry,
-    ResourceLifecycle, RuntimeMetadata, SetupUpdateAuthorization, Stack, StackSettings, StackState,
-    Storage, Worker, WorkerCode,
+    ClientConfig, ComputeCluster, ComputeClusterOutputs, DeploymentConfig, DeploymentState,
+    DeploymentStatus, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
+    Platform, ReleaseInfo, ResourceEntry, ResourceLifecycle, RuntimeMetadata,
+    SetupUpdateAuthorization, Stack, StackSettings, StackState, Storage, Worker, WorkerCode,
 };
+use alien_infra::{register_registry_extension, LocalComputeClusterController};
 use chrono::Utc;
 use indexmap::IndexMap;
 use sha2::{Digest, Sha256};
@@ -375,16 +376,204 @@ async fn stale_waiting_for_machines_returns_to_provisioning() {
         &[DeploymentStatus::Provisioning],
     )
     .await;
+    assert!(state.current_release.is_none());
+    assert!(state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .pending_prepared_stack
+        .is_none());
+    let target = state.target_release.clone();
     let stale_state = DeploymentState {
         status: DeploymentStatus::WaitingForMachines,
         ..state
     };
 
-    let result = alien_deployment::step(stale_state, config, ClientConfig::Test, None)
+    let result = alien_deployment::step(stale_state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("provisioning step should succeed");
 
     assert_eq!(result.state.status, DeploymentStatus::Provisioning);
+    let completed = run_to_completion(result.state, config).await;
+    assert_eq!(completed.status, DeploymentStatus::Running);
+    assert_eq!(completed.current_release, target);
+    assert!(completed.target_release.is_none());
+    assert_eq!(
+        completed.stack_state.as_ref().unwrap().resources["test-function"].status,
+        alien_core::ResourceStatus::Running
+    );
+}
+
+#[tokio::test]
+async fn initial_update_resumes_prepared_target_after_waiting_for_machines() {
+    let config = create_test_config("target-env", false);
+    let old_stack = create_test_stack_with_storage("test-stack", "archive", "old-worker");
+    let mut state = run_until_status(
+        create_initial_state(old_stack),
+        config.clone(),
+        &[DeploymentStatus::Provisioning],
+    )
+    .await;
+    assert!(state.current_release.is_none());
+    let frozen = state.stack_state.as_ref().unwrap().resources["archive"].clone();
+    let baseline = state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .prepared_stack
+        .clone();
+    state
+        .runtime_metadata
+        .as_mut()
+        .unwrap()
+        .direct_setup_revision = Some("setup-revision".into());
+
+    let mut target = create_test_stack_with_storage("test-stack", "archive", "new-worker");
+    target.resources.get_mut("new-worker").unwrap().config = alien_core::Resource::new(
+        Worker::new("new-worker".into())
+            .code(WorkerCode::Image {
+                image: "demo:target".into(),
+            })
+            .permissions("default".into())
+            .build(),
+    );
+    let target_release = ReleaseInfo {
+        release_id: Some("rel_target".into()),
+        version: Some("2.0.0".into()),
+        description: None,
+        stack: target,
+    };
+    start_update(&mut state, target_release.clone());
+    state = run_until_status(state, config.clone(), &[DeploymentStatus::Updating]).await;
+    let pending = state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .pending_prepared_stack
+        .clone();
+    assert!(pending
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("new-worker"));
+    assert_eq!(
+        state.runtime_metadata.as_ref().unwrap().prepared_stack,
+        baseline
+    );
+
+    // The setup-owned cluster is already Running; only its persisted inventory changes.
+    // Test controllers reconcile the workloads, and no cluster controller action is needed.
+    register_registry_extension(Box::new(|registry| {
+        registry
+            .register::<ComputeCluster>(ComputeCluster::RESOURCE_TYPE)
+            .with_controller::<LocalComputeClusterController>(Platform::Test);
+    }));
+    let cluster = ResourceEntry {
+        config: alien_core::Resource::new(ComputeCluster::new("machines".into()).build()),
+        lifecycle: ResourceLifecycle::Frozen,
+        dependencies: Vec::new(),
+        remote_access: false,
+        enabled_when: None,
+    };
+    let metadata = state.runtime_metadata.as_mut().unwrap();
+    metadata
+        .prepared_stack
+        .as_mut()
+        .unwrap()
+        .resources
+        .insert("machines".into(), cluster.clone());
+    metadata
+        .pending_prepared_stack
+        .as_mut()
+        .unwrap()
+        .resources
+        .insert("machines".into(), cluster);
+    let pending = metadata.pending_prepared_stack.clone();
+    state.platform = Platform::Machines;
+    let mut inventory = alien_core::StackResourceState::new_pending(
+        ComputeCluster::RESOURCE_TYPE.to_string(),
+        alien_core::Resource::new(ComputeCluster::new("machines".into()).build()),
+        Some(ResourceLifecycle::Frozen),
+        Vec::new(),
+    );
+    inventory.status = alien_core::ResourceStatus::Running;
+    let outputs = ComputeClusterOutputs {
+        cluster_id: "demo-cluster".into(),
+        horizon_ready: true,
+        capacity_group_statuses: vec![],
+        total_machines: 0,
+    };
+    inventory.outputs = Some(alien_core::ResourceOutputs::new(outputs.clone()));
+    state
+        .stack_state
+        .as_mut()
+        .unwrap()
+        .resources
+        .insert("machines".into(), inventory);
+    let result = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("updating should wait for inventory");
+    state = result.state;
+    assert_eq!(state.status, DeploymentStatus::WaitingForMachines);
+    assert_eq!(result.suggested_delay_ms, Some(30_000));
+    assert!(state.current_release.is_none());
+    assert_eq!(
+        state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .pending_prepared_stack,
+        pending
+    );
+
+    // Round-trip the checkpoint just as a later loop invocation reloads persisted state.
+    state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+    state
+        .stack_state
+        .as_mut()
+        .unwrap()
+        .resources
+        .get_mut("machines")
+        .unwrap()
+        .outputs = Some(alien_core::ResourceOutputs::new(ComputeClusterOutputs {
+        total_machines: 1,
+        ..outputs
+    }));
+    state = run_to_completion(state, config).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert_eq!(state.current_release, Some(target_release));
+    assert!(state.target_release.is_none());
+    let metadata = state.runtime_metadata.as_ref().unwrap();
+    assert_eq!(metadata.prepared_stack, pending);
+    assert!(metadata.pending_prepared_stack.is_none());
+    assert_eq!(
+        metadata.direct_setup_revision.as_deref(),
+        Some("setup-revision")
+    );
+    let resources = &state.stack_state.as_ref().unwrap().resources;
+    assert_eq!(
+        serde_json::to_value(&resources["archive"]).unwrap(),
+        serde_json::to_value(frozen).unwrap()
+    );
+    assert!(!resources.contains_key("old-worker"));
+    assert_eq!(
+        resources["new-worker"].status,
+        alien_core::ResourceStatus::Running
+    );
+    let worker = resources["new-worker"]
+        .config
+        .downcast_ref::<Worker>()
+        .unwrap();
+    assert_eq!(
+        worker.code,
+        WorkerCode::Image {
+            image: "demo:target".into()
+        }
+    );
+    assert_eq!(
+        worker.environment.get("PLAIN_VAR").map(String::as_str),
+        Some("plain_value")
+    );
 }
 
 /// B) Secrets sync behavior tests
@@ -1067,15 +1256,29 @@ async fn stale_waiting_for_machines_returns_to_updating() {
         description: None,
         stack: create_test_stack("test-stack", "test-function-v2"),
     };
-    start_update(&mut state, release_v2);
+    start_update(&mut state, release_v2.clone());
     state = run_until_status(state, config.clone(), &[DeploymentStatus::Updating]).await;
     state.status = DeploymentStatus::WaitingForMachines;
 
-    let result = alien_deployment::step(state, config, ClientConfig::Test, None)
+    let result = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("updating step should succeed");
 
     assert_eq!(result.state.status, DeploymentStatus::Updating);
+    let completed = run_to_completion(result.state, config).await;
+    assert_eq!(completed.status, DeploymentStatus::Running);
+    assert_eq!(completed.current_release, Some(release_v2));
+    assert!(completed.target_release.is_none());
+    assert!(completed
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .pending_prepared_stack
+        .is_none());
+    assert_eq!(
+        completed.stack_state.as_ref().unwrap().resources["test-function-v2"].status,
+        alien_core::ResourceStatus::Running
+    );
 }
 
 #[tokio::test]
