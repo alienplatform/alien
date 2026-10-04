@@ -15,7 +15,8 @@ export const DeployerSecretLocationSchema = z.object({
 "name": z.string().describe("Full name of the secret in that store."),
 get "store"(){
                 return DeployerSecretStoreSchema.describe("The secret store a deployer writes a vault-native secret into.")
-              }
+              },
+"vaultName": z.string().describe("The Azure Key Vault that holds the secret. Other stores resolve `name`\nin the stack's own account or project.").nullish()
     }).describe("Where a deployer writes a vault-native secret.")
 
 export type DeployerSecretLocation = z.infer<typeof DeployerSecretLocationSchema>

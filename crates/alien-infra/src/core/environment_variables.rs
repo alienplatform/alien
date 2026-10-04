@@ -22,20 +22,6 @@ use std::collections::{BTreeMap, HashMap};
 pub const OTEL_EXPORTER_OTLP_HEADERS: &str = "OTEL_EXPORTER_OTLP_HEADERS";
 pub const OTEL_EXPORTER_OTLP_METRICS_HEADERS: &str = "OTEL_EXPORTER_OTLP_METRICS_HEADERS";
 
-fn matches_environment_target(resource_id: &str, target_resources: &Option<Vec<String>>) -> bool {
-    match target_resources {
-        None => true,
-        Some(patterns) if patterns.is_empty() => false,
-        Some(patterns) => patterns.iter().any(|pattern| {
-            if let Some(prefix) = pattern.strip_suffix('*') {
-                resource_id.starts_with(prefix)
-            } else {
-                resource_id == pattern
-            }
-        }),
-    }
-}
-
 pub(crate) fn applicable_secret_environment_variables<'a>(
     resource_id: &str,
     variables: &'a [EnvironmentVariable],
@@ -43,7 +29,7 @@ pub(crate) fn applicable_secret_environment_variables<'a>(
     variables
         .iter()
         .filter(|var| var.var_type == EnvironmentVariableType::Secret)
-        .filter(|var| matches_environment_target(resource_id, &var.target_resources))
+        .filter(|var| alien_core::targets_resource(&var.target_resources, resource_id))
         .collect()
 }
 
@@ -735,6 +721,7 @@ mod tests {
                 name: name.to_string(),
                 vault_key: vault_key.to_string(),
                 secret_name: format!("secrets/{vault_key}"),
+                vault_name: None,
                 label: label.to_string(),
                 required,
             }
