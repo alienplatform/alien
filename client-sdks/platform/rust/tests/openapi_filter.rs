@@ -221,6 +221,76 @@ fn gives_repeated_anonymous_objects_stable_component_identity() {
 }
 
 #[test]
+fn shares_identical_unions_without_changing_their_contracts() {
+    for keyword in ["anyOf", "oneOf"] {
+        let union = json!({
+            keyword: [
+                { "type": "string", "minLength": 3, "enum": ["alpha", "beta"] },
+                { "type": "integer", "minimum": 1, "maximum": 8 },
+                { "type": "boolean" }
+            ],
+            "description": "A constrained value.",
+            "default": "alpha"
+        });
+        let mut distinct = union.clone();
+        distinct[keyword][1]["maximum"] = json!(9);
+        let document = json!({
+            "paths": {
+                "/values": {
+                    "get": {
+                        "operationId": "values",
+                        "responses": {
+                            "200": {
+                                "description": "ok",
+                                "content": {
+                                    "application/json": {
+                                        "schema": { "$ref": "#/components/schemas/Values" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "components": {
+                "schemas": {
+                    "Values": {
+                        "type": "object",
+                        "properties": {
+                            "first": union.clone(),
+                            "second": union.clone(),
+                            "distinct": distinct.clone()
+                        },
+                        "required": ["first", "second"]
+                    }
+                }
+            }
+        });
+
+        let filtered = openapi_filter::filter_openapi(&document, &["values"]).unwrap();
+        let properties = &filtered["components"]["schemas"]["Values"]["properties"];
+        let reference = properties["first"]["$ref"]
+            .as_str()
+            .expect("identical unions must share a component");
+        assert_eq!(properties["first"], properties["second"]);
+        let shared = filtered
+            .pointer(reference.strip_prefix('#').unwrap())
+            .unwrap();
+        // Dereferencing must recover every branch, constraint, and annotation.
+        assert_eq!(shared, &union);
+        assert_eq!(properties["distinct"], distinct);
+        assert_eq!(
+            filtered["components"]["schemas"]["Values"]["required"],
+            json!(["first", "second"])
+        );
+        assert_eq!(
+            filtered,
+            openapi_filter::filter_openapi(&document, &["values"]).unwrap()
+        );
+    }
+}
+
+#[test]
 fn deduplication_never_rewrites_object_valued_contract_data() {
     let repeated_schema = json!({
         "type": "object",
@@ -518,6 +588,7 @@ fn rejects_missing_duplicate_and_unresolved_operations() {
 #[test]
 fn real_spec_contains_every_required_operation_and_shrinks() {
     let document: Value = serde_json::from_str(include_str!("../openapi.json")).unwrap();
+    let normalized = openapi_filter::normalize_openapi(&document).unwrap();
     let filtered =
         openapi_filter::filter_openapi(&document, openapi_filter::REQUIRED_OPERATION_IDS).unwrap();
 
@@ -525,7 +596,16 @@ fn real_spec_contains_every_required_operation_and_shrinks() {
         operation_ids(&filtered).len(),
         openapi_filter::REQUIRED_OPERATION_IDS.len()
     );
-    assert!(component_count(&filtered) < component_count(&document));
+    // Extracting shared schemas can increase the component count while reducing
+    // the graph size. Count retained source components, not extracted identities.
+    let source_schemas = document["components"]["schemas"].as_object().unwrap();
+    let retained_source_schemas = filtered["components"]["schemas"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .filter(|name| source_schemas.contains_key(*name))
+        .count();
+    assert!(retained_source_schemas < source_schemas.len());
     assert!(
         serde_json::to_vec(&filtered).unwrap().len() < serde_json::to_vec(&document).unwrap().len()
     );
@@ -537,7 +617,16 @@ fn real_spec_contains_every_required_operation_and_shrinks() {
         let schema = filtered.pointer(pointer).unwrap();
         assert_eq!(schema["type"], "object");
         assert!(schema.get("$ref").is_none());
+        assert_eq!(schema, normalized.pointer(pointer).unwrap());
     }
+
+    let compute = filtered
+        .pointer(
+            "/components/schemas/NewDeploymentRequest/properties/stackSettings/properties/compute",
+        )
+        .unwrap();
+    assert!(compute.get("anyOf").is_some());
+    assert!(compute.get("$ref").is_none());
 
     let shared_components = filtered["components"]["schemas"]
         .as_object()
@@ -573,16 +662,6 @@ fn operation_ids(document: &Value) -> Vec<&str> {
     operation_ids
 }
 
-fn component_count(document: &Value) -> usize {
-    document["components"]
-        .as_object()
-        .unwrap()
-        .values()
-        .filter_map(Value::as_object)
-        .map(serde_json::Map::len)
-        .sum()
-}
-
 fn collect_strict_schemas(value: &Value, pointer: &str, found: &mut Vec<String>) {
     match value {
         Value::Object(object) => {
@@ -609,4 +688,42 @@ fn collect_strict_schemas(value: &Value, pointer: &str, found: &mut Vec<String>)
         }
         _ => {}
     }
+}
+
+#[test]
+fn binding_normalization_refuses_overlapping_or_optional_tags() {
+    let branch = json!({
+        "type": "object", "required": ["type"],
+        "properties": {"type": {"type": "string", "enum": ["storage"]}}
+    });
+    for other in [
+        branch.clone(),
+        json!({
+            "type": "object",
+            "properties": {"type": {"type": "string", "enum": ["queue"]}}
+        }),
+    ] {
+        let document = json!({"components": {"schemas": {
+            "ExternalBinding": {"anyOf": [branch, other]}
+        }}});
+        assert!(openapi_filter::normalize_openapi(&document).is_err());
+    }
+}
+
+#[test]
+fn constrained_json_alternatives_are_not_simplified() {
+    let union = json!({"anyOf": [
+        {"$ref": "#/components/schemas/JsonValue"}, {"type": "string"}
+    ]});
+    let document = json!({"components": {"schemas": {
+        "JsonValue": {"type": "object"}, "Value": union,
+        "NullableValue": {"anyOf": [
+            {"allOf": [{"$ref": "#/components/schemas/JsonValue"}], "nullable": true},
+            {"type": "string"}
+        ]}
+    }}});
+    assert_eq!(
+        openapi_filter::normalize_openapi(&document).unwrap(),
+        document
+    );
 }

@@ -15,6 +15,11 @@ const CONSUMER_NAMED_ANONYMOUS_SCHEMA_POINTERS: &[&str] = &[
     "/paths/~1v1~1projects/post/requestBody/content/application~1json/schema/properties/gitRepository",
 ];
 
+// This union also has a path-derived type used by a handwritten consumer. Its
+// nested objects already share identities, so protect only the union itself.
+const CONSUMER_NAMED_ANONYMOUS_UNION_POINTERS: &[&str] =
+    &["/components/schemas/NewDeploymentRequest/properties/stackSettings/properties/compute"];
+
 // The server adds package types without a client release. No Alien consumer matches on these
 // two response fields, so they decode as plain strings instead of closed enums. When the
 // component is present, a moved field or a missing enum fails generation.
@@ -171,8 +176,9 @@ pub fn filter_openapi(document: &Value, required_operation_ids: &[&str]) -> Resu
         "components".to_string(),
         reachable_components(document, &filtered)?,
     );
+    normalize_binding_unions(&mut filtered)?;
     open_string_enums(&mut filtered)?;
-    deduplicate_anonymous_object_schemas(
+    deduplicate_anonymous_schemas(
         &mut filtered,
         required_operation_ids == REQUIRED_OPERATION_IDS,
     )?;
@@ -182,7 +188,7 @@ pub fn filter_openapi(document: &Value, required_operation_ids: &[&str]) -> Resu
     Ok(Value::Object(filtered))
 }
 
-fn deduplicate_anonymous_object_schemas(
+fn deduplicate_anonymous_schemas(
     document: &mut Map<String, Value>,
     protect_consumer_names: bool,
 ) -> Result<(), String> {
@@ -194,7 +200,13 @@ fn deduplicate_anonymous_object_schemas(
             let schema = document_value.pointer(pointer).ok_or_else(|| {
                 format!("consumer-named anonymous schema is missing at `{pointer}`")
             })?;
-            collect_object_schema_keys(schema, &mut protected_shapes)?;
+            collect_shareable_schema_keys(schema, &mut protected_shapes)?;
+        }
+        for pointer in CONSUMER_NAMED_ANONYMOUS_UNION_POINTERS {
+            let schema = document_value.pointer(pointer).ok_or_else(|| {
+                format!("consumer-named anonymous union is missing at `{pointer}`")
+            })?;
+            protected_shapes.insert(canonical_schema_key(schema)?);
         }
     }
     let schemas = document
@@ -230,8 +242,13 @@ fn deduplicate_anonymous_object_schemas(
             continue;
         }
 
+        let kind = if schema.get("type").and_then(Value::as_str) == Some("object") {
+            "Object"
+        } else {
+            "Union"
+        };
         let name = format!(
-            "AlienSharedObject{:016x}",
+            "AlienShared{kind}{:016x}",
             stable_schema_hash(key.as_bytes())
         );
         if existing_names.contains(&name) {
@@ -267,11 +284,22 @@ fn deduplicate_anonymous_object_schemas(
     Ok(())
 }
 
-fn collect_object_schema_keys(value: &Value, keys: &mut BTreeSet<String>) -> Result<(), String> {
-    if value.get("type").and_then(Value::as_str) == Some("object") && value.get("$ref").is_none() {
+// Repeated unions generate distinct enums and conversion implementations at each
+// use site, even when their object branches already share component identities.
+// Share only exact schemas; retain constraints, annotations, and branch order.
+fn is_shareable_anonymous_schema(schema: &Value) -> bool {
+    schema.get("$ref").is_none()
+        && (schema.get("type").and_then(Value::as_str) == Some("object")
+            || ["anyOf", "oneOf"]
+                .iter()
+                .any(|keyword| schema.get(*keyword).is_some_and(Value::is_array)))
+}
+
+fn collect_shareable_schema_keys(value: &Value, keys: &mut BTreeSet<String>) -> Result<(), String> {
+    if is_shareable_anonymous_schema(value) {
         keys.insert(canonical_schema_key(value)?);
     }
-    for_schema_children(value, |child| collect_object_schema_keys(child, keys))?;
+    for_schema_children(value, |child| collect_shareable_schema_keys(child, keys))?;
     Ok(())
 }
 
@@ -309,10 +337,7 @@ fn collect_schema_occurrences(
     occurrences: &mut BTreeMap<String, (usize, Value)>,
     collect_current: bool,
 ) {
-    if collect_current
-        && value.get("type").and_then(Value::as_str) == Some("object")
-        && value.get("$ref").is_none()
-    {
+    if collect_current && is_shareable_anonymous_schema(value) {
         let schema = value.clone();
         let key = serde_json::to_string(&schema).expect("JSON schema serializes");
         occurrences
@@ -369,10 +394,7 @@ fn replace_schema_occurrences(
     replacements: &BTreeMap<String, String>,
     replace_current: bool,
 ) -> Result<(), String> {
-    if replace_current
-        && value.get("type").and_then(Value::as_str) == Some("object")
-        && value.get("$ref").is_none()
-    {
+    if replace_current && is_shareable_anonymous_schema(value) {
         let key = canonical_schema_key(value)?;
         if let Some(name) = replacements.get(&key) {
             *value = serde_json::json!({
@@ -475,6 +497,7 @@ pub fn normalize_openapi(document: &Value) -> Result<Value, String> {
         .as_object()
         .ok_or_else(|| "OpenAPI document must be a JSON object".to_string())?
         .clone();
+    normalize_binding_unions(&mut root)?;
     open_string_enums(&mut root)?;
     canonicalize_nullable_enums(&mut root);
     allow_unknown_properties(&mut root);
@@ -733,4 +756,111 @@ fn parse_component_reference(value: &str) -> Option<(String, String)> {
 
 fn decode_json_pointer_segment(segment: &str) -> String {
     segment.replace("~1", "/").replace("~0", "~")
+}
+
+// Progenitor represents anyOf as flattened optional fields. A branch containing
+// unrestricted JSON overlaps every other alternative and cannot roundtrip that
+// representation. Remove only demonstrably redundant JSON alternatives; keep
+// sibling constraints and all concrete binding fields unchanged.
+fn normalize_binding_unions(document: &mut Map<String, Value>) -> Result<(), String> {
+    let Some(schemas) = document
+        .get_mut("components")
+        .and_then(|components| components.get_mut("schemas"))
+        .and_then(Value::as_object_mut)
+    else {
+        return Ok(());
+    };
+    if schemas.get("JsonValue") == Some(&serde_json::json!({})) {
+        for schema in schemas.values_mut() {
+            simplify_unrestricted_json_unions(schema);
+        }
+    }
+    if let Some(binding) = schemas.get_mut("ExternalBinding") {
+        if let Some(branches) = binding.get("anyOf").and_then(Value::as_array) {
+            // Each category requires a distinct literal `type`, so at most one
+            // branch can match. oneOf preserves acceptance and generates an enum
+            // instead of flattened Options that consume each other's input.
+            let mut seen = BTreeSet::new();
+            for branch in branches {
+                let tags = required_type_tags(branch).ok_or_else(|| {
+                    "ExternalBinding alternatives must have required literal type tags".to_string()
+                })?;
+                if tags.iter().any(|tag| !seen.insert(tag.clone())) {
+                    return Err(
+                        "ExternalBinding alternatives have overlapping type tags".to_string()
+                    );
+                }
+            }
+            let object = binding.as_object_mut().expect("union is an object");
+            let branches = object.remove("anyOf").expect("union was checked");
+            object.insert("oneOf".to_string(), branches);
+        }
+    }
+    Ok(())
+}
+
+fn simplify_unrestricted_json_unions(schema: &mut Value) {
+    if let Some(object) = schema.as_object_mut() {
+        let unrestricted = object
+            .get("anyOf")
+            .and_then(Value::as_array)
+            .is_some_and(|branches| {
+                branches.iter().any(|branch| {
+                    branch == &serde_json::json!({"$ref": "#/components/schemas/JsonValue"})
+                        || branch
+                            == &serde_json::json!({
+                                "allOf": [{"$ref": "#/components/schemas/JsonValue"}],
+                                "nullable": true
+                            })
+                })
+            });
+        if unrestricted {
+            object.remove("anyOf");
+        }
+    }
+    for_schema_children_mut(schema, |child| {
+        simplify_unrestricted_json_unions(child);
+        Ok::<(), ()>(())
+    })
+    .expect("JSON union simplification is infallible");
+}
+
+// Return a conservative set of possible required string tags. Intersections
+// need only one tagged member; every alternative of a union must be tagged.
+fn required_type_tags(schema: &Value) -> Option<BTreeSet<String>> {
+    if schema.get("nullable") == Some(&Value::Bool(true)) {
+        return None;
+    }
+    if schema.get("type").and_then(Value::as_str) == Some("object")
+        && schema
+            .get("required")?
+            .as_array()?
+            .contains(&Value::String("type".to_string()))
+    {
+        let tag = schema.pointer("/properties/type")?;
+        if tag.get("type").and_then(Value::as_str) == Some("string")
+            && tag.get("nullable") != Some(&Value::Bool(true))
+        {
+            let tags: Option<BTreeSet<String>> = tag
+                .get("enum")?
+                .as_array()?
+                .iter()
+                .map(|value| value.as_str().map(str::to_string))
+                .collect();
+            return tags.filter(|tags| !tags.is_empty());
+        }
+    }
+    if let Some(branches) = schema.get("allOf").and_then(Value::as_array) {
+        return branches.iter().find_map(required_type_tags);
+    }
+    for keyword in ["anyOf", "oneOf"] {
+        if let Some(branches) = schema.get(keyword).and_then(Value::as_array) {
+            let mut tags = BTreeSet::new();
+            for branch in branches {
+                tags.extend(required_type_tags(branch)?);
+            }
+            return (!tags.is_empty()).then_some(tags);
+        }
+    }
+    None
 }
