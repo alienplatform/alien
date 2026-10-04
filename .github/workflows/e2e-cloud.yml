@@ -506,21 +506,24 @@ jobs:
           targets: x86_64-unknown-linux-musl
           install-protoc: "true"
 
-      - uses: pnpm/action-setup@v6
-        if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+      - if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+        name: Install development tools
+        id: mise
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
         with:
-          version: 10.34.5
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: node pnpm bun
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
-      - uses: actions/setup-node@v7
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
         if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
         with:
-          node-version: 24
           cache: pnpm
-
-      - uses: oven-sh/setup-bun@v2
-        if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
-        with:
-          bun-version: "1.4.2"
 
       - name: Install JS dependencies
         if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
@@ -604,21 +607,24 @@ jobs:
           targets: aarch64-unknown-linux-musl
           install-protoc: "true"
 
-      - uses: pnpm/action-setup@v6
-        if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+      - if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+        name: Install development tools
+        id: mise
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
         with:
-          version: 10.34.5
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: node pnpm bun
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
-      - uses: actions/setup-node@v7
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
         if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
         with:
-          node-version: 24
           cache: pnpm
-
-      - uses: oven-sh/setup-bun@v2
-        if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
-        with:
-          bun-version: "1.4.2"
 
       - name: Install JS dependencies
         if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
@@ -1262,7 +1268,15 @@ jobs:
           ) &
           echo "OIDC_REFRESH_PID=$!" >> $GITHUB_ENV
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: rust
+          cache: false
 
       - uses: depot/setup-action@v1
 
@@ -1287,17 +1301,21 @@ jobs:
         with:
           version: 0.16.0
 
-      - uses: oven-sh/setup-bun@v2
+      - name: Install development tools
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
         with:
-          bun-version: "1.4.2"
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: node pnpm bun
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
+        id: mise
 
-      - uses: pnpm/action-setup@v6
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
         with:
-          version: 10.34.5
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
           cache: pnpm
 
       - name: Install JS dependencies and build packages
@@ -1361,7 +1379,15 @@ jobs:
         with:
           name: env-test-e2e
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: rust
+          cache: false
 
       - uses: depot/setup-action@v1
 
@@ -1386,17 +1412,21 @@ jobs:
         with:
           version: 0.16.0
 
-      - uses: oven-sh/setup-bun@v2
+      - name: Install development tools
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
         with:
-          bun-version: "1.4.2"
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: node pnpm bun
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
+        id: mise
 
-      - uses: pnpm/action-setup@v6
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
         with:
-          version: 10.34.5
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
           cache: pnpm
 
       - uses: hashicorp/setup-terraform@v4
@@ -1510,7 +1540,15 @@ jobs:
         if: needs.compute-matrix.outputs.build_operator_image == 'true'
         run: docker pull ${{ needs.build-operator-image.outputs.operator_image }}
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: rust
+          cache: false
 
       - uses: depot/setup-action@v1
 
@@ -1535,17 +1573,21 @@ jobs:
         with:
           version: 0.16.0
 
-      - uses: oven-sh/setup-bun@v2
+      - name: Install development tools
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
         with:
-          bun-version: "1.4.2"
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: node pnpm bun
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
+        id: mise
 
-      - uses: pnpm/action-setup@v6
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
         with:
-          version: 10.34.5
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
           cache: pnpm
 
       - uses: hashicorp/setup-terraform@v4
@@ -1674,7 +1716,15 @@ jobs:
         with:
           name: env-test-e2e
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: rust
+          cache: false
 
       # depot cargo works on Linux/macOS; Windows uses sccache directly
       - uses: depot/setup-action@v1
@@ -1714,17 +1764,21 @@ jobs:
         with:
           version: 0.16.0
 
-      - uses: oven-sh/setup-bun@v2
+      - name: Install development tools
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
         with:
-          bun-version: "1.4.2"
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: node pnpm bun
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
+        id: mise
 
-      - uses: pnpm/action-setup@v6
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
         with:
-          version: 10.34.5
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
           cache: pnpm
 
       - name: Install JS dependencies and build packages
