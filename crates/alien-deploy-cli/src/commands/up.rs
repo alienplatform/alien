@@ -3248,7 +3248,7 @@ fn parse_stack_input_arg(input: &str, flag: &str) -> Result<(String, String)> {
     let Some((id, value)) = input.split_once('=') else {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: flag.trim_start_matches("--").to_string(),
-            message: format!("Invalid {flag} format: '{input}'. Use id=value"),
+            message: format!("Invalid {flag} format. Use id=value"),
         }));
     };
     if id.trim().is_empty() {

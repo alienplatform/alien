@@ -1,9 +1,10 @@
 //! Configure an exact existing setup target before acquiring its execution claim.
 
 use super::{
-    create_manager_client, create_manager_http_client, deployment_info_url, load_public_endpoints,
-    load_stack_settings, push_initial_setup_targeted, resolve_base_url, resolve_token,
-    DeployConfigFile, UpArgs,
+    collect_deployer_input_values, create_manager_client, create_manager_http_client,
+    deployment_info_url, load_public_endpoints, load_stack_settings, push_initial_setup_targeted,
+    resolve_base_url, resolve_token, stack_input_matches_context, DeployConfigFile,
+    DeploymentInfoSetupConfig, UpArgs,
 };
 use crate::{
     error::{ErrorData, Result},
@@ -113,6 +114,92 @@ struct PrepareRequest<'a> {
 struct PreparedTarget {
     update_operation_id: String,
     platform: Platform,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InputUpdateRequest<'a> {
+    expected_base_operation_id: &'a str,
+    input_values: &'a HashMap<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InputUpdateResponse {
+    outcome: String,
+    operation: Option<InputOperation>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InputOperation {
+    id: String,
+    target_release_id: Option<String>,
+}
+
+impl InputUpdateResponse {
+    fn next_operation(self, previous: &str, release: &str) -> Result<String> {
+        match (self.outcome.as_str(), self.operation) {
+            ("unchanged", None) => Ok(previous.to_string()),
+            ("accepted", Some(operation))
+                if !operation.id.is_empty()
+                    && operation.target_release_id.as_deref() == Some(release) =>
+            {
+                Ok(operation.id)
+            }
+            _ => Err(invalid_target(
+                "Input save did not return the exact requested release operation.",
+            )),
+        }
+    }
+}
+
+fn has_explicit_inputs(args: &UpArgs, config: Option<&DeployConfigFile>) -> bool {
+    !args.input_values.is_empty()
+        || !args.secret_input_values.is_empty()
+        || config.is_some_and(|config| {
+            config
+                .inputs
+                .as_ref()
+                .is_some_and(|values| !values.is_empty())
+                || config
+                    .secret_inputs
+                    .as_ref()
+                    .is_some_and(|values| !values.is_empty())
+        })
+}
+
+fn explicit_input_values(
+    args: &UpArgs,
+    config: Option<&DeployConfigFile>,
+    setup_config: Option<&DeploymentInfoSetupConfig>,
+) -> Result<HashMap<String, Value>> {
+    let supplied = has_explicit_inputs(args, config);
+    if !supplied {
+        return Ok(HashMap::new());
+    }
+    let mut inputs = setup_config
+        .and_then(|config| config.inputs.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|input| stack_input_matches_context(input, Platform::Machines))
+        .collect::<Vec<_>>();
+    if inputs.is_empty() {
+        return Err(invalid_target(
+            "The exact target has no deployer input definitions for the supplied values.",
+        ));
+    }
+    // This is a patch: required values already stored by setup must be retained,
+    // not prompted for again or replaced by release defaults.
+    for input in &mut inputs {
+        input.required = false;
+    }
+    collect_deployer_input_values(
+        &inputs,
+        &args.input_values,
+        &args.secret_input_values,
+        config,
+    )
 }
 
 fn invalid_target(message: &str) -> AlienError<ErrorData> {
@@ -276,10 +363,11 @@ pub(super) async fn run(
         .deployment_id
         .as_deref()
         .ok_or_else(|| invalid_target("--deployment-id is required."))?;
-    let operation_id = args
+    let mut operation_id = args
         .update_operation_id
         .as_deref()
-        .ok_or_else(|| invalid_target("--update-operation-id is required."))?;
+        .ok_or_else(|| invalid_target("--update-operation-id is required."))?
+        .to_string();
     let release_id = args
         .release_id
         .as_deref()
@@ -302,12 +390,6 @@ pub(super) async fn run(
             "An exact Machines setup target cannot select a base platform or setup item.",
         ));
     }
-    if !args.input_values.is_empty()
-        || !args.secret_input_values.is_empty()
-        || config.is_some_and(|config| config.inputs.is_some() || config.secret_inputs.is_some())
-    {
-        return Err(invalid_target("Setup input changes must be saved through the authorized setup configuration before this command."));
-    }
     let token = resolve_token(args, embedded)?;
     let base_url = resolve_base_url(args, embedded);
     let http = create_manager_http_client(&token)?;
@@ -315,7 +397,7 @@ pub(super) async fn run(
         .client(&http)
         .base_url(&base_url)
         .deployment_id(deployment_id)
-        .operation_id(operation_id)
+        .operation_id(&operation_id)
         .release_id(release_id)
         .call()
         .await?;
@@ -329,6 +411,51 @@ pub(super) async fn run(
             "--manager-url does not match the existing deployment's authorized manager.",
         ));
     }
+    if has_explicit_inputs(args, config) {
+        let inputs_url = format!(
+            "{}/v1/deployments/{}/inputs",
+            base_url.trim_end_matches('/'),
+            urlencoding::encode(deployment_id)
+        );
+        let response = http
+            .get(&inputs_url)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Could not load setup input definitions".into(),
+            })?;
+        let definitions: DeploymentInfoSetupConfig = read_response(response).await?;
+        let values = explicit_input_values(args, config, Some(&definitions))?;
+        let response = http
+            .patch(&inputs_url)
+            .json(&InputUpdateRequest {
+                expected_base_operation_id: &operation_id,
+                input_values: &values,
+            })
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Could not save the exact setup inputs".into(),
+            })?;
+        let saved: InputUpdateResponse = read_response(response).await?;
+        operation_id = saved.next_operation(&operation_id, release_id)?;
+        output::info(&format!("Setup inputs saved for update operation '{operation_id}'. Use this operation ID if setup is interrupted."));
+        info = fetch_target()
+            .client(&http)
+            .base_url(&base_url)
+            .deployment_id(deployment_id)
+            .operation_id(&operation_id)
+            .release_id(release_id)
+            .call()
+            .await?;
+        if manager_url(&info)? != original_manager {
+            return Err(invalid_target(
+                "The original manager changed while saving setup inputs.",
+            ));
+        }
+    }
     patch_settings(&mut info.setup_update, args, config)?;
     let response = http
         .post(format!(
@@ -337,7 +464,7 @@ pub(super) async fn run(
         ))
         .json(&PrepareRequest {
             deployment_id,
-            update_operation_id: operation_id,
+            update_operation_id: &operation_id,
             platform: Platform::Machines,
             setup_method: "cli",
             save_for_setup: true,
@@ -391,10 +518,11 @@ pub(super) async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::{StackInputDefinition, StackInputKind};
     use alien_deployment::manager_api_transport::ExecutionClaim;
     use clap::Parser;
     use httpmock::{
-        Method::{GET, POST},
+        Method::{GET, PATCH, POST},
         MockServer,
     };
     use serde_json::json;
@@ -441,6 +569,125 @@ mod tests {
             "--base-url",
             &server.base_url(),
         ])
+    }
+
+    fn input_definitions() -> Value {
+        let mut secret = StackInputDefinition::deployer_boolean(
+            "storageSecret",
+            "Storage secret",
+            "Signing secret",
+            None,
+        );
+        secret.kind = StackInputKind::Secret;
+        json!({"inputs": [
+            secret,
+            StackInputDefinition::deployer_boolean("archiveEnabled", "Archive", "Enable archive", None),
+            StackInputDefinition::deployer_boolean("alreadyConfigured", "Existing choice", "Keep prior answer", None)
+        ]})
+    }
+
+    #[test]
+    fn input_patch_only_contains_explicit_typed_values() {
+        let args = UpArgs::parse_from([
+            "democtl",
+            "--input",
+            "archiveEnabled=true",
+            "--secret-input",
+            "storageSecret=test-secret",
+        ]);
+        let definitions: DeploymentInfoSetupConfig =
+            serde_json::from_value(input_definitions()).unwrap();
+        let values = explicit_input_values(&args, None, Some(&definitions)).unwrap();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values["archiveEnabled"], true);
+        assert_eq!(values["storageSecret"], "test-secret");
+        assert!(!values.contains_key("alreadyConfigured"));
+        let malformed = UpArgs::parse_from(["democtl", "--secret-input", "sensitive-test-marker"]);
+        let error = explicit_input_values(&malformed, None, Some(&definitions)).unwrap_err();
+        assert!(!format!("{error:?}").contains("sensitive-test-marker"));
+    }
+
+    #[test]
+    fn input_save_must_preserve_exact_release_and_return_an_operation() {
+        for response in [
+            json!({"outcome":"accepted", "operation":null}),
+            json!({"outcome":"accepted", "operation":{"id":"op_other", "targetReleaseId":"rel_other"}}),
+            json!({"outcome":"unexpected", "operation":null}),
+        ] {
+            let response: InputUpdateResponse = serde_json::from_value(response).unwrap();
+            assert!(response.next_operation("op_blocked", "rel_target").is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn input_save_uses_cas_and_follows_accepted_or_unchanged_operation() {
+        for outcome in ["accepted", "unchanged", "stale"] {
+            let server = MockServer::start_async().await;
+            let original = server
+                .mock_async(|when, then| {
+                    when.method(GET)
+                        .path("/v1/deployment-info")
+                        .query_param("updateOperationId", "op_blocked");
+                    then.status(200).json_body(info(&server, "op_blocked"));
+                })
+                .await;
+            let definitions = server
+                .mock_async(|when, then| {
+                    when.method(GET).path("/v1/deployments/dep_demo/inputs");
+                    then.status(200).json_body(input_definitions());
+                })
+                .await;
+            let inputs = server.mock_async(|when, then| {
+                when.method(PATCH).path("/v1/deployments/dep_demo/inputs").json_body(json!({
+                    "expectedBaseOperationId":"op_blocked",
+                    "inputValues":{"archiveEnabled":true,"storageSecret":"test-secret"}
+                }));
+                if outcome == "stale" { then.status(409).body("test-secret"); }
+                else { then.status(200).json_body(json!({
+                    "outcome":outcome,
+                    "operation": if outcome == "accepted" { json!({"id":"op_inputs","targetReleaseId":"rel_target"}) } else { Value::Null }
+                })); }
+            }).await;
+            let saved = server
+                .mock_async(|when, then| {
+                    when.method(GET)
+                        .path("/v1/deployment-info")
+                        .query_param("updateOperationId", "op_inputs");
+                    then.status(200).json_body(info(&server, "op_inputs"));
+                })
+                .await;
+            let prepare = server.mock_async(|when, then| {
+                when.method(POST).path("/v1/deployment-info/prepare-stack").json_body(json!({
+                    "deploymentId":"dep_demo", "updateOperationId":if outcome=="accepted" {"op_inputs"} else {"op_blocked"},
+                    "platform":"machines", "setupMethod":"cli", "saveForSetup":true, "stackSettings":{}
+                }));
+                then.status(409);
+            }).await;
+            let acquire = server
+                .mock_async(|when, then| {
+                    when.method(POST).path("/v1/sync/acquire");
+                    then.status(500);
+                })
+                .await;
+            let mut args = args(&server);
+            args.input_values = vec!["archiveEnabled=true".into()];
+            args.secret_input_values = vec!["storageSecret=test-secret".into()];
+            let error = super::super::up_command(args, None).await.unwrap_err();
+            assert!(error.to_string().contains("409"), "{error}");
+            assert!(!format!("{error:?}").contains("test-secret"));
+            original
+                .assert_hits_async(if outcome == "unchanged" { 2 } else { 1 })
+                .await;
+            definitions.assert_hits_async(1).await;
+            inputs.assert_hits_async(1).await;
+            saved
+                .assert_hits_async(if outcome == "accepted" { 1 } else { 0 })
+                .await;
+            prepare
+                .assert_hits_async(if outcome == "stale" { 0 } else { 1 })
+                .await;
+            acquire.assert_hits_async(0).await;
+        }
     }
 
     #[test]
