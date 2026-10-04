@@ -15,7 +15,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::error::{ErrorData, Result};
-use crate::providers::sandbox::{guard_for, Bounded, TimeoutReport};
+use crate::providers::sandbox::{checked_env_name, guard_for, Bounded, TimeoutReport};
 use crate::traits::{
     Binding, CommandOutput, CreateSandboxRequest, JobPoll, JobStart, PreviewCapability,
     ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
@@ -336,6 +336,45 @@ impl Sandbox for LocalSandbox {
             TimeoutReport::bounded_program(request.timeout),
             "sh".to_string(),
         ];
+        // Inside the bounded command, like `env` below, so the route stays argv-only. A directory
+        // that does not exist fails the command with `cd`'s own message.
+        if let Some(cwd) = &request.cwd {
+            argv.extend([
+                "sh".to_string(),
+                "-c".to_string(),
+                "cd -- \"$1\" && shift && exec \"$@\"".to_string(),
+                "sh".to_string(),
+                sandbox_dir(cwd)?,
+            ]);
+        }
+        // Through `env`, so the variables reach the caller's command and not the wrapper that
+        // bounds it: a caller-chosen `PATH` or `LD_*` on the wrapper picks the `setsid` and `od`
+        // its deadline depends on.
+        if !request.env.is_empty() {
+            for name in request.env.keys() {
+                checked_env_name("sandbox.runCommand", name)?;
+            }
+            // `env` reads operands as assignments until one is not, so a program named with `=`
+            // would be taken as a variable and the next argument run in its place.
+            if request.command.contains('=') {
+                return Err(AlienError::new(ErrorData::InvalidInput {
+                    operation_context: "sandbox.runCommand".to_string(),
+                    details: format!(
+                        "command '{}' cannot carry '=' in its name while the call also declares \
+                         environment variables",
+                        request.command
+                    ),
+                    field_name: Some("command".to_string()),
+                }));
+            }
+            argv.push("env".to_string());
+            argv.extend(
+                request
+                    .env
+                    .iter()
+                    .map(|(name, value)| format!("{name}={value}")),
+            );
+        }
         argv.extend(request.argv());
         let response = self.exec_within(sandbox_id, &argv, &request).await?;
 
@@ -509,6 +548,27 @@ impl Sandbox for LocalSandbox {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+}
+
+/// Resolves a working directory under the session root, the rule the in-sandbox agent applies on
+/// the cloud backends: a leading `/` means the root, and `..` is refused.
+fn sandbox_dir(path: &str) -> Result<String> {
+    let relative = path.trim_matches('/');
+    let escapes = relative
+        .split('/')
+        .any(|part| part == ".." || part.is_empty());
+    if path.is_empty() || (!relative.is_empty() && escapes) {
+        return Err(AlienError::new(ErrorData::InvalidInput {
+            operation_context: "sandbox.runCommand".to_string(),
+            details: format!(
+                "working directory '{path}' must name a directory under the sandbox root"
+            ),
+            field_name: Some("cwd".to_string()),
+        }));
+    }
+    Ok(format!("/sandbox/{relative}")
+        .trim_end_matches('/')
+        .to_string())
 }
 
 #[cfg(test)]

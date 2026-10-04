@@ -408,3 +408,155 @@ async fn a_create_in_flight_at_removal_is_visible_to_the_reap_that_follows() {
     );
     manager.reap(SANDBOX_SLOW).await.expect("cleanup");
 }
+
+#[tokio::test]
+#[ignore = "requires a real Docker daemon"]
+async fn a_command_gets_the_env_and_cwd_it_was_given() {
+    use alien_bindings::providers::sandbox::local::LocalSandbox;
+    use alien_bindings::traits::{CommandOutput, CreateSandboxRequest, RunCommandRequest, Sandbox};
+    use alien_core::bindings::{BindingValue, LocalSandboxBinding};
+    use futures::StreamExt as _;
+    use std::collections::BTreeMap;
+
+    let harness = Harness::start().await;
+    let sandbox = LocalSandbox::new(
+        "agent",
+        &LocalSandboxBinding {
+            manager_url: BindingValue::Value(harness.route.base_url.clone()),
+            sandbox_key: BindingValue::Value(SANDBOX.to_string()),
+            token_path: BindingValue::Value(harness.route.token_path.display().to_string()),
+        },
+    )
+    .await
+    .expect("binding reads the route token");
+
+    let instance = sandbox
+        .create(CreateSandboxRequest {
+            sandbox_id: Some("env-cwd".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("sandbox starts");
+    sandbox
+        .write_files(
+            &instance.sandbox_id,
+            BTreeMap::from([("work/marker".to_string(), b"x".to_vec())]),
+        )
+        .await
+        .expect("creates the work directory");
+
+    let frames: Vec<_> = sandbox
+        .run_command(
+            &instance.sandbox_id,
+            RunCommandRequest {
+                command: "sh".to_string(),
+                args: vec!["-c".to_string(), "echo \"$FOO\"; pwd".to_string()],
+                cwd: Some("/work".to_string()),
+                env: BTreeMap::from([("FOO".to_string(), "bar".to_string())]),
+                timeout: std::time::Duration::from_secs(30),
+            },
+        )
+        .await
+        .expect("command runs")
+        .collect()
+        .await;
+
+    let stdout: String = frames
+        .iter()
+        .filter_map(|frame| match frame {
+            Ok(CommandOutput::Stdout { data, .. }) => {
+                Some(String::from_utf8_lossy(data).into_owned())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stdout, "bar\n/sandbox/work\n", "frames: {frames:?}");
+
+    // The variables reach the command, not the wrapper that holds it to its timeout: with no
+    // `setsid` on this PATH the wrapper still runs, and the command sees the PATH it was given.
+    let frames: Vec<_> = sandbox
+        .run_command(
+            &instance.sandbox_id,
+            RunCommandRequest {
+                command: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), "echo \"$PATH\"".to_string()],
+                cwd: None,
+                env: BTreeMap::from([("PATH".to_string(), "/sandbox".to_string())]),
+                timeout: std::time::Duration::from_secs(30),
+            },
+        )
+        .await
+        .expect("the wrapper keeps its own PATH")
+        .collect()
+        .await;
+    assert!(
+        matches!(&frames[..], [Ok(CommandOutput::Stdout { data, .. }), Ok(CommandOutput::Exit { code: 0, .. })] if data == b"/sandbox\n"),
+        "frames: {frames:?}"
+    );
+
+    // A directory that does not exist fails the command, with `cd`'s message, rather than
+    // running it in the root.
+    let frames: Vec<_> = sandbox
+        .run_command(
+            &instance.sandbox_id,
+            RunCommandRequest {
+                command: "true".to_string(),
+                args: vec![],
+                cwd: Some("/nope".to_string()),
+                env: BTreeMap::new(),
+                timeout: std::time::Duration::from_secs(30),
+            },
+        )
+        .await
+        .expect("command is sent")
+        .collect()
+        .await;
+    let stderr: String = frames
+        .iter()
+        .filter_map(|frame| match frame {
+            Ok(CommandOutput::Stderr { data, .. }) => {
+                Some(String::from_utf8_lossy(data).into_owned())
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        stderr.contains("/sandbox/nope")
+            && matches!(frames.last(), Some(Ok(CommandOutput::Exit { code, .. })) if *code != 0),
+        "frames: {frames:?}"
+    );
+
+    // Input no backend would run is refused before anything is sent, and says why.
+    let refused = |cwd: &str, env: BTreeMap<String, String>| RunCommandRequest {
+        command: "true".to_string(),
+        args: vec![],
+        cwd: Some(cwd.to_string()),
+        env,
+        timeout: std::time::Duration::from_secs(30),
+    };
+    for (request, cause) in [
+        (
+            refused("/work/..", BTreeMap::new()),
+            "under the sandbox root",
+        ),
+        (
+            refused(
+                "/work",
+                BTreeMap::from([("A=B".to_string(), "c".to_string())]),
+            ),
+            "not a shell name",
+        ),
+    ] {
+        let error = match sandbox.run_command(&instance.sandbox_id, request).await {
+            Ok(_) => panic!("expected a refusal naming '{cause}'"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "INVALID_INPUT", "{error:?}");
+        assert!(error.message.contains(cause), "{error:?}");
+    }
+
+    sandbox
+        .terminate(&instance.sandbox_id)
+        .await
+        .expect("cleanup");
+}
