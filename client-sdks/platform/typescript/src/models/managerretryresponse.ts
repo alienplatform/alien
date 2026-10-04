@@ -9,6 +9,10 @@ import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
+  ExternalBindingUnion,
+  ExternalBindingUnion$inboundSchema,
+} from "./externalbindingunion.js";
+import {
   ManagerRetryDeploymentResponse,
   ManagerRetryDeploymentResponse$inboundSchema,
 } from "./managerretrydeploymentresponse.js";
@@ -17,7 +21,7 @@ import {
   ManagerRetryResponseSetupConfig$inboundSchema,
   ManagerRetryResponseSetupTerraform,
   ManagerRetryResponseSetupTerraform$inboundSchema,
-} from "./managerretryresponseexternalbindings2.js";
+} from "./managerretryresponsecloud2.js";
 import {
   ManagerRetryResponseCertificateUnion1,
   ManagerRetryResponseCertificateUnion1$inboundSchema,
@@ -31,73 +35,17 @@ import {
   ManagerRetryResponseDomainsUnion1$inboundSchema,
   ManagerRetryResponseExposureCustom1,
   ManagerRetryResponseExposureCustom1$inboundSchema,
-  ManagerRetryResponseExternalBindings1,
-  ManagerRetryResponseExternalBindings1$inboundSchema,
   ManagerRetryResponseHeartbeats1,
   ManagerRetryResponseHeartbeats1$inboundSchema,
   ManagerRetryResponseModeGenerated1,
   ManagerRetryResponseModeGenerated1$inboundSchema,
-  ManagerRetryResponseProviderUnion2,
-  ManagerRetryResponseProviderUnion2$inboundSchema,
+  ManagerRetryResponseProviderAzureApplicationGatewayForContainers1,
+  ManagerRetryResponseProviderAzureApplicationGatewayForContainers1$inboundSchema,
+  ManagerRetryResponseRouteGateway1,
+  ManagerRetryResponseRouteGateway1$inboundSchema,
   ManagerRetryResponseSetupGoogleOauth,
   ManagerRetryResponseSetupGoogleOauth$inboundSchema,
-} from "./managerretryresponseproviderunion2.js";
-
-/**
- * Shared Gateway API route profile values.
- */
-export type ManagerRetryResponseRouteGateway1 = {
-  /**
-   * Annotations applied to route objects.
-   */
-  annotations?: { [k: string]: string } | undefined;
-  /**
-   * Route controller identifier, for example a cloud Gateway controller.
-   */
-  controller?: string | null | undefined;
-  /**
-   * GatewayClass selected for generated Gateways.
-   */
-  gatewayClassName: string;
-  /**
-   * Labels applied to route objects.
-   */
-  labels?: { [k: string]: string } | undefined;
-  /**
-   * Listener port, usually 443.
-   */
-  listenerPort: number;
-  provider?: ManagerRetryResponseProviderUnion2 | null | undefined;
-  routeApi: "gateway";
-};
-
-export const ManagerRetryResponseProviderAzureApplicationGatewayForContainersEnum1 =
-  {
-    AzureApplicationGatewayForContainers:
-      "azureApplicationGatewayForContainers",
-  } as const;
-export type ManagerRetryResponseProviderAzureApplicationGatewayForContainersEnum1 =
-  ClosedEnum<
-    typeof ManagerRetryResponseProviderAzureApplicationGatewayForContainersEnum1
-  >;
-
-export type ManagerRetryResponseProviderAzureApplicationGatewayForContainers1 =
-  {
-    /**
-     * Optional ALB name when using BYO Application Gateway resources.
-     */
-    albName?: string | null | undefined;
-    /**
-     * Optional ALB namespace when using BYO Application Gateway resources.
-     */
-    albNamespace?: string | null | undefined;
-    /**
-     * Public or internal frontend exposure.
-     */
-    frontend: string;
-    provider:
-      ManagerRetryResponseProviderAzureApplicationGatewayForContainersEnum1;
-  };
+} from "./managerretryresponseproviderazureapplicationgatewayforcontainers1.js";
 
 export const ManagerRetryResponseProviderGkeGatewayEnum1 = {
   GkeGateway: "gkeGateway",
@@ -145,7 +93,7 @@ export type ManagerRetryResponseProviderUnion1 =
   | ManagerRetryResponseProviderAwsAlb1
   | ManagerRetryResponseProviderAzureApplicationGatewayForContainers1
   | ManagerRetryResponseProviderGkeGateway1
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -171,7 +119,7 @@ export type ManagerRetryResponseRouteIngress1 = {
     | ManagerRetryResponseProviderAwsAlb1
     | ManagerRetryResponseProviderAzureApplicationGatewayForContainers1
     | ManagerRetryResponseProviderGkeGateway1
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -211,7 +159,7 @@ export type ManagerRetryResponseExposureUnion1 =
   | ManagerRetryResponseExposureCustom1
   | ManagerRetryResponseExposureGenerated1
   | ManagerRetryResponseExposureDisabled1
-  | any;
+  | string;
 
 /**
  * Kubernetes runtime substrate configuration.
@@ -229,14 +177,14 @@ export type ManagerRetryResponseKubernetes1 = {
     | ManagerRetryResponseExposureCustom1
     | ManagerRetryResponseExposureGenerated1
     | ManagerRetryResponseExposureDisabled1
-    | any
+    | string
     | null
     | undefined;
 };
 
 export type ManagerRetryResponseKubernetesUnion1 =
   | ManagerRetryResponseKubernetes1
-  | any;
+  | string;
 
 export const ManagerRetryResponseTypeByoVnetAzure1 = {
   ByoVnetAzure: "byo-vnet-azure",
@@ -364,7 +312,7 @@ export type ManagerRetryResponseNetworkUnion1 =
   | ManagerRetryResponseNetworkByoVnetAzure1
   | ManagerRetryResponseNetworkUseDefault1
   | ManagerRetryResponseNetworkCreate1
-  | any;
+  | string;
 
 /**
  * How telemetry (logs, metrics, traces) is handled.
@@ -414,27 +362,19 @@ export type ManagerRetryResponseStackSettings1 = {
    */
   deploymentModel?: ManagerRetryResponseDeploymentModel1 | undefined;
   domains?: ManagerRetryResponseDomainsUnion1 | null | undefined;
-  /**
-   * External bindings for pre-existing infrastructure.
-   *
-   * @remarks
-   * Allows using existing resources (MinIO, Redis, shared Container Apps
-   * Environment, etc.) instead of having Alien provision them.
-   * Required for Kubernetes platform, optional for cloud platforms.
-   */
-  externalBindings?: ManagerRetryResponseExternalBindings1 | null | undefined;
+  externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
   /**
    * How heartbeat health checks are handled.
    */
   heartbeats?: ManagerRetryResponseHeartbeats1 | undefined;
-  kubernetes?: ManagerRetryResponseKubernetes1 | any | null | undefined;
+  kubernetes?: ManagerRetryResponseKubernetes1 | string | null | undefined;
   network?:
     | ManagerRetryResponseNetworkByoVpcAws1
     | ManagerRetryResponseNetworkByoVpcGcp1
     | ManagerRetryResponseNetworkByoVnetAzure1
     | ManagerRetryResponseNetworkUseDefault1
     | ManagerRetryResponseNetworkCreate1
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -508,67 +448,6 @@ export type ManagerRetryResponse =
   | ManagerRetryDeploymentResponse;
 
 /** @internal */
-export const ManagerRetryResponseRouteGateway1$inboundSchema: z.ZodType<
-  ManagerRetryResponseRouteGateway1,
-  unknown
-> = z.object({
-  annotations: z.record(z.string(), z.string()).optional(),
-  controller: z.nullable(z.string()).optional(),
-  gatewayClassName: z.string(),
-  labels: z.record(z.string(), z.string()).optional(),
-  listenerPort: z.int(),
-  provider: z.nullable(ManagerRetryResponseProviderUnion2$inboundSchema)
-    .optional(),
-  routeApi: z.literal("gateway"),
-});
-
-export function managerRetryResponseRouteGateway1FromJSON(
-  jsonString: string,
-): SafeParseResult<ManagerRetryResponseRouteGateway1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ManagerRetryResponseRouteGateway1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagerRetryResponseRouteGateway1' from JSON`,
-  );
-}
-
-/** @internal */
-export const ManagerRetryResponseProviderAzureApplicationGatewayForContainersEnum1$inboundSchema:
-  z.ZodEnum<
-    typeof ManagerRetryResponseProviderAzureApplicationGatewayForContainersEnum1
-  > = z.enum(
-    ManagerRetryResponseProviderAzureApplicationGatewayForContainersEnum1,
-  );
-
-/** @internal */
-export const ManagerRetryResponseProviderAzureApplicationGatewayForContainers1$inboundSchema:
-  z.ZodType<
-    ManagerRetryResponseProviderAzureApplicationGatewayForContainers1,
-    unknown
-  > = z.object({
-    albName: z.nullable(z.string()).optional(),
-    albNamespace: z.nullable(z.string()).optional(),
-    frontend: z.string(),
-    provider:
-      ManagerRetryResponseProviderAzureApplicationGatewayForContainersEnum1$inboundSchema,
-  });
-
-export function managerRetryResponseProviderAzureApplicationGatewayForContainers1FromJSON(
-  jsonString: string,
-): SafeParseResult<
-  ManagerRetryResponseProviderAzureApplicationGatewayForContainers1,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      ManagerRetryResponseProviderAzureApplicationGatewayForContainers1$inboundSchema
-        .parse(JSON.parse(x)),
-    `Failed to parse 'ManagerRetryResponseProviderAzureApplicationGatewayForContainers1' from JSON`,
-  );
-}
-
-/** @internal */
 export const ManagerRetryResponseProviderGkeGatewayEnum1$inboundSchema:
   z.ZodEnum<typeof ManagerRetryResponseProviderGkeGatewayEnum1> = z.enum(
     ManagerRetryResponseProviderGkeGatewayEnum1,
@@ -633,11 +512,9 @@ export const ManagerRetryResponseProviderUnion1$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => ManagerRetryResponseProviderAwsAlb1$inboundSchema),
-  z.lazy(() =>
-    ManagerRetryResponseProviderAzureApplicationGatewayForContainers1$inboundSchema
-  ),
+  ManagerRetryResponseProviderAzureApplicationGatewayForContainers1$inboundSchema,
   z.lazy(() => ManagerRetryResponseProviderGkeGateway1$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function managerRetryResponseProviderUnion1FromJSON(
@@ -663,11 +540,11 @@ export const ManagerRetryResponseRouteIngress1$inboundSchema: z.ZodType<
   provider: z.nullable(
     z.union([
       z.lazy(() => ManagerRetryResponseProviderAwsAlb1$inboundSchema),
+      ManagerRetryResponseProviderAzureApplicationGatewayForContainers1$inboundSchema,
       z.lazy(() =>
-        ManagerRetryResponseProviderAzureApplicationGatewayForContainers1$inboundSchema
+        ManagerRetryResponseProviderGkeGateway1$inboundSchema
       ),
-      z.lazy(() => ManagerRetryResponseProviderGkeGateway1$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
@@ -689,7 +566,7 @@ export const ManagerRetryResponseRouteUnion1$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => ManagerRetryResponseRouteIngress1$inboundSchema),
-  z.lazy(() => ManagerRetryResponseRouteGateway1$inboundSchema),
+  ManagerRetryResponseRouteGateway1$inboundSchema,
 ]);
 
 export function managerRetryResponseRouteUnion1FromJSON(
@@ -711,7 +588,7 @@ export const ManagerRetryResponseExposureGenerated1$inboundSchema: z.ZodType<
   mode: ManagerRetryResponseModeGenerated1$inboundSchema,
   route: z.union([
     z.lazy(() => ManagerRetryResponseRouteIngress1$inboundSchema),
-    z.lazy(() => ManagerRetryResponseRouteGateway1$inboundSchema),
+    ManagerRetryResponseRouteGateway1$inboundSchema,
   ]),
 });
 
@@ -758,7 +635,7 @@ export const ManagerRetryResponseExposureUnion1$inboundSchema: z.ZodType<
   ManagerRetryResponseExposureCustom1$inboundSchema,
   z.lazy(() => ManagerRetryResponseExposureGenerated1$inboundSchema),
   z.lazy(() => ManagerRetryResponseExposureDisabled1$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function managerRetryResponseExposureUnion1FromJSON(
@@ -784,7 +661,7 @@ export const ManagerRetryResponseKubernetes1$inboundSchema: z.ZodType<
       ManagerRetryResponseExposureCustom1$inboundSchema,
       z.lazy(() => ManagerRetryResponseExposureGenerated1$inboundSchema),
       z.lazy(() => ManagerRetryResponseExposureDisabled1$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -805,7 +682,7 @@ export const ManagerRetryResponseKubernetesUnion1$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => ManagerRetryResponseKubernetes1$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function managerRetryResponseKubernetesUnion1FromJSON(
@@ -992,7 +869,7 @@ export const ManagerRetryResponseNetworkUnion1$inboundSchema: z.ZodType<
   z.lazy(() => ManagerRetryResponseNetworkByoVnetAzure1$inboundSchema),
   z.lazy(() => ManagerRetryResponseNetworkUseDefault1$inboundSchema),
   z.lazy(() => ManagerRetryResponseNetworkCreate1$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function managerRetryResponseNetworkUnion1FromJSON(
@@ -1027,13 +904,13 @@ export const ManagerRetryResponseStackSettings1$inboundSchema: z.ZodType<
   domains: z.nullable(ManagerRetryResponseDomainsUnion1$inboundSchema)
     .optional(),
   externalBindings: z.nullable(
-    ManagerRetryResponseExternalBindings1$inboundSchema,
+    z.record(z.string(), ExternalBindingUnion$inboundSchema),
   ).optional(),
   heartbeats: ManagerRetryResponseHeartbeats1$inboundSchema.optional(),
   kubernetes: z.nullable(
     z.union([
       z.lazy(() => ManagerRetryResponseKubernetes1$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   network: z.nullable(
@@ -1043,7 +920,7 @@ export const ManagerRetryResponseStackSettings1$inboundSchema: z.ZodType<
       z.lazy(() => ManagerRetryResponseNetworkByoVnetAzure1$inboundSchema),
       z.lazy(() => ManagerRetryResponseNetworkUseDefault1$inboundSchema),
       z.lazy(() => ManagerRetryResponseNetworkCreate1$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   publicEndpoints: z.nullable(

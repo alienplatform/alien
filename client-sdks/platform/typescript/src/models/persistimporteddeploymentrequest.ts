@@ -26,7 +26,7 @@ import {
   PersistImportedDeploymentRequestStackSettings,
   PersistImportedDeploymentRequestStackSettings$Outbound,
   PersistImportedDeploymentRequestStackSettings$outboundSchema,
-} from "./persistimporteddeploymentrequestpendingpreparedstackoverrideresourceconditionunion.js";
+} from "./persistimporteddeploymentrequestpendingpreparedstackoverrideconditionresource.js";
 import {
   PersistImportedDeploymentRequestPendingPreparedStackUnion,
   PersistImportedDeploymentRequestPendingPreparedStackUnion$Outbound,
@@ -43,22 +43,47 @@ import {
   PersistImportedDeploymentRequestPreparedStackProfileAzure,
   PersistImportedDeploymentRequestPreparedStackProfileAzure$Outbound,
   PersistImportedDeploymentRequestPreparedStackProfileAzure$outboundSchema,
-  PersistImportedDeploymentRequestPreparedStackProfileConditionStack,
-  PersistImportedDeploymentRequestPreparedStackProfileConditionStack$Outbound,
-  PersistImportedDeploymentRequestPreparedStackProfileConditionStack$outboundSchema,
-  PersistImportedDeploymentRequestPreparedStackProfileGcpResource,
-  PersistImportedDeploymentRequestPreparedStackProfileGcpResource$Outbound,
-  PersistImportedDeploymentRequestPreparedStackProfileGcpResource$outboundSchema,
-} from "./persistimporteddeploymentrequestpreparedstackprofileconditionstack.js";
+  PersistImportedDeploymentRequestPreparedStackProfileConditionResource,
+  PersistImportedDeploymentRequestPreparedStackProfileConditionResource$Outbound,
+  PersistImportedDeploymentRequestPreparedStackProfileConditionResource$outboundSchema,
+} from "./persistimporteddeploymentrequestpreparedstackprofileconditionresource.js";
 import {
   StackInputValueRequest,
   StackInputValueRequest$Outbound,
   StackInputValueRequest$outboundSchema,
 } from "./stackinputvaluerequest.js";
 
+export type PersistImportedDeploymentRequestPreparedStackProfileResourceConditionUnion =
+  | PersistImportedDeploymentRequestPreparedStackProfileConditionResource
+  | string;
+
+/**
+ * GCP-specific binding specification
+ */
+export type PersistImportedDeploymentRequestPreparedStackProfileGcpResource = {
+  condition?:
+    | PersistImportedDeploymentRequestPreparedStackProfileConditionResource
+    | string
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type PersistImportedDeploymentRequestPreparedStackProfileConditionStack =
+  {
+    expression: string;
+    title: string;
+  };
+
 export type PersistImportedDeploymentRequestPreparedStackProfileStackConditionUnion =
   | PersistImportedDeploymentRequestPreparedStackProfileConditionStack
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
@@ -66,7 +91,7 @@ export type PersistImportedDeploymentRequestPreparedStackProfileStackConditionUn
 export type PersistImportedDeploymentRequestPreparedStackProfileGcpStack = {
   condition?:
     | PersistImportedDeploymentRequestPreparedStackProfileConditionStack
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -366,7 +391,7 @@ export type PersistImportedDeploymentRequestPreparedStack = {
 
 export type PersistImportedDeploymentRequestPreparedStackUnion =
   | PersistImportedDeploymentRequestPreparedStack
-  | any;
+  | string;
 
 /**
  * The cross-account read a manager opened on Alien's registry for one deployment.
@@ -387,7 +412,7 @@ export type PersistImportedDeploymentRequestRegistryAccess = {
 
 export type PersistImportedDeploymentRequestRegistryAccessUnion =
   | PersistImportedDeploymentRequestRegistryAccess
-  | any;
+  | string;
 
 /**
  * The objects that keep an AWS deny sandbox's sessions inside the VPC. Each id is recorded as
@@ -419,7 +444,7 @@ export type PersistImportedDeploymentRequestEgress = {
 
 export type PersistImportedDeploymentRequestEgressUnion =
   | PersistImportedDeploymentRequestEgress
-  | any;
+  | string;
 
 export const PersistImportedDeploymentRequestTypeAwsSandbox = {
   AwsSandbox: "awsSandbox",
@@ -436,7 +461,7 @@ export type PersistImportedDeploymentRequestSetupScaffolding = {
    * IAM role the image build runs as.
    */
   buildRoleName: string;
-  egress?: PersistImportedDeploymentRequestEgress | any | null | undefined;
+  egress?: PersistImportedDeploymentRequestEgress | string | null | undefined;
   /**
    * A Frozen sandbox's MicroVM image, built during setup. A Live one's image belongs to its
    *
@@ -452,7 +477,7 @@ export type PersistImportedDeploymentRequestSetupScaffolding = {
  */
 export type PersistImportedDeploymentRequestSetupUpdateAuthorization = {
   /**
-   * Frozen resource projection from the last successful deployment.
+   * Setup-owned digest (`Stack::setup_owned_digest`) of the last successful deployment.
    */
   baselineFrozenDigest: string;
   /**
@@ -476,14 +501,14 @@ export type PersistImportedDeploymentRequestSetupUpdateAuthorization = {
    */
   setupTarget: string;
   /**
-   * Frozen resource projection prepared by the setup re-import.
+   * Setup-owned digest (`Stack::setup_owned_digest`) of the stack the setup re-import prepared.
    */
   targetFrozenDigest: string;
 };
 
 export type PersistImportedDeploymentRequestSetupUpdateAuthorizationUnion =
   | PersistImportedDeploymentRequestSetupUpdateAuthorization
-  | any;
+  | string;
 
 /**
  * Runtime metadata for deployment
@@ -540,12 +565,12 @@ export type PersistImportedDeploymentRequestRuntimeMetadata = {
   persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?:
     | PersistImportedDeploymentRequestPreparedStack
-    | any
+    | string
     | null
     | undefined;
   registryAccess?:
     | PersistImportedDeploymentRequestRegistryAccess
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -568,7 +593,7 @@ export type PersistImportedDeploymentRequestRuntimeMetadata = {
   } | undefined;
   setupUpdateAuthorization?:
     | PersistImportedDeploymentRequestSetupUpdateAuthorization
-    | any
+    | string
     | null
     | undefined;
 };
@@ -783,9 +808,101 @@ export type PersistImportedDeploymentRequest = {
 };
 
 /** @internal */
+export type PersistImportedDeploymentRequestPreparedStackProfileResourceConditionUnion$Outbound =
+  | PersistImportedDeploymentRequestPreparedStackProfileConditionResource$Outbound
+  | string;
+
+/** @internal */
+export const PersistImportedDeploymentRequestPreparedStackProfileResourceConditionUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestPreparedStackProfileResourceConditionUnion$Outbound,
+    PersistImportedDeploymentRequestPreparedStackProfileResourceConditionUnion
+  > = z.union([
+    PersistImportedDeploymentRequestPreparedStackProfileConditionResource$outboundSchema,
+    z.string(),
+  ]);
+
+export function persistImportedDeploymentRequestPreparedStackProfileResourceConditionUnionToJSON(
+  persistImportedDeploymentRequestPreparedStackProfileResourceConditionUnion:
+    PersistImportedDeploymentRequestPreparedStackProfileResourceConditionUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestPreparedStackProfileResourceConditionUnion$outboundSchema
+      .parse(
+        persistImportedDeploymentRequestPreparedStackProfileResourceConditionUnion,
+      ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestPreparedStackProfileGcpResource$Outbound =
+  {
+    condition?:
+      | PersistImportedDeploymentRequestPreparedStackProfileConditionResource$Outbound
+      | string
+      | null
+      | undefined;
+    scope: string;
+  };
+
+/** @internal */
+export const PersistImportedDeploymentRequestPreparedStackProfileGcpResource$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestPreparedStackProfileGcpResource$Outbound,
+    PersistImportedDeploymentRequestPreparedStackProfileGcpResource
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        PersistImportedDeploymentRequestPreparedStackProfileConditionResource$outboundSchema,
+        z.string(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function persistImportedDeploymentRequestPreparedStackProfileGcpResourceToJSON(
+  persistImportedDeploymentRequestPreparedStackProfileGcpResource:
+    PersistImportedDeploymentRequestPreparedStackProfileGcpResource,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestPreparedStackProfileGcpResource$outboundSchema
+      .parse(persistImportedDeploymentRequestPreparedStackProfileGcpResource),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestPreparedStackProfileConditionStack$Outbound =
+  {
+    expression: string;
+    title: string;
+  };
+
+/** @internal */
+export const PersistImportedDeploymentRequestPreparedStackProfileConditionStack$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestPreparedStackProfileConditionStack$Outbound,
+    PersistImportedDeploymentRequestPreparedStackProfileConditionStack
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function persistImportedDeploymentRequestPreparedStackProfileConditionStackToJSON(
+  persistImportedDeploymentRequestPreparedStackProfileConditionStack:
+    PersistImportedDeploymentRequestPreparedStackProfileConditionStack,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestPreparedStackProfileConditionStack$outboundSchema
+      .parse(
+        persistImportedDeploymentRequestPreparedStackProfileConditionStack,
+      ),
+  );
+}
+
+/** @internal */
 export type PersistImportedDeploymentRequestPreparedStackProfileStackConditionUnion$Outbound =
   | PersistImportedDeploymentRequestPreparedStackProfileConditionStack$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PersistImportedDeploymentRequestPreparedStackProfileStackConditionUnion$outboundSchema:
@@ -793,8 +910,10 @@ export const PersistImportedDeploymentRequestPreparedStackProfileStackConditionU
     PersistImportedDeploymentRequestPreparedStackProfileStackConditionUnion$Outbound,
     PersistImportedDeploymentRequestPreparedStackProfileStackConditionUnion
   > = z.union([
-    PersistImportedDeploymentRequestPreparedStackProfileConditionStack$outboundSchema,
-    z.any(),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestPreparedStackProfileConditionStack$outboundSchema
+    ),
+    z.string(),
   ]);
 
 export function persistImportedDeploymentRequestPreparedStackProfileStackConditionUnionToJSON(
@@ -814,7 +933,7 @@ export type PersistImportedDeploymentRequestPreparedStackProfileGcpStack$Outboun
   {
     condition?:
       | PersistImportedDeploymentRequestPreparedStackProfileConditionStack$Outbound
-      | any
+      | string
       | null
       | undefined;
     scope: string;
@@ -828,8 +947,10 @@ export const PersistImportedDeploymentRequestPreparedStackProfileGcpStack$outbou
   > = z.object({
     condition: z.nullable(
       z.union([
-        PersistImportedDeploymentRequestPreparedStackProfileConditionStack$outboundSchema,
-        z.any(),
+        z.lazy(() =>
+          PersistImportedDeploymentRequestPreparedStackProfileConditionStack$outboundSchema
+        ),
+        z.string(),
       ]),
     ).optional(),
     scope: z.string(),
@@ -862,9 +983,9 @@ export const PersistImportedDeploymentRequestPreparedStackProfileGcpBinding$outb
     PersistImportedDeploymentRequestPreparedStackProfileGcpBinding$Outbound,
     PersistImportedDeploymentRequestPreparedStackProfileGcpBinding
   > = z.object({
-    resource:
+    resource: z.lazy(() =>
       PersistImportedDeploymentRequestPreparedStackProfileGcpResource$outboundSchema
-        .optional(),
+    ).optional(),
     stack: z.lazy(() =>
       PersistImportedDeploymentRequestPreparedStackProfileGcpStack$outboundSchema
     ).optional(),
@@ -1284,7 +1405,7 @@ export function persistImportedDeploymentRequestPreparedStackToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestPreparedStackUnion$Outbound =
   | PersistImportedDeploymentRequestPreparedStack$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PersistImportedDeploymentRequestPreparedStackUnion$outboundSchema:
@@ -1293,7 +1414,7 @@ export const PersistImportedDeploymentRequestPreparedStackUnion$outboundSchema:
     PersistImportedDeploymentRequestPreparedStackUnion
   > = z.union([
     z.lazy(() => PersistImportedDeploymentRequestPreparedStack$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function persistImportedDeploymentRequestPreparedStackUnionToJSON(
@@ -1337,7 +1458,7 @@ export function persistImportedDeploymentRequestRegistryAccessToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestRegistryAccessUnion$Outbound =
   | PersistImportedDeploymentRequestRegistryAccess$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PersistImportedDeploymentRequestRegistryAccessUnion$outboundSchema:
@@ -1346,7 +1467,7 @@ export const PersistImportedDeploymentRequestRegistryAccessUnion$outboundSchema:
     PersistImportedDeploymentRequestRegistryAccessUnion
   > = z.union([
     z.lazy(() => PersistImportedDeploymentRequestRegistryAccess$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function persistImportedDeploymentRequestRegistryAccessUnionToJSON(
@@ -1393,7 +1514,7 @@ export function persistImportedDeploymentRequestEgressToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestEgressUnion$Outbound =
   | PersistImportedDeploymentRequestEgress$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PersistImportedDeploymentRequestEgressUnion$outboundSchema:
@@ -1402,7 +1523,7 @@ export const PersistImportedDeploymentRequestEgressUnion$outboundSchema:
     PersistImportedDeploymentRequestEgressUnion
   > = z.union([
     z.lazy(() => PersistImportedDeploymentRequestEgress$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function persistImportedDeploymentRequestEgressUnionToJSON(
@@ -1427,7 +1548,7 @@ export type PersistImportedDeploymentRequestSetupScaffolding$Outbound = {
   buildRoleName: string;
   egress?:
     | PersistImportedDeploymentRequestEgress$Outbound
-    | any
+    | string
     | null
     | undefined;
   imageArn?: string | null | undefined;
@@ -1444,7 +1565,7 @@ export const PersistImportedDeploymentRequestSetupScaffolding$outboundSchema:
     egress: z.nullable(
       z.union([
         z.lazy(() => PersistImportedDeploymentRequestEgress$outboundSchema),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     imageArn: z.nullable(z.string()).optional(),
@@ -1502,7 +1623,7 @@ export function persistImportedDeploymentRequestSetupUpdateAuthorizationToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestSetupUpdateAuthorizationUnion$Outbound =
   | PersistImportedDeploymentRequestSetupUpdateAuthorization$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PersistImportedDeploymentRequestSetupUpdateAuthorizationUnion$outboundSchema:
@@ -1513,7 +1634,7 @@ export const PersistImportedDeploymentRequestSetupUpdateAuthorizationUnion$outbo
     z.lazy(() =>
       PersistImportedDeploymentRequestSetupUpdateAuthorization$outboundSchema
     ),
-    z.any(),
+    z.string(),
   ]);
 
 export function persistImportedDeploymentRequestSetupUpdateAuthorizationUnionToJSON(
@@ -1539,12 +1660,12 @@ export type PersistImportedDeploymentRequestRuntimeMetadata$Outbound = {
   persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?:
     | PersistImportedDeploymentRequestPreparedStack$Outbound
-    | any
+    | string
     | null
     | undefined;
   registryAccess?:
     | PersistImportedDeploymentRequestRegistryAccess$Outbound
-    | any
+    | string
     | null
     | undefined;
   registryAccessGranted?: boolean | undefined;
@@ -1553,7 +1674,7 @@ export type PersistImportedDeploymentRequestRuntimeMetadata$Outbound = {
   } | undefined;
   setupUpdateAuthorization?:
     | PersistImportedDeploymentRequestSetupUpdateAuthorization$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -1579,7 +1700,7 @@ export const PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema:
         z.lazy(() =>
           PersistImportedDeploymentRequestPreparedStack$outboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     registryAccess: z.nullable(
@@ -1587,7 +1708,7 @@ export const PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema:
         z.lazy(() =>
           PersistImportedDeploymentRequestRegistryAccess$outboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     registryAccessGranted: z.boolean().optional(),
@@ -1602,7 +1723,7 @@ export const PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema:
         z.lazy(() =>
           PersistImportedDeploymentRequestSetupUpdateAuthorization$outboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
   });

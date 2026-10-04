@@ -45,19 +45,66 @@ import {
   SyncListResponseStackState$inboundSchema,
   SyncListResponseStatus,
   SyncListResponseStatus$inboundSchema,
-} from "./synclistresponsependingpreparedstackprovidedby.js";
+} from "./synclistresponsependingpreparedstackplatform.js";
 import {
   SyncListResponsePendingPreparedStackUnion,
   SyncListResponsePendingPreparedStackUnion$inboundSchema,
-  SyncListResponsePreparedStackExtendUnion,
-  SyncListResponsePreparedStackExtendUnion$inboundSchema,
+  SyncListResponsePreparedStackExtendAw,
+  SyncListResponsePreparedStackExtendAw$inboundSchema,
+  SyncListResponsePreparedStackExtendAzure,
+  SyncListResponsePreparedStackExtendAzure$inboundSchema,
+  SyncListResponsePreparedStackExtendGcp,
+  SyncListResponsePreparedStackExtendGcp$inboundSchema,
   SyncListResponsePreparedStackInput,
   SyncListResponsePreparedStackInput$inboundSchema,
   SyncListResponsePreparedStackManagement2,
   SyncListResponsePreparedStackManagement2$inboundSchema,
   SyncListResponsePreparedStackManagementEnum,
   SyncListResponsePreparedStackManagementEnum$inboundSchema,
-} from "./synclistresponsepreparedstackextendunion.js";
+} from "./synclistresponsepreparedstackextendgcp.js";
+
+/**
+ * Platform-specific permission configurations
+ */
+export type SyncListResponsePreparedStackExtendPlatforms = {
+  /**
+   * AWS permission configurations
+   */
+  aws?: Array<SyncListResponsePreparedStackExtendAw> | null | undefined;
+  /**
+   * Azure permission configurations
+   */
+  azure?: Array<SyncListResponsePreparedStackExtendAzure> | null | undefined;
+  /**
+   * GCP permission configurations
+   */
+  gcp?: Array<SyncListResponsePreparedStackExtendGcp> | null | undefined;
+};
+
+/**
+ * A permission set that can be applied across different cloud platforms
+ */
+export type SyncListResponsePreparedStackExtend = {
+  /**
+   * Human-readable description of what this permission set allows
+   */
+  description: string;
+  /**
+   * Unique identifier for the permission set (e.g., "storage/data-read")
+   */
+  id: string;
+  /**
+   * Platform-specific permission configurations
+   */
+  platforms: SyncListResponsePreparedStackExtendPlatforms;
+};
+
+/**
+ * Reference to a permission set - either by name or inline definition
+ */
+export type SyncListResponsePreparedStackExtendUnion =
+  | SyncListResponsePreparedStackExtend
+  | string;
 
 export type SyncListResponsePreparedStackManagement1 = {
   /**
@@ -66,7 +113,7 @@ export type SyncListResponsePreparedStackManagement1 = {
    * @remarks
    * Key can be "*" for all resources or resource name for specific resource
    */
-  extend: { [k: string]: Array<SyncListResponsePreparedStackExtendUnion> };
+  extend: { [k: string]: Array<SyncListResponsePreparedStackExtend | string> };
 };
 
 /**
@@ -293,7 +340,7 @@ export type SyncListResponsePreparedStackProfileConditionResource = {
 
 export type SyncListResponsePreparedStackProfileResourceConditionUnion =
   | SyncListResponsePreparedStackProfileConditionResource
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
@@ -301,7 +348,7 @@ export type SyncListResponsePreparedStackProfileResourceConditionUnion =
 export type SyncListResponsePreparedStackProfileGcpResource = {
   condition?:
     | SyncListResponsePreparedStackProfileConditionResource
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -320,7 +367,7 @@ export type SyncListResponsePreparedStackProfileConditionStack = {
 
 export type SyncListResponsePreparedStackProfileStackConditionUnion =
   | SyncListResponsePreparedStackProfileConditionStack
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
@@ -328,7 +375,7 @@ export type SyncListResponsePreparedStackProfileStackConditionUnion =
 export type SyncListResponsePreparedStackProfileGcpStack = {
   condition?:
     | SyncListResponsePreparedStackProfileConditionStack
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -608,7 +655,7 @@ export type SyncListResponsePreparedStack = {
 
 export type SyncListResponsePreparedStackUnion =
   | SyncListResponsePreparedStack
-  | any;
+  | string;
 
 /**
  * The cross-account read a manager opened on Alien's registry for one deployment.
@@ -629,7 +676,7 @@ export type SyncListResponseRegistryAccess = {
 
 export type SyncListResponseRegistryAccessUnion =
   | SyncListResponseRegistryAccess
-  | any;
+  | string;
 
 /**
  * The objects that keep an AWS deny sandbox's sessions inside the VPC. Each id is recorded as
@@ -659,7 +706,7 @@ export type SyncListResponseEgress = {
   securityGroupId?: string | null | undefined;
 };
 
-export type SyncListResponseEgressUnion = SyncListResponseEgress | any;
+export type SyncListResponseEgressUnion = SyncListResponseEgress | string;
 
 export const SyncListResponseTypeAwsSandbox = {
   AwsSandbox: "awsSandbox",
@@ -676,7 +723,7 @@ export type SyncListResponseSetupScaffolding = {
    * IAM role the image build runs as.
    */
   buildRoleName: string;
-  egress?: SyncListResponseEgress | any | null | undefined;
+  egress?: SyncListResponseEgress | string | null | undefined;
   /**
    * A Frozen sandbox's MicroVM image, built during setup. A Live one's image belongs to its
    *
@@ -692,7 +739,7 @@ export type SyncListResponseSetupScaffolding = {
  */
 export type SyncListResponseSetupUpdateAuthorization = {
   /**
-   * Frozen resource projection from the last successful deployment.
+   * Setup-owned digest (`Stack::setup_owned_digest`) of the last successful deployment.
    */
   baselineFrozenDigest: string;
   /**
@@ -716,14 +763,14 @@ export type SyncListResponseSetupUpdateAuthorization = {
    */
   setupTarget: string;
   /**
-   * Frozen resource projection prepared by the setup re-import.
+   * Setup-owned digest (`Stack::setup_owned_digest`) of the stack the setup re-import prepared.
    */
   targetFrozenDigest: string;
 };
 
 export type SyncListResponseSetupUpdateAuthorizationUnion =
   | SyncListResponseSetupUpdateAuthorization
-  | any;
+  | string;
 
 /**
  * Runtime metadata for deployment state persistence
@@ -772,8 +819,8 @@ export type SyncListResponseRuntimeMetadata = {
    * resource sharing such an input resolves the persisted answer forever.
    */
   persistedGateAnswers?: { [k: string]: boolean } | undefined;
-  preparedStack?: SyncListResponsePreparedStack | any | null | undefined;
-  registryAccess?: SyncListResponseRegistryAccess | any | null | undefined;
+  preparedStack?: SyncListResponsePreparedStack | string | null | undefined;
+  registryAccess?: SyncListResponseRegistryAccess | string | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
    *
@@ -794,7 +841,7 @@ export type SyncListResponseRuntimeMetadata = {
     | undefined;
   setupUpdateAuthorization?:
     | SyncListResponseSetupUpdateAuthorization
-    | any
+    | string
     | null
     | undefined;
 };
@@ -1005,7 +1052,7 @@ export type SyncListResponseManagementConfigUnion =
   | SyncListResponseManagementConfigAws
   | SyncListResponseManagementConfigGcp
   | SyncListResponseManagementConfigKubernetes
-  | any;
+  | string;
 
 export type SyncListResponseDeployment = {
   /**
@@ -1172,7 +1219,7 @@ export type SyncListResponseDeployment = {
     | SyncListResponseManagementConfigAws
     | SyncListResponseManagementConfigGcp
     | SyncListResponseManagementConfigKubernetes
-    | any
+    | string
     | null
     | undefined;
   deploymentToken?: string | null | undefined;
@@ -1188,13 +1235,94 @@ export type SyncListResponse = {
 };
 
 /** @internal */
+export const SyncListResponsePreparedStackExtendPlatforms$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackExtendPlatforms, unknown> = z.object({
+    aws: z.nullable(
+      z.array(SyncListResponsePreparedStackExtendAw$inboundSchema),
+    ).optional(),
+    azure: z.nullable(
+      z.array(SyncListResponsePreparedStackExtendAzure$inboundSchema),
+    ).optional(),
+    gcp: z.nullable(
+      z.array(SyncListResponsePreparedStackExtendGcp$inboundSchema),
+    ).optional(),
+  });
+
+export function syncListResponsePreparedStackExtendPlatformsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendPlatforms,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackExtendPlatforms$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackExtendPlatforms' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackExtend$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackExtend,
+  unknown
+> = z.object({
+  description: z.string(),
+  id: z.string(),
+  platforms: z.lazy(() =>
+    SyncListResponsePreparedStackExtendPlatforms$inboundSchema
+  ),
+});
+
+export function syncListResponsePreparedStackExtendFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponsePreparedStackExtend, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackExtend$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePreparedStackExtend' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackExtendUnion$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackExtendUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponsePreparedStackExtend$inboundSchema),
+  z.string(),
+]);
+
+export function syncListResponsePreparedStackExtendUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackExtendUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackExtendUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncListResponsePreparedStackManagement1$inboundSchema: z.ZodType<
   SyncListResponsePreparedStackManagement1,
   unknown
 > = z.object({
   extend: z.record(
     z.string(),
-    z.array(SyncListResponsePreparedStackExtendUnion$inboundSchema),
+    z.array(z.union([
+      z.lazy(() => SyncListResponsePreparedStackExtend$inboundSchema),
+      z.string(),
+    ])),
   ),
 });
 
@@ -1545,7 +1673,7 @@ export const SyncListResponsePreparedStackProfileResourceConditionUnion$inboundS
     z.lazy(() =>
       SyncListResponsePreparedStackProfileConditionResource$inboundSchema
     ),
-    z.any(),
+    z.string(),
   ]);
 
 export function syncListResponsePreparedStackProfileResourceConditionUnionFromJSON(
@@ -1572,7 +1700,7 @@ export const SyncListResponsePreparedStackProfileGcpResource$inboundSchema:
           z.lazy(() =>
             SyncListResponsePreparedStackProfileConditionResource$inboundSchema
           ),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
       scope: z.string(),
@@ -1625,7 +1753,7 @@ export const SyncListResponsePreparedStackProfileStackConditionUnion$inboundSche
       z.lazy(() =>
         SyncListResponsePreparedStackProfileConditionStack$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]);
 
 export function syncListResponsePreparedStackProfileStackConditionUnionFromJSON(
@@ -1651,7 +1779,7 @@ export const SyncListResponsePreparedStackProfileGcpStack$inboundSchema:
         z.lazy(() =>
           SyncListResponsePreparedStackProfileConditionStack$inboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     scope: z.string(),
@@ -2005,7 +2133,7 @@ export const SyncListResponsePreparedStackUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => SyncListResponsePreparedStack$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function syncListResponsePreparedStackUnionFromJSON(
@@ -2044,7 +2172,7 @@ export const SyncListResponseRegistryAccessUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => SyncListResponseRegistryAccess$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function syncListResponseRegistryAccessUnionFromJSON(
@@ -2083,7 +2211,7 @@ export function syncListResponseEgressFromJSON(
 export const SyncListResponseEgressUnion$inboundSchema: z.ZodType<
   SyncListResponseEgressUnion,
   unknown
-> = z.union([z.lazy(() => SyncListResponseEgress$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => SyncListResponseEgress$inboundSchema), z.string()]);
 
 export function syncListResponseEgressUnionFromJSON(
   jsonString: string,
@@ -2107,7 +2235,7 @@ export const SyncListResponseSetupScaffolding$inboundSchema: z.ZodType<
 > = z.object({
   buildRoleName: z.string(),
   egress: z.nullable(
-    z.union([z.lazy(() => SyncListResponseEgress$inboundSchema), z.any()]),
+    z.union([z.lazy(() => SyncListResponseEgress$inboundSchema), z.string()]),
   ).optional(),
   imageArn: z.nullable(z.string()).optional(),
   type: SyncListResponseTypeAwsSandbox$inboundSchema,
@@ -2157,7 +2285,7 @@ export function syncListResponseSetupUpdateAuthorizationFromJSON(
 export const SyncListResponseSetupUpdateAuthorizationUnion$inboundSchema:
   z.ZodType<SyncListResponseSetupUpdateAuthorizationUnion, unknown> = z.union([
     z.lazy(() => SyncListResponseSetupUpdateAuthorization$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function syncListResponseSetupUpdateAuthorizationUnionFromJSON(
@@ -2193,13 +2321,13 @@ export const SyncListResponseRuntimeMetadata$inboundSchema: z.ZodType<
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => SyncListResponsePreparedStack$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   registryAccess: z.nullable(
     z.union([
       z.lazy(() => SyncListResponseRegistryAccess$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   registryAccessGranted: z.boolean().optional(),
@@ -2210,7 +2338,7 @@ export const SyncListResponseRuntimeMetadata$inboundSchema: z.ZodType<
   setupUpdateAuthorization: z.nullable(
     z.union([
       z.lazy(() => SyncListResponseSetupUpdateAuthorization$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -2396,7 +2524,7 @@ export const SyncListResponseManagementConfigUnion$inboundSchema: z.ZodType<
   z.lazy(() => SyncListResponseManagementConfigAws$inboundSchema),
   z.lazy(() => SyncListResponseManagementConfigGcp$inboundSchema),
   z.lazy(() => SyncListResponseManagementConfigKubernetes$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function syncListResponseManagementConfigUnionFromJSON(
@@ -2476,7 +2604,7 @@ export const SyncListResponseDeployment$inboundSchema: z.ZodType<
       z.lazy(() => SyncListResponseManagementConfigAws$inboundSchema),
       z.lazy(() => SyncListResponseManagementConfigGcp$inboundSchema),
       z.lazy(() => SyncListResponseManagementConfigKubernetes$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   deploymentToken: z.nullable(z.string()).optional(),

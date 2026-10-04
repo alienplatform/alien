@@ -21,6 +21,10 @@ import {
 } from "./deploymentportalappearance.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
+  ExternalBindingUnion,
+  ExternalBindingUnion$inboundSchema,
+} from "./externalbindingunion.js";
+import {
   SetupItemStatus,
   SetupItemStatus$inboundSchema,
 } from "./setupitemstatus.js";
@@ -77,10 +81,10 @@ export type DeploymentInfoFailureDomains2 = {
 
 export type DeploymentInfoFailureDomainsUnion2 =
   | DeploymentInfoFailureDomains2
-  | any;
+  | string;
 
 export type DeploymentInfoPoolsAutoscale = {
-  failureDomains?: DeploymentInfoFailureDomains2 | any | null | undefined;
+  failureDomains?: DeploymentInfoFailureDomains2 | string | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -115,10 +119,10 @@ export type DeploymentInfoFailureDomains1 = {
 
 export type DeploymentInfoFailureDomainsUnion1 =
   | DeploymentInfoFailureDomains1
-  | any;
+  | string;
 
 export type DeploymentInfoPoolsFixed = {
-  failureDomains?: DeploymentInfoFailureDomains1 | any | null | undefined;
+  failureDomains?: DeploymentInfoFailureDomains1 | string | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -155,7 +159,7 @@ export type DeploymentInfoCompute = {
   } | undefined;
 };
 
-export type DeploymentInfoComputeUnion = DeploymentInfoCompute | any;
+export type DeploymentInfoComputeUnion = DeploymentInfoCompute | string;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -175,20 +179,20 @@ export type DeploymentInfoAws = {
   certificateArn: string;
 };
 
-export type DeploymentInfoAwsUnion = DeploymentInfoAws | any;
+export type DeploymentInfoAwsUnion = DeploymentInfoAws | string;
 
 export type DeploymentInfoAzure = {
   keyVaultCertificateId: string;
   keyVaultResourceId?: string | null | undefined;
 };
 
-export type DeploymentInfoAzureUnion = DeploymentInfoAzure | any;
+export type DeploymentInfoAzureUnion = DeploymentInfoAzure | string;
 
 export type DeploymentInfoGcp = {
   certificateName: string;
 };
 
-export type DeploymentInfoGcpUnion = DeploymentInfoGcp | any;
+export type DeploymentInfoGcpUnion = DeploymentInfoGcp | string;
 
 /**
  * Namespace-scoped Kubernetes TLS Secret reference.
@@ -213,16 +217,16 @@ export type DeploymentInfoDomainsKubernetes = {
 
 export type DeploymentInfoDomainsKubernetesUnion =
   | DeploymentInfoDomainsKubernetes
-  | any;
+  | string;
 
 /**
  * Platform-specific certificate references for custom domains.
  */
 export type DeploymentInfoDomainsCertificate = {
-  aws?: DeploymentInfoAws | any | null | undefined;
-  azure?: DeploymentInfoAzure | any | null | undefined;
-  gcp?: DeploymentInfoGcp | any | null | undefined;
-  kubernetes?: DeploymentInfoDomainsKubernetes | any | null | undefined;
+  aws?: DeploymentInfoAws | string | null | undefined;
+  azure?: DeploymentInfoAzure | string | null | undefined;
+  gcp?: DeploymentInfoGcp | string | null | undefined;
+  kubernetes?: DeploymentInfoDomainsKubernetes | string | null | undefined;
 };
 
 /**
@@ -268,7 +272,7 @@ export type DeploymentInfoPublicEndpointTargetMachineAddresses = {
 export type DeploymentInfoPublicEndpointTargetUnion =
   | DeploymentInfoPublicEndpointTargetLoadBalancer
   | DeploymentInfoPublicEndpointTargetMachineAddresses
-  | any;
+  | string;
 
 /**
  * Domain configuration for the stack.
@@ -289,22 +293,12 @@ export type DeploymentInfoDomains = {
   publicEndpointTarget?:
     | DeploymentInfoPublicEndpointTargetLoadBalancer
     | DeploymentInfoPublicEndpointTargetMachineAddresses
-    | any
+    | string
     | null
     | undefined;
 };
 
-export type DeploymentInfoDomainsUnion = DeploymentInfoDomains | any;
-
-/**
- * External bindings for pre-existing infrastructure.
- *
- * @remarks
- * Allows using existing resources (MinIO, Redis, shared Container Apps
- * Environment, etc.) instead of having Alien provision them.
- * Required for Kubernetes platform, optional for cloud platforms.
- */
-export type DeploymentInfoExternalBindings = {};
+export type DeploymentInfoDomainsUnion = DeploymentInfoDomains | string;
 
 /**
  * How heartbeat health checks are handled.
@@ -333,7 +327,7 @@ export type DeploymentInfoCloud = {
   subscriptionId?: string | null | undefined;
 };
 
-export type DeploymentInfoCloudUnion = DeploymentInfoCloud | any;
+export type DeploymentInfoCloudUnion = DeploymentInfoCloud | string;
 
 /**
  * Ownership model for the Kubernetes cluster.
@@ -354,7 +348,7 @@ export type DeploymentInfoOwnership = ClosedEnum<
  * Kubernetes cluster setup settings.
  */
 export type DeploymentInfoCluster = {
-  cloud?: DeploymentInfoCloud | any | null | undefined;
+  cloud?: DeploymentInfoCloud | string | null | undefined;
   /**
    * Namespace where the Alien chart and application resources run.
    */
@@ -365,7 +359,7 @@ export type DeploymentInfoCluster = {
   ownership: DeploymentInfoOwnership;
 };
 
-export type DeploymentInfoClusterUnion = DeploymentInfoCluster | any;
+export type DeploymentInfoClusterUnion = DeploymentInfoCluster | string;
 
 export type DeploymentInfoCertificateNone2 = {
   mode: "none";
@@ -499,7 +493,7 @@ export type SetupUpdateProviderUnion4 =
   | ProviderSetupUpdateAwsAlb4
   | ProviderSetupUpdateAzureApplicationGatewayForContainers4
   | ProviderSetupUpdateGkeGateway4
-  | any;
+  | string;
 
 /**
  * Shared Gateway API route profile values.
@@ -529,7 +523,7 @@ export type DeploymentInfoRouteGateway2 = {
     | ProviderSetupUpdateAwsAlb4
     | ProviderSetupUpdateAzureApplicationGatewayForContainers4
     | ProviderSetupUpdateGkeGateway4
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -605,7 +599,7 @@ export type SetupUpdateProviderUnion3 =
   | ProviderSetupUpdateAwsAlb3
   | ProviderSetupUpdateAzureApplicationGatewayForContainers3
   | ProviderSetupUpdateGkeGateway3
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -631,7 +625,7 @@ export type DeploymentInfoRouteIngress2 = {
     | ProviderSetupUpdateAwsAlb3
     | ProviderSetupUpdateAzureApplicationGatewayForContainers3
     | ProviderSetupUpdateGkeGateway3
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -799,7 +793,7 @@ export type SetupUpdateProviderUnion2 =
   | ProviderSetupUpdateAwsAlb2
   | ProviderSetupUpdateAzureApplicationGatewayForContainers2
   | ProviderSetupUpdateGkeGateway2
-  | any;
+  | string;
 
 /**
  * Shared Gateway API route profile values.
@@ -829,7 +823,7 @@ export type DeploymentInfoRouteGateway1 = {
     | ProviderSetupUpdateAwsAlb2
     | ProviderSetupUpdateAzureApplicationGatewayForContainers2
     | ProviderSetupUpdateGkeGateway2
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -905,7 +899,7 @@ export type SetupUpdateProviderUnion1 =
   | ProviderSetupUpdateAwsAlb1
   | ProviderSetupUpdateAzureApplicationGatewayForContainers1
   | ProviderSetupUpdateGkeGateway1
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -931,7 +925,7 @@ export type DeploymentInfoRouteIngress1 = {
     | ProviderSetupUpdateAwsAlb1
     | ProviderSetupUpdateAzureApplicationGatewayForContainers1
     | ProviderSetupUpdateGkeGateway1
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -976,7 +970,7 @@ export type DeploymentInfoExposureUnion =
   | DeploymentInfoExposureCustom
   | DeploymentInfoExposureGenerated
   | DeploymentInfoExposureDisabled
-  | any;
+  | string;
 
 /**
  * Kubernetes runtime substrate configuration.
@@ -989,17 +983,17 @@ export type DeploymentInfoExposureUnion =
  * cluster.
  */
 export type DeploymentInfoKubernetes = {
-  cluster?: DeploymentInfoCluster | any | null | undefined;
+  cluster?: DeploymentInfoCluster | string | null | undefined;
   exposure?:
     | DeploymentInfoExposureCustom
     | DeploymentInfoExposureGenerated
     | DeploymentInfoExposureDisabled
-    | any
+    | string
     | null
     | undefined;
 };
 
-export type DeploymentInfoKubernetesUnion = DeploymentInfoKubernetes | any;
+export type DeploymentInfoKubernetesUnion = DeploymentInfoKubernetes | string;
 
 export const DeploymentInfoTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
@@ -1127,7 +1121,7 @@ export type DeploymentInfoNetworkUnion =
   | DeploymentInfoNetworkByoVnetAzure
   | DeploymentInfoNetworkUseDefault
   | DeploymentInfoNetworkCreate
-  | any;
+  | string;
 
 /**
  * How telemetry (logs, metrics, traces) is handled.
@@ -1169,33 +1163,25 @@ export type DeploymentInfoUpdates = ClosedEnum<typeof DeploymentInfoUpdates>;
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type DeploymentInfoStackSettings = {
-  compute?: DeploymentInfoCompute | any | null | undefined;
+  compute?: DeploymentInfoCompute | string | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
   deploymentModel?: DeploymentInfoDeploymentModel | undefined;
-  domains?: DeploymentInfoDomains | any | null | undefined;
-  /**
-   * External bindings for pre-existing infrastructure.
-   *
-   * @remarks
-   * Allows using existing resources (MinIO, Redis, shared Container Apps
-   * Environment, etc.) instead of having Alien provision them.
-   * Required for Kubernetes platform, optional for cloud platforms.
-   */
-  externalBindings?: DeploymentInfoExternalBindings | null | undefined;
+  domains?: DeploymentInfoDomains | string | null | undefined;
+  externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
   /**
    * How heartbeat health checks are handled.
    */
   heartbeats?: DeploymentInfoHeartbeats | undefined;
-  kubernetes?: DeploymentInfoKubernetes | any | null | undefined;
+  kubernetes?: DeploymentInfoKubernetes | string | null | undefined;
   network?:
     | DeploymentInfoNetworkByoVpcAws
     | DeploymentInfoNetworkByoVpcGcp
     | DeploymentInfoNetworkByoVnetAzure
     | DeploymentInfoNetworkUseDefault
     | DeploymentInfoNetworkCreate
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -1894,7 +1880,7 @@ export type DeploymentInfoManagementConfigUnion =
   | DeploymentInfoManagementConfigAws
   | DeploymentInfoManagementConfigGcp
   | DeploymentInfoManagementConfigKubernetes
-  | any;
+  | string;
 
 export type InstallContextTargets = {
   /**
@@ -1915,7 +1901,7 @@ export type InstallContextTargets = {
     | DeploymentInfoManagementConfigAws
     | DeploymentInfoManagementConfigGcp
     | DeploymentInfoManagementConfigKubernetes
-    | any
+    | string
     | null
     | undefined;
   awsManagingAccountId?: string | undefined;
@@ -2032,7 +2018,7 @@ export const DeploymentInfoFailureDomainsUnion2$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => DeploymentInfoFailureDomains2$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentInfoFailureDomainsUnion2FromJSON(
@@ -2054,7 +2040,7 @@ export const DeploymentInfoPoolsAutoscale$inboundSchema: z.ZodType<
   failure_domains: z.nullable(
     z.union([
       z.lazy(() => DeploymentInfoFailureDomains2$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -2102,7 +2088,7 @@ export const DeploymentInfoFailureDomainsUnion1$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => DeploymentInfoFailureDomains1$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentInfoFailureDomainsUnion1FromJSON(
@@ -2124,7 +2110,7 @@ export const DeploymentInfoPoolsFixed$inboundSchema: z.ZodType<
   failure_domains: z.nullable(
     z.union([
       z.lazy(() => DeploymentInfoFailureDomains1$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -2193,7 +2179,7 @@ export function deploymentInfoComputeFromJSON(
 export const DeploymentInfoComputeUnion$inboundSchema: z.ZodType<
   DeploymentInfoComputeUnion,
   unknown
-> = z.union([z.lazy(() => DeploymentInfoCompute$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DeploymentInfoCompute$inboundSchema), z.string()]);
 
 export function deploymentInfoComputeUnionFromJSON(
   jsonString: string,
@@ -2232,7 +2218,7 @@ export function deploymentInfoAwsFromJSON(
 export const DeploymentInfoAwsUnion$inboundSchema: z.ZodType<
   DeploymentInfoAwsUnion,
   unknown
-> = z.union([z.lazy(() => DeploymentInfoAws$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DeploymentInfoAws$inboundSchema), z.string()]);
 
 export function deploymentInfoAwsUnionFromJSON(
   jsonString: string,
@@ -2267,7 +2253,7 @@ export function deploymentInfoAzureFromJSON(
 export const DeploymentInfoAzureUnion$inboundSchema: z.ZodType<
   DeploymentInfoAzureUnion,
   unknown
-> = z.union([z.lazy(() => DeploymentInfoAzure$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DeploymentInfoAzure$inboundSchema), z.string()]);
 
 export function deploymentInfoAzureUnionFromJSON(
   jsonString: string,
@@ -2301,7 +2287,7 @@ export function deploymentInfoGcpFromJSON(
 export const DeploymentInfoGcpUnion$inboundSchema: z.ZodType<
   DeploymentInfoGcpUnion,
   unknown
-> = z.union([z.lazy(() => DeploymentInfoGcp$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DeploymentInfoGcp$inboundSchema), z.string()]);
 
 export function deploymentInfoGcpUnionFromJSON(
   jsonString: string,
@@ -2356,7 +2342,7 @@ export const DeploymentInfoDomainsKubernetesUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => DeploymentInfoDomainsKubernetes$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentInfoDomainsKubernetesUnionFromJSON(
@@ -2376,18 +2362,18 @@ export const DeploymentInfoDomainsCertificate$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   aws: z.nullable(
-    z.union([z.lazy(() => DeploymentInfoAws$inboundSchema), z.any()]),
+    z.union([z.lazy(() => DeploymentInfoAws$inboundSchema), z.string()]),
   ).optional(),
   azure: z.nullable(
-    z.union([z.lazy(() => DeploymentInfoAzure$inboundSchema), z.any()]),
+    z.union([z.lazy(() => DeploymentInfoAzure$inboundSchema), z.string()]),
   ).optional(),
   gcp: z.nullable(
-    z.union([z.lazy(() => DeploymentInfoGcp$inboundSchema), z.any()]),
+    z.union([z.lazy(() => DeploymentInfoGcp$inboundSchema), z.string()]),
   ).optional(),
   kubernetes: z.nullable(
     z.union([
       z.lazy(() => DeploymentInfoDomainsKubernetes$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -2488,7 +2474,7 @@ export const DeploymentInfoPublicEndpointTargetUnion$inboundSchema: z.ZodType<
   z.lazy(() =>
     DeploymentInfoPublicEndpointTargetMachineAddresses$inboundSchema
   ),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentInfoPublicEndpointTargetUnionFromJSON(
@@ -2526,7 +2512,7 @@ export const DeploymentInfoDomains$inboundSchema: z.ZodType<
       z.lazy(() =>
         DeploymentInfoPublicEndpointTargetMachineAddresses$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -2545,7 +2531,7 @@ export function deploymentInfoDomainsFromJSON(
 export const DeploymentInfoDomainsUnion$inboundSchema: z.ZodType<
   DeploymentInfoDomainsUnion,
   unknown
-> = z.union([z.lazy(() => DeploymentInfoDomains$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DeploymentInfoDomains$inboundSchema), z.string()]);
 
 export function deploymentInfoDomainsUnionFromJSON(
   jsonString: string,
@@ -2554,22 +2540,6 @@ export function deploymentInfoDomainsUnionFromJSON(
     jsonString,
     (x) => DeploymentInfoDomainsUnion$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DeploymentInfoDomainsUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentInfoExternalBindings$inboundSchema: z.ZodType<
-  DeploymentInfoExternalBindings,
-  unknown
-> = z.object({});
-
-export function deploymentInfoExternalBindingsFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentInfoExternalBindings, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DeploymentInfoExternalBindings$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentInfoExternalBindings' from JSON`,
   );
 }
 
@@ -2606,7 +2576,7 @@ export function deploymentInfoCloudFromJSON(
 export const DeploymentInfoCloudUnion$inboundSchema: z.ZodType<
   DeploymentInfoCloudUnion,
   unknown
-> = z.union([z.lazy(() => DeploymentInfoCloud$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DeploymentInfoCloud$inboundSchema), z.string()]);
 
 export function deploymentInfoCloudUnionFromJSON(
   jsonString: string,
@@ -2629,7 +2599,7 @@ export const DeploymentInfoCluster$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   cloud: z.nullable(
-    z.union([z.lazy(() => DeploymentInfoCloud$inboundSchema), z.any()]),
+    z.union([z.lazy(() => DeploymentInfoCloud$inboundSchema), z.string()]),
   ).optional(),
   namespace: z.nullable(z.string()).optional(),
   ownership: DeploymentInfoOwnership$inboundSchema,
@@ -2649,7 +2619,7 @@ export function deploymentInfoClusterFromJSON(
 export const DeploymentInfoClusterUnion$inboundSchema: z.ZodType<
   DeploymentInfoClusterUnion,
   unknown
-> = z.union([z.lazy(() => DeploymentInfoCluster$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DeploymentInfoCluster$inboundSchema), z.string()]);
 
 export function deploymentInfoClusterUnionFromJSON(
   jsonString: string,
@@ -2887,7 +2857,7 @@ export const SetupUpdateProviderUnion4$inboundSchema: z.ZodType<
     ProviderSetupUpdateAzureApplicationGatewayForContainers4$inboundSchema
   ),
   z.lazy(() => ProviderSetupUpdateGkeGateway4$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function setupUpdateProviderUnion4FromJSON(
@@ -2917,7 +2887,7 @@ export const DeploymentInfoRouteGateway2$inboundSchema: z.ZodType<
         ProviderSetupUpdateAzureApplicationGatewayForContainers4$inboundSchema
       ),
       z.lazy(() => ProviderSetupUpdateGkeGateway4$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("gateway"),
@@ -3026,7 +2996,7 @@ export const SetupUpdateProviderUnion3$inboundSchema: z.ZodType<
     ProviderSetupUpdateAzureApplicationGatewayForContainers3$inboundSchema
   ),
   z.lazy(() => ProviderSetupUpdateGkeGateway3$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function setupUpdateProviderUnion3FromJSON(
@@ -3055,7 +3025,7 @@ export const DeploymentInfoRouteIngress2$inboundSchema: z.ZodType<
         ProviderSetupUpdateAzureApplicationGatewayForContainers3$inboundSchema
       ),
       z.lazy(() => ProviderSetupUpdateGkeGateway3$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
@@ -3346,7 +3316,7 @@ export const SetupUpdateProviderUnion2$inboundSchema: z.ZodType<
     ProviderSetupUpdateAzureApplicationGatewayForContainers2$inboundSchema
   ),
   z.lazy(() => ProviderSetupUpdateGkeGateway2$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function setupUpdateProviderUnion2FromJSON(
@@ -3376,7 +3346,7 @@ export const DeploymentInfoRouteGateway1$inboundSchema: z.ZodType<
         ProviderSetupUpdateAzureApplicationGatewayForContainers2$inboundSchema
       ),
       z.lazy(() => ProviderSetupUpdateGkeGateway2$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("gateway"),
@@ -3485,7 +3455,7 @@ export const SetupUpdateProviderUnion1$inboundSchema: z.ZodType<
     ProviderSetupUpdateAzureApplicationGatewayForContainers1$inboundSchema
   ),
   z.lazy(() => ProviderSetupUpdateGkeGateway1$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function setupUpdateProviderUnion1FromJSON(
@@ -3514,7 +3484,7 @@ export const DeploymentInfoRouteIngress1$inboundSchema: z.ZodType<
         ProviderSetupUpdateAzureApplicationGatewayForContainers1$inboundSchema
       ),
       z.lazy(() => ProviderSetupUpdateGkeGateway1$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
@@ -3609,7 +3579,7 @@ export const DeploymentInfoExposureUnion$inboundSchema: z.ZodType<
   z.lazy(() => DeploymentInfoExposureCustom$inboundSchema),
   z.lazy(() => DeploymentInfoExposureGenerated$inboundSchema),
   z.lazy(() => DeploymentInfoExposureDisabled$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentInfoExposureUnionFromJSON(
@@ -3628,14 +3598,14 @@ export const DeploymentInfoKubernetes$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   cluster: z.nullable(
-    z.union([z.lazy(() => DeploymentInfoCluster$inboundSchema), z.any()]),
+    z.union([z.lazy(() => DeploymentInfoCluster$inboundSchema), z.string()]),
   ).optional(),
   exposure: z.nullable(
     z.union([
       z.lazy(() => DeploymentInfoExposureCustom$inboundSchema),
       z.lazy(() => DeploymentInfoExposureGenerated$inboundSchema),
       z.lazy(() => DeploymentInfoExposureDisabled$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -3654,7 +3624,7 @@ export function deploymentInfoKubernetesFromJSON(
 export const DeploymentInfoKubernetesUnion$inboundSchema: z.ZodType<
   DeploymentInfoKubernetesUnion,
   unknown
-> = z.union([z.lazy(() => DeploymentInfoKubernetes$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DeploymentInfoKubernetes$inboundSchema), z.string()]);
 
 export function deploymentInfoKubernetesUnionFromJSON(
   jsonString: string,
@@ -3829,7 +3799,7 @@ export const DeploymentInfoNetworkUnion$inboundSchema: z.ZodType<
   z.lazy(() => DeploymentInfoNetworkByoVnetAzure$inboundSchema),
   z.lazy(() => DeploymentInfoNetworkUseDefault$inboundSchema),
   z.lazy(() => DeploymentInfoNetworkCreate$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentInfoNetworkUnionFromJSON(
@@ -3858,18 +3828,18 @@ export const DeploymentInfoStackSettings$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   compute: z.nullable(
-    z.union([z.lazy(() => DeploymentInfoCompute$inboundSchema), z.any()]),
+    z.union([z.lazy(() => DeploymentInfoCompute$inboundSchema), z.string()]),
   ).optional(),
   deploymentModel: DeploymentInfoDeploymentModel$inboundSchema.optional(),
   domains: z.nullable(
-    z.union([z.lazy(() => DeploymentInfoDomains$inboundSchema), z.any()]),
+    z.union([z.lazy(() => DeploymentInfoDomains$inboundSchema), z.string()]),
   ).optional(),
   externalBindings: z.nullable(
-    z.lazy(() => DeploymentInfoExternalBindings$inboundSchema),
+    z.record(z.string(), ExternalBindingUnion$inboundSchema),
   ).optional(),
   heartbeats: DeploymentInfoHeartbeats$inboundSchema.optional(),
   kubernetes: z.nullable(
-    z.union([z.lazy(() => DeploymentInfoKubernetes$inboundSchema), z.any()]),
+    z.union([z.lazy(() => DeploymentInfoKubernetes$inboundSchema), z.string()]),
   ).optional(),
   network: z.nullable(
     z.union([
@@ -3878,7 +3848,7 @@ export const DeploymentInfoStackSettings$inboundSchema: z.ZodType<
       z.lazy(() => DeploymentInfoNetworkByoVnetAzure$inboundSchema),
       z.lazy(() => DeploymentInfoNetworkUseDefault$inboundSchema),
       z.lazy(() => DeploymentInfoNetworkCreate$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   publicEndpoints: z.nullable(
@@ -4625,7 +4595,7 @@ export const DeploymentInfoManagementConfigUnion$inboundSchema: z.ZodType<
   z.lazy(() => DeploymentInfoManagementConfigAws$inboundSchema),
   z.lazy(() => DeploymentInfoManagementConfigGcp$inboundSchema),
   z.lazy(() => DeploymentInfoManagementConfigKubernetes$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentInfoManagementConfigUnionFromJSON(
@@ -4652,7 +4622,7 @@ export const InstallContextTargets$inboundSchema: z.ZodType<
       z.lazy(() => DeploymentInfoManagementConfigAws$inboundSchema),
       z.lazy(() => DeploymentInfoManagementConfigGcp$inboundSchema),
       z.lazy(() => DeploymentInfoManagementConfigKubernetes$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   awsManagingAccountId: z.string().optional(),

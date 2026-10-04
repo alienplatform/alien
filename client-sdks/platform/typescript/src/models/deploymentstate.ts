@@ -29,7 +29,7 @@ import {
   DeploymentStatePlatform,
   DeploymentStatePlatform$inboundSchema,
   DeploymentStatePlatform$outboundSchema,
-} from "./deploymentstatependingpreparedstackoverridestackconditionunion.js";
+} from "./deploymentstatependingpreparedstackoverrideconditionresource.js";
 import {
   DeploymentStatePendingPreparedStackUnion,
   DeploymentStatePendingPreparedStackUnion$inboundSchema,
@@ -51,12 +51,72 @@ import {
   DeploymentStatePreparedStackProfileAzure$inboundSchema,
   DeploymentStatePreparedStackProfileAzure$Outbound,
   DeploymentStatePreparedStackProfileAzure$outboundSchema,
-  DeploymentStatePreparedStackProfileGcpBinding,
-  DeploymentStatePreparedStackProfileGcpBinding$inboundSchema,
-  DeploymentStatePreparedStackProfileGcpBinding$Outbound,
-  DeploymentStatePreparedStackProfileGcpBinding$outboundSchema,
-} from "./deploymentstatepreparedstackprofilegcpbinding.js";
+  DeploymentStatePreparedStackProfileConditionResource,
+  DeploymentStatePreparedStackProfileConditionResource$inboundSchema,
+  DeploymentStatePreparedStackProfileConditionResource$Outbound,
+  DeploymentStatePreparedStackProfileConditionResource$outboundSchema,
+} from "./deploymentstatepreparedstackprofileconditionresource.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+
+export type DeploymentStatePreparedStackProfileResourceConditionUnion =
+  | DeploymentStatePreparedStackProfileConditionResource
+  | string;
+
+/**
+ * GCP-specific binding specification
+ */
+export type DeploymentStatePreparedStackProfileGcpResource = {
+  condition?:
+    | DeploymentStatePreparedStackProfileConditionResource
+    | string
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type DeploymentStatePreparedStackProfileConditionStack = {
+  expression: string;
+  title: string;
+};
+
+export type DeploymentStatePreparedStackProfileStackConditionUnion =
+  | DeploymentStatePreparedStackProfileConditionStack
+  | string;
+
+/**
+ * GCP-specific binding specification
+ */
+export type DeploymentStatePreparedStackProfileGcpStack = {
+  condition?:
+    | DeploymentStatePreparedStackProfileConditionStack
+    | string
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type DeploymentStatePreparedStackProfileGcpBinding = {
+  /**
+   * GCP-specific binding specification
+   */
+  resource?: DeploymentStatePreparedStackProfileGcpResource | undefined;
+  /**
+   * GCP-specific binding specification
+   */
+  stack?: DeploymentStatePreparedStackProfileGcpStack | undefined;
+};
 
 /**
  * Grant permissions for a specific cloud platform
@@ -311,7 +371,7 @@ export type DeploymentStatePreparedStack = {
 
 export type DeploymentStatePreparedStackUnion =
   | DeploymentStatePreparedStack
-  | any;
+  | string;
 
 /**
  * The cross-account read a manager opened on Alien's registry for one deployment.
@@ -332,7 +392,7 @@ export type DeploymentStateRegistryAccess = {
 
 export type DeploymentStateRegistryAccessUnion =
   | DeploymentStateRegistryAccess
-  | any;
+  | string;
 
 /**
  * The objects that keep an AWS deny sandbox's sessions inside the VPC. Each id is recorded as
@@ -362,7 +422,7 @@ export type DeploymentStateEgress = {
   securityGroupId?: string | null | undefined;
 };
 
-export type DeploymentStateEgressUnion = DeploymentStateEgress | any;
+export type DeploymentStateEgressUnion = DeploymentStateEgress | string;
 
 export const DeploymentStateTypeAwsSandbox = {
   AwsSandbox: "awsSandbox",
@@ -379,7 +439,7 @@ export type DeploymentStateSetupScaffolding = {
    * IAM role the image build runs as.
    */
   buildRoleName: string;
-  egress?: DeploymentStateEgress | any | null | undefined;
+  egress?: DeploymentStateEgress | string | null | undefined;
   /**
    * A Frozen sandbox's MicroVM image, built during setup. A Live one's image belongs to its
    *
@@ -395,7 +455,7 @@ export type DeploymentStateSetupScaffolding = {
  */
 export type DeploymentStateSetupUpdateAuthorization = {
   /**
-   * Frozen resource projection from the last successful deployment.
+   * Setup-owned digest (`Stack::setup_owned_digest`) of the last successful deployment.
    */
   baselineFrozenDigest: string;
   /**
@@ -419,14 +479,14 @@ export type DeploymentStateSetupUpdateAuthorization = {
    */
   setupTarget: string;
   /**
-   * Frozen resource projection prepared by the setup re-import.
+   * Setup-owned digest (`Stack::setup_owned_digest`) of the stack the setup re-import prepared.
    */
   targetFrozenDigest: string;
 };
 
 export type DeploymentStateSetupUpdateAuthorizationUnion =
   | DeploymentStateSetupUpdateAuthorization
-  | any;
+  | string;
 
 /**
  * Runtime metadata for deployment
@@ -479,8 +539,8 @@ export type DeploymentStateRuntimeMetadata = {
    * resource sharing such an input resolves the persisted answer forever.
    */
   persistedGateAnswers?: { [k: string]: boolean } | undefined;
-  preparedStack?: DeploymentStatePreparedStack | any | null | undefined;
-  registryAccess?: DeploymentStateRegistryAccess | any | null | undefined;
+  preparedStack?: DeploymentStatePreparedStack | string | null | undefined;
+  registryAccess?: DeploymentStateRegistryAccess | string | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
    *
@@ -501,12 +561,12 @@ export type DeploymentStateRuntimeMetadata = {
     | undefined;
   setupUpdateAuthorization?:
     | DeploymentStateSetupUpdateAuthorization
-    | any
+    | string
     | null
     | undefined;
 };
 
-export type RuntimeMetadata = DeploymentStateRuntimeMetadata | any;
+export type RuntimeMetadata = DeploymentStateRuntimeMetadata | string;
 
 /**
  * Represents the target cloud platform.
@@ -563,7 +623,7 @@ export type DeploymentStateControllerPlatformEnum = ClosedEnum<
 
 export type DeploymentStateControllerPlatformUnion =
   | DeploymentStateControllerPlatformEnum
-  | any;
+  | string;
 
 /**
  * Reference to a resource by its stable id and resource type.
@@ -664,7 +724,7 @@ export type DeploymentStateStackStateError = {
 
 export type DeploymentStateStackStateErrorUnion =
   | DeploymentStateStackStateError
-  | any;
+  | string;
 
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -682,7 +742,7 @@ export type DeploymentStateStackStateLifecycleEnum = ClosedEnum<
 
 export type DeploymentStateLifecycleUnion =
   | DeploymentStateStackStateLifecycleEnum
-  | any;
+  | string;
 
 /**
  * Resource outputs that can hold output data for any resource type in the Alien system. All resource outputs share a common 'type' field with additional type-specific output properties.
@@ -695,7 +755,7 @@ export type DeploymentStateOutputs = {
   additionalProperties?: { [k: string]: any | null } | undefined;
 };
 
-export type DeploymentStateOutputsUnion = DeploymentStateOutputs | any;
+export type DeploymentStateOutputsUnion = DeploymentStateOutputs | string;
 
 /**
  * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
@@ -714,7 +774,7 @@ export type DeploymentStatePreviousConfig = {
 
 export type DeploymentStatePreviousConfigUnion =
   | DeploymentStatePreviousConfig
-  | any;
+  | string;
 
 /**
  * Represents the high-level status of a resource during its lifecycle.
@@ -757,7 +817,7 @@ export type DeploymentStateStackStateResources = {
   config: DeploymentStateStackStateConfig;
   controllerPlatform?:
     | DeploymentStateControllerPlatformEnum
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -767,7 +827,7 @@ export type DeploymentStateStackStateResources = {
    * This preserves the full dependency information from the stack definition.
    */
   dependencies?: Array<DeploymentStateStackStateDependency> | undefined;
-  error?: DeploymentStateStackStateError | any | null | undefined;
+  error?: DeploymentStateStackStateError | string | null | undefined;
   /**
    * Stores the controller state that failed, used for manual retry operations.
    *
@@ -776,9 +836,13 @@ export type DeploymentStateStackStateResources = {
    * Stored as JSON to make the struct serializable and movable to alien-core.
    */
   lastFailedState?: any | null | undefined;
-  lifecycle?: DeploymentStateStackStateLifecycleEnum | any | null | undefined;
-  outputs?: DeploymentStateOutputs | any | null | undefined;
-  previousConfig?: DeploymentStatePreviousConfig | any | null | undefined;
+  lifecycle?:
+    | DeploymentStateStackStateLifecycleEnum
+    | string
+    | null
+    | undefined;
+  outputs?: DeploymentStateOutputs | string | null | undefined;
+  previousConfig?: DeploymentStatePreviousConfig | string | null | undefined;
   /**
    * Binding parameters for remote access.
    *
@@ -820,7 +884,7 @@ export type DeploymentStateStackState = {
   resources: { [k: string]: DeploymentStateStackStateResources };
 };
 
-export type StackState = DeploymentStateStackState | any;
+export type StackState = DeploymentStateStackState | string;
 
 /**
  * Deployment status in the deployment lifecycle.
@@ -928,7 +992,7 @@ export type TargetReleaseDefaultUnion =
   | TargetReleaseDefaultNumber
   | TargetReleaseDefaultBoolean
   | TargetReleaseDefaultStringList
-  | any;
+  | string;
 
 /**
  * Environment variable handling for a stack input mapping.
@@ -944,7 +1008,7 @@ export type TargetReleaseTypeEnvEnum = ClosedEnum<
   typeof TargetReleaseTypeEnvEnum
 >;
 
-export type TargetReleaseTypeUnion = TargetReleaseTypeEnvEnum | any;
+export type TargetReleaseTypeUnion = TargetReleaseTypeEnvEnum | string;
 
 /**
  * How a resolved stack input is injected into runtime environment variables.
@@ -958,8 +1022,27 @@ export type TargetReleaseEnv = {
    * Target resource IDs or patterns. None means every env-capable resource.
    */
   targetResources?: Array<string> | null | undefined;
-  type?: TargetReleaseTypeEnvEnum | any | null | undefined;
+  type?: TargetReleaseTypeEnvEnum | string | null | undefined;
 };
+
+/**
+ * Asks Alien to generate a secret input's value.
+ *
+ * @remarks
+ *
+ * The value is an alphanumeric string (`A-Z`, `a-z`, `0-9`), so it is safe in
+ * connection strings, command lines and environment variables. It is generated
+ * once, when the deployment's input values are first resolved, and then kept
+ * with the deployment's other input values.
+ */
+export type TargetReleaseGenerate = {
+  /**
+   * Number of characters to generate.
+   */
+  length: number;
+};
+
+export type TargetReleaseGenerateUnion = TargetReleaseGenerate | string;
 
 /**
  * Primitive stack input kind.
@@ -1051,7 +1134,7 @@ export type TargetReleaseValidation = {
   values?: Array<string> | null | undefined;
 };
 
-export type TargetReleaseValidationUnion = TargetReleaseValidation | any;
+export type TargetReleaseValidationUnion = TargetReleaseValidation | string;
 
 /**
  * Stack input definition serialized into a release stack.
@@ -1062,7 +1145,7 @@ export type TargetReleaseInput = {
     | TargetReleaseDefaultNumber
     | TargetReleaseDefaultBoolean
     | TargetReleaseDefaultStringList
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -1073,6 +1156,7 @@ export type TargetReleaseInput = {
    * Runtime env-var mappings for v1 input resolution.
    */
   env?: Array<TargetReleaseEnv> | undefined;
+  generate?: TargetReleaseGenerate | string | null | undefined;
   /**
    * Stable input ID used by CLI/API calls.
    */
@@ -1101,7 +1185,7 @@ export type TargetReleaseInput = {
    * Whether a resolved value is required before deployment can proceed.
    */
   required: boolean;
-  validation?: TargetReleaseValidation | any | null | undefined;
+  validation?: TargetReleaseValidation | string | null | undefined;
 };
 
 export const TargetReleaseManagementEnum = {
@@ -1327,13 +1411,17 @@ export type TargetReleaseOverrideConditionResource = {
 
 export type TargetReleaseOverrideResourceConditionUnion =
   | TargetReleaseOverrideConditionResource
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
  */
 export type TargetReleaseOverrideGcpResource = {
-  condition?: TargetReleaseOverrideConditionResource | any | null | undefined;
+  condition?:
+    | TargetReleaseOverrideConditionResource
+    | string
+    | null
+    | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -1350,13 +1438,13 @@ export type TargetReleaseOverrideCondition = {
 
 export type TargetReleaseOverrideConditionUnion =
   | TargetReleaseOverrideCondition
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
  */
 export type TargetReleaseOverrideGcpStack = {
-  condition?: TargetReleaseOverrideCondition | any | null | undefined;
+  condition?: TargetReleaseOverrideCondition | string | null | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -1692,13 +1780,13 @@ export type TargetReleaseExtendConditionResource = {
 
 export type TargetReleaseExtendResourceConditionUnion =
   | TargetReleaseExtendConditionResource
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
  */
 export type TargetReleaseExtendGcpResource = {
-  condition?: TargetReleaseExtendConditionResource | any | null | undefined;
+  condition?: TargetReleaseExtendConditionResource | string | null | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -1715,13 +1803,13 @@ export type TargetReleaseExtendCondition = {
 
 export type TargetReleaseExtendConditionUnion =
   | TargetReleaseExtendCondition
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
  */
 export type TargetReleaseExtendGcpStack = {
-  condition?: TargetReleaseExtendCondition | any | null | undefined;
+  condition?: TargetReleaseExtendCondition | string | null | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -2065,13 +2153,13 @@ export type TargetReleaseProfileConditionResource = {
 
 export type TargetReleaseProfileResourceConditionUnion =
   | TargetReleaseProfileConditionResource
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
  */
 export type TargetReleaseProfileGcpResource = {
-  condition?: TargetReleaseProfileConditionResource | any | null | undefined;
+  condition?: TargetReleaseProfileConditionResource | string | null | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -2088,13 +2176,13 @@ export type TargetReleaseProfileCondition = {
 
 export type TargetReleaseProfileConditionUnion =
   | TargetReleaseProfileCondition
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
  */
 export type TargetReleaseProfileGcpStack = {
-  condition?: TargetReleaseProfileCondition | any | null | undefined;
+  condition?: TargetReleaseProfileCondition | string | null | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -2392,7 +2480,7 @@ export type TargetRelease = {
   version?: string | null | undefined;
 };
 
-export type TargetReleaseUnion = TargetRelease | any;
+export type TargetReleaseUnion = TargetRelease | string;
 
 /**
  * Current deployment state (includes releases)
@@ -2421,8 +2509,8 @@ export type DeploymentState = {
    * When true and status is a failed state, the deployment system will retry failed resources
    */
   retryRequested?: boolean | undefined;
-  runtimeMetadata?: DeploymentStateRuntimeMetadata | any | null | undefined;
-  stackState?: DeploymentStateStackState | any | null | undefined;
+  runtimeMetadata?: DeploymentStateRuntimeMetadata | string | null | undefined;
+  stackState?: DeploymentStateStackState | string | null | undefined;
   /**
    * Deployment status in the deployment lifecycle.
    *
@@ -2433,8 +2521,344 @@ export type DeploymentState = {
    * resource health comes from inventory and resource heartbeat data.
    */
   status: DeploymentStateStatus;
-  targetRelease?: TargetRelease | any | null | undefined;
+  targetRelease?: TargetRelease | string | null | undefined;
 };
+
+/** @internal */
+export const DeploymentStatePreparedStackProfileResourceConditionUnion$inboundSchema:
+  z.ZodType<
+    DeploymentStatePreparedStackProfileResourceConditionUnion,
+    unknown
+  > = z.union([
+    DeploymentStatePreparedStackProfileConditionResource$inboundSchema,
+    z.string(),
+  ]);
+/** @internal */
+export type DeploymentStatePreparedStackProfileResourceConditionUnion$Outbound =
+  | DeploymentStatePreparedStackProfileConditionResource$Outbound
+  | string;
+
+/** @internal */
+export const DeploymentStatePreparedStackProfileResourceConditionUnion$outboundSchema:
+  z.ZodType<
+    DeploymentStatePreparedStackProfileResourceConditionUnion$Outbound,
+    DeploymentStatePreparedStackProfileResourceConditionUnion
+  > = z.union([
+    DeploymentStatePreparedStackProfileConditionResource$outboundSchema,
+    z.string(),
+  ]);
+
+export function deploymentStatePreparedStackProfileResourceConditionUnionToJSON(
+  deploymentStatePreparedStackProfileResourceConditionUnion:
+    DeploymentStatePreparedStackProfileResourceConditionUnion,
+): string {
+  return JSON.stringify(
+    DeploymentStatePreparedStackProfileResourceConditionUnion$outboundSchema
+      .parse(deploymentStatePreparedStackProfileResourceConditionUnion),
+  );
+}
+export function deploymentStatePreparedStackProfileResourceConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentStatePreparedStackProfileResourceConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentStatePreparedStackProfileResourceConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentStatePreparedStackProfileResourceConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentStatePreparedStackProfileGcpResource$inboundSchema:
+  z.ZodType<DeploymentStatePreparedStackProfileGcpResource, unknown> = z.object(
+    {
+      condition: z.nullable(
+        z.union([
+          DeploymentStatePreparedStackProfileConditionResource$inboundSchema,
+          z.string(),
+        ]),
+      ).optional(),
+      scope: z.string(),
+    },
+  );
+/** @internal */
+export type DeploymentStatePreparedStackProfileGcpResource$Outbound = {
+  condition?:
+    | DeploymentStatePreparedStackProfileConditionResource$Outbound
+    | string
+    | null
+    | undefined;
+  scope: string;
+};
+
+/** @internal */
+export const DeploymentStatePreparedStackProfileGcpResource$outboundSchema:
+  z.ZodType<
+    DeploymentStatePreparedStackProfileGcpResource$Outbound,
+    DeploymentStatePreparedStackProfileGcpResource
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        DeploymentStatePreparedStackProfileConditionResource$outboundSchema,
+        z.string(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function deploymentStatePreparedStackProfileGcpResourceToJSON(
+  deploymentStatePreparedStackProfileGcpResource:
+    DeploymentStatePreparedStackProfileGcpResource,
+): string {
+  return JSON.stringify(
+    DeploymentStatePreparedStackProfileGcpResource$outboundSchema.parse(
+      deploymentStatePreparedStackProfileGcpResource,
+    ),
+  );
+}
+export function deploymentStatePreparedStackProfileGcpResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentStatePreparedStackProfileGcpResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentStatePreparedStackProfileGcpResource$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentStatePreparedStackProfileGcpResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentStatePreparedStackProfileConditionStack$inboundSchema:
+  z.ZodType<DeploymentStatePreparedStackProfileConditionStack, unknown> = z
+    .object({
+      expression: z.string(),
+      title: z.string(),
+    });
+/** @internal */
+export type DeploymentStatePreparedStackProfileConditionStack$Outbound = {
+  expression: string;
+  title: string;
+};
+
+/** @internal */
+export const DeploymentStatePreparedStackProfileConditionStack$outboundSchema:
+  z.ZodType<
+    DeploymentStatePreparedStackProfileConditionStack$Outbound,
+    DeploymentStatePreparedStackProfileConditionStack
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function deploymentStatePreparedStackProfileConditionStackToJSON(
+  deploymentStatePreparedStackProfileConditionStack:
+    DeploymentStatePreparedStackProfileConditionStack,
+): string {
+  return JSON.stringify(
+    DeploymentStatePreparedStackProfileConditionStack$outboundSchema.parse(
+      deploymentStatePreparedStackProfileConditionStack,
+    ),
+  );
+}
+export function deploymentStatePreparedStackProfileConditionStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentStatePreparedStackProfileConditionStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentStatePreparedStackProfileConditionStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentStatePreparedStackProfileConditionStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentStatePreparedStackProfileStackConditionUnion$inboundSchema:
+  z.ZodType<DeploymentStatePreparedStackProfileStackConditionUnion, unknown> = z
+    .union([
+      z.lazy(() =>
+        DeploymentStatePreparedStackProfileConditionStack$inboundSchema
+      ),
+      z.string(),
+    ]);
+/** @internal */
+export type DeploymentStatePreparedStackProfileStackConditionUnion$Outbound =
+  | DeploymentStatePreparedStackProfileConditionStack$Outbound
+  | string;
+
+/** @internal */
+export const DeploymentStatePreparedStackProfileStackConditionUnion$outboundSchema:
+  z.ZodType<
+    DeploymentStatePreparedStackProfileStackConditionUnion$Outbound,
+    DeploymentStatePreparedStackProfileStackConditionUnion
+  > = z.union([
+    z.lazy(() =>
+      DeploymentStatePreparedStackProfileConditionStack$outboundSchema
+    ),
+    z.string(),
+  ]);
+
+export function deploymentStatePreparedStackProfileStackConditionUnionToJSON(
+  deploymentStatePreparedStackProfileStackConditionUnion:
+    DeploymentStatePreparedStackProfileStackConditionUnion,
+): string {
+  return JSON.stringify(
+    DeploymentStatePreparedStackProfileStackConditionUnion$outboundSchema.parse(
+      deploymentStatePreparedStackProfileStackConditionUnion,
+    ),
+  );
+}
+export function deploymentStatePreparedStackProfileStackConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentStatePreparedStackProfileStackConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentStatePreparedStackProfileStackConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentStatePreparedStackProfileStackConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentStatePreparedStackProfileGcpStack$inboundSchema:
+  z.ZodType<DeploymentStatePreparedStackProfileGcpStack, unknown> = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          DeploymentStatePreparedStackProfileConditionStack$inboundSchema
+        ),
+        z.string(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+/** @internal */
+export type DeploymentStatePreparedStackProfileGcpStack$Outbound = {
+  condition?:
+    | DeploymentStatePreparedStackProfileConditionStack$Outbound
+    | string
+    | null
+    | undefined;
+  scope: string;
+};
+
+/** @internal */
+export const DeploymentStatePreparedStackProfileGcpStack$outboundSchema:
+  z.ZodType<
+    DeploymentStatePreparedStackProfileGcpStack$Outbound,
+    DeploymentStatePreparedStackProfileGcpStack
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          DeploymentStatePreparedStackProfileConditionStack$outboundSchema
+        ),
+        z.string(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function deploymentStatePreparedStackProfileGcpStackToJSON(
+  deploymentStatePreparedStackProfileGcpStack:
+    DeploymentStatePreparedStackProfileGcpStack,
+): string {
+  return JSON.stringify(
+    DeploymentStatePreparedStackProfileGcpStack$outboundSchema.parse(
+      deploymentStatePreparedStackProfileGcpStack,
+    ),
+  );
+}
+export function deploymentStatePreparedStackProfileGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentStatePreparedStackProfileGcpStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentStatePreparedStackProfileGcpStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentStatePreparedStackProfileGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentStatePreparedStackProfileGcpBinding$inboundSchema:
+  z.ZodType<DeploymentStatePreparedStackProfileGcpBinding, unknown> = z.object({
+    resource: z.lazy(() =>
+      DeploymentStatePreparedStackProfileGcpResource$inboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      DeploymentStatePreparedStackProfileGcpStack$inboundSchema
+    ).optional(),
+  });
+/** @internal */
+export type DeploymentStatePreparedStackProfileGcpBinding$Outbound = {
+  resource?:
+    | DeploymentStatePreparedStackProfileGcpResource$Outbound
+    | undefined;
+  stack?: DeploymentStatePreparedStackProfileGcpStack$Outbound | undefined;
+};
+
+/** @internal */
+export const DeploymentStatePreparedStackProfileGcpBinding$outboundSchema:
+  z.ZodType<
+    DeploymentStatePreparedStackProfileGcpBinding$Outbound,
+    DeploymentStatePreparedStackProfileGcpBinding
+  > = z.object({
+    resource: z.lazy(() =>
+      DeploymentStatePreparedStackProfileGcpResource$outboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      DeploymentStatePreparedStackProfileGcpStack$outboundSchema
+    ).optional(),
+  });
+
+export function deploymentStatePreparedStackProfileGcpBindingToJSON(
+  deploymentStatePreparedStackProfileGcpBinding:
+    DeploymentStatePreparedStackProfileGcpBinding,
+): string {
+  return JSON.stringify(
+    DeploymentStatePreparedStackProfileGcpBinding$outboundSchema.parse(
+      deploymentStatePreparedStackProfileGcpBinding,
+    ),
+  );
+}
+export function deploymentStatePreparedStackProfileGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentStatePreparedStackProfileGcpBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentStatePreparedStackProfileGcpBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentStatePreparedStackProfileGcpBinding' from JSON`,
+  );
+}
 
 /** @internal */
 export const DeploymentStatePreparedStackProfileGcpGrant$inboundSchema:
@@ -2498,7 +2922,9 @@ export const DeploymentStatePreparedStackProfileGcp$inboundSchema: z.ZodType<
   DeploymentStatePreparedStackProfileGcp,
   unknown
 > = z.object({
-  binding: DeploymentStatePreparedStackProfileGcpBinding$inboundSchema,
+  binding: z.lazy(() =>
+    DeploymentStatePreparedStackProfileGcpBinding$inboundSchema
+  ),
   description: z.nullable(z.string()).optional(),
   grant: z.lazy(() =>
     DeploymentStatePreparedStackProfileGcpGrant$inboundSchema
@@ -2518,7 +2944,9 @@ export const DeploymentStatePreparedStackProfileGcp$outboundSchema: z.ZodType<
   DeploymentStatePreparedStackProfileGcp$Outbound,
   DeploymentStatePreparedStackProfileGcp
 > = z.object({
-  binding: DeploymentStatePreparedStackProfileGcpBinding$outboundSchema,
+  binding: z.lazy(() =>
+    DeploymentStatePreparedStackProfileGcpBinding$outboundSchema
+  ),
   description: z.nullable(z.string()).optional(),
   grant: z.lazy(() =>
     DeploymentStatePreparedStackProfileGcpGrant$outboundSchema
@@ -3050,12 +3478,12 @@ export const DeploymentStatePreparedStackUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => DeploymentStatePreparedStack$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 /** @internal */
 export type DeploymentStatePreparedStackUnion$Outbound =
   | DeploymentStatePreparedStack$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentStatePreparedStackUnion$outboundSchema: z.ZodType<
@@ -3063,7 +3491,7 @@ export const DeploymentStatePreparedStackUnion$outboundSchema: z.ZodType<
   DeploymentStatePreparedStackUnion
 > = z.union([
   z.lazy(() => DeploymentStatePreparedStack$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentStatePreparedStackUnionToJSON(
@@ -3133,12 +3561,12 @@ export const DeploymentStateRegistryAccessUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => DeploymentStateRegistryAccess$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 /** @internal */
 export type DeploymentStateRegistryAccessUnion$Outbound =
   | DeploymentStateRegistryAccess$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentStateRegistryAccessUnion$outboundSchema: z.ZodType<
@@ -3146,7 +3574,7 @@ export const DeploymentStateRegistryAccessUnion$outboundSchema: z.ZodType<
   DeploymentStateRegistryAccessUnion
 > = z.union([
   z.lazy(() => DeploymentStateRegistryAccess$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentStateRegistryAccessUnionToJSON(
@@ -3219,17 +3647,17 @@ export function deploymentStateEgressFromJSON(
 export const DeploymentStateEgressUnion$inboundSchema: z.ZodType<
   DeploymentStateEgressUnion,
   unknown
-> = z.union([z.lazy(() => DeploymentStateEgress$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DeploymentStateEgress$inboundSchema), z.string()]);
 /** @internal */
 export type DeploymentStateEgressUnion$Outbound =
   | DeploymentStateEgress$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentStateEgressUnion$outboundSchema: z.ZodType<
   DeploymentStateEgressUnion$Outbound,
   DeploymentStateEgressUnion
-> = z.union([z.lazy(() => DeploymentStateEgress$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => DeploymentStateEgress$outboundSchema), z.string()]);
 
 export function deploymentStateEgressUnionToJSON(
   deploymentStateEgressUnion: DeploymentStateEgressUnion,
@@ -3264,7 +3692,7 @@ export const DeploymentStateSetupScaffolding$inboundSchema: z.ZodType<
 > = z.object({
   buildRoleName: z.string(),
   egress: z.nullable(
-    z.union([z.lazy(() => DeploymentStateEgress$inboundSchema), z.any()]),
+    z.union([z.lazy(() => DeploymentStateEgress$inboundSchema), z.string()]),
   ).optional(),
   imageArn: z.nullable(z.string()).optional(),
   type: DeploymentStateTypeAwsSandbox$inboundSchema,
@@ -3272,7 +3700,7 @@ export const DeploymentStateSetupScaffolding$inboundSchema: z.ZodType<
 /** @internal */
 export type DeploymentStateSetupScaffolding$Outbound = {
   buildRoleName: string;
-  egress?: DeploymentStateEgress$Outbound | any | null | undefined;
+  egress?: DeploymentStateEgress$Outbound | string | null | undefined;
   imageArn?: string | null | undefined;
   type: string;
 };
@@ -3284,7 +3712,7 @@ export const DeploymentStateSetupScaffolding$outboundSchema: z.ZodType<
 > = z.object({
   buildRoleName: z.string(),
   egress: z.nullable(
-    z.union([z.lazy(() => DeploymentStateEgress$outboundSchema), z.any()]),
+    z.union([z.lazy(() => DeploymentStateEgress$outboundSchema), z.string()]),
   ).optional(),
   imageArn: z.nullable(z.string()).optional(),
   type: DeploymentStateTypeAwsSandbox$outboundSchema,
@@ -3377,12 +3805,12 @@ export function deploymentStateSetupUpdateAuthorizationFromJSON(
 export const DeploymentStateSetupUpdateAuthorizationUnion$inboundSchema:
   z.ZodType<DeploymentStateSetupUpdateAuthorizationUnion, unknown> = z.union([
     z.lazy(() => DeploymentStateSetupUpdateAuthorization$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 /** @internal */
 export type DeploymentStateSetupUpdateAuthorizationUnion$Outbound =
   | DeploymentStateSetupUpdateAuthorization$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentStateSetupUpdateAuthorizationUnion$outboundSchema:
@@ -3391,7 +3819,7 @@ export const DeploymentStateSetupUpdateAuthorizationUnion$outboundSchema:
     DeploymentStateSetupUpdateAuthorizationUnion
   > = z.union([
     z.lazy(() => DeploymentStateSetupUpdateAuthorization$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentStateSetupUpdateAuthorizationUnionToJSON(
@@ -3437,13 +3865,13 @@ export const DeploymentStateRuntimeMetadata$inboundSchema: z.ZodType<
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => DeploymentStatePreparedStack$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   registryAccess: z.nullable(
     z.union([
       z.lazy(() => DeploymentStateRegistryAccess$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   registryAccessGranted: z.boolean().optional(),
@@ -3454,7 +3882,7 @@ export const DeploymentStateRuntimeMetadata$inboundSchema: z.ZodType<
   setupUpdateAuthorization: z.nullable(
     z.union([
       z.lazy(() => DeploymentStateSetupUpdateAuthorization$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -3471,12 +3899,12 @@ export type DeploymentStateRuntimeMetadata$Outbound = {
   persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?:
     | DeploymentStatePreparedStack$Outbound
-    | any
+    | string
     | null
     | undefined;
   registryAccess?:
     | DeploymentStateRegistryAccess$Outbound
-    | any
+    | string
     | null
     | undefined;
   registryAccessGranted?: boolean | undefined;
@@ -3485,7 +3913,7 @@ export type DeploymentStateRuntimeMetadata$Outbound = {
     | undefined;
   setupUpdateAuthorization?:
     | DeploymentStateSetupUpdateAuthorization$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -3507,13 +3935,13 @@ export const DeploymentStateRuntimeMetadata$outboundSchema: z.ZodType<
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => DeploymentStatePreparedStack$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   registryAccess: z.nullable(
     z.union([
       z.lazy(() => DeploymentStateRegistryAccess$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   registryAccessGranted: z.boolean().optional(),
@@ -3524,7 +3952,7 @@ export const DeploymentStateRuntimeMetadata$outboundSchema: z.ZodType<
   setupUpdateAuthorization: z.nullable(
     z.union([
       z.lazy(() => DeploymentStateSetupUpdateAuthorization$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -3554,12 +3982,12 @@ export const RuntimeMetadata$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => DeploymentStateRuntimeMetadata$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 /** @internal */
 export type RuntimeMetadata$Outbound =
   | DeploymentStateRuntimeMetadata$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const RuntimeMetadata$outboundSchema: z.ZodType<
@@ -3567,7 +3995,7 @@ export const RuntimeMetadata$outboundSchema: z.ZodType<
   RuntimeMetadata
 > = z.union([
   z.lazy(() => DeploymentStateRuntimeMetadata$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function runtimeMetadataToJSON(
@@ -3662,15 +4090,15 @@ export const DeploymentStateControllerPlatformEnum$outboundSchema: z.ZodEnum<
 export const DeploymentStateControllerPlatformUnion$inboundSchema: z.ZodType<
   DeploymentStateControllerPlatformUnion,
   unknown
-> = z.union([DeploymentStateControllerPlatformEnum$inboundSchema, z.any()]);
+> = z.union([DeploymentStateControllerPlatformEnum$inboundSchema, z.string()]);
 /** @internal */
-export type DeploymentStateControllerPlatformUnion$Outbound = string | any;
+export type DeploymentStateControllerPlatformUnion$Outbound = string | string;
 
 /** @internal */
 export const DeploymentStateControllerPlatformUnion$outboundSchema: z.ZodType<
   DeploymentStateControllerPlatformUnion$Outbound,
   DeploymentStateControllerPlatformUnion
-> = z.union([DeploymentStateControllerPlatformEnum$outboundSchema, z.any()]);
+> = z.union([DeploymentStateControllerPlatformEnum$outboundSchema, z.string()]);
 
 export function deploymentStateControllerPlatformUnionToJSON(
   deploymentStateControllerPlatformUnion:
@@ -3802,12 +4230,12 @@ export const DeploymentStateStackStateErrorUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => DeploymentStateStackStateError$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 /** @internal */
 export type DeploymentStateStackStateErrorUnion$Outbound =
   | DeploymentStateStackStateError$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentStateStackStateErrorUnion$outboundSchema: z.ZodType<
@@ -3815,7 +4243,7 @@ export const DeploymentStateStackStateErrorUnion$outboundSchema: z.ZodType<
   DeploymentStateStackStateErrorUnion
 > = z.union([
   z.lazy(() => DeploymentStateStackStateError$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentStateStackStateErrorUnionToJSON(
@@ -3851,15 +4279,18 @@ export const DeploymentStateStackStateLifecycleEnum$outboundSchema: z.ZodEnum<
 export const DeploymentStateLifecycleUnion$inboundSchema: z.ZodType<
   DeploymentStateLifecycleUnion,
   unknown
-> = z.union([DeploymentStateStackStateLifecycleEnum$inboundSchema, z.any()]);
+> = z.union([DeploymentStateStackStateLifecycleEnum$inboundSchema, z.string()]);
 /** @internal */
-export type DeploymentStateLifecycleUnion$Outbound = string | any;
+export type DeploymentStateLifecycleUnion$Outbound = string | string;
 
 /** @internal */
 export const DeploymentStateLifecycleUnion$outboundSchema: z.ZodType<
   DeploymentStateLifecycleUnion$Outbound,
   DeploymentStateLifecycleUnion
-> = z.union([DeploymentStateStackStateLifecycleEnum$outboundSchema, z.any()]);
+> = z.union([
+  DeploymentStateStackStateLifecycleEnum$outboundSchema,
+  z.string(),
+]);
 
 export function deploymentStateLifecycleUnionToJSON(
   deploymentStateLifecycleUnion: DeploymentStateLifecycleUnion,
@@ -3934,17 +4365,17 @@ export function deploymentStateOutputsFromJSON(
 export const DeploymentStateOutputsUnion$inboundSchema: z.ZodType<
   DeploymentStateOutputsUnion,
   unknown
-> = z.union([z.lazy(() => DeploymentStateOutputs$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DeploymentStateOutputs$inboundSchema), z.string()]);
 /** @internal */
 export type DeploymentStateOutputsUnion$Outbound =
   | DeploymentStateOutputs$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentStateOutputsUnion$outboundSchema: z.ZodType<
   DeploymentStateOutputsUnion$Outbound,
   DeploymentStateOutputsUnion
-> = z.union([z.lazy(() => DeploymentStateOutputs$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => DeploymentStateOutputs$outboundSchema), z.string()]);
 
 export function deploymentStateOutputsUnionToJSON(
   deploymentStateOutputsUnion: DeploymentStateOutputsUnion,
@@ -4026,12 +4457,12 @@ export const DeploymentStatePreviousConfigUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => DeploymentStatePreviousConfig$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 /** @internal */
 export type DeploymentStatePreviousConfigUnion$Outbound =
   | DeploymentStatePreviousConfig$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentStatePreviousConfigUnion$outboundSchema: z.ZodType<
@@ -4039,7 +4470,7 @@ export const DeploymentStatePreviousConfigUnion$outboundSchema: z.ZodType<
   DeploymentStatePreviousConfigUnion
 > = z.union([
   z.lazy(() => DeploymentStatePreviousConfig$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentStatePreviousConfigUnionToJSON(
@@ -4079,7 +4510,7 @@ export const DeploymentStateStackStateResources$inboundSchema: z.ZodType<
   _internal: z.nullable(z.any()).optional(),
   config: z.lazy(() => DeploymentStateStackStateConfig$inboundSchema),
   controllerPlatform: z.nullable(
-    z.union([DeploymentStateControllerPlatformEnum$inboundSchema, z.any()]),
+    z.union([DeploymentStateControllerPlatformEnum$inboundSchema, z.string()]),
   ).optional(),
   dependencies: z.array(
     z.lazy(() => DeploymentStateStackStateDependency$inboundSchema),
@@ -4087,20 +4518,20 @@ export const DeploymentStateStackStateResources$inboundSchema: z.ZodType<
   error: z.nullable(
     z.union([
       z.lazy(() => DeploymentStateStackStateError$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   lastFailedState: z.nullable(z.any()).optional(),
   lifecycle: z.nullable(
-    z.union([DeploymentStateStackStateLifecycleEnum$inboundSchema, z.any()]),
+    z.union([DeploymentStateStackStateLifecycleEnum$inboundSchema, z.string()]),
   ).optional(),
   outputs: z.nullable(
-    z.union([z.lazy(() => DeploymentStateOutputs$inboundSchema), z.any()]),
+    z.union([z.lazy(() => DeploymentStateOutputs$inboundSchema), z.string()]),
   ).optional(),
   previousConfig: z.nullable(
     z.union([
       z.lazy(() => DeploymentStatePreviousConfig$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   remoteBindingParams: z.nullable(z.any()).optional(),
@@ -4116,17 +4547,17 @@ export const DeploymentStateStackStateResources$inboundSchema: z.ZodType<
 export type DeploymentStateStackStateResources$Outbound = {
   _internal?: any | null | undefined;
   config: DeploymentStateStackStateConfig$Outbound;
-  controllerPlatform?: string | any | null | undefined;
+  controllerPlatform?: string | string | null | undefined;
   dependencies?:
     | Array<DeploymentStateStackStateDependency$Outbound>
     | undefined;
-  error?: DeploymentStateStackStateError$Outbound | any | null | undefined;
+  error?: DeploymentStateStackStateError$Outbound | string | null | undefined;
   lastFailedState?: any | null | undefined;
-  lifecycle?: string | any | null | undefined;
-  outputs?: DeploymentStateOutputs$Outbound | any | null | undefined;
+  lifecycle?: string | string | null | undefined;
+  outputs?: DeploymentStateOutputs$Outbound | string | null | undefined;
   previousConfig?:
     | DeploymentStatePreviousConfig$Outbound
-    | any
+    | string
     | null
     | undefined;
   remoteBindingParams?: any | null | undefined;
@@ -4143,7 +4574,7 @@ export const DeploymentStateStackStateResources$outboundSchema: z.ZodType<
   internal: z.nullable(z.any()).optional(),
   config: z.lazy(() => DeploymentStateStackStateConfig$outboundSchema),
   controllerPlatform: z.nullable(
-    z.union([DeploymentStateControllerPlatformEnum$outboundSchema, z.any()]),
+    z.union([DeploymentStateControllerPlatformEnum$outboundSchema, z.string()]),
   ).optional(),
   dependencies: z.array(
     z.lazy(() => DeploymentStateStackStateDependency$outboundSchema),
@@ -4151,20 +4582,23 @@ export const DeploymentStateStackStateResources$outboundSchema: z.ZodType<
   error: z.nullable(
     z.union([
       z.lazy(() => DeploymentStateStackStateError$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   lastFailedState: z.nullable(z.any()).optional(),
   lifecycle: z.nullable(
-    z.union([DeploymentStateStackStateLifecycleEnum$outboundSchema, z.any()]),
+    z.union([
+      DeploymentStateStackStateLifecycleEnum$outboundSchema,
+      z.string(),
+    ]),
   ).optional(),
   outputs: z.nullable(
-    z.union([z.lazy(() => DeploymentStateOutputs$outboundSchema), z.any()]),
+    z.union([z.lazy(() => DeploymentStateOutputs$outboundSchema), z.string()]),
   ).optional(),
   previousConfig: z.nullable(
     z.union([
       z.lazy(() => DeploymentStatePreviousConfig$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   remoteBindingParams: z.nullable(z.any()).optional(),
@@ -4248,16 +4682,19 @@ export function deploymentStateStackStateFromJSON(
 
 /** @internal */
 export const StackState$inboundSchema: z.ZodType<StackState, unknown> = z.union(
-  [z.lazy(() => DeploymentStateStackState$inboundSchema), z.any()],
+  [z.lazy(() => DeploymentStateStackState$inboundSchema), z.string()],
 );
 /** @internal */
-export type StackState$Outbound = DeploymentStateStackState$Outbound | any;
+export type StackState$Outbound = DeploymentStateStackState$Outbound | string;
 
 /** @internal */
 export const StackState$outboundSchema: z.ZodType<
   StackState$Outbound,
   StackState
-> = z.union([z.lazy(() => DeploymentStateStackState$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => DeploymentStateStackState$outboundSchema),
+  z.string(),
+]);
 
 export function stackStateToJSON(stackState: StackState): string {
   return JSON.stringify(StackState$outboundSchema.parse(stackState));
@@ -4490,7 +4927,7 @@ export const TargetReleaseDefaultUnion$inboundSchema: z.ZodType<
   z.lazy(() => TargetReleaseDefaultNumber$inboundSchema),
   z.lazy(() => TargetReleaseDefaultBoolean$inboundSchema),
   z.lazy(() => TargetReleaseDefaultStringList$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 /** @internal */
 export type TargetReleaseDefaultUnion$Outbound =
@@ -4498,7 +4935,7 @@ export type TargetReleaseDefaultUnion$Outbound =
   | TargetReleaseDefaultNumber$Outbound
   | TargetReleaseDefaultBoolean$Outbound
   | TargetReleaseDefaultStringList$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const TargetReleaseDefaultUnion$outboundSchema: z.ZodType<
@@ -4509,7 +4946,7 @@ export const TargetReleaseDefaultUnion$outboundSchema: z.ZodType<
   z.lazy(() => TargetReleaseDefaultNumber$outboundSchema),
   z.lazy(() => TargetReleaseDefaultBoolean$outboundSchema),
   z.lazy(() => TargetReleaseDefaultStringList$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function targetReleaseDefaultUnionToJSON(
@@ -4542,15 +4979,15 @@ export const TargetReleaseTypeEnvEnum$outboundSchema: z.ZodEnum<
 export const TargetReleaseTypeUnion$inboundSchema: z.ZodType<
   TargetReleaseTypeUnion,
   unknown
-> = z.union([TargetReleaseTypeEnvEnum$inboundSchema, z.any()]);
+> = z.union([TargetReleaseTypeEnvEnum$inboundSchema, z.string()]);
 /** @internal */
-export type TargetReleaseTypeUnion$Outbound = string | any;
+export type TargetReleaseTypeUnion$Outbound = string | string;
 
 /** @internal */
 export const TargetReleaseTypeUnion$outboundSchema: z.ZodType<
   TargetReleaseTypeUnion$Outbound,
   TargetReleaseTypeUnion
-> = z.union([TargetReleaseTypeEnvEnum$outboundSchema, z.any()]);
+> = z.union([TargetReleaseTypeEnvEnum$outboundSchema, z.string()]);
 
 export function targetReleaseTypeUnionToJSON(
   targetReleaseTypeUnion: TargetReleaseTypeUnion,
@@ -4576,14 +5013,15 @@ export const TargetReleaseEnv$inboundSchema: z.ZodType<
 > = z.object({
   name: z.string(),
   targetResources: z.nullable(z.array(z.string())).optional(),
-  type: z.nullable(z.union([TargetReleaseTypeEnvEnum$inboundSchema, z.any()]))
-    .optional(),
+  type: z.nullable(
+    z.union([TargetReleaseTypeEnvEnum$inboundSchema, z.string()]),
+  ).optional(),
 });
 /** @internal */
 export type TargetReleaseEnv$Outbound = {
   name: string;
   targetResources?: Array<string> | null | undefined;
-  type?: string | any | null | undefined;
+  type?: string | string | null | undefined;
 };
 
 /** @internal */
@@ -4593,8 +5031,9 @@ export const TargetReleaseEnv$outboundSchema: z.ZodType<
 > = z.object({
   name: z.string(),
   targetResources: z.nullable(z.array(z.string())).optional(),
-  type: z.nullable(z.union([TargetReleaseTypeEnvEnum$outboundSchema, z.any()]))
-    .optional(),
+  type: z.nullable(
+    z.union([TargetReleaseTypeEnvEnum$outboundSchema, z.string()]),
+  ).optional(),
 });
 
 export function targetReleaseEnvToJSON(
@@ -4611,6 +5050,76 @@ export function targetReleaseEnvFromJSON(
     jsonString,
     (x) => TargetReleaseEnv$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'TargetReleaseEnv' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseGenerate$inboundSchema: z.ZodType<
+  TargetReleaseGenerate,
+  unknown
+> = z.object({
+  length: z.int(),
+});
+/** @internal */
+export type TargetReleaseGenerate$Outbound = {
+  length: number;
+};
+
+/** @internal */
+export const TargetReleaseGenerate$outboundSchema: z.ZodType<
+  TargetReleaseGenerate$Outbound,
+  TargetReleaseGenerate
+> = z.object({
+  length: z.int(),
+});
+
+export function targetReleaseGenerateToJSON(
+  targetReleaseGenerate: TargetReleaseGenerate,
+): string {
+  return JSON.stringify(
+    TargetReleaseGenerate$outboundSchema.parse(targetReleaseGenerate),
+  );
+}
+export function targetReleaseGenerateFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseGenerate, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseGenerate$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseGenerate' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseGenerateUnion$inboundSchema: z.ZodType<
+  TargetReleaseGenerateUnion,
+  unknown
+> = z.union([z.lazy(() => TargetReleaseGenerate$inboundSchema), z.string()]);
+/** @internal */
+export type TargetReleaseGenerateUnion$Outbound =
+  | TargetReleaseGenerate$Outbound
+  | string;
+
+/** @internal */
+export const TargetReleaseGenerateUnion$outboundSchema: z.ZodType<
+  TargetReleaseGenerateUnion$Outbound,
+  TargetReleaseGenerateUnion
+> = z.union([z.lazy(() => TargetReleaseGenerate$outboundSchema), z.string()]);
+
+export function targetReleaseGenerateUnionToJSON(
+  targetReleaseGenerateUnion: TargetReleaseGenerateUnion,
+): string {
+  return JSON.stringify(
+    TargetReleaseGenerateUnion$outboundSchema.parse(targetReleaseGenerateUnion),
+  );
+}
+export function targetReleaseGenerateUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseGenerateUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseGenerateUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseGenerateUnion' from JSON`,
   );
 }
 
@@ -4706,17 +5215,17 @@ export function targetReleaseValidationFromJSON(
 export const TargetReleaseValidationUnion$inboundSchema: z.ZodType<
   TargetReleaseValidationUnion,
   unknown
-> = z.union([z.lazy(() => TargetReleaseValidation$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => TargetReleaseValidation$inboundSchema), z.string()]);
 /** @internal */
 export type TargetReleaseValidationUnion$Outbound =
   | TargetReleaseValidation$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const TargetReleaseValidationUnion$outboundSchema: z.ZodType<
   TargetReleaseValidationUnion$Outbound,
   TargetReleaseValidationUnion
-> = z.union([z.lazy(() => TargetReleaseValidation$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => TargetReleaseValidation$outboundSchema), z.string()]);
 
 export function targetReleaseValidationUnionToJSON(
   targetReleaseValidationUnion: TargetReleaseValidationUnion,
@@ -4748,11 +5257,14 @@ export const TargetReleaseInput$inboundSchema: z.ZodType<
       z.lazy(() => TargetReleaseDefaultNumber$inboundSchema),
       z.lazy(() => TargetReleaseDefaultBoolean$inboundSchema),
       z.lazy(() => TargetReleaseDefaultStringList$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   description: z.string(),
   env: z.array(z.lazy(() => TargetReleaseEnv$inboundSchema)).optional(),
+  generate: z.nullable(
+    z.union([z.lazy(() => TargetReleaseGenerate$inboundSchema), z.string()]),
+  ).optional(),
   id: z.string(),
   kind: TargetReleaseKind$inboundSchema,
   label: z.string(),
@@ -4762,7 +5274,7 @@ export const TargetReleaseInput$inboundSchema: z.ZodType<
   providedBy: z.array(TargetReleaseProvidedBy$inboundSchema),
   required: z.boolean(),
   validation: z.nullable(
-    z.union([z.lazy(() => TargetReleaseValidation$inboundSchema), z.any()]),
+    z.union([z.lazy(() => TargetReleaseValidation$inboundSchema), z.string()]),
   ).optional(),
 });
 /** @internal */
@@ -4772,11 +5284,12 @@ export type TargetReleaseInput$Outbound = {
     | TargetReleaseDefaultNumber$Outbound
     | TargetReleaseDefaultBoolean$Outbound
     | TargetReleaseDefaultStringList$Outbound
-    | any
+    | string
     | null
     | undefined;
   description: string;
   env?: Array<TargetReleaseEnv$Outbound> | undefined;
+  generate?: TargetReleaseGenerate$Outbound | string | null | undefined;
   id: string;
   kind: string;
   label: string;
@@ -4784,7 +5297,7 @@ export type TargetReleaseInput$Outbound = {
   platforms?: Array<string> | null | undefined;
   providedBy: Array<string>;
   required: boolean;
-  validation?: TargetReleaseValidation$Outbound | any | null | undefined;
+  validation?: TargetReleaseValidation$Outbound | string | null | undefined;
 };
 
 /** @internal */
@@ -4798,11 +5311,14 @@ export const TargetReleaseInput$outboundSchema: z.ZodType<
       z.lazy(() => TargetReleaseDefaultNumber$outboundSchema),
       z.lazy(() => TargetReleaseDefaultBoolean$outboundSchema),
       z.lazy(() => TargetReleaseDefaultStringList$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   description: z.string(),
   env: z.array(z.lazy(() => TargetReleaseEnv$outboundSchema)).optional(),
+  generate: z.nullable(
+    z.union([z.lazy(() => TargetReleaseGenerate$outboundSchema), z.string()]),
+  ).optional(),
   id: z.string(),
   kind: TargetReleaseKind$outboundSchema,
   label: z.string(),
@@ -4812,7 +5328,7 @@ export const TargetReleaseInput$outboundSchema: z.ZodType<
   providedBy: z.array(TargetReleaseProvidedBy$outboundSchema),
   required: z.boolean(),
   validation: z.nullable(
-    z.union([z.lazy(() => TargetReleaseValidation$outboundSchema), z.any()]),
+    z.union([z.lazy(() => TargetReleaseValidation$outboundSchema), z.string()]),
   ).optional(),
 });
 
@@ -5358,12 +5874,12 @@ export function targetReleaseOverrideConditionResourceFromJSON(
 export const TargetReleaseOverrideResourceConditionUnion$inboundSchema:
   z.ZodType<TargetReleaseOverrideResourceConditionUnion, unknown> = z.union([
     z.lazy(() => TargetReleaseOverrideConditionResource$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 /** @internal */
 export type TargetReleaseOverrideResourceConditionUnion$Outbound =
   | TargetReleaseOverrideConditionResource$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const TargetReleaseOverrideResourceConditionUnion$outboundSchema:
@@ -5372,7 +5888,7 @@ export const TargetReleaseOverrideResourceConditionUnion$outboundSchema:
     TargetReleaseOverrideResourceConditionUnion
   > = z.union([
     z.lazy(() => TargetReleaseOverrideConditionResource$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function targetReleaseOverrideResourceConditionUnionToJSON(
@@ -5409,7 +5925,7 @@ export const TargetReleaseOverrideGcpResource$inboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => TargetReleaseOverrideConditionResource$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
@@ -5418,7 +5934,7 @@ export const TargetReleaseOverrideGcpResource$inboundSchema: z.ZodType<
 export type TargetReleaseOverrideGcpResource$Outbound = {
   condition?:
     | TargetReleaseOverrideConditionResource$Outbound
-    | any
+    | string
     | null
     | undefined;
   scope: string;
@@ -5432,7 +5948,7 @@ export const TargetReleaseOverrideGcpResource$outboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => TargetReleaseOverrideConditionResource$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
@@ -5505,12 +6021,12 @@ export const TargetReleaseOverrideConditionUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => TargetReleaseOverrideCondition$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 /** @internal */
 export type TargetReleaseOverrideConditionUnion$Outbound =
   | TargetReleaseOverrideCondition$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const TargetReleaseOverrideConditionUnion$outboundSchema: z.ZodType<
@@ -5518,7 +6034,7 @@ export const TargetReleaseOverrideConditionUnion$outboundSchema: z.ZodType<
   TargetReleaseOverrideConditionUnion
 > = z.union([
   z.lazy(() => TargetReleaseOverrideCondition$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function targetReleaseOverrideConditionUnionToJSON(
@@ -5549,14 +6065,18 @@ export const TargetReleaseOverrideGcpStack$inboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => TargetReleaseOverrideCondition$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
 });
 /** @internal */
 export type TargetReleaseOverrideGcpStack$Outbound = {
-  condition?: TargetReleaseOverrideCondition$Outbound | any | null | undefined;
+  condition?:
+    | TargetReleaseOverrideCondition$Outbound
+    | string
+    | null
+    | undefined;
   scope: string;
 };
 
@@ -5568,7 +6088,7 @@ export const TargetReleaseOverrideGcpStack$outboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => TargetReleaseOverrideCondition$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
@@ -6422,12 +6942,12 @@ export const TargetReleaseExtendResourceConditionUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => TargetReleaseExtendConditionResource$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 /** @internal */
 export type TargetReleaseExtendResourceConditionUnion$Outbound =
   | TargetReleaseExtendConditionResource$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const TargetReleaseExtendResourceConditionUnion$outboundSchema:
@@ -6436,7 +6956,7 @@ export const TargetReleaseExtendResourceConditionUnion$outboundSchema:
     TargetReleaseExtendResourceConditionUnion
   > = z.union([
     z.lazy(() => TargetReleaseExtendConditionResource$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function targetReleaseExtendResourceConditionUnionToJSON(
@@ -6473,7 +6993,7 @@ export const TargetReleaseExtendGcpResource$inboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => TargetReleaseExtendConditionResource$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
@@ -6482,7 +7002,7 @@ export const TargetReleaseExtendGcpResource$inboundSchema: z.ZodType<
 export type TargetReleaseExtendGcpResource$Outbound = {
   condition?:
     | TargetReleaseExtendConditionResource$Outbound
-    | any
+    | string
     | null
     | undefined;
   scope: string;
@@ -6496,7 +7016,7 @@ export const TargetReleaseExtendGcpResource$outboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => TargetReleaseExtendConditionResource$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
@@ -6569,12 +7089,12 @@ export const TargetReleaseExtendConditionUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => TargetReleaseExtendCondition$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 /** @internal */
 export type TargetReleaseExtendConditionUnion$Outbound =
   | TargetReleaseExtendCondition$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const TargetReleaseExtendConditionUnion$outboundSchema: z.ZodType<
@@ -6582,7 +7102,7 @@ export const TargetReleaseExtendConditionUnion$outboundSchema: z.ZodType<
   TargetReleaseExtendConditionUnion
 > = z.union([
   z.lazy(() => TargetReleaseExtendCondition$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function targetReleaseExtendConditionUnionToJSON(
@@ -6612,14 +7132,14 @@ export const TargetReleaseExtendGcpStack$inboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => TargetReleaseExtendCondition$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
 });
 /** @internal */
 export type TargetReleaseExtendGcpStack$Outbound = {
-  condition?: TargetReleaseExtendCondition$Outbound | any | null | undefined;
+  condition?: TargetReleaseExtendCondition$Outbound | string | null | undefined;
   scope: string;
 };
 
@@ -6631,7 +7151,7 @@ export const TargetReleaseExtendGcpStack$outboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => TargetReleaseExtendCondition$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
@@ -7530,12 +8050,12 @@ export function targetReleaseProfileConditionResourceFromJSON(
 export const TargetReleaseProfileResourceConditionUnion$inboundSchema:
   z.ZodType<TargetReleaseProfileResourceConditionUnion, unknown> = z.union([
     z.lazy(() => TargetReleaseProfileConditionResource$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 /** @internal */
 export type TargetReleaseProfileResourceConditionUnion$Outbound =
   | TargetReleaseProfileConditionResource$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const TargetReleaseProfileResourceConditionUnion$outboundSchema:
@@ -7544,7 +8064,7 @@ export const TargetReleaseProfileResourceConditionUnion$outboundSchema:
     TargetReleaseProfileResourceConditionUnion
   > = z.union([
     z.lazy(() => TargetReleaseProfileConditionResource$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function targetReleaseProfileResourceConditionUnionToJSON(
@@ -7581,7 +8101,7 @@ export const TargetReleaseProfileGcpResource$inboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => TargetReleaseProfileConditionResource$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
@@ -7590,7 +8110,7 @@ export const TargetReleaseProfileGcpResource$inboundSchema: z.ZodType<
 export type TargetReleaseProfileGcpResource$Outbound = {
   condition?:
     | TargetReleaseProfileConditionResource$Outbound
-    | any
+    | string
     | null
     | undefined;
   scope: string;
@@ -7604,7 +8124,7 @@ export const TargetReleaseProfileGcpResource$outboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => TargetReleaseProfileConditionResource$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
@@ -7677,12 +8197,12 @@ export const TargetReleaseProfileConditionUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => TargetReleaseProfileCondition$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 /** @internal */
 export type TargetReleaseProfileConditionUnion$Outbound =
   | TargetReleaseProfileCondition$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const TargetReleaseProfileConditionUnion$outboundSchema: z.ZodType<
@@ -7690,7 +8210,7 @@ export const TargetReleaseProfileConditionUnion$outboundSchema: z.ZodType<
   TargetReleaseProfileConditionUnion
 > = z.union([
   z.lazy(() => TargetReleaseProfileCondition$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function targetReleaseProfileConditionUnionToJSON(
@@ -7721,14 +8241,18 @@ export const TargetReleaseProfileGcpStack$inboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => TargetReleaseProfileCondition$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
 });
 /** @internal */
 export type TargetReleaseProfileGcpStack$Outbound = {
-  condition?: TargetReleaseProfileCondition$Outbound | any | null | undefined;
+  condition?:
+    | TargetReleaseProfileCondition$Outbound
+    | string
+    | null
+    | undefined;
   scope: string;
 };
 
@@ -7740,7 +8264,7 @@ export const TargetReleaseProfileGcpStack$outboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => TargetReleaseProfileCondition$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
@@ -8377,15 +8901,15 @@ export function targetReleaseFromJSON(
 export const TargetReleaseUnion$inboundSchema: z.ZodType<
   TargetReleaseUnion,
   unknown
-> = z.union([z.lazy(() => TargetRelease$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => TargetRelease$inboundSchema), z.string()]);
 /** @internal */
-export type TargetReleaseUnion$Outbound = TargetRelease$Outbound | any;
+export type TargetReleaseUnion$Outbound = TargetRelease$Outbound | string;
 
 /** @internal */
 export const TargetReleaseUnion$outboundSchema: z.ZodType<
   TargetReleaseUnion$Outbound,
   TargetReleaseUnion
-> = z.union([z.lazy(() => TargetRelease$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => TargetRelease$outboundSchema), z.string()]);
 
 export function targetReleaseUnionToJSON(
   targetReleaseUnion: TargetReleaseUnion,
@@ -8419,15 +8943,18 @@ export const DeploymentState$inboundSchema: z.ZodType<
   runtimeMetadata: z.nullable(
     z.union([
       z.lazy(() => DeploymentStateRuntimeMetadata$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   stackState: z.nullable(
-    z.union([z.lazy(() => DeploymentStateStackState$inboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => DeploymentStateStackState$inboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   status: DeploymentStateStatus$inboundSchema,
   targetRelease: z.nullable(
-    z.union([z.lazy(() => TargetRelease$inboundSchema), z.any()]),
+    z.union([z.lazy(() => TargetRelease$inboundSchema), z.string()]),
   ).optional(),
 });
 /** @internal */
@@ -8443,12 +8970,12 @@ export type DeploymentState$Outbound = {
   retryRequested?: boolean | undefined;
   runtimeMetadata?:
     | DeploymentStateRuntimeMetadata$Outbound
-    | any
+    | string
     | null
     | undefined;
-  stackState?: DeploymentStateStackState$Outbound | any | null | undefined;
+  stackState?: DeploymentStateStackState$Outbound | string | null | undefined;
   status: string;
-  targetRelease?: TargetRelease$Outbound | any | null | undefined;
+  targetRelease?: TargetRelease$Outbound | string | null | undefined;
 };
 
 /** @internal */
@@ -8467,15 +8994,18 @@ export const DeploymentState$outboundSchema: z.ZodType<
   runtimeMetadata: z.nullable(
     z.union([
       z.lazy(() => DeploymentStateRuntimeMetadata$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   stackState: z.nullable(
-    z.union([z.lazy(() => DeploymentStateStackState$outboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => DeploymentStateStackState$outboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   status: DeploymentStateStatus$outboundSchema,
   targetRelease: z.nullable(
-    z.union([z.lazy(() => TargetRelease$outboundSchema), z.any()]),
+    z.union([z.lazy(() => TargetRelease$outboundSchema), z.string()]),
   ).optional(),
 });
 

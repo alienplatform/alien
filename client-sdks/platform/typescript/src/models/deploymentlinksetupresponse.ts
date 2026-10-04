@@ -68,6 +68,7 @@ export type DeploymentLinkSetupResponseSetupItem = ClosedEnum<
 export const VisiblePackageType = {
   Cli: "cli",
   Cloudformation: "cloudformation",
+  GcpSandboxImage: "gcp-sandbox-image",
   Helm: "helm",
   OperatorImage: "operator-image",
   SandboxBundle: "sandbox-bundle",

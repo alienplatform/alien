@@ -8,6 +8,12 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  ExternalBindingUnion,
+  ExternalBindingUnion$inboundSchema,
+  ExternalBindingUnion$Outbound,
+  ExternalBindingUnion$outboundSchema,
+} from "./externalbindingunion.js";
 
 /**
  * Failure-domain policy selected for a compute pool.
@@ -28,12 +34,12 @@ export type DeploymentSetupStackSettingsPolicyFailureDomains2 = {
 
 export type DeploymentSetupStackSettingsPolicyFailureDomainsUnion2 =
   | DeploymentSetupStackSettingsPolicyFailureDomains2
-  | any;
+  | string;
 
 export type DeploymentSetupStackSettingsPolicyPoolsAutoscale = {
   failureDomains?:
     | DeploymentSetupStackSettingsPolicyFailureDomains2
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -70,12 +76,12 @@ export type DeploymentSetupStackSettingsPolicyFailureDomains1 = {
 
 export type DeploymentSetupStackSettingsPolicyFailureDomainsUnion1 =
   | DeploymentSetupStackSettingsPolicyFailureDomains1
-  | any;
+  | string;
 
 export type DeploymentSetupStackSettingsPolicyPoolsFixed = {
   failureDomains?:
     | DeploymentSetupStackSettingsPolicyFailureDomains1
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -118,7 +124,7 @@ export type DeploymentSetupStackSettingsPolicyCompute = {
 
 export type DeploymentSetupStackSettingsPolicyComputeUnion =
   | DeploymentSetupStackSettingsPolicyCompute
-  | any;
+  | string;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -140,7 +146,7 @@ export type DeploymentSetupStackSettingsPolicyAws = {
 
 export type DeploymentSetupStackSettingsPolicyAwsUnion =
   | DeploymentSetupStackSettingsPolicyAws
-  | any;
+  | string;
 
 export type DeploymentSetupStackSettingsPolicyAzure = {
   keyVaultCertificateId: string;
@@ -149,7 +155,7 @@ export type DeploymentSetupStackSettingsPolicyAzure = {
 
 export type DeploymentSetupStackSettingsPolicyAzureUnion =
   | DeploymentSetupStackSettingsPolicyAzure
-  | any;
+  | string;
 
 export type DeploymentSetupStackSettingsPolicyGcp = {
   certificateName: string;
@@ -157,7 +163,7 @@ export type DeploymentSetupStackSettingsPolicyGcp = {
 
 export type DeploymentSetupStackSettingsPolicyGcpUnion =
   | DeploymentSetupStackSettingsPolicyGcp
-  | any;
+  | string;
 
 /**
  * Namespace-scoped Kubernetes TLS Secret reference.
@@ -182,18 +188,18 @@ export type DeploymentSetupStackSettingsPolicyDomainsKubernetes = {
 
 export type DeploymentSetupStackSettingsPolicyDomainsKubernetesUnion =
   | DeploymentSetupStackSettingsPolicyDomainsKubernetes
-  | any;
+  | string;
 
 /**
  * Platform-specific certificate references for custom domains.
  */
 export type DeploymentSetupStackSettingsPolicyDomainsCertificate = {
-  aws?: DeploymentSetupStackSettingsPolicyAws | any | null | undefined;
-  azure?: DeploymentSetupStackSettingsPolicyAzure | any | null | undefined;
-  gcp?: DeploymentSetupStackSettingsPolicyGcp | any | null | undefined;
+  aws?: DeploymentSetupStackSettingsPolicyAws | string | null | undefined;
+  azure?: DeploymentSetupStackSettingsPolicyAzure | string | null | undefined;
+  gcp?: DeploymentSetupStackSettingsPolicyGcp | string | null | undefined;
   kubernetes?:
     | DeploymentSetupStackSettingsPolicyDomainsKubernetes
-    | any
+    | string
     | null
     | undefined;
 };
@@ -243,7 +249,7 @@ export type DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddress
 export type DeploymentSetupStackSettingsPolicyPublicEndpointTargetUnion =
   | DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer
   | DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses
-  | any;
+  | string;
 
 /**
  * Domain configuration for the stack.
@@ -264,24 +270,14 @@ export type DeploymentSetupStackSettingsPolicyDomains = {
   publicEndpointTarget?:
     | DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer
     | DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses
-    | any
+    | string
     | null
     | undefined;
 };
 
 export type DeploymentSetupStackSettingsPolicyDomainsUnion =
   | DeploymentSetupStackSettingsPolicyDomains
-  | any;
-
-/**
- * External bindings for pre-existing infrastructure.
- *
- * @remarks
- * Allows using existing resources (MinIO, Redis, shared Container Apps
- * Environment, etc.) instead of having Alien provision them.
- * Required for Kubernetes platform, optional for cloud platforms.
- */
-export type DeploymentSetupStackSettingsPolicyExternalBindings = {};
+  | string;
 
 /**
  * How heartbeat health checks are handled.
@@ -312,7 +308,7 @@ export type DeploymentSetupStackSettingsPolicyCloud = {
 
 export type DeploymentSetupStackSettingsPolicyCloudUnion =
   | DeploymentSetupStackSettingsPolicyCloud
-  | any;
+  | string;
 
 /**
  * Ownership model for the Kubernetes cluster.
@@ -333,7 +329,7 @@ export type DeploymentSetupStackSettingsPolicyOwnership = ClosedEnum<
  * Kubernetes cluster setup settings.
  */
 export type DeploymentSetupStackSettingsPolicyCluster = {
-  cloud?: DeploymentSetupStackSettingsPolicyCloud | any | null | undefined;
+  cloud?: DeploymentSetupStackSettingsPolicyCloud | string | null | undefined;
   /**
    * Namespace where the Alien chart and application resources run.
    */
@@ -346,7 +342,7 @@ export type DeploymentSetupStackSettingsPolicyCluster = {
 
 export type DeploymentSetupStackSettingsPolicyClusterUnion =
   | DeploymentSetupStackSettingsPolicyCluster
-  | any;
+  | string;
 
 export type DeploymentSetupStackSettingsPolicyCertificateNone2 = {
   mode: "none";
@@ -485,7 +481,7 @@ export type DeploymentSetupStackSettingsPolicyProviderUnion4 =
   | DeploymentSetupStackSettingsPolicyProviderAwsAlb4
   | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4
   | DeploymentSetupStackSettingsPolicyProviderGkeGateway4
-  | any;
+  | string;
 
 /**
  * Shared Gateway API route profile values.
@@ -515,7 +511,7 @@ export type DeploymentSetupStackSettingsPolicyRouteGateway2 = {
     | DeploymentSetupStackSettingsPolicyProviderAwsAlb4
     | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4
     | DeploymentSetupStackSettingsPolicyProviderGkeGateway4
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -594,7 +590,7 @@ export type DeploymentSetupStackSettingsPolicyProviderUnion3 =
   | DeploymentSetupStackSettingsPolicyProviderAwsAlb3
   | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3
   | DeploymentSetupStackSettingsPolicyProviderGkeGateway3
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -620,7 +616,7 @@ export type DeploymentSetupStackSettingsPolicyRouteIngress2 = {
     | DeploymentSetupStackSettingsPolicyProviderAwsAlb3
     | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3
     | DeploymentSetupStackSettingsPolicyProviderGkeGateway3
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -793,7 +789,7 @@ export type DeploymentSetupStackSettingsPolicyProviderUnion2 =
   | DeploymentSetupStackSettingsPolicyProviderAwsAlb2
   | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2
   | DeploymentSetupStackSettingsPolicyProviderGkeGateway2
-  | any;
+  | string;
 
 /**
  * Shared Gateway API route profile values.
@@ -823,7 +819,7 @@ export type DeploymentSetupStackSettingsPolicyRouteGateway1 = {
     | DeploymentSetupStackSettingsPolicyProviderAwsAlb2
     | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2
     | DeploymentSetupStackSettingsPolicyProviderGkeGateway2
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -902,7 +898,7 @@ export type DeploymentSetupStackSettingsPolicyProviderUnion1 =
   | DeploymentSetupStackSettingsPolicyProviderAwsAlb1
   | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1
   | DeploymentSetupStackSettingsPolicyProviderGkeGateway1
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -928,7 +924,7 @@ export type DeploymentSetupStackSettingsPolicyRouteIngress1 = {
     | DeploymentSetupStackSettingsPolicyProviderAwsAlb1
     | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1
     | DeploymentSetupStackSettingsPolicyProviderGkeGateway1
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -975,7 +971,7 @@ export type DeploymentSetupStackSettingsPolicyExposureUnion =
   | DeploymentSetupStackSettingsPolicyExposureCustom
   | DeploymentSetupStackSettingsPolicyExposureGenerated
   | DeploymentSetupStackSettingsPolicyExposureDisabled
-  | any;
+  | string;
 
 /**
  * Kubernetes runtime substrate configuration.
@@ -988,19 +984,23 @@ export type DeploymentSetupStackSettingsPolicyExposureUnion =
  * cluster.
  */
 export type DeploymentSetupStackSettingsPolicyKubernetes = {
-  cluster?: DeploymentSetupStackSettingsPolicyCluster | any | null | undefined;
+  cluster?:
+    | DeploymentSetupStackSettingsPolicyCluster
+    | string
+    | null
+    | undefined;
   exposure?:
     | DeploymentSetupStackSettingsPolicyExposureCustom
     | DeploymentSetupStackSettingsPolicyExposureGenerated
     | DeploymentSetupStackSettingsPolicyExposureDisabled
-    | any
+    | string
     | null
     | undefined;
 };
 
 export type DeploymentSetupStackSettingsPolicyKubernetesUnion =
   | DeploymentSetupStackSettingsPolicyKubernetes
-  | any;
+  | string;
 
 export const DeploymentSetupStackSettingsPolicyTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
@@ -1128,7 +1128,7 @@ export type DeploymentSetupStackSettingsPolicyNetworkUnion =
   | DeploymentSetupStackSettingsPolicyNetworkByoVnetAzure
   | DeploymentSetupStackSettingsPolicyNetworkUseDefault
   | DeploymentSetupStackSettingsPolicyNetworkCreate
-  | any;
+  | string;
 
 /**
  * How telemetry (logs, metrics, traces) is handled.
@@ -1172,33 +1172,30 @@ export type DeploymentSetupStackSettingsPolicyUpdates = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type Defaults = {
-  compute?: DeploymentSetupStackSettingsPolicyCompute | any | null | undefined;
+  compute?:
+    | DeploymentSetupStackSettingsPolicyCompute
+    | string
+    | null
+    | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
   deploymentModel?:
     | DeploymentSetupStackSettingsPolicyDeploymentModel
     | undefined;
-  domains?: DeploymentSetupStackSettingsPolicyDomains | any | null | undefined;
-  /**
-   * External bindings for pre-existing infrastructure.
-   *
-   * @remarks
-   * Allows using existing resources (MinIO, Redis, shared Container Apps
-   * Environment, etc.) instead of having Alien provision them.
-   * Required for Kubernetes platform, optional for cloud platforms.
-   */
-  externalBindings?:
-    | DeploymentSetupStackSettingsPolicyExternalBindings
+  domains?:
+    | DeploymentSetupStackSettingsPolicyDomains
+    | string
     | null
     | undefined;
+  externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
   /**
    * How heartbeat health checks are handled.
    */
   heartbeats?: DeploymentSetupStackSettingsPolicyHeartbeats | undefined;
   kubernetes?:
     | DeploymentSetupStackSettingsPolicyKubernetes
-    | any
+    | string
     | null
     | undefined;
   network?:
@@ -1207,7 +1204,7 @@ export type Defaults = {
     | DeploymentSetupStackSettingsPolicyNetworkByoVnetAzure
     | DeploymentSetupStackSettingsPolicyNetworkUseDefault
     | DeploymentSetupStackSettingsPolicyNetworkCreate
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -1343,12 +1340,12 @@ export const DeploymentSetupStackSettingsPolicyFailureDomainsUnion2$inboundSchem
       z.lazy(() =>
         DeploymentSetupStackSettingsPolicyFailureDomains2$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]);
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyFailureDomainsUnion2$Outbound =
   | DeploymentSetupStackSettingsPolicyFailureDomains2$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyFailureDomainsUnion2$outboundSchema:
@@ -1359,7 +1356,7 @@ export const DeploymentSetupStackSettingsPolicyFailureDomainsUnion2$outboundSche
     z.lazy(() =>
       DeploymentSetupStackSettingsPolicyFailureDomains2$outboundSchema
     ),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentSetupStackSettingsPolicyFailureDomainsUnion2ToJSON(
@@ -1396,7 +1393,7 @@ export const DeploymentSetupStackSettingsPolicyPoolsAutoscale$inboundSchema:
           z.lazy(() =>
             DeploymentSetupStackSettingsPolicyFailureDomains2$inboundSchema
           ),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
       machine: z.nullable(z.string()).optional(),
@@ -1412,7 +1409,7 @@ export const DeploymentSetupStackSettingsPolicyPoolsAutoscale$inboundSchema:
 export type DeploymentSetupStackSettingsPolicyPoolsAutoscale$Outbound = {
   failure_domains?:
     | DeploymentSetupStackSettingsPolicyFailureDomains2$Outbound
-    | any
+    | string
     | null
     | undefined;
   machine?: string | null | undefined;
@@ -1432,7 +1429,7 @@ export const DeploymentSetupStackSettingsPolicyPoolsAutoscale$outboundSchema:
         z.lazy(() =>
           DeploymentSetupStackSettingsPolicyFailureDomains2$outboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     machine: z.nullable(z.string()).optional(),
@@ -1527,12 +1524,12 @@ export const DeploymentSetupStackSettingsPolicyFailureDomainsUnion1$inboundSchem
       z.lazy(() =>
         DeploymentSetupStackSettingsPolicyFailureDomains1$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]);
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyFailureDomainsUnion1$Outbound =
   | DeploymentSetupStackSettingsPolicyFailureDomains1$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyFailureDomainsUnion1$outboundSchema:
@@ -1543,7 +1540,7 @@ export const DeploymentSetupStackSettingsPolicyFailureDomainsUnion1$outboundSche
     z.lazy(() =>
       DeploymentSetupStackSettingsPolicyFailureDomains1$outboundSchema
     ),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentSetupStackSettingsPolicyFailureDomainsUnion1ToJSON(
@@ -1579,7 +1576,7 @@ export const DeploymentSetupStackSettingsPolicyPoolsFixed$inboundSchema:
         z.lazy(() =>
           DeploymentSetupStackSettingsPolicyFailureDomains1$inboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     machine: z.nullable(z.string()).optional(),
@@ -1594,7 +1591,7 @@ export const DeploymentSetupStackSettingsPolicyPoolsFixed$inboundSchema:
 export type DeploymentSetupStackSettingsPolicyPoolsFixed$Outbound = {
   failure_domains?:
     | DeploymentSetupStackSettingsPolicyFailureDomains1$Outbound
-    | any
+    | string
     | null
     | undefined;
   machine?: string | null | undefined;
@@ -1613,7 +1610,7 @@ export const DeploymentSetupStackSettingsPolicyPoolsFixed$outboundSchema:
         z.lazy(() =>
           DeploymentSetupStackSettingsPolicyFailureDomains1$outboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     machine: z.nullable(z.string()).optional(),
@@ -1775,12 +1772,12 @@ export function deploymentSetupStackSettingsPolicyComputeFromJSON(
 export const DeploymentSetupStackSettingsPolicyComputeUnion$inboundSchema:
   z.ZodType<DeploymentSetupStackSettingsPolicyComputeUnion, unknown> = z.union([
     z.lazy(() => DeploymentSetupStackSettingsPolicyCompute$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyComputeUnion$Outbound =
   | DeploymentSetupStackSettingsPolicyCompute$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyComputeUnion$outboundSchema:
@@ -1789,7 +1786,7 @@ export const DeploymentSetupStackSettingsPolicyComputeUnion$outboundSchema:
     DeploymentSetupStackSettingsPolicyComputeUnion
   > = z.union([
     z.lazy(() => DeploymentSetupStackSettingsPolicyCompute$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentSetupStackSettingsPolicyComputeUnionToJSON(
@@ -1872,12 +1869,12 @@ export function deploymentSetupStackSettingsPolicyAwsFromJSON(
 export const DeploymentSetupStackSettingsPolicyAwsUnion$inboundSchema:
   z.ZodType<DeploymentSetupStackSettingsPolicyAwsUnion, unknown> = z.union([
     z.lazy(() => DeploymentSetupStackSettingsPolicyAws$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyAwsUnion$Outbound =
   | DeploymentSetupStackSettingsPolicyAws$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyAwsUnion$outboundSchema:
@@ -1886,7 +1883,7 @@ export const DeploymentSetupStackSettingsPolicyAwsUnion$outboundSchema:
     DeploymentSetupStackSettingsPolicyAwsUnion
   > = z.union([
     z.lazy(() => DeploymentSetupStackSettingsPolicyAws$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentSetupStackSettingsPolicyAwsUnionToJSON(
@@ -1968,12 +1965,12 @@ export function deploymentSetupStackSettingsPolicyAzureFromJSON(
 export const DeploymentSetupStackSettingsPolicyAzureUnion$inboundSchema:
   z.ZodType<DeploymentSetupStackSettingsPolicyAzureUnion, unknown> = z.union([
     z.lazy(() => DeploymentSetupStackSettingsPolicyAzure$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyAzureUnion$Outbound =
   | DeploymentSetupStackSettingsPolicyAzure$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyAzureUnion$outboundSchema:
@@ -1982,7 +1979,7 @@ export const DeploymentSetupStackSettingsPolicyAzureUnion$outboundSchema:
     DeploymentSetupStackSettingsPolicyAzureUnion
   > = z.union([
     z.lazy(() => DeploymentSetupStackSettingsPolicyAzure$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentSetupStackSettingsPolicyAzureUnionToJSON(
@@ -2055,12 +2052,12 @@ export function deploymentSetupStackSettingsPolicyGcpFromJSON(
 export const DeploymentSetupStackSettingsPolicyGcpUnion$inboundSchema:
   z.ZodType<DeploymentSetupStackSettingsPolicyGcpUnion, unknown> = z.union([
     z.lazy(() => DeploymentSetupStackSettingsPolicyGcp$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyGcpUnion$Outbound =
   | DeploymentSetupStackSettingsPolicyGcp$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyGcpUnion$outboundSchema:
@@ -2069,7 +2066,7 @@ export const DeploymentSetupStackSettingsPolicyGcpUnion$outboundSchema:
     DeploymentSetupStackSettingsPolicyGcpUnion
   > = z.union([
     z.lazy(() => DeploymentSetupStackSettingsPolicyGcp$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentSetupStackSettingsPolicyGcpUnionToJSON(
@@ -2205,12 +2202,12 @@ export const DeploymentSetupStackSettingsPolicyDomainsKubernetesUnion$inboundSch
       z.lazy(() =>
         DeploymentSetupStackSettingsPolicyDomainsKubernetes$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]);
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyDomainsKubernetesUnion$Outbound =
   | DeploymentSetupStackSettingsPolicyDomainsKubernetes$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyDomainsKubernetesUnion$outboundSchema:
@@ -2221,7 +2218,7 @@ export const DeploymentSetupStackSettingsPolicyDomainsKubernetesUnion$outboundSc
     z.lazy(() =>
       DeploymentSetupStackSettingsPolicyDomainsKubernetes$outboundSchema
     ),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentSetupStackSettingsPolicyDomainsKubernetesUnionToJSON(
@@ -2255,19 +2252,19 @@ export const DeploymentSetupStackSettingsPolicyDomainsCertificate$inboundSchema:
       aws: z.nullable(
         z.union([
           z.lazy(() => DeploymentSetupStackSettingsPolicyAws$inboundSchema),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
       azure: z.nullable(
         z.union([
           z.lazy(() => DeploymentSetupStackSettingsPolicyAzure$inboundSchema),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
       gcp: z.nullable(
         z.union([
           z.lazy(() => DeploymentSetupStackSettingsPolicyGcp$inboundSchema),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
       kubernetes: z.nullable(
@@ -2275,22 +2272,30 @@ export const DeploymentSetupStackSettingsPolicyDomainsCertificate$inboundSchema:
           z.lazy(() =>
             DeploymentSetupStackSettingsPolicyDomainsKubernetes$inboundSchema
           ),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
     });
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyDomainsCertificate$Outbound = {
-  aws?: DeploymentSetupStackSettingsPolicyAws$Outbound | any | null | undefined;
-  azure?:
-    | DeploymentSetupStackSettingsPolicyAzure$Outbound
-    | any
+  aws?:
+    | DeploymentSetupStackSettingsPolicyAws$Outbound
+    | string
     | null
     | undefined;
-  gcp?: DeploymentSetupStackSettingsPolicyGcp$Outbound | any | null | undefined;
+  azure?:
+    | DeploymentSetupStackSettingsPolicyAzure$Outbound
+    | string
+    | null
+    | undefined;
+  gcp?:
+    | DeploymentSetupStackSettingsPolicyGcp$Outbound
+    | string
+    | null
+    | undefined;
   kubernetes?:
     | DeploymentSetupStackSettingsPolicyDomainsKubernetes$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -2304,19 +2309,19 @@ export const DeploymentSetupStackSettingsPolicyDomainsCertificate$outboundSchema
     aws: z.nullable(
       z.union([
         z.lazy(() => DeploymentSetupStackSettingsPolicyAws$outboundSchema),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     azure: z.nullable(
       z.union([
         z.lazy(() => DeploymentSetupStackSettingsPolicyAzure$outboundSchema),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     gcp: z.nullable(
       z.union([
         z.lazy(() => DeploymentSetupStackSettingsPolicyGcp$outboundSchema),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     kubernetes: z.nullable(
@@ -2324,7 +2329,7 @@ export const DeploymentSetupStackSettingsPolicyDomainsCertificate$outboundSchema
         z.lazy(() =>
           DeploymentSetupStackSettingsPolicyDomainsKubernetes$outboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
   });
@@ -2540,13 +2545,13 @@ export const DeploymentSetupStackSettingsPolicyPublicEndpointTargetUnion$inbound
     z.lazy(() =>
       DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses$inboundSchema
     ),
-    z.any(),
+    z.string(),
   ]);
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyPublicEndpointTargetUnion$Outbound =
   | DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer$Outbound
   | DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyPublicEndpointTargetUnion$outboundSchema:
@@ -2560,7 +2565,7 @@ export const DeploymentSetupStackSettingsPolicyPublicEndpointTargetUnion$outboun
     z.lazy(() =>
       DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses$outboundSchema
     ),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentSetupStackSettingsPolicyPublicEndpointTargetUnionToJSON(
@@ -2608,7 +2613,7 @@ export const DeploymentSetupStackSettingsPolicyDomains$inboundSchema: z.ZodType<
       z.lazy(() =>
         DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -2621,7 +2626,7 @@ export type DeploymentSetupStackSettingsPolicyDomains$Outbound = {
   publicEndpointTarget?:
     | DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer$Outbound
     | DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -2648,7 +2653,7 @@ export const DeploymentSetupStackSettingsPolicyDomains$outboundSchema:
         z.lazy(() =>
           DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses$outboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
   });
@@ -2683,12 +2688,12 @@ export function deploymentSetupStackSettingsPolicyDomainsFromJSON(
 export const DeploymentSetupStackSettingsPolicyDomainsUnion$inboundSchema:
   z.ZodType<DeploymentSetupStackSettingsPolicyDomainsUnion, unknown> = z.union([
     z.lazy(() => DeploymentSetupStackSettingsPolicyDomains$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyDomainsUnion$Outbound =
   | DeploymentSetupStackSettingsPolicyDomains$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyDomainsUnion$outboundSchema:
@@ -2697,7 +2702,7 @@ export const DeploymentSetupStackSettingsPolicyDomainsUnion$outboundSchema:
     DeploymentSetupStackSettingsPolicyDomainsUnion
   > = z.union([
     z.lazy(() => DeploymentSetupStackSettingsPolicyDomains$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentSetupStackSettingsPolicyDomainsUnionToJSON(
@@ -2723,46 +2728,6 @@ export function deploymentSetupStackSettingsPolicyDomainsUnionFromJSON(
         JSON.parse(x),
       ),
     `Failed to parse 'DeploymentSetupStackSettingsPolicyDomainsUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyExternalBindings$inboundSchema:
-  z.ZodType<DeploymentSetupStackSettingsPolicyExternalBindings, unknown> = z
-    .object({});
-/** @internal */
-export type DeploymentSetupStackSettingsPolicyExternalBindings$Outbound = {};
-
-/** @internal */
-export const DeploymentSetupStackSettingsPolicyExternalBindings$outboundSchema:
-  z.ZodType<
-    DeploymentSetupStackSettingsPolicyExternalBindings$Outbound,
-    DeploymentSetupStackSettingsPolicyExternalBindings
-  > = z.object({});
-
-export function deploymentSetupStackSettingsPolicyExternalBindingsToJSON(
-  deploymentSetupStackSettingsPolicyExternalBindings:
-    DeploymentSetupStackSettingsPolicyExternalBindings,
-): string {
-  return JSON.stringify(
-    DeploymentSetupStackSettingsPolicyExternalBindings$outboundSchema.parse(
-      deploymentSetupStackSettingsPolicyExternalBindings,
-    ),
-  );
-}
-export function deploymentSetupStackSettingsPolicyExternalBindingsFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentSetupStackSettingsPolicyExternalBindings,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentSetupStackSettingsPolicyExternalBindings$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentSetupStackSettingsPolicyExternalBindings' from JSON`,
   );
 }
 
@@ -2844,12 +2809,12 @@ export function deploymentSetupStackSettingsPolicyCloudFromJSON(
 export const DeploymentSetupStackSettingsPolicyCloudUnion$inboundSchema:
   z.ZodType<DeploymentSetupStackSettingsPolicyCloudUnion, unknown> = z.union([
     z.lazy(() => DeploymentSetupStackSettingsPolicyCloud$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyCloudUnion$Outbound =
   | DeploymentSetupStackSettingsPolicyCloud$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyCloudUnion$outboundSchema:
@@ -2858,7 +2823,7 @@ export const DeploymentSetupStackSettingsPolicyCloudUnion$outboundSchema:
     DeploymentSetupStackSettingsPolicyCloudUnion
   > = z.union([
     z.lazy(() => DeploymentSetupStackSettingsPolicyCloud$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentSetupStackSettingsPolicyCloudUnionToJSON(
@@ -2905,7 +2870,7 @@ export const DeploymentSetupStackSettingsPolicyCluster$inboundSchema: z.ZodType<
   cloud: z.nullable(
     z.union([
       z.lazy(() => DeploymentSetupStackSettingsPolicyCloud$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   namespace: z.nullable(z.string()).optional(),
@@ -2915,7 +2880,7 @@ export const DeploymentSetupStackSettingsPolicyCluster$inboundSchema: z.ZodType<
 export type DeploymentSetupStackSettingsPolicyCluster$Outbound = {
   cloud?:
     | DeploymentSetupStackSettingsPolicyCloud$Outbound
-    | any
+    | string
     | null
     | undefined;
   namespace?: string | null | undefined;
@@ -2931,7 +2896,7 @@ export const DeploymentSetupStackSettingsPolicyCluster$outboundSchema:
     cloud: z.nullable(
       z.union([
         z.lazy(() => DeploymentSetupStackSettingsPolicyCloud$outboundSchema),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     namespace: z.nullable(z.string()).optional(),
@@ -2968,12 +2933,12 @@ export function deploymentSetupStackSettingsPolicyClusterFromJSON(
 export const DeploymentSetupStackSettingsPolicyClusterUnion$inboundSchema:
   z.ZodType<DeploymentSetupStackSettingsPolicyClusterUnion, unknown> = z.union([
     z.lazy(() => DeploymentSetupStackSettingsPolicyCluster$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyClusterUnion$Outbound =
   | DeploymentSetupStackSettingsPolicyCluster$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyClusterUnion$outboundSchema:
@@ -2982,7 +2947,7 @@ export const DeploymentSetupStackSettingsPolicyClusterUnion$outboundSchema:
     DeploymentSetupStackSettingsPolicyClusterUnion
   > = z.union([
     z.lazy(() => DeploymentSetupStackSettingsPolicyCluster$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentSetupStackSettingsPolicyClusterUnionToJSON(
@@ -3563,14 +3528,14 @@ export const DeploymentSetupStackSettingsPolicyProviderUnion4$inboundSchema:
       z.lazy(() =>
         DeploymentSetupStackSettingsPolicyProviderGkeGateway4$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]);
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyProviderUnion4$Outbound =
   | DeploymentSetupStackSettingsPolicyProviderAwsAlb4$Outbound
   | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4$Outbound
   | DeploymentSetupStackSettingsPolicyProviderGkeGateway4$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyProviderUnion4$outboundSchema:
@@ -3587,7 +3552,7 @@ export const DeploymentSetupStackSettingsPolicyProviderUnion4$outboundSchema:
     z.lazy(() =>
       DeploymentSetupStackSettingsPolicyProviderGkeGateway4$outboundSchema
     ),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentSetupStackSettingsPolicyProviderUnion4ToJSON(
@@ -3636,7 +3601,7 @@ export const DeploymentSetupStackSettingsPolicyRouteGateway2$inboundSchema:
           z.lazy(() =>
             DeploymentSetupStackSettingsPolicyProviderGkeGateway4$inboundSchema
           ),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
       routeApi: z.literal("gateway"),
@@ -3652,7 +3617,7 @@ export type DeploymentSetupStackSettingsPolicyRouteGateway2$Outbound = {
     | DeploymentSetupStackSettingsPolicyProviderAwsAlb4$Outbound
     | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers4$Outbound
     | DeploymentSetupStackSettingsPolicyProviderGkeGateway4$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -3680,7 +3645,7 @@ export const DeploymentSetupStackSettingsPolicyRouteGateway2$outboundSchema:
         z.lazy(() =>
           DeploymentSetupStackSettingsPolicyProviderGkeGateway4$outboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     routeApi: z.literal("gateway"),
@@ -3928,14 +3893,14 @@ export const DeploymentSetupStackSettingsPolicyProviderUnion3$inboundSchema:
       z.lazy(() =>
         DeploymentSetupStackSettingsPolicyProviderGkeGateway3$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]);
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyProviderUnion3$Outbound =
   | DeploymentSetupStackSettingsPolicyProviderAwsAlb3$Outbound
   | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3$Outbound
   | DeploymentSetupStackSettingsPolicyProviderGkeGateway3$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyProviderUnion3$outboundSchema:
@@ -3952,7 +3917,7 @@ export const DeploymentSetupStackSettingsPolicyProviderUnion3$outboundSchema:
     z.lazy(() =>
       DeploymentSetupStackSettingsPolicyProviderGkeGateway3$outboundSchema
     ),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentSetupStackSettingsPolicyProviderUnion3ToJSON(
@@ -4000,7 +3965,7 @@ export const DeploymentSetupStackSettingsPolicyRouteIngress2$inboundSchema:
           z.lazy(() =>
             DeploymentSetupStackSettingsPolicyProviderGkeGateway3$inboundSchema
           ),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
       routeApi: z.literal("ingress"),
@@ -4015,7 +3980,7 @@ export type DeploymentSetupStackSettingsPolicyRouteIngress2$Outbound = {
     | DeploymentSetupStackSettingsPolicyProviderAwsAlb3$Outbound
     | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers3$Outbound
     | DeploymentSetupStackSettingsPolicyProviderGkeGateway3$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -4042,7 +4007,7 @@ export const DeploymentSetupStackSettingsPolicyRouteIngress2$outboundSchema:
         z.lazy(() =>
           DeploymentSetupStackSettingsPolicyProviderGkeGateway3$outboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     routeApi: z.literal("ingress"),
@@ -4785,14 +4750,14 @@ export const DeploymentSetupStackSettingsPolicyProviderUnion2$inboundSchema:
       z.lazy(() =>
         DeploymentSetupStackSettingsPolicyProviderGkeGateway2$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]);
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyProviderUnion2$Outbound =
   | DeploymentSetupStackSettingsPolicyProviderAwsAlb2$Outbound
   | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2$Outbound
   | DeploymentSetupStackSettingsPolicyProviderGkeGateway2$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyProviderUnion2$outboundSchema:
@@ -4809,7 +4774,7 @@ export const DeploymentSetupStackSettingsPolicyProviderUnion2$outboundSchema:
     z.lazy(() =>
       DeploymentSetupStackSettingsPolicyProviderGkeGateway2$outboundSchema
     ),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentSetupStackSettingsPolicyProviderUnion2ToJSON(
@@ -4858,7 +4823,7 @@ export const DeploymentSetupStackSettingsPolicyRouteGateway1$inboundSchema:
           z.lazy(() =>
             DeploymentSetupStackSettingsPolicyProviderGkeGateway2$inboundSchema
           ),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
       routeApi: z.literal("gateway"),
@@ -4874,7 +4839,7 @@ export type DeploymentSetupStackSettingsPolicyRouteGateway1$Outbound = {
     | DeploymentSetupStackSettingsPolicyProviderAwsAlb2$Outbound
     | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers2$Outbound
     | DeploymentSetupStackSettingsPolicyProviderGkeGateway2$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -4902,7 +4867,7 @@ export const DeploymentSetupStackSettingsPolicyRouteGateway1$outboundSchema:
         z.lazy(() =>
           DeploymentSetupStackSettingsPolicyProviderGkeGateway2$outboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     routeApi: z.literal("gateway"),
@@ -5150,14 +5115,14 @@ export const DeploymentSetupStackSettingsPolicyProviderUnion1$inboundSchema:
       z.lazy(() =>
         DeploymentSetupStackSettingsPolicyProviderGkeGateway1$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]);
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyProviderUnion1$Outbound =
   | DeploymentSetupStackSettingsPolicyProviderAwsAlb1$Outbound
   | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1$Outbound
   | DeploymentSetupStackSettingsPolicyProviderGkeGateway1$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyProviderUnion1$outboundSchema:
@@ -5174,7 +5139,7 @@ export const DeploymentSetupStackSettingsPolicyProviderUnion1$outboundSchema:
     z.lazy(() =>
       DeploymentSetupStackSettingsPolicyProviderGkeGateway1$outboundSchema
     ),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentSetupStackSettingsPolicyProviderUnion1ToJSON(
@@ -5222,7 +5187,7 @@ export const DeploymentSetupStackSettingsPolicyRouteIngress1$inboundSchema:
           z.lazy(() =>
             DeploymentSetupStackSettingsPolicyProviderGkeGateway1$inboundSchema
           ),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
       routeApi: z.literal("ingress"),
@@ -5237,7 +5202,7 @@ export type DeploymentSetupStackSettingsPolicyRouteIngress1$Outbound = {
     | DeploymentSetupStackSettingsPolicyProviderAwsAlb1$Outbound
     | DeploymentSetupStackSettingsPolicyProviderAzureApplicationGatewayForContainers1$Outbound
     | DeploymentSetupStackSettingsPolicyProviderGkeGateway1$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -5264,7 +5229,7 @@ export const DeploymentSetupStackSettingsPolicyRouteIngress1$outboundSchema:
         z.lazy(() =>
           DeploymentSetupStackSettingsPolicyProviderGkeGateway1$outboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     routeApi: z.literal("ingress"),
@@ -5521,7 +5486,7 @@ export const DeploymentSetupStackSettingsPolicyExposureUnion$inboundSchema:
       z.lazy(() =>
         DeploymentSetupStackSettingsPolicyExposureDisabled$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ],
   );
 /** @internal */
@@ -5529,7 +5494,7 @@ export type DeploymentSetupStackSettingsPolicyExposureUnion$Outbound =
   | DeploymentSetupStackSettingsPolicyExposureCustom$Outbound
   | DeploymentSetupStackSettingsPolicyExposureGenerated$Outbound
   | DeploymentSetupStackSettingsPolicyExposureDisabled$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyExposureUnion$outboundSchema:
@@ -5546,7 +5511,7 @@ export const DeploymentSetupStackSettingsPolicyExposureUnion$outboundSchema:
     z.lazy(() =>
       DeploymentSetupStackSettingsPolicyExposureDisabled$outboundSchema
     ),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentSetupStackSettingsPolicyExposureUnionToJSON(
@@ -5581,7 +5546,7 @@ export const DeploymentSetupStackSettingsPolicyKubernetes$inboundSchema:
     cluster: z.nullable(
       z.union([
         z.lazy(() => DeploymentSetupStackSettingsPolicyCluster$inboundSchema),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     exposure: z.nullable(
@@ -5595,7 +5560,7 @@ export const DeploymentSetupStackSettingsPolicyKubernetes$inboundSchema:
         z.lazy(() =>
           DeploymentSetupStackSettingsPolicyExposureDisabled$inboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
   });
@@ -5603,14 +5568,14 @@ export const DeploymentSetupStackSettingsPolicyKubernetes$inboundSchema:
 export type DeploymentSetupStackSettingsPolicyKubernetes$Outbound = {
   cluster?:
     | DeploymentSetupStackSettingsPolicyCluster$Outbound
-    | any
+    | string
     | null
     | undefined;
   exposure?:
     | DeploymentSetupStackSettingsPolicyExposureCustom$Outbound
     | DeploymentSetupStackSettingsPolicyExposureGenerated$Outbound
     | DeploymentSetupStackSettingsPolicyExposureDisabled$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -5624,7 +5589,7 @@ export const DeploymentSetupStackSettingsPolicyKubernetes$outboundSchema:
     cluster: z.nullable(
       z.union([
         z.lazy(() => DeploymentSetupStackSettingsPolicyCluster$outboundSchema),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     exposure: z.nullable(
@@ -5638,7 +5603,7 @@ export const DeploymentSetupStackSettingsPolicyKubernetes$outboundSchema:
         z.lazy(() =>
           DeploymentSetupStackSettingsPolicyExposureDisabled$outboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
   });
@@ -5674,12 +5639,12 @@ export const DeploymentSetupStackSettingsPolicyKubernetesUnion$inboundSchema:
   z.ZodType<DeploymentSetupStackSettingsPolicyKubernetesUnion, unknown> = z
     .union([
       z.lazy(() => DeploymentSetupStackSettingsPolicyKubernetes$inboundSchema),
-      z.any(),
+      z.string(),
     ]);
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyKubernetesUnion$Outbound =
   | DeploymentSetupStackSettingsPolicyKubernetes$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyKubernetesUnion$outboundSchema:
@@ -5688,7 +5653,7 @@ export const DeploymentSetupStackSettingsPolicyKubernetesUnion$outboundSchema:
     DeploymentSetupStackSettingsPolicyKubernetesUnion
   > = z.union([
     z.lazy(() => DeploymentSetupStackSettingsPolicyKubernetes$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentSetupStackSettingsPolicyKubernetesUnionToJSON(
@@ -6103,7 +6068,7 @@ export const DeploymentSetupStackSettingsPolicyNetworkUnion$inboundSchema:
       DeploymentSetupStackSettingsPolicyNetworkUseDefault$inboundSchema
     ),
     z.lazy(() => DeploymentSetupStackSettingsPolicyNetworkCreate$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyNetworkUnion$Outbound =
@@ -6112,7 +6077,7 @@ export type DeploymentSetupStackSettingsPolicyNetworkUnion$Outbound =
   | DeploymentSetupStackSettingsPolicyNetworkByoVnetAzure$Outbound
   | DeploymentSetupStackSettingsPolicyNetworkUseDefault$Outbound
   | DeploymentSetupStackSettingsPolicyNetworkCreate$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DeploymentSetupStackSettingsPolicyNetworkUnion$outboundSchema:
@@ -6135,7 +6100,7 @@ export const DeploymentSetupStackSettingsPolicyNetworkUnion$outboundSchema:
     z.lazy(() =>
       DeploymentSetupStackSettingsPolicyNetworkCreate$outboundSchema
     ),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentSetupStackSettingsPolicyNetworkUnionToJSON(
@@ -6188,7 +6153,7 @@ export const Defaults$inboundSchema: z.ZodType<Defaults, unknown> = z.object({
   compute: z.nullable(
     z.union([
       z.lazy(() => DeploymentSetupStackSettingsPolicyCompute$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   deploymentModel:
@@ -6196,20 +6161,18 @@ export const Defaults$inboundSchema: z.ZodType<Defaults, unknown> = z.object({
   domains: z.nullable(
     z.union([
       z.lazy(() => DeploymentSetupStackSettingsPolicyDomains$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   externalBindings: z.nullable(
-    z.lazy(() =>
-      DeploymentSetupStackSettingsPolicyExternalBindings$inboundSchema
-    ),
+    z.record(z.string(), ExternalBindingUnion$inboundSchema),
   ).optional(),
   heartbeats: DeploymentSetupStackSettingsPolicyHeartbeats$inboundSchema
     .optional(),
   kubernetes: z.nullable(
     z.union([
       z.lazy(() => DeploymentSetupStackSettingsPolicyKubernetes$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   network: z.nullable(
@@ -6229,7 +6192,7 @@ export const Defaults$inboundSchema: z.ZodType<Defaults, unknown> = z.object({
       z.lazy(() =>
         DeploymentSetupStackSettingsPolicyNetworkCreate$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   publicEndpoints: z.nullable(
@@ -6243,23 +6206,23 @@ export const Defaults$inboundSchema: z.ZodType<Defaults, unknown> = z.object({
 export type Defaults$Outbound = {
   compute?:
     | DeploymentSetupStackSettingsPolicyCompute$Outbound
-    | any
+    | string
     | null
     | undefined;
   deploymentModel?: string | undefined;
   domains?:
     | DeploymentSetupStackSettingsPolicyDomains$Outbound
-    | any
+    | string
     | null
     | undefined;
   externalBindings?:
-    | DeploymentSetupStackSettingsPolicyExternalBindings$Outbound
+    | { [k: string]: ExternalBindingUnion$Outbound }
     | null
     | undefined;
   heartbeats?: string | undefined;
   kubernetes?:
     | DeploymentSetupStackSettingsPolicyKubernetes$Outbound
-    | any
+    | string
     | null
     | undefined;
   network?:
@@ -6268,7 +6231,7 @@ export type Defaults$Outbound = {
     | DeploymentSetupStackSettingsPolicyNetworkByoVnetAzure$Outbound
     | DeploymentSetupStackSettingsPolicyNetworkUseDefault$Outbound
     | DeploymentSetupStackSettingsPolicyNetworkCreate$Outbound
-    | any
+    | string
     | null
     | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
@@ -6282,7 +6245,7 @@ export const Defaults$outboundSchema: z.ZodType<Defaults$Outbound, Defaults> = z
     compute: z.nullable(
       z.union([
         z.lazy(() => DeploymentSetupStackSettingsPolicyCompute$outboundSchema),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     deploymentModel:
@@ -6291,13 +6254,11 @@ export const Defaults$outboundSchema: z.ZodType<Defaults$Outbound, Defaults> = z
     domains: z.nullable(
       z.union([
         z.lazy(() => DeploymentSetupStackSettingsPolicyDomains$outboundSchema),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     externalBindings: z.nullable(
-      z.lazy(() =>
-        DeploymentSetupStackSettingsPolicyExternalBindings$outboundSchema
-      ),
+      z.record(z.string(), ExternalBindingUnion$outboundSchema),
     ).optional(),
     heartbeats: DeploymentSetupStackSettingsPolicyHeartbeats$outboundSchema
       .optional(),
@@ -6306,7 +6267,7 @@ export const Defaults$outboundSchema: z.ZodType<Defaults$Outbound, Defaults> = z
         z.lazy(() =>
           DeploymentSetupStackSettingsPolicyKubernetes$outboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     network: z.nullable(
@@ -6326,7 +6287,7 @@ export const Defaults$outboundSchema: z.ZodType<Defaults$Outbound, Defaults> = z
         z.lazy(() =>
           DeploymentSetupStackSettingsPolicyNetworkCreate$outboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     publicEndpoints: z.nullable(

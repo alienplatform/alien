@@ -30,6 +30,7 @@ export const PrepareDeploymentStackPlatform = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
+  Machines: "machines",
 } as const;
 export type PrepareDeploymentStackPlatform = ClosedEnum<
   typeof PrepareDeploymentStackPlatform
@@ -54,12 +55,12 @@ export type PrepareDeploymentStackFailureDomains2 = {
 
 export type PrepareDeploymentStackFailureDomainsUnion2 =
   | PrepareDeploymentStackFailureDomains2
-  | any;
+  | string;
 
 export type PrepareDeploymentStackPoolsAutoscale = {
   failureDomains?:
     | PrepareDeploymentStackFailureDomains2
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -96,12 +97,12 @@ export type PrepareDeploymentStackFailureDomains1 = {
 
 export type PrepareDeploymentStackFailureDomainsUnion1 =
   | PrepareDeploymentStackFailureDomains1
-  | any;
+  | string;
 
 export type PrepareDeploymentStackPoolsFixed = {
   failureDomains?:
     | PrepareDeploymentStackFailureDomains1
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -144,7 +145,7 @@ export type PrepareDeploymentStackCompute = {
 
 export type PrepareDeploymentStackComputeUnion =
   | PrepareDeploymentStackCompute
-  | any;
+  | string;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -164,7 +165,7 @@ export type PrepareDeploymentStackAws = {
   certificateArn: string;
 };
 
-export type PrepareDeploymentStackAwsUnion = PrepareDeploymentStackAws | any;
+export type PrepareDeploymentStackAwsUnion = PrepareDeploymentStackAws | string;
 
 export type PrepareDeploymentStackAzure = {
   keyVaultCertificateId: string;
@@ -173,13 +174,13 @@ export type PrepareDeploymentStackAzure = {
 
 export type PrepareDeploymentStackAzureUnion =
   | PrepareDeploymentStackAzure
-  | any;
+  | string;
 
 export type PrepareDeploymentStackGcp = {
   certificateName: string;
 };
 
-export type PrepareDeploymentStackGcpUnion = PrepareDeploymentStackGcp | any;
+export type PrepareDeploymentStackGcpUnion = PrepareDeploymentStackGcp | string;
 
 /**
  * Namespace-scoped Kubernetes TLS Secret reference.
@@ -204,16 +205,20 @@ export type PrepareDeploymentStackDomainsKubernetes = {
 
 export type PrepareDeploymentStackDomainsKubernetesUnion =
   | PrepareDeploymentStackDomainsKubernetes
-  | any;
+  | string;
 
 /**
  * Platform-specific certificate references for custom domains.
  */
 export type PrepareDeploymentStackDomainsCertificate = {
-  aws?: PrepareDeploymentStackAws | any | null | undefined;
-  azure?: PrepareDeploymentStackAzure | any | null | undefined;
-  gcp?: PrepareDeploymentStackGcp | any | null | undefined;
-  kubernetes?: PrepareDeploymentStackDomainsKubernetes | any | null | undefined;
+  aws?: PrepareDeploymentStackAws | string | null | undefined;
+  azure?: PrepareDeploymentStackAzure | string | null | undefined;
+  gcp?: PrepareDeploymentStackGcp | string | null | undefined;
+  kubernetes?:
+    | PrepareDeploymentStackDomainsKubernetes
+    | string
+    | null
+    | undefined;
 };
 
 /**
@@ -259,7 +264,7 @@ export type PrepareDeploymentStackPublicEndpointTargetMachineAddresses = {
 export type PrepareDeploymentStackPublicEndpointTargetUnion =
   | PrepareDeploymentStackPublicEndpointTargetLoadBalancer
   | PrepareDeploymentStackPublicEndpointTargetMachineAddresses
-  | any;
+  | string;
 
 /**
  * Domain configuration for the stack.
@@ -280,24 +285,14 @@ export type PrepareDeploymentStackDomains = {
   publicEndpointTarget?:
     | PrepareDeploymentStackPublicEndpointTargetLoadBalancer
     | PrepareDeploymentStackPublicEndpointTargetMachineAddresses
-    | any
+    | string
     | null
     | undefined;
 };
 
 export type PrepareDeploymentStackDomainsUnion =
   | PrepareDeploymentStackDomains
-  | any;
-
-/**
- * External bindings for pre-existing infrastructure.
- *
- * @remarks
- * Allows using existing resources (MinIO, Redis, shared Container Apps
- * Environment, etc.) instead of having Alien provision them.
- * Required for Kubernetes platform, optional for cloud platforms.
- */
-export type PrepareDeploymentStackExternalBindings = {};
+  | string;
 
 /**
  * How heartbeat health checks are handled.
@@ -328,7 +323,7 @@ export type PrepareDeploymentStackCloud = {
 
 export type PrepareDeploymentStackCloudUnion =
   | PrepareDeploymentStackCloud
-  | any;
+  | string;
 
 /**
  * Ownership model for the Kubernetes cluster.
@@ -349,7 +344,7 @@ export type PrepareDeploymentStackOwnership = ClosedEnum<
  * Kubernetes cluster setup settings.
  */
 export type PrepareDeploymentStackCluster = {
-  cloud?: PrepareDeploymentStackCloud | any | null | undefined;
+  cloud?: PrepareDeploymentStackCloud | string | null | undefined;
   /**
    * Namespace where the Alien chart and application resources run.
    */
@@ -362,7 +357,7 @@ export type PrepareDeploymentStackCluster = {
 
 export type PrepareDeploymentStackClusterUnion =
   | PrepareDeploymentStackCluster
-  | any;
+  | string;
 
 export type PrepareDeploymentStackCertificateNone2 = {
   mode: "none";
@@ -502,7 +497,7 @@ export type PrepareDeploymentStackProviderUnion4 =
   | PrepareDeploymentStackProviderAwsAlb4
   | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4
   | PrepareDeploymentStackProviderGkeGateway4
-  | any;
+  | string;
 
 /**
  * Shared Gateway API route profile values.
@@ -532,7 +527,7 @@ export type PrepareDeploymentStackRouteGateway2 = {
     | PrepareDeploymentStackProviderAwsAlb4
     | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4
     | PrepareDeploymentStackProviderGkeGateway4
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -612,7 +607,7 @@ export type PrepareDeploymentStackProviderUnion3 =
   | PrepareDeploymentStackProviderAwsAlb3
   | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3
   | PrepareDeploymentStackProviderGkeGateway3
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -638,7 +633,7 @@ export type PrepareDeploymentStackRouteIngress2 = {
     | PrepareDeploymentStackProviderAwsAlb3
     | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3
     | PrepareDeploymentStackProviderGkeGateway3
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -812,7 +807,7 @@ export type PrepareDeploymentStackProviderUnion2 =
   | PrepareDeploymentStackProviderAwsAlb2
   | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2
   | PrepareDeploymentStackProviderGkeGateway2
-  | any;
+  | string;
 
 /**
  * Shared Gateway API route profile values.
@@ -842,7 +837,7 @@ export type PrepareDeploymentStackRouteGateway1 = {
     | PrepareDeploymentStackProviderAwsAlb2
     | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2
     | PrepareDeploymentStackProviderGkeGateway2
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -922,7 +917,7 @@ export type PrepareDeploymentStackProviderUnion1 =
   | PrepareDeploymentStackProviderAwsAlb1
   | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1
   | PrepareDeploymentStackProviderGkeGateway1
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -948,7 +943,7 @@ export type PrepareDeploymentStackRouteIngress1 = {
     | PrepareDeploymentStackProviderAwsAlb1
     | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1
     | PrepareDeploymentStackProviderGkeGateway1
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -995,7 +990,7 @@ export type PrepareDeploymentStackExposureUnion =
   | PrepareDeploymentStackExposureCustom
   | PrepareDeploymentStackExposureGenerated
   | PrepareDeploymentStackExposureDisabled
-  | any;
+  | string;
 
 /**
  * Kubernetes runtime substrate configuration.
@@ -1008,19 +1003,19 @@ export type PrepareDeploymentStackExposureUnion =
  * cluster.
  */
 export type PrepareDeploymentStackKubernetes = {
-  cluster?: PrepareDeploymentStackCluster | any | null | undefined;
+  cluster?: PrepareDeploymentStackCluster | string | null | undefined;
   exposure?:
     | PrepareDeploymentStackExposureCustom
     | PrepareDeploymentStackExposureGenerated
     | PrepareDeploymentStackExposureDisabled
-    | any
+    | string
     | null
     | undefined;
 };
 
 export type PrepareDeploymentStackKubernetesUnion =
   | PrepareDeploymentStackKubernetes
-  | any;
+  | string;
 
 export const PrepareDeploymentStackTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
@@ -1148,7 +1143,7 @@ export type PrepareDeploymentStackNetworkUnion =
   | PrepareDeploymentStackNetworkByoVnetAzure
   | PrepareDeploymentStackNetworkUseDefault
   | PrepareDeploymentStackNetworkCreate
-  | any;
+  | string;
 
 /**
  * How telemetry (logs, metrics, traces) is handled.
@@ -1192,33 +1187,28 @@ export type PrepareDeploymentStackUpdates = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type PrepareDeploymentStackStackSettings = {
-  compute?: PrepareDeploymentStackCompute | any | null | undefined;
+  compute?: PrepareDeploymentStackCompute | string | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
   deploymentModel?: PrepareDeploymentStackDeploymentModel | undefined;
-  domains?: PrepareDeploymentStackDomains | any | null | undefined;
-  /**
-   * External bindings for pre-existing infrastructure.
-   *
-   * @remarks
-   * Allows using existing resources (MinIO, Redis, shared Container Apps
-   * Environment, etc.) instead of having Alien provision them.
-   * Required for Kubernetes platform, optional for cloud platforms.
-   */
-  externalBindings?: PrepareDeploymentStackExternalBindings | null | undefined;
+  domains?: PrepareDeploymentStackDomains | string | null | undefined;
+  externalBindings?:
+    | { [k: string]: models.ExternalBindingUnion }
+    | null
+    | undefined;
   /**
    * How heartbeat health checks are handled.
    */
   heartbeats?: PrepareDeploymentStackHeartbeats | undefined;
-  kubernetes?: PrepareDeploymentStackKubernetes | any | null | undefined;
+  kubernetes?: PrepareDeploymentStackKubernetes | string | null | undefined;
   network?:
     | PrepareDeploymentStackNetworkByoVpcAws
     | PrepareDeploymentStackNetworkByoVpcGcp
     | PrepareDeploymentStackNetworkByoVnetAzure
     | PrepareDeploymentStackNetworkUseDefault
     | PrepareDeploymentStackNetworkCreate
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -1305,7 +1295,7 @@ export function prepareDeploymentStackFailureDomains2ToJSON(
 /** @internal */
 export type PrepareDeploymentStackFailureDomainsUnion2$Outbound =
   | PrepareDeploymentStackFailureDomains2$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PrepareDeploymentStackFailureDomainsUnion2$outboundSchema:
@@ -1314,7 +1304,7 @@ export const PrepareDeploymentStackFailureDomainsUnion2$outboundSchema:
     PrepareDeploymentStackFailureDomainsUnion2
   > = z.union([
     z.lazy(() => PrepareDeploymentStackFailureDomains2$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function prepareDeploymentStackFailureDomainsUnion2ToJSON(
@@ -1332,7 +1322,7 @@ export function prepareDeploymentStackFailureDomainsUnion2ToJSON(
 export type PrepareDeploymentStackPoolsAutoscale$Outbound = {
   failure_domains?:
     | PrepareDeploymentStackFailureDomains2$Outbound
-    | any
+    | string
     | null
     | undefined;
   machine?: string | null | undefined;
@@ -1349,7 +1339,7 @@ export const PrepareDeploymentStackPoolsAutoscale$outboundSchema: z.ZodType<
   failureDomains: z.nullable(
     z.union([
       z.lazy(() => PrepareDeploymentStackFailureDomains2$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -1400,7 +1390,7 @@ export function prepareDeploymentStackFailureDomains1ToJSON(
 /** @internal */
 export type PrepareDeploymentStackFailureDomainsUnion1$Outbound =
   | PrepareDeploymentStackFailureDomains1$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PrepareDeploymentStackFailureDomainsUnion1$outboundSchema:
@@ -1409,7 +1399,7 @@ export const PrepareDeploymentStackFailureDomainsUnion1$outboundSchema:
     PrepareDeploymentStackFailureDomainsUnion1
   > = z.union([
     z.lazy(() => PrepareDeploymentStackFailureDomains1$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function prepareDeploymentStackFailureDomainsUnion1ToJSON(
@@ -1427,7 +1417,7 @@ export function prepareDeploymentStackFailureDomainsUnion1ToJSON(
 export type PrepareDeploymentStackPoolsFixed$Outbound = {
   failure_domains?:
     | PrepareDeploymentStackFailureDomains1$Outbound
-    | any
+    | string
     | null
     | undefined;
   machine?: string | null | undefined;
@@ -1443,7 +1433,7 @@ export const PrepareDeploymentStackPoolsFixed$outboundSchema: z.ZodType<
   failureDomains: z.nullable(
     z.union([
       z.lazy(() => PrepareDeploymentStackFailureDomains1$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -1525,7 +1515,7 @@ export function prepareDeploymentStackComputeToJSON(
 /** @internal */
 export type PrepareDeploymentStackComputeUnion$Outbound =
   | PrepareDeploymentStackCompute$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PrepareDeploymentStackComputeUnion$outboundSchema: z.ZodType<
@@ -1533,7 +1523,7 @@ export const PrepareDeploymentStackComputeUnion$outboundSchema: z.ZodType<
   PrepareDeploymentStackComputeUnion
 > = z.union([
   z.lazy(() => PrepareDeploymentStackCompute$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function prepareDeploymentStackComputeUnionToJSON(
@@ -1575,13 +1565,16 @@ export function prepareDeploymentStackAwsToJSON(
 /** @internal */
 export type PrepareDeploymentStackAwsUnion$Outbound =
   | PrepareDeploymentStackAws$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PrepareDeploymentStackAwsUnion$outboundSchema: z.ZodType<
   PrepareDeploymentStackAwsUnion$Outbound,
   PrepareDeploymentStackAwsUnion
-> = z.union([z.lazy(() => PrepareDeploymentStackAws$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => PrepareDeploymentStackAws$outboundSchema),
+  z.string(),
+]);
 
 export function prepareDeploymentStackAwsUnionToJSON(
   prepareDeploymentStackAwsUnion: PrepareDeploymentStackAwsUnion,
@@ -1621,7 +1614,7 @@ export function prepareDeploymentStackAzureToJSON(
 /** @internal */
 export type PrepareDeploymentStackAzureUnion$Outbound =
   | PrepareDeploymentStackAzure$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PrepareDeploymentStackAzureUnion$outboundSchema: z.ZodType<
@@ -1629,7 +1622,7 @@ export const PrepareDeploymentStackAzureUnion$outboundSchema: z.ZodType<
   PrepareDeploymentStackAzureUnion
 > = z.union([
   z.lazy(() => PrepareDeploymentStackAzure$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function prepareDeploymentStackAzureUnionToJSON(
@@ -1666,13 +1659,16 @@ export function prepareDeploymentStackGcpToJSON(
 /** @internal */
 export type PrepareDeploymentStackGcpUnion$Outbound =
   | PrepareDeploymentStackGcp$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PrepareDeploymentStackGcpUnion$outboundSchema: z.ZodType<
   PrepareDeploymentStackGcpUnion$Outbound,
   PrepareDeploymentStackGcpUnion
-> = z.union([z.lazy(() => PrepareDeploymentStackGcp$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => PrepareDeploymentStackGcp$outboundSchema),
+  z.string(),
+]);
 
 export function prepareDeploymentStackGcpUnionToJSON(
   prepareDeploymentStackGcpUnion: PrepareDeploymentStackGcpUnion,
@@ -1736,7 +1732,7 @@ export function prepareDeploymentStackDomainsKubernetesToJSON(
 /** @internal */
 export type PrepareDeploymentStackDomainsKubernetesUnion$Outbound =
   | PrepareDeploymentStackDomainsKubernetes$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PrepareDeploymentStackDomainsKubernetesUnion$outboundSchema:
@@ -1745,7 +1741,7 @@ export const PrepareDeploymentStackDomainsKubernetesUnion$outboundSchema:
     PrepareDeploymentStackDomainsKubernetesUnion
   > = z.union([
     z.lazy(() => PrepareDeploymentStackDomainsKubernetes$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function prepareDeploymentStackDomainsKubernetesUnionToJSON(
@@ -1761,12 +1757,12 @@ export function prepareDeploymentStackDomainsKubernetesUnionToJSON(
 
 /** @internal */
 export type PrepareDeploymentStackDomainsCertificate$Outbound = {
-  aws?: PrepareDeploymentStackAws$Outbound | any | null | undefined;
-  azure?: PrepareDeploymentStackAzure$Outbound | any | null | undefined;
-  gcp?: PrepareDeploymentStackGcp$Outbound | any | null | undefined;
+  aws?: PrepareDeploymentStackAws$Outbound | string | null | undefined;
+  azure?: PrepareDeploymentStackAzure$Outbound | string | null | undefined;
+  gcp?: PrepareDeploymentStackGcp$Outbound | string | null | undefined;
   kubernetes?:
     | PrepareDeploymentStackDomainsKubernetes$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -1777,21 +1773,27 @@ export const PrepareDeploymentStackDomainsCertificate$outboundSchema: z.ZodType<
   PrepareDeploymentStackDomainsCertificate
 > = z.object({
   aws: z.nullable(
-    z.union([z.lazy(() => PrepareDeploymentStackAws$outboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => PrepareDeploymentStackAws$outboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   azure: z.nullable(
     z.union([
       z.lazy(() => PrepareDeploymentStackAzure$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   gcp: z.nullable(
-    z.union([z.lazy(() => PrepareDeploymentStackGcp$outboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => PrepareDeploymentStackGcp$outboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   kubernetes: z.nullable(
     z.union([
       z.lazy(() => PrepareDeploymentStackDomainsKubernetes$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -1901,7 +1903,7 @@ export function prepareDeploymentStackPublicEndpointTargetMachineAddressesToJSON
 export type PrepareDeploymentStackPublicEndpointTargetUnion$Outbound =
   | PrepareDeploymentStackPublicEndpointTargetLoadBalancer$Outbound
   | PrepareDeploymentStackPublicEndpointTargetMachineAddresses$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PrepareDeploymentStackPublicEndpointTargetUnion$outboundSchema:
@@ -1915,7 +1917,7 @@ export const PrepareDeploymentStackPublicEndpointTargetUnion$outboundSchema:
     z.lazy(() =>
       PrepareDeploymentStackPublicEndpointTargetMachineAddresses$outboundSchema
     ),
-    z.any(),
+    z.string(),
   ]);
 
 export function prepareDeploymentStackPublicEndpointTargetUnionToJSON(
@@ -1938,7 +1940,7 @@ export type PrepareDeploymentStackDomains$Outbound = {
   publicEndpointTarget?:
     | PrepareDeploymentStackPublicEndpointTargetLoadBalancer$Outbound
     | PrepareDeploymentStackPublicEndpointTargetMachineAddresses$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -1962,7 +1964,7 @@ export const PrepareDeploymentStackDomains$outboundSchema: z.ZodType<
       z.lazy(() =>
         PrepareDeploymentStackPublicEndpointTargetMachineAddresses$outboundSchema
       ),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -1980,7 +1982,7 @@ export function prepareDeploymentStackDomainsToJSON(
 /** @internal */
 export type PrepareDeploymentStackDomainsUnion$Outbound =
   | PrepareDeploymentStackDomains$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PrepareDeploymentStackDomainsUnion$outboundSchema: z.ZodType<
@@ -1988,7 +1990,7 @@ export const PrepareDeploymentStackDomainsUnion$outboundSchema: z.ZodType<
   PrepareDeploymentStackDomainsUnion
 > = z.union([
   z.lazy(() => PrepareDeploymentStackDomains$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function prepareDeploymentStackDomainsUnionToJSON(
@@ -1997,26 +1999,6 @@ export function prepareDeploymentStackDomainsUnionToJSON(
   return JSON.stringify(
     PrepareDeploymentStackDomainsUnion$outboundSchema.parse(
       prepareDeploymentStackDomainsUnion,
-    ),
-  );
-}
-
-/** @internal */
-export type PrepareDeploymentStackExternalBindings$Outbound = {};
-
-/** @internal */
-export const PrepareDeploymentStackExternalBindings$outboundSchema: z.ZodType<
-  PrepareDeploymentStackExternalBindings$Outbound,
-  PrepareDeploymentStackExternalBindings
-> = z.object({});
-
-export function prepareDeploymentStackExternalBindingsToJSON(
-  prepareDeploymentStackExternalBindings:
-    PrepareDeploymentStackExternalBindings,
-): string {
-  return JSON.stringify(
-    PrepareDeploymentStackExternalBindings$outboundSchema.parse(
-      prepareDeploymentStackExternalBindings,
     ),
   );
 }
@@ -2064,7 +2046,7 @@ export function prepareDeploymentStackCloudToJSON(
 /** @internal */
 export type PrepareDeploymentStackCloudUnion$Outbound =
   | PrepareDeploymentStackCloud$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PrepareDeploymentStackCloudUnion$outboundSchema: z.ZodType<
@@ -2072,7 +2054,7 @@ export const PrepareDeploymentStackCloudUnion$outboundSchema: z.ZodType<
   PrepareDeploymentStackCloudUnion
 > = z.union([
   z.lazy(() => PrepareDeploymentStackCloud$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function prepareDeploymentStackCloudUnionToJSON(
@@ -2092,7 +2074,7 @@ export const PrepareDeploymentStackOwnership$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type PrepareDeploymentStackCluster$Outbound = {
-  cloud?: PrepareDeploymentStackCloud$Outbound | any | null | undefined;
+  cloud?: PrepareDeploymentStackCloud$Outbound | string | null | undefined;
   namespace?: string | null | undefined;
   ownership: string;
 };
@@ -2105,7 +2087,7 @@ export const PrepareDeploymentStackCluster$outboundSchema: z.ZodType<
   cloud: z.nullable(
     z.union([
       z.lazy(() => PrepareDeploymentStackCloud$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   namespace: z.nullable(z.string()).optional(),
@@ -2125,7 +2107,7 @@ export function prepareDeploymentStackClusterToJSON(
 /** @internal */
 export type PrepareDeploymentStackClusterUnion$Outbound =
   | PrepareDeploymentStackCluster$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PrepareDeploymentStackClusterUnion$outboundSchema: z.ZodType<
@@ -2133,7 +2115,7 @@ export const PrepareDeploymentStackClusterUnion$outboundSchema: z.ZodType<
   PrepareDeploymentStackClusterUnion
 > = z.union([
   z.lazy(() => PrepareDeploymentStackCluster$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function prepareDeploymentStackClusterUnionToJSON(
@@ -2439,7 +2421,7 @@ export type PrepareDeploymentStackProviderUnion4$Outbound =
   | PrepareDeploymentStackProviderAwsAlb4$Outbound
   | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4$Outbound
   | PrepareDeploymentStackProviderGkeGateway4$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PrepareDeploymentStackProviderUnion4$outboundSchema: z.ZodType<
@@ -2451,7 +2433,7 @@ export const PrepareDeploymentStackProviderUnion4$outboundSchema: z.ZodType<
     PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4$outboundSchema
   ),
   z.lazy(() => PrepareDeploymentStackProviderGkeGateway4$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function prepareDeploymentStackProviderUnion4ToJSON(
@@ -2475,7 +2457,7 @@ export type PrepareDeploymentStackRouteGateway2$Outbound = {
     | PrepareDeploymentStackProviderAwsAlb4$Outbound
     | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4$Outbound
     | PrepareDeploymentStackProviderGkeGateway4$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -2498,7 +2480,7 @@ export const PrepareDeploymentStackRouteGateway2$outboundSchema: z.ZodType<
         PrepareDeploymentStackProviderAzureApplicationGatewayForContainers4$outboundSchema
       ),
       z.lazy(() => PrepareDeploymentStackProviderGkeGateway4$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("gateway"),
@@ -2631,7 +2613,7 @@ export type PrepareDeploymentStackProviderUnion3$Outbound =
   | PrepareDeploymentStackProviderAwsAlb3$Outbound
   | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3$Outbound
   | PrepareDeploymentStackProviderGkeGateway3$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PrepareDeploymentStackProviderUnion3$outboundSchema: z.ZodType<
@@ -2643,7 +2625,7 @@ export const PrepareDeploymentStackProviderUnion3$outboundSchema: z.ZodType<
     PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3$outboundSchema
   ),
   z.lazy(() => PrepareDeploymentStackProviderGkeGateway3$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function prepareDeploymentStackProviderUnion3ToJSON(
@@ -2666,7 +2648,7 @@ export type PrepareDeploymentStackRouteIngress2$Outbound = {
     | PrepareDeploymentStackProviderAwsAlb3$Outbound
     | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3$Outbound
     | PrepareDeploymentStackProviderGkeGateway3$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -2688,7 +2670,7 @@ export const PrepareDeploymentStackRouteIngress2$outboundSchema: z.ZodType<
         PrepareDeploymentStackProviderAzureApplicationGatewayForContainers3$outboundSchema
       ),
       z.lazy(() => PrepareDeploymentStackProviderGkeGateway3$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
@@ -3070,7 +3052,7 @@ export type PrepareDeploymentStackProviderUnion2$Outbound =
   | PrepareDeploymentStackProviderAwsAlb2$Outbound
   | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2$Outbound
   | PrepareDeploymentStackProviderGkeGateway2$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PrepareDeploymentStackProviderUnion2$outboundSchema: z.ZodType<
@@ -3082,7 +3064,7 @@ export const PrepareDeploymentStackProviderUnion2$outboundSchema: z.ZodType<
     PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2$outboundSchema
   ),
   z.lazy(() => PrepareDeploymentStackProviderGkeGateway2$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function prepareDeploymentStackProviderUnion2ToJSON(
@@ -3106,7 +3088,7 @@ export type PrepareDeploymentStackRouteGateway1$Outbound = {
     | PrepareDeploymentStackProviderAwsAlb2$Outbound
     | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2$Outbound
     | PrepareDeploymentStackProviderGkeGateway2$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -3129,7 +3111,7 @@ export const PrepareDeploymentStackRouteGateway1$outboundSchema: z.ZodType<
         PrepareDeploymentStackProviderAzureApplicationGatewayForContainers2$outboundSchema
       ),
       z.lazy(() => PrepareDeploymentStackProviderGkeGateway2$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("gateway"),
@@ -3262,7 +3244,7 @@ export type PrepareDeploymentStackProviderUnion1$Outbound =
   | PrepareDeploymentStackProviderAwsAlb1$Outbound
   | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1$Outbound
   | PrepareDeploymentStackProviderGkeGateway1$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PrepareDeploymentStackProviderUnion1$outboundSchema: z.ZodType<
@@ -3274,7 +3256,7 @@ export const PrepareDeploymentStackProviderUnion1$outboundSchema: z.ZodType<
     PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1$outboundSchema
   ),
   z.lazy(() => PrepareDeploymentStackProviderGkeGateway1$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function prepareDeploymentStackProviderUnion1ToJSON(
@@ -3297,7 +3279,7 @@ export type PrepareDeploymentStackRouteIngress1$Outbound = {
     | PrepareDeploymentStackProviderAwsAlb1$Outbound
     | PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1$Outbound
     | PrepareDeploymentStackProviderGkeGateway1$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -3319,7 +3301,7 @@ export const PrepareDeploymentStackRouteIngress1$outboundSchema: z.ZodType<
         PrepareDeploymentStackProviderAzureApplicationGatewayForContainers1$outboundSchema
       ),
       z.lazy(() => PrepareDeploymentStackProviderGkeGateway1$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
@@ -3441,7 +3423,7 @@ export type PrepareDeploymentStackExposureUnion$Outbound =
   | PrepareDeploymentStackExposureCustom$Outbound
   | PrepareDeploymentStackExposureGenerated$Outbound
   | PrepareDeploymentStackExposureDisabled$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PrepareDeploymentStackExposureUnion$outboundSchema: z.ZodType<
@@ -3451,7 +3433,7 @@ export const PrepareDeploymentStackExposureUnion$outboundSchema: z.ZodType<
   z.lazy(() => PrepareDeploymentStackExposureCustom$outboundSchema),
   z.lazy(() => PrepareDeploymentStackExposureGenerated$outboundSchema),
   z.lazy(() => PrepareDeploymentStackExposureDisabled$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function prepareDeploymentStackExposureUnionToJSON(
@@ -3466,12 +3448,12 @@ export function prepareDeploymentStackExposureUnionToJSON(
 
 /** @internal */
 export type PrepareDeploymentStackKubernetes$Outbound = {
-  cluster?: PrepareDeploymentStackCluster$Outbound | any | null | undefined;
+  cluster?: PrepareDeploymentStackCluster$Outbound | string | null | undefined;
   exposure?:
     | PrepareDeploymentStackExposureCustom$Outbound
     | PrepareDeploymentStackExposureGenerated$Outbound
     | PrepareDeploymentStackExposureDisabled$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -3484,7 +3466,7 @@ export const PrepareDeploymentStackKubernetes$outboundSchema: z.ZodType<
   cluster: z.nullable(
     z.union([
       z.lazy(() => PrepareDeploymentStackCluster$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   exposure: z.nullable(
@@ -3492,7 +3474,7 @@ export const PrepareDeploymentStackKubernetes$outboundSchema: z.ZodType<
       z.lazy(() => PrepareDeploymentStackExposureCustom$outboundSchema),
       z.lazy(() => PrepareDeploymentStackExposureGenerated$outboundSchema),
       z.lazy(() => PrepareDeploymentStackExposureDisabled$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -3510,7 +3492,7 @@ export function prepareDeploymentStackKubernetesToJSON(
 /** @internal */
 export type PrepareDeploymentStackKubernetesUnion$Outbound =
   | PrepareDeploymentStackKubernetes$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PrepareDeploymentStackKubernetesUnion$outboundSchema: z.ZodType<
@@ -3518,7 +3500,7 @@ export const PrepareDeploymentStackKubernetesUnion$outboundSchema: z.ZodType<
   PrepareDeploymentStackKubernetesUnion
 > = z.union([
   z.lazy(() => PrepareDeploymentStackKubernetes$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function prepareDeploymentStackKubernetesUnionToJSON(
@@ -3735,7 +3717,7 @@ export type PrepareDeploymentStackNetworkUnion$Outbound =
   | PrepareDeploymentStackNetworkByoVnetAzure$Outbound
   | PrepareDeploymentStackNetworkUseDefault$Outbound
   | PrepareDeploymentStackNetworkCreate$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PrepareDeploymentStackNetworkUnion$outboundSchema: z.ZodType<
@@ -3747,7 +3729,7 @@ export const PrepareDeploymentStackNetworkUnion$outboundSchema: z.ZodType<
   z.lazy(() => PrepareDeploymentStackNetworkByoVnetAzure$outboundSchema),
   z.lazy(() => PrepareDeploymentStackNetworkUseDefault$outboundSchema),
   z.lazy(() => PrepareDeploymentStackNetworkCreate$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function prepareDeploymentStackNetworkUnionToJSON(
@@ -3772,17 +3754,17 @@ export const PrepareDeploymentStackUpdates$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type PrepareDeploymentStackStackSettings$Outbound = {
-  compute?: PrepareDeploymentStackCompute$Outbound | any | null | undefined;
+  compute?: PrepareDeploymentStackCompute$Outbound | string | null | undefined;
   deploymentModel?: string | undefined;
-  domains?: PrepareDeploymentStackDomains$Outbound | any | null | undefined;
+  domains?: PrepareDeploymentStackDomains$Outbound | string | null | undefined;
   externalBindings?:
-    | PrepareDeploymentStackExternalBindings$Outbound
+    | { [k: string]: models.ExternalBindingUnion$Outbound }
     | null
     | undefined;
   heartbeats?: string | undefined;
   kubernetes?:
     | PrepareDeploymentStackKubernetes$Outbound
-    | any
+    | string
     | null
     | undefined;
   network?:
@@ -3791,7 +3773,7 @@ export type PrepareDeploymentStackStackSettings$Outbound = {
     | PrepareDeploymentStackNetworkByoVnetAzure$Outbound
     | PrepareDeploymentStackNetworkUseDefault$Outbound
     | PrepareDeploymentStackNetworkCreate$Outbound
-    | any
+    | string
     | null
     | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
@@ -3807,7 +3789,7 @@ export const PrepareDeploymentStackStackSettings$outboundSchema: z.ZodType<
   compute: z.nullable(
     z.union([
       z.lazy(() => PrepareDeploymentStackCompute$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   deploymentModel: PrepareDeploymentStackDeploymentModel$outboundSchema
@@ -3815,17 +3797,17 @@ export const PrepareDeploymentStackStackSettings$outboundSchema: z.ZodType<
   domains: z.nullable(
     z.union([
       z.lazy(() => PrepareDeploymentStackDomains$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   externalBindings: z.nullable(
-    z.lazy(() => PrepareDeploymentStackExternalBindings$outboundSchema),
+    z.record(z.string(), models.ExternalBindingUnion$outboundSchema),
   ).optional(),
   heartbeats: PrepareDeploymentStackHeartbeats$outboundSchema.optional(),
   kubernetes: z.nullable(
     z.union([
       z.lazy(() => PrepareDeploymentStackKubernetes$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   network: z.nullable(
@@ -3835,7 +3817,7 @@ export const PrepareDeploymentStackStackSettings$outboundSchema: z.ZodType<
       z.lazy(() => PrepareDeploymentStackNetworkByoVnetAzure$outboundSchema),
       z.lazy(() => PrepareDeploymentStackNetworkUseDefault$outboundSchema),
       z.lazy(() => PrepareDeploymentStackNetworkCreate$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   publicEndpoints: z.nullable(

@@ -11,5 +11,5 @@ let value: PreparedDeploymentStackPlatform = "gcp";
 ## Values
 
 ```typescript
-"aws" | "gcp" | "azure"
+"aws" | "gcp" | "azure" | "machines"
 ```

@@ -17,9 +17,9 @@ const value: models.SyncListResponseSetupUpdateAuthorization = {
 };
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

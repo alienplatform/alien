@@ -58,9 +58,9 @@ const value: models.StackSettingsNetworkByoVnetAzure = {
 };
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

@@ -15,6 +15,11 @@ import {
   EnvironmentVariableConfig$outboundSchema,
 } from "./environmentvariableconfig.js";
 import {
+  ExternalBindingUnion,
+  ExternalBindingUnion$Outbound,
+  ExternalBindingUnion$outboundSchema,
+} from "./externalbindingunion.js";
+import {
   StackInputValueRequest,
   StackInputValueRequest$Outbound,
   StackInputValueRequest$outboundSchema,
@@ -166,7 +171,7 @@ export type NewDeploymentRequestEnvironmentInfoUnion =
   | NewDeploymentRequestEnvironmentInfoLocal
   | NewDeploymentRequestEnvironmentInfoAws
   | NewDeploymentRequestEnvironmentInfoTest
-  | any;
+  | string;
 
 /**
  * Failure-domain policy selected for a compute pool.
@@ -187,10 +192,14 @@ export type NewDeploymentRequestFailureDomains2 = {
 
 export type NewDeploymentRequestFailureDomainsUnion2 =
   | NewDeploymentRequestFailureDomains2
-  | any;
+  | string;
 
 export type NewDeploymentRequestPoolsAutoscale = {
-  failureDomains?: NewDeploymentRequestFailureDomains2 | any | null | undefined;
+  failureDomains?:
+    | NewDeploymentRequestFailureDomains2
+    | string
+    | null
+    | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -225,10 +234,14 @@ export type NewDeploymentRequestFailureDomains1 = {
 
 export type NewDeploymentRequestFailureDomainsUnion1 =
   | NewDeploymentRequestFailureDomains1
-  | any;
+  | string;
 
 export type NewDeploymentRequestPoolsFixed = {
-  failureDomains?: NewDeploymentRequestFailureDomains1 | any | null | undefined;
+  failureDomains?:
+    | NewDeploymentRequestFailureDomains1
+    | string
+    | null
+    | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -269,7 +282,7 @@ export type NewDeploymentRequestCompute = {
 
 export type NewDeploymentRequestComputeUnion =
   | NewDeploymentRequestCompute
-  | any;
+  | string;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -289,20 +302,20 @@ export type NewDeploymentRequestAws = {
   certificateArn: string;
 };
 
-export type NewDeploymentRequestAwsUnion = NewDeploymentRequestAws | any;
+export type NewDeploymentRequestAwsUnion = NewDeploymentRequestAws | string;
 
 export type NewDeploymentRequestAzure = {
   keyVaultCertificateId: string;
   keyVaultResourceId?: string | null | undefined;
 };
 
-export type NewDeploymentRequestAzureUnion = NewDeploymentRequestAzure | any;
+export type NewDeploymentRequestAzureUnion = NewDeploymentRequestAzure | string;
 
 export type NewDeploymentRequestGcp = {
   certificateName: string;
 };
 
-export type NewDeploymentRequestGcpUnion = NewDeploymentRequestGcp | any;
+export type NewDeploymentRequestGcpUnion = NewDeploymentRequestGcp | string;
 
 /**
  * Namespace-scoped Kubernetes TLS Secret reference.
@@ -327,16 +340,20 @@ export type NewDeploymentRequestDomainsKubernetes = {
 
 export type NewDeploymentRequestDomainsKubernetesUnion =
   | NewDeploymentRequestDomainsKubernetes
-  | any;
+  | string;
 
 /**
  * Platform-specific certificate references for custom domains.
  */
 export type NewDeploymentRequestDomainsCertificate = {
-  aws?: NewDeploymentRequestAws | any | null | undefined;
-  azure?: NewDeploymentRequestAzure | any | null | undefined;
-  gcp?: NewDeploymentRequestGcp | any | null | undefined;
-  kubernetes?: NewDeploymentRequestDomainsKubernetes | any | null | undefined;
+  aws?: NewDeploymentRequestAws | string | null | undefined;
+  azure?: NewDeploymentRequestAzure | string | null | undefined;
+  gcp?: NewDeploymentRequestGcp | string | null | undefined;
+  kubernetes?:
+    | NewDeploymentRequestDomainsKubernetes
+    | string
+    | null
+    | undefined;
 };
 
 /**
@@ -382,7 +399,7 @@ export type NewDeploymentRequestPublicEndpointTargetMachineAddresses = {
 export type NewDeploymentRequestPublicEndpointTargetUnion =
   | NewDeploymentRequestPublicEndpointTargetLoadBalancer
   | NewDeploymentRequestPublicEndpointTargetMachineAddresses
-  | any;
+  | string;
 
 /**
  * Domain configuration for the stack.
@@ -403,24 +420,14 @@ export type NewDeploymentRequestDomains = {
   publicEndpointTarget?:
     | NewDeploymentRequestPublicEndpointTargetLoadBalancer
     | NewDeploymentRequestPublicEndpointTargetMachineAddresses
-    | any
+    | string
     | null
     | undefined;
 };
 
 export type NewDeploymentRequestDomainsUnion =
   | NewDeploymentRequestDomains
-  | any;
-
-/**
- * External bindings for pre-existing infrastructure.
- *
- * @remarks
- * Allows using existing resources (MinIO, Redis, shared Container Apps
- * Environment, etc.) instead of having Alien provision them.
- * Required for Kubernetes platform, optional for cloud platforms.
- */
-export type NewDeploymentRequestExternalBindings = {};
+  | string;
 
 /**
  * How heartbeat health checks are handled.
@@ -449,7 +456,7 @@ export type NewDeploymentRequestCloud = {
   subscriptionId?: string | null | undefined;
 };
 
-export type NewDeploymentRequestCloudUnion = NewDeploymentRequestCloud | any;
+export type NewDeploymentRequestCloudUnion = NewDeploymentRequestCloud | string;
 
 /**
  * Ownership model for the Kubernetes cluster.
@@ -470,7 +477,7 @@ export type NewDeploymentRequestOwnership = ClosedEnum<
  * Kubernetes cluster setup settings.
  */
 export type NewDeploymentRequestCluster = {
-  cloud?: NewDeploymentRequestCloud | any | null | undefined;
+  cloud?: NewDeploymentRequestCloud | string | null | undefined;
   /**
    * Namespace where the Alien chart and application resources run.
    */
@@ -483,7 +490,7 @@ export type NewDeploymentRequestCluster = {
 
 export type NewDeploymentRequestClusterUnion =
   | NewDeploymentRequestCluster
-  | any;
+  | string;
 
 export type NewDeploymentRequestCertificateNone2 = {
   mode: "none";
@@ -623,7 +630,7 @@ export type NewDeploymentRequestProviderUnion4 =
   | NewDeploymentRequestProviderAwsAlb4
   | NewDeploymentRequestProviderAzureApplicationGatewayForContainers4
   | NewDeploymentRequestProviderGkeGateway4
-  | any;
+  | string;
 
 /**
  * Shared Gateway API route profile values.
@@ -653,7 +660,7 @@ export type NewDeploymentRequestRouteGateway2 = {
     | NewDeploymentRequestProviderAwsAlb4
     | NewDeploymentRequestProviderAzureApplicationGatewayForContainers4
     | NewDeploymentRequestProviderGkeGateway4
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -733,7 +740,7 @@ export type NewDeploymentRequestProviderUnion3 =
   | NewDeploymentRequestProviderAwsAlb3
   | NewDeploymentRequestProviderAzureApplicationGatewayForContainers3
   | NewDeploymentRequestProviderGkeGateway3
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -759,7 +766,7 @@ export type NewDeploymentRequestRouteIngress2 = {
     | NewDeploymentRequestProviderAwsAlb3
     | NewDeploymentRequestProviderAzureApplicationGatewayForContainers3
     | NewDeploymentRequestProviderGkeGateway3
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -931,7 +938,7 @@ export type NewDeploymentRequestProviderUnion2 =
   | NewDeploymentRequestProviderAwsAlb2
   | NewDeploymentRequestProviderAzureApplicationGatewayForContainers2
   | NewDeploymentRequestProviderGkeGateway2
-  | any;
+  | string;
 
 /**
  * Shared Gateway API route profile values.
@@ -961,7 +968,7 @@ export type NewDeploymentRequestRouteGateway1 = {
     | NewDeploymentRequestProviderAwsAlb2
     | NewDeploymentRequestProviderAzureApplicationGatewayForContainers2
     | NewDeploymentRequestProviderGkeGateway2
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -1041,7 +1048,7 @@ export type NewDeploymentRequestProviderUnion1 =
   | NewDeploymentRequestProviderAwsAlb1
   | NewDeploymentRequestProviderAzureApplicationGatewayForContainers1
   | NewDeploymentRequestProviderGkeGateway1
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -1067,7 +1074,7 @@ export type NewDeploymentRequestRouteIngress1 = {
     | NewDeploymentRequestProviderAwsAlb1
     | NewDeploymentRequestProviderAzureApplicationGatewayForContainers1
     | NewDeploymentRequestProviderGkeGateway1
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -1112,7 +1119,7 @@ export type NewDeploymentRequestExposureUnion =
   | NewDeploymentRequestExposureCustom
   | NewDeploymentRequestExposureGenerated
   | NewDeploymentRequestExposureDisabled
-  | any;
+  | string;
 
 /**
  * Kubernetes runtime substrate configuration.
@@ -1125,19 +1132,19 @@ export type NewDeploymentRequestExposureUnion =
  * cluster.
  */
 export type NewDeploymentRequestKubernetes = {
-  cluster?: NewDeploymentRequestCluster | any | null | undefined;
+  cluster?: NewDeploymentRequestCluster | string | null | undefined;
   exposure?:
     | NewDeploymentRequestExposureCustom
     | NewDeploymentRequestExposureGenerated
     | NewDeploymentRequestExposureDisabled
-    | any
+    | string
     | null
     | undefined;
 };
 
 export type NewDeploymentRequestKubernetesUnion =
   | NewDeploymentRequestKubernetes
-  | any;
+  | string;
 
 export const NewDeploymentRequestTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
@@ -1265,7 +1272,7 @@ export type NewDeploymentRequestNetworkUnion =
   | NewDeploymentRequestNetworkByoVnetAzure
   | NewDeploymentRequestNetworkUseDefault
   | NewDeploymentRequestNetworkCreate
-  | any;
+  | string;
 
 /**
  * How telemetry (logs, metrics, traces) is handled.
@@ -1300,33 +1307,25 @@ export type NewDeploymentRequestUpdates = ClosedEnum<
  * Stack settings for deployment customization
  */
 export type NewDeploymentRequestStackSettings = {
-  compute?: NewDeploymentRequestCompute | any | null | undefined;
+  compute?: NewDeploymentRequestCompute | string | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
   deploymentModel?: NewDeploymentRequestDeploymentModel | undefined;
-  domains?: NewDeploymentRequestDomains | any | null | undefined;
-  /**
-   * External bindings for pre-existing infrastructure.
-   *
-   * @remarks
-   * Allows using existing resources (MinIO, Redis, shared Container Apps
-   * Environment, etc.) instead of having Alien provision them.
-   * Required for Kubernetes platform, optional for cloud platforms.
-   */
-  externalBindings?: NewDeploymentRequestExternalBindings | null | undefined;
+  domains?: NewDeploymentRequestDomains | string | null | undefined;
+  externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
   /**
    * How heartbeat health checks are handled.
    */
   heartbeats?: NewDeploymentRequestHeartbeats | undefined;
-  kubernetes?: NewDeploymentRequestKubernetes | any | null | undefined;
+  kubernetes?: NewDeploymentRequestKubernetes | string | null | undefined;
   network?:
     | NewDeploymentRequestNetworkByoVpcAws
     | NewDeploymentRequestNetworkByoVpcGcp
     | NewDeploymentRequestNetworkByoVnetAzure
     | NewDeploymentRequestNetworkUseDefault
     | NewDeploymentRequestNetworkCreate
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -1425,7 +1424,7 @@ export type NewDeploymentRequest = {
     | NewDeploymentRequestEnvironmentInfoLocal
     | NewDeploymentRequestEnvironmentInfoAws
     | NewDeploymentRequestEnvironmentInfoTest
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -1657,7 +1656,7 @@ export type NewDeploymentRequestEnvironmentInfoUnion$Outbound =
   | NewDeploymentRequestEnvironmentInfoLocal$Outbound
   | NewDeploymentRequestEnvironmentInfoAws$Outbound
   | NewDeploymentRequestEnvironmentInfoTest$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestEnvironmentInfoUnion$outboundSchema: z.ZodType<
@@ -1669,7 +1668,7 @@ export const NewDeploymentRequestEnvironmentInfoUnion$outboundSchema: z.ZodType<
   z.lazy(() => NewDeploymentRequestEnvironmentInfoLocal$outboundSchema),
   z.lazy(() => NewDeploymentRequestEnvironmentInfoAws$outboundSchema),
   z.lazy(() => NewDeploymentRequestEnvironmentInfoTest$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function newDeploymentRequestEnvironmentInfoUnionToJSON(
@@ -1711,7 +1710,7 @@ export function newDeploymentRequestFailureDomains2ToJSON(
 /** @internal */
 export type NewDeploymentRequestFailureDomainsUnion2$Outbound =
   | NewDeploymentRequestFailureDomains2$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestFailureDomainsUnion2$outboundSchema: z.ZodType<
@@ -1719,7 +1718,7 @@ export const NewDeploymentRequestFailureDomainsUnion2$outboundSchema: z.ZodType<
   NewDeploymentRequestFailureDomainsUnion2
 > = z.union([
   z.lazy(() => NewDeploymentRequestFailureDomains2$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function newDeploymentRequestFailureDomainsUnion2ToJSON(
@@ -1737,7 +1736,7 @@ export function newDeploymentRequestFailureDomainsUnion2ToJSON(
 export type NewDeploymentRequestPoolsAutoscale$Outbound = {
   failure_domains?:
     | NewDeploymentRequestFailureDomains2$Outbound
-    | any
+    | string
     | null
     | undefined;
   machine?: string | null | undefined;
@@ -1754,7 +1753,7 @@ export const NewDeploymentRequestPoolsAutoscale$outboundSchema: z.ZodType<
   failureDomains: z.nullable(
     z.union([
       z.lazy(() => NewDeploymentRequestFailureDomains2$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -1805,7 +1804,7 @@ export function newDeploymentRequestFailureDomains1ToJSON(
 /** @internal */
 export type NewDeploymentRequestFailureDomainsUnion1$Outbound =
   | NewDeploymentRequestFailureDomains1$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestFailureDomainsUnion1$outboundSchema: z.ZodType<
@@ -1813,7 +1812,7 @@ export const NewDeploymentRequestFailureDomainsUnion1$outboundSchema: z.ZodType<
   NewDeploymentRequestFailureDomainsUnion1
 > = z.union([
   z.lazy(() => NewDeploymentRequestFailureDomains1$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function newDeploymentRequestFailureDomainsUnion1ToJSON(
@@ -1831,7 +1830,7 @@ export function newDeploymentRequestFailureDomainsUnion1ToJSON(
 export type NewDeploymentRequestPoolsFixed$Outbound = {
   failure_domains?:
     | NewDeploymentRequestFailureDomains1$Outbound
-    | any
+    | string
     | null
     | undefined;
   machine?: string | null | undefined;
@@ -1847,7 +1846,7 @@ export const NewDeploymentRequestPoolsFixed$outboundSchema: z.ZodType<
   failureDomains: z.nullable(
     z.union([
       z.lazy(() => NewDeploymentRequestFailureDomains1$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -1929,7 +1928,7 @@ export function newDeploymentRequestComputeToJSON(
 /** @internal */
 export type NewDeploymentRequestComputeUnion$Outbound =
   | NewDeploymentRequestCompute$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestComputeUnion$outboundSchema: z.ZodType<
@@ -1937,7 +1936,7 @@ export const NewDeploymentRequestComputeUnion$outboundSchema: z.ZodType<
   NewDeploymentRequestComputeUnion
 > = z.union([
   z.lazy(() => NewDeploymentRequestCompute$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function newDeploymentRequestComputeUnionToJSON(
@@ -1979,13 +1978,13 @@ export function newDeploymentRequestAwsToJSON(
 /** @internal */
 export type NewDeploymentRequestAwsUnion$Outbound =
   | NewDeploymentRequestAws$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestAwsUnion$outboundSchema: z.ZodType<
   NewDeploymentRequestAwsUnion$Outbound,
   NewDeploymentRequestAwsUnion
-> = z.union([z.lazy(() => NewDeploymentRequestAws$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => NewDeploymentRequestAws$outboundSchema), z.string()]);
 
 export function newDeploymentRequestAwsUnionToJSON(
   newDeploymentRequestAwsUnion: NewDeploymentRequestAwsUnion,
@@ -2023,13 +2022,16 @@ export function newDeploymentRequestAzureToJSON(
 /** @internal */
 export type NewDeploymentRequestAzureUnion$Outbound =
   | NewDeploymentRequestAzure$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestAzureUnion$outboundSchema: z.ZodType<
   NewDeploymentRequestAzureUnion$Outbound,
   NewDeploymentRequestAzureUnion
-> = z.union([z.lazy(() => NewDeploymentRequestAzure$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => NewDeploymentRequestAzure$outboundSchema),
+  z.string(),
+]);
 
 export function newDeploymentRequestAzureUnionToJSON(
   newDeploymentRequestAzureUnion: NewDeploymentRequestAzureUnion,
@@ -2065,13 +2067,13 @@ export function newDeploymentRequestGcpToJSON(
 /** @internal */
 export type NewDeploymentRequestGcpUnion$Outbound =
   | NewDeploymentRequestGcp$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestGcpUnion$outboundSchema: z.ZodType<
   NewDeploymentRequestGcpUnion$Outbound,
   NewDeploymentRequestGcpUnion
-> = z.union([z.lazy(() => NewDeploymentRequestGcp$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => NewDeploymentRequestGcp$outboundSchema), z.string()]);
 
 export function newDeploymentRequestGcpUnionToJSON(
   newDeploymentRequestGcpUnion: NewDeploymentRequestGcpUnion,
@@ -2134,7 +2136,7 @@ export function newDeploymentRequestDomainsKubernetesToJSON(
 /** @internal */
 export type NewDeploymentRequestDomainsKubernetesUnion$Outbound =
   | NewDeploymentRequestDomainsKubernetes$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestDomainsKubernetesUnion$outboundSchema:
@@ -2143,7 +2145,7 @@ export const NewDeploymentRequestDomainsKubernetesUnion$outboundSchema:
     NewDeploymentRequestDomainsKubernetesUnion
   > = z.union([
     z.lazy(() => NewDeploymentRequestDomainsKubernetes$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function newDeploymentRequestDomainsKubernetesUnionToJSON(
@@ -2159,12 +2161,12 @@ export function newDeploymentRequestDomainsKubernetesUnionToJSON(
 
 /** @internal */
 export type NewDeploymentRequestDomainsCertificate$Outbound = {
-  aws?: NewDeploymentRequestAws$Outbound | any | null | undefined;
-  azure?: NewDeploymentRequestAzure$Outbound | any | null | undefined;
-  gcp?: NewDeploymentRequestGcp$Outbound | any | null | undefined;
+  aws?: NewDeploymentRequestAws$Outbound | string | null | undefined;
+  azure?: NewDeploymentRequestAzure$Outbound | string | null | undefined;
+  gcp?: NewDeploymentRequestGcp$Outbound | string | null | undefined;
   kubernetes?:
     | NewDeploymentRequestDomainsKubernetes$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -2175,18 +2177,21 @@ export const NewDeploymentRequestDomainsCertificate$outboundSchema: z.ZodType<
   NewDeploymentRequestDomainsCertificate
 > = z.object({
   aws: z.nullable(
-    z.union([z.lazy(() => NewDeploymentRequestAws$outboundSchema), z.any()]),
+    z.union([z.lazy(() => NewDeploymentRequestAws$outboundSchema), z.string()]),
   ).optional(),
   azure: z.nullable(
-    z.union([z.lazy(() => NewDeploymentRequestAzure$outboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => NewDeploymentRequestAzure$outboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   gcp: z.nullable(
-    z.union([z.lazy(() => NewDeploymentRequestGcp$outboundSchema), z.any()]),
+    z.union([z.lazy(() => NewDeploymentRequestGcp$outboundSchema), z.string()]),
   ).optional(),
   kubernetes: z.nullable(
     z.union([
       z.lazy(() => NewDeploymentRequestDomainsKubernetes$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -2295,7 +2300,7 @@ export function newDeploymentRequestPublicEndpointTargetMachineAddressesToJSON(
 export type NewDeploymentRequestPublicEndpointTargetUnion$Outbound =
   | NewDeploymentRequestPublicEndpointTargetLoadBalancer$Outbound
   | NewDeploymentRequestPublicEndpointTargetMachineAddresses$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestPublicEndpointTargetUnion$outboundSchema:
@@ -2309,7 +2314,7 @@ export const NewDeploymentRequestPublicEndpointTargetUnion$outboundSchema:
     z.lazy(() =>
       NewDeploymentRequestPublicEndpointTargetMachineAddresses$outboundSchema
     ),
-    z.any(),
+    z.string(),
   ]);
 
 export function newDeploymentRequestPublicEndpointTargetUnionToJSON(
@@ -2332,7 +2337,7 @@ export type NewDeploymentRequestDomains$Outbound = {
   publicEndpointTarget?:
     | NewDeploymentRequestPublicEndpointTargetLoadBalancer$Outbound
     | NewDeploymentRequestPublicEndpointTargetMachineAddresses$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -2356,7 +2361,7 @@ export const NewDeploymentRequestDomains$outboundSchema: z.ZodType<
       z.lazy(() =>
         NewDeploymentRequestPublicEndpointTargetMachineAddresses$outboundSchema
       ),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -2374,7 +2379,7 @@ export function newDeploymentRequestDomainsToJSON(
 /** @internal */
 export type NewDeploymentRequestDomainsUnion$Outbound =
   | NewDeploymentRequestDomains$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestDomainsUnion$outboundSchema: z.ZodType<
@@ -2382,7 +2387,7 @@ export const NewDeploymentRequestDomainsUnion$outboundSchema: z.ZodType<
   NewDeploymentRequestDomainsUnion
 > = z.union([
   z.lazy(() => NewDeploymentRequestDomains$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function newDeploymentRequestDomainsUnionToJSON(
@@ -2391,25 +2396,6 @@ export function newDeploymentRequestDomainsUnionToJSON(
   return JSON.stringify(
     NewDeploymentRequestDomainsUnion$outboundSchema.parse(
       newDeploymentRequestDomainsUnion,
-    ),
-  );
-}
-
-/** @internal */
-export type NewDeploymentRequestExternalBindings$Outbound = {};
-
-/** @internal */
-export const NewDeploymentRequestExternalBindings$outboundSchema: z.ZodType<
-  NewDeploymentRequestExternalBindings$Outbound,
-  NewDeploymentRequestExternalBindings
-> = z.object({});
-
-export function newDeploymentRequestExternalBindingsToJSON(
-  newDeploymentRequestExternalBindings: NewDeploymentRequestExternalBindings,
-): string {
-  return JSON.stringify(
-    NewDeploymentRequestExternalBindings$outboundSchema.parse(
-      newDeploymentRequestExternalBindings,
     ),
   );
 }
@@ -2455,13 +2441,16 @@ export function newDeploymentRequestCloudToJSON(
 /** @internal */
 export type NewDeploymentRequestCloudUnion$Outbound =
   | NewDeploymentRequestCloud$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestCloudUnion$outboundSchema: z.ZodType<
   NewDeploymentRequestCloudUnion$Outbound,
   NewDeploymentRequestCloudUnion
-> = z.union([z.lazy(() => NewDeploymentRequestCloud$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => NewDeploymentRequestCloud$outboundSchema),
+  z.string(),
+]);
 
 export function newDeploymentRequestCloudUnionToJSON(
   newDeploymentRequestCloudUnion: NewDeploymentRequestCloudUnion,
@@ -2480,7 +2469,7 @@ export const NewDeploymentRequestOwnership$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type NewDeploymentRequestCluster$Outbound = {
-  cloud?: NewDeploymentRequestCloud$Outbound | any | null | undefined;
+  cloud?: NewDeploymentRequestCloud$Outbound | string | null | undefined;
   namespace?: string | null | undefined;
   ownership: string;
 };
@@ -2491,7 +2480,10 @@ export const NewDeploymentRequestCluster$outboundSchema: z.ZodType<
   NewDeploymentRequestCluster
 > = z.object({
   cloud: z.nullable(
-    z.union([z.lazy(() => NewDeploymentRequestCloud$outboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => NewDeploymentRequestCloud$outboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   namespace: z.nullable(z.string()).optional(),
   ownership: NewDeploymentRequestOwnership$outboundSchema,
@@ -2510,7 +2502,7 @@ export function newDeploymentRequestClusterToJSON(
 /** @internal */
 export type NewDeploymentRequestClusterUnion$Outbound =
   | NewDeploymentRequestCluster$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestClusterUnion$outboundSchema: z.ZodType<
@@ -2518,7 +2510,7 @@ export const NewDeploymentRequestClusterUnion$outboundSchema: z.ZodType<
   NewDeploymentRequestClusterUnion
 > = z.union([
   z.lazy(() => NewDeploymentRequestCluster$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function newDeploymentRequestClusterUnionToJSON(
@@ -2814,7 +2806,7 @@ export type NewDeploymentRequestProviderUnion4$Outbound =
   | NewDeploymentRequestProviderAwsAlb4$Outbound
   | NewDeploymentRequestProviderAzureApplicationGatewayForContainers4$Outbound
   | NewDeploymentRequestProviderGkeGateway4$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestProviderUnion4$outboundSchema: z.ZodType<
@@ -2826,7 +2818,7 @@ export const NewDeploymentRequestProviderUnion4$outboundSchema: z.ZodType<
     NewDeploymentRequestProviderAzureApplicationGatewayForContainers4$outboundSchema
   ),
   z.lazy(() => NewDeploymentRequestProviderGkeGateway4$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function newDeploymentRequestProviderUnion4ToJSON(
@@ -2850,7 +2842,7 @@ export type NewDeploymentRequestRouteGateway2$Outbound = {
     | NewDeploymentRequestProviderAwsAlb4$Outbound
     | NewDeploymentRequestProviderAzureApplicationGatewayForContainers4$Outbound
     | NewDeploymentRequestProviderGkeGateway4$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -2873,7 +2865,7 @@ export const NewDeploymentRequestRouteGateway2$outboundSchema: z.ZodType<
         NewDeploymentRequestProviderAzureApplicationGatewayForContainers4$outboundSchema
       ),
       z.lazy(() => NewDeploymentRequestProviderGkeGateway4$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("gateway"),
@@ -3002,7 +2994,7 @@ export type NewDeploymentRequestProviderUnion3$Outbound =
   | NewDeploymentRequestProviderAwsAlb3$Outbound
   | NewDeploymentRequestProviderAzureApplicationGatewayForContainers3$Outbound
   | NewDeploymentRequestProviderGkeGateway3$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestProviderUnion3$outboundSchema: z.ZodType<
@@ -3014,7 +3006,7 @@ export const NewDeploymentRequestProviderUnion3$outboundSchema: z.ZodType<
     NewDeploymentRequestProviderAzureApplicationGatewayForContainers3$outboundSchema
   ),
   z.lazy(() => NewDeploymentRequestProviderGkeGateway3$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function newDeploymentRequestProviderUnion3ToJSON(
@@ -3037,7 +3029,7 @@ export type NewDeploymentRequestRouteIngress2$Outbound = {
     | NewDeploymentRequestProviderAwsAlb3$Outbound
     | NewDeploymentRequestProviderAzureApplicationGatewayForContainers3$Outbound
     | NewDeploymentRequestProviderGkeGateway3$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -3059,7 +3051,7 @@ export const NewDeploymentRequestRouteIngress2$outboundSchema: z.ZodType<
         NewDeploymentRequestProviderAzureApplicationGatewayForContainers3$outboundSchema
       ),
       z.lazy(() => NewDeploymentRequestProviderGkeGateway3$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
@@ -3431,7 +3423,7 @@ export type NewDeploymentRequestProviderUnion2$Outbound =
   | NewDeploymentRequestProviderAwsAlb2$Outbound
   | NewDeploymentRequestProviderAzureApplicationGatewayForContainers2$Outbound
   | NewDeploymentRequestProviderGkeGateway2$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestProviderUnion2$outboundSchema: z.ZodType<
@@ -3443,7 +3435,7 @@ export const NewDeploymentRequestProviderUnion2$outboundSchema: z.ZodType<
     NewDeploymentRequestProviderAzureApplicationGatewayForContainers2$outboundSchema
   ),
   z.lazy(() => NewDeploymentRequestProviderGkeGateway2$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function newDeploymentRequestProviderUnion2ToJSON(
@@ -3467,7 +3459,7 @@ export type NewDeploymentRequestRouteGateway1$Outbound = {
     | NewDeploymentRequestProviderAwsAlb2$Outbound
     | NewDeploymentRequestProviderAzureApplicationGatewayForContainers2$Outbound
     | NewDeploymentRequestProviderGkeGateway2$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -3490,7 +3482,7 @@ export const NewDeploymentRequestRouteGateway1$outboundSchema: z.ZodType<
         NewDeploymentRequestProviderAzureApplicationGatewayForContainers2$outboundSchema
       ),
       z.lazy(() => NewDeploymentRequestProviderGkeGateway2$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("gateway"),
@@ -3619,7 +3611,7 @@ export type NewDeploymentRequestProviderUnion1$Outbound =
   | NewDeploymentRequestProviderAwsAlb1$Outbound
   | NewDeploymentRequestProviderAzureApplicationGatewayForContainers1$Outbound
   | NewDeploymentRequestProviderGkeGateway1$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestProviderUnion1$outboundSchema: z.ZodType<
@@ -3631,7 +3623,7 @@ export const NewDeploymentRequestProviderUnion1$outboundSchema: z.ZodType<
     NewDeploymentRequestProviderAzureApplicationGatewayForContainers1$outboundSchema
   ),
   z.lazy(() => NewDeploymentRequestProviderGkeGateway1$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function newDeploymentRequestProviderUnion1ToJSON(
@@ -3654,7 +3646,7 @@ export type NewDeploymentRequestRouteIngress1$Outbound = {
     | NewDeploymentRequestProviderAwsAlb1$Outbound
     | NewDeploymentRequestProviderAzureApplicationGatewayForContainers1$Outbound
     | NewDeploymentRequestProviderGkeGateway1$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -3676,7 +3668,7 @@ export const NewDeploymentRequestRouteIngress1$outboundSchema: z.ZodType<
         NewDeploymentRequestProviderAzureApplicationGatewayForContainers1$outboundSchema
       ),
       z.lazy(() => NewDeploymentRequestProviderGkeGateway1$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
@@ -3796,7 +3788,7 @@ export type NewDeploymentRequestExposureUnion$Outbound =
   | NewDeploymentRequestExposureCustom$Outbound
   | NewDeploymentRequestExposureGenerated$Outbound
   | NewDeploymentRequestExposureDisabled$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestExposureUnion$outboundSchema: z.ZodType<
@@ -3806,7 +3798,7 @@ export const NewDeploymentRequestExposureUnion$outboundSchema: z.ZodType<
   z.lazy(() => NewDeploymentRequestExposureCustom$outboundSchema),
   z.lazy(() => NewDeploymentRequestExposureGenerated$outboundSchema),
   z.lazy(() => NewDeploymentRequestExposureDisabled$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function newDeploymentRequestExposureUnionToJSON(
@@ -3821,12 +3813,12 @@ export function newDeploymentRequestExposureUnionToJSON(
 
 /** @internal */
 export type NewDeploymentRequestKubernetes$Outbound = {
-  cluster?: NewDeploymentRequestCluster$Outbound | any | null | undefined;
+  cluster?: NewDeploymentRequestCluster$Outbound | string | null | undefined;
   exposure?:
     | NewDeploymentRequestExposureCustom$Outbound
     | NewDeploymentRequestExposureGenerated$Outbound
     | NewDeploymentRequestExposureDisabled$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -3839,7 +3831,7 @@ export const NewDeploymentRequestKubernetes$outboundSchema: z.ZodType<
   cluster: z.nullable(
     z.union([
       z.lazy(() => NewDeploymentRequestCluster$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   exposure: z.nullable(
@@ -3847,7 +3839,7 @@ export const NewDeploymentRequestKubernetes$outboundSchema: z.ZodType<
       z.lazy(() => NewDeploymentRequestExposureCustom$outboundSchema),
       z.lazy(() => NewDeploymentRequestExposureGenerated$outboundSchema),
       z.lazy(() => NewDeploymentRequestExposureDisabled$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -3865,7 +3857,7 @@ export function newDeploymentRequestKubernetesToJSON(
 /** @internal */
 export type NewDeploymentRequestKubernetesUnion$Outbound =
   | NewDeploymentRequestKubernetes$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestKubernetesUnion$outboundSchema: z.ZodType<
@@ -3873,7 +3865,7 @@ export const NewDeploymentRequestKubernetesUnion$outboundSchema: z.ZodType<
   NewDeploymentRequestKubernetesUnion
 > = z.union([
   z.lazy(() => NewDeploymentRequestKubernetes$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function newDeploymentRequestKubernetesUnionToJSON(
@@ -4086,7 +4078,7 @@ export type NewDeploymentRequestNetworkUnion$Outbound =
   | NewDeploymentRequestNetworkByoVnetAzure$Outbound
   | NewDeploymentRequestNetworkUseDefault$Outbound
   | NewDeploymentRequestNetworkCreate$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const NewDeploymentRequestNetworkUnion$outboundSchema: z.ZodType<
@@ -4098,7 +4090,7 @@ export const NewDeploymentRequestNetworkUnion$outboundSchema: z.ZodType<
   z.lazy(() => NewDeploymentRequestNetworkByoVnetAzure$outboundSchema),
   z.lazy(() => NewDeploymentRequestNetworkUseDefault$outboundSchema),
   z.lazy(() => NewDeploymentRequestNetworkCreate$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function newDeploymentRequestNetworkUnionToJSON(
@@ -4123,22 +4115,26 @@ export const NewDeploymentRequestUpdates$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type NewDeploymentRequestStackSettings$Outbound = {
-  compute?: NewDeploymentRequestCompute$Outbound | any | null | undefined;
+  compute?: NewDeploymentRequestCompute$Outbound | string | null | undefined;
   deploymentModel?: string | undefined;
-  domains?: NewDeploymentRequestDomains$Outbound | any | null | undefined;
+  domains?: NewDeploymentRequestDomains$Outbound | string | null | undefined;
   externalBindings?:
-    | NewDeploymentRequestExternalBindings$Outbound
+    | { [k: string]: ExternalBindingUnion$Outbound }
     | null
     | undefined;
   heartbeats?: string | undefined;
-  kubernetes?: NewDeploymentRequestKubernetes$Outbound | any | null | undefined;
+  kubernetes?:
+    | NewDeploymentRequestKubernetes$Outbound
+    | string
+    | null
+    | undefined;
   network?:
     | NewDeploymentRequestNetworkByoVpcAws$Outbound
     | NewDeploymentRequestNetworkByoVpcGcp$Outbound
     | NewDeploymentRequestNetworkByoVnetAzure$Outbound
     | NewDeploymentRequestNetworkUseDefault$Outbound
     | NewDeploymentRequestNetworkCreate$Outbound
-    | any
+    | string
     | null
     | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
@@ -4154,7 +4150,7 @@ export const NewDeploymentRequestStackSettings$outboundSchema: z.ZodType<
   compute: z.nullable(
     z.union([
       z.lazy(() => NewDeploymentRequestCompute$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   deploymentModel: NewDeploymentRequestDeploymentModel$outboundSchema
@@ -4162,17 +4158,17 @@ export const NewDeploymentRequestStackSettings$outboundSchema: z.ZodType<
   domains: z.nullable(
     z.union([
       z.lazy(() => NewDeploymentRequestDomains$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   externalBindings: z.nullable(
-    z.lazy(() => NewDeploymentRequestExternalBindings$outboundSchema),
+    z.record(z.string(), ExternalBindingUnion$outboundSchema),
   ).optional(),
   heartbeats: NewDeploymentRequestHeartbeats$outboundSchema.optional(),
   kubernetes: z.nullable(
     z.union([
       z.lazy(() => NewDeploymentRequestKubernetes$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   network: z.nullable(
@@ -4182,7 +4178,7 @@ export const NewDeploymentRequestStackSettings$outboundSchema: z.ZodType<
       z.lazy(() => NewDeploymentRequestNetworkByoVnetAzure$outboundSchema),
       z.lazy(() => NewDeploymentRequestNetworkUseDefault$outboundSchema),
       z.lazy(() => NewDeploymentRequestNetworkCreate$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   publicEndpoints: z.nullable(
@@ -4233,7 +4229,7 @@ export type NewDeploymentRequest$Outbound = {
     | NewDeploymentRequestEnvironmentInfoLocal$Outbound
     | NewDeploymentRequestEnvironmentInfoAws$Outbound
     | NewDeploymentRequestEnvironmentInfoTest$Outbound
-    | any
+    | string
     | null
     | undefined;
   project: string;
@@ -4271,7 +4267,7 @@ export const NewDeploymentRequest$outboundSchema: z.ZodType<
       z.lazy(() => NewDeploymentRequestEnvironmentInfoLocal$outboundSchema),
       z.lazy(() => NewDeploymentRequestEnvironmentInfoAws$outboundSchema),
       z.lazy(() => NewDeploymentRequestEnvironmentInfoTest$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   project: z.string(),

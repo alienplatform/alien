@@ -24,23 +24,31 @@ import {
   DeploymentDetailResponseStackState$inboundSchema,
   DeploymentDetailResponseStatus,
   DeploymentDetailResponseStatus$inboundSchema,
-} from "./deploymentdetailresponsependingpreparedstackprovidedby.js";
+} from "./deploymentdetailresponsependingpreparedstackplatform.js";
 import {
   DeploymentDetailResponsePendingPreparedStackUnion,
   DeploymentDetailResponsePendingPreparedStackUnion$inboundSchema,
-  DeploymentDetailResponsePreparedStackExtendUnion,
-  DeploymentDetailResponsePreparedStackExtendUnion$inboundSchema,
+  DeploymentDetailResponsePreparedStackExtendAw,
+  DeploymentDetailResponsePreparedStackExtendAw$inboundSchema,
+  DeploymentDetailResponsePreparedStackExtendAzure,
+  DeploymentDetailResponsePreparedStackExtendAzure$inboundSchema,
+  DeploymentDetailResponsePreparedStackExtendGcp,
+  DeploymentDetailResponsePreparedStackExtendGcp$inboundSchema,
   DeploymentDetailResponsePreparedStackInput,
   DeploymentDetailResponsePreparedStackInput$inboundSchema,
   DeploymentDetailResponsePreparedStackManagement2,
   DeploymentDetailResponsePreparedStackManagement2$inboundSchema,
   DeploymentDetailResponsePreparedStackManagementEnum,
   DeploymentDetailResponsePreparedStackManagementEnum$inboundSchema,
-} from "./deploymentdetailresponsepreparedstackextendunion.js";
+} from "./deploymentdetailresponsepreparedstackextendgcp.js";
 import {
   DeploymentGroupInfo,
   DeploymentGroupInfo$inboundSchema,
 } from "./deploymentgroupinfo.js";
+import {
+  DeploymentOperatorSyncPlugin,
+  DeploymentOperatorSyncPlugin$inboundSchema,
+} from "./deploymentoperatorsyncplugin.js";
 import {
   DeploymentOperatorSyncStatus,
   DeploymentOperatorSyncStatus$inboundSchema,
@@ -75,6 +83,55 @@ import {
   ReportedOperation$inboundSchema,
 } from "./reportedoperation.js";
 
+/**
+ * Platform-specific permission configurations
+ */
+export type DeploymentDetailResponsePreparedStackExtendPlatforms = {
+  /**
+   * AWS permission configurations
+   */
+  aws?: Array<DeploymentDetailResponsePreparedStackExtendAw> | null | undefined;
+  /**
+   * Azure permission configurations
+   */
+  azure?:
+    | Array<DeploymentDetailResponsePreparedStackExtendAzure>
+    | null
+    | undefined;
+  /**
+   * GCP permission configurations
+   */
+  gcp?:
+    | Array<DeploymentDetailResponsePreparedStackExtendGcp>
+    | null
+    | undefined;
+};
+
+/**
+ * A permission set that can be applied across different cloud platforms
+ */
+export type DeploymentDetailResponsePreparedStackExtend = {
+  /**
+   * Human-readable description of what this permission set allows
+   */
+  description: string;
+  /**
+   * Unique identifier for the permission set (e.g., "storage/data-read")
+   */
+  id: string;
+  /**
+   * Platform-specific permission configurations
+   */
+  platforms: DeploymentDetailResponsePreparedStackExtendPlatforms;
+};
+
+/**
+ * Reference to a permission set - either by name or inline definition
+ */
+export type DeploymentDetailResponsePreparedStackExtendUnion =
+  | DeploymentDetailResponsePreparedStackExtend
+  | string;
+
 export type DeploymentDetailResponsePreparedStackManagement1 = {
   /**
    * Permission profile that maps resources to permission sets
@@ -83,7 +140,7 @@ export type DeploymentDetailResponsePreparedStackManagement1 = {
    * Key can be "*" for all resources or resource name for specific resource
    */
   extend: {
-    [k: string]: Array<DeploymentDetailResponsePreparedStackExtendUnion>;
+    [k: string]: Array<DeploymentDetailResponsePreparedStackExtend | string>;
   };
 };
 
@@ -313,7 +370,7 @@ export type DeploymentDetailResponsePreparedStackProfileConditionResource = {
 
 export type DeploymentDetailResponsePreparedStackProfileResourceConditionUnion =
   | DeploymentDetailResponsePreparedStackProfileConditionResource
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
@@ -321,7 +378,7 @@ export type DeploymentDetailResponsePreparedStackProfileResourceConditionUnion =
 export type DeploymentDetailResponsePreparedStackProfileGcpResource = {
   condition?:
     | DeploymentDetailResponsePreparedStackProfileConditionResource
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -340,7 +397,7 @@ export type DeploymentDetailResponsePreparedStackProfileConditionStack = {
 
 export type DeploymentDetailResponsePreparedStackProfileStackConditionUnion =
   | DeploymentDetailResponsePreparedStackProfileConditionStack
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
@@ -348,7 +405,7 @@ export type DeploymentDetailResponsePreparedStackProfileStackConditionUnion =
 export type DeploymentDetailResponsePreparedStackProfileGcpStack = {
   condition?:
     | DeploymentDetailResponsePreparedStackProfileConditionStack
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -639,7 +696,7 @@ export type DeploymentDetailResponsePreparedStack = {
 
 export type DeploymentDetailResponsePreparedStackUnion =
   | DeploymentDetailResponsePreparedStack
-  | any;
+  | string;
 
 /**
  * The cross-account read a manager opened on Alien's registry for one deployment.
@@ -660,7 +717,7 @@ export type DeploymentDetailResponseRegistryAccess = {
 
 export type DeploymentDetailResponseRegistryAccessUnion =
   | DeploymentDetailResponseRegistryAccess
-  | any;
+  | string;
 
 /**
  * The objects that keep an AWS deny sandbox's sessions inside the VPC. Each id is recorded as
@@ -692,7 +749,7 @@ export type DeploymentDetailResponseEgress = {
 
 export type DeploymentDetailResponseEgressUnion =
   | DeploymentDetailResponseEgress
-  | any;
+  | string;
 
 export const DeploymentDetailResponseTypeAwsSandbox = {
   AwsSandbox: "awsSandbox",
@@ -709,7 +766,7 @@ export type DeploymentDetailResponseSetupScaffolding = {
    * IAM role the image build runs as.
    */
   buildRoleName: string;
-  egress?: DeploymentDetailResponseEgress | any | null | undefined;
+  egress?: DeploymentDetailResponseEgress | string | null | undefined;
   /**
    * A Frozen sandbox's MicroVM image, built during setup. A Live one's image belongs to its
    *
@@ -725,7 +782,7 @@ export type DeploymentDetailResponseSetupScaffolding = {
  */
 export type DeploymentDetailResponseSetupUpdateAuthorization = {
   /**
-   * Frozen resource projection from the last successful deployment.
+   * Setup-owned digest (`Stack::setup_owned_digest`) of the last successful deployment.
    */
   baselineFrozenDigest: string;
   /**
@@ -749,14 +806,14 @@ export type DeploymentDetailResponseSetupUpdateAuthorization = {
    */
   setupTarget: string;
   /**
-   * Frozen resource projection prepared by the setup re-import.
+   * Setup-owned digest (`Stack::setup_owned_digest`) of the stack the setup re-import prepared.
    */
   targetFrozenDigest: string;
 };
 
 export type DeploymentDetailResponseSetupUpdateAuthorizationUnion =
   | DeploymentDetailResponseSetupUpdateAuthorization
-  | any;
+  | string;
 
 /**
  * Runtime metadata for deployment state persistence
@@ -809,12 +866,12 @@ export type DeploymentDetailResponseRuntimeMetadata = {
   persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?:
     | DeploymentDetailResponsePreparedStack
-    | any
+    | string
     | null
     | undefined;
   registryAccess?:
     | DeploymentDetailResponseRegistryAccess
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -837,7 +894,7 @@ export type DeploymentDetailResponseRuntimeMetadata = {
     | undefined;
   setupUpdateAuthorization?:
     | DeploymentDetailResponseSetupUpdateAuthorization
-    | any
+    | string
     | null
     | undefined;
 };
@@ -985,6 +1042,10 @@ export type OperatorSync = {
    * Expected `plugin/operation` names not reported by the Operator (catalog-mismatch only)
    */
   missingOperations?: Array<string> | null | undefined;
+  /**
+   * Enabled plugins compared with what the Operator last reported loading. Null when the sync fingerprints cannot be read.
+   */
+  plugins?: Array<DeploymentOperatorSyncPlugin> | null | undefined;
   targetSetAt: Date;
   observedAt?: Date | null | undefined;
 };
@@ -1153,12 +1214,98 @@ export type DeploymentDetailResponse = {
 };
 
 /** @internal */
+export const DeploymentDetailResponsePreparedStackExtendPlatforms$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendPlatforms, unknown> = z
+    .object({
+      aws: z.nullable(
+        z.array(DeploymentDetailResponsePreparedStackExtendAw$inboundSchema),
+      ).optional(),
+      azure: z.nullable(
+        z.array(DeploymentDetailResponsePreparedStackExtendAzure$inboundSchema),
+      ).optional(),
+      gcp: z.nullable(
+        z.array(DeploymentDetailResponsePreparedStackExtendGcp$inboundSchema),
+      ).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackExtendPlatformsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendPlatforms,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendPlatforms$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendPlatforms' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtend$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtend, unknown> = z.object({
+    description: z.string(),
+    id: z.string(),
+    platforms: z.lazy(() =>
+      DeploymentDetailResponsePreparedStackExtendPlatforms$inboundSchema
+    ),
+  });
+
+export function deploymentDetailResponsePreparedStackExtendFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtend,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtend$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtend' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendUnion$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendUnion, unknown> = z
+    .union([
+      z.lazy(() => DeploymentDetailResponsePreparedStackExtend$inboundSchema),
+      z.string(),
+    ]);
+
+export function deploymentDetailResponsePreparedStackExtendUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentDetailResponsePreparedStackManagement1$inboundSchema:
   z.ZodType<DeploymentDetailResponsePreparedStackManagement1, unknown> = z
     .object({
       extend: z.record(
         z.string(),
-        z.array(DeploymentDetailResponsePreparedStackExtendUnion$inboundSchema),
+        z.array(z.union([
+          z.lazy(() =>
+            DeploymentDetailResponsePreparedStackExtend$inboundSchema
+          ),
+          z.string(),
+        ])),
       ),
     });
 
@@ -1515,7 +1662,7 @@ export const DeploymentDetailResponsePreparedStackProfileResourceConditionUnion$
     z.lazy(() =>
       DeploymentDetailResponsePreparedStackProfileConditionResource$inboundSchema
     ),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentDetailResponsePreparedStackProfileResourceConditionUnionFromJSON(
@@ -1542,7 +1689,7 @@ export const DeploymentDetailResponsePreparedStackProfileGcpResource$inboundSche
           z.lazy(() =>
             DeploymentDetailResponsePreparedStackProfileConditionResource$inboundSchema
           ),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
       scope: z.string(),
@@ -1597,7 +1744,7 @@ export const DeploymentDetailResponsePreparedStackProfileStackConditionUnion$inb
     z.lazy(() =>
       DeploymentDetailResponsePreparedStackProfileConditionStack$inboundSchema
     ),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentDetailResponsePreparedStackProfileStackConditionUnionFromJSON(
@@ -1624,7 +1771,7 @@ export const DeploymentDetailResponsePreparedStackProfileGcpStack$inboundSchema:
           z.lazy(() =>
             DeploymentDetailResponsePreparedStackProfileConditionStack$inboundSchema
           ),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
       scope: z.string(),
@@ -1994,7 +2141,7 @@ export function deploymentDetailResponsePreparedStackFromJSON(
 export const DeploymentDetailResponsePreparedStackUnion$inboundSchema:
   z.ZodType<DeploymentDetailResponsePreparedStackUnion, unknown> = z.union([
     z.lazy(() => DeploymentDetailResponsePreparedStack$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentDetailResponsePreparedStackUnionFromJSON(
@@ -2037,7 +2184,7 @@ export function deploymentDetailResponseRegistryAccessFromJSON(
 export const DeploymentDetailResponseRegistryAccessUnion$inboundSchema:
   z.ZodType<DeploymentDetailResponseRegistryAccessUnion, unknown> = z.union([
     z.lazy(() => DeploymentDetailResponseRegistryAccess$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentDetailResponseRegistryAccessUnionFromJSON(
@@ -2083,7 +2230,7 @@ export const DeploymentDetailResponseEgressUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => DeploymentDetailResponseEgress$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentDetailResponseEgressUnionFromJSON(
@@ -2111,7 +2258,7 @@ export const DeploymentDetailResponseSetupScaffolding$inboundSchema: z.ZodType<
   egress: z.nullable(
     z.union([
       z.lazy(() => DeploymentDetailResponseEgress$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   imageArn: z.nullable(z.string()).optional(),
@@ -2170,7 +2317,7 @@ export const DeploymentDetailResponseSetupUpdateAuthorizationUnion$inboundSchema
       z.lazy(() =>
         DeploymentDetailResponseSetupUpdateAuthorization$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]);
 
 export function deploymentDetailResponseSetupUpdateAuthorizationUnionFromJSON(
@@ -2206,13 +2353,13 @@ export const DeploymentDetailResponseRuntimeMetadata$inboundSchema: z.ZodType<
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => DeploymentDetailResponsePreparedStack$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   registryAccess: z.nullable(
     z.union([
       z.lazy(() => DeploymentDetailResponseRegistryAccess$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   registryAccessGranted: z.boolean().optional(),
@@ -2225,7 +2372,7 @@ export const DeploymentDetailResponseRuntimeMetadata$inboundSchema: z.ZodType<
       z.lazy(() =>
         DeploymentDetailResponseSetupUpdateAuthorization$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -2313,6 +2460,8 @@ export const OperatorSync$inboundSchema: z.ZodType<OperatorSync, unknown> = z
     targetBundleHash: z.string(),
     observedBundleHash: z.nullable(z.string()).optional(),
     missingOperations: z.nullable(z.array(z.string())).optional(),
+    plugins: z.nullable(z.array(DeploymentOperatorSyncPlugin$inboundSchema))
+      .optional(),
     targetSetAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
     observedAt: z.nullable(
       z.iso.datetime({ offset: true }).transform(v => new Date(v)),
