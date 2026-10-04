@@ -1,4 +1,4 @@
 # Stable compiler for Python wheel builds.
 # Select locally with: mise -E stable exec -- cargo <command>
 [tools]
-rust = { version = "1.99.0", profile = "minimal" }
+rust = { version = "1.99.0", profile = "minimal", components = "rustfmt,clippy" }

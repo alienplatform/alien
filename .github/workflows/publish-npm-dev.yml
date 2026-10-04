@@ -60,8 +60,10 @@ jobs:
           MISE_DISABLE_TOOLS: rust
         with:
           version: 2026.10.1
+          add_shims_to_path: false
+          working_directory: .npm-dev-tools
           install_args: node pnpm
-          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
+          cache_key: "{{default}}-${{ hashFiles('.npm-dev-tools/package.json') }}"
 
       - uses: actions/setup-node@v7
         with:
@@ -120,9 +122,15 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.git_sha }}
 
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+          path: .npm-dev-tools
+          persist-credentials: false
+
       - name: Setup Rust (linux)
         if: matrix.os == 'linux'
-        uses: ./.github/actions/setup-rust
+        uses: ./.npm-dev-tools/.github/actions/setup-rust
         with:
           depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
           repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
@@ -135,6 +143,8 @@ jobs:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
         with:
           version: 2026.10.1
+          add_shims_to_path: false
+          working_directory: .npm-dev-tools
           install_args: rust
           cache: false
 
@@ -158,8 +168,10 @@ jobs:
           MISE_DISABLE_TOOLS: rust
         with:
           version: 2026.10.1
+          add_shims_to_path: false
+          working_directory: .npm-dev-tools
           install_args: node pnpm
-          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
+          cache_key: "{{default}}-${{ hashFiles('.npm-dev-tools/package.json') }}"
 
       - uses: actions/setup-node@v7
         with:
@@ -247,8 +259,10 @@ jobs:
           MISE_DISABLE_TOOLS: rust
         with:
           version: 2026.10.1
+          add_shims_to_path: false
+          working_directory: .npm-dev-tools
           install_args: node pnpm
-          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
+          cache_key: "{{default}}-${{ hashFiles('.npm-dev-tools/package.json') }}"
 
       - uses: actions/setup-node@v7
         with:

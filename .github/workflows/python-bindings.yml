@@ -5,6 +5,8 @@ on:
     paths:
       - "Cargo.lock"
       - "Cargo.toml"
+      - "mise*.toml"
+      - "rust-toolchain.toml"
       - "crates/alien-bindings/**"
       - "crates/alien-ai-gateway/**"
       - "crates/alien-core/src/bindings/**"
@@ -16,6 +18,8 @@ on:
     paths:
       - "Cargo.lock"
       - "Cargo.toml"
+      - "mise*.toml"
+      - "rust-toolchain.toml"
       - "crates/alien-bindings/**"
       - "crates/alien-ai-gateway/**"
       - "crates/alien-core/src/bindings/**"
@@ -43,6 +47,7 @@ jobs:
           MISE_ENV: stable
         with:
           version: 2026.10.1
+          add_shims_to_path: false
           install_args: rust
           cache: false
       - uses: actions/setup-python@v5
@@ -87,11 +92,13 @@ jobs:
           MISE_ENV: stable
         with:
           version: 2026.10.1
+          add_shims_to_path: false
           install_args: rust
           cache: false
       - uses: PyO3/maturin-action@v1
         with:
           command: build
+          rust-toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
           args: --manifest-path crates/alien-bindings-python/Cargo.toml --release --out dist --no-default-features --features all-platforms,platform-sdk

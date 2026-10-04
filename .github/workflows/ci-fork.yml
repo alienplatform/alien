@@ -45,6 +45,7 @@ jobs:
           MISE_DISABLE_TOOLS: rust
         with:
           version: 2026.10.1
+          add_shims_to_path: false
           install_args: node pnpm
           cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
@@ -60,6 +61,7 @@ jobs:
           MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
         with:
           version: 2026.10.1
+          add_shims_to_path: false
           install_args: rust
           cache: false
 
