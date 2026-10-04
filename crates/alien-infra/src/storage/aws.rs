@@ -23,9 +23,9 @@ use alien_error::{Context, IntoAlienError};
 use alien_macros::controller;
 use chrono::{DateTime, Utc};
 
-/// How long a bucket waits after `PutBucketAbac` was denied before the controller schedules
-/// another attempt. A deployment whose setup predates the ABAC permissions gets them only when
-/// its setup is updated, which the runtime cannot observe, so it retries on this interval.
+/// Backoff before later update planning may retry a denied `PutBucketAbac` request for an
+/// unchanged bucket. Periodic observation does not run planning or schedule this retry.
+/// An explicit bucket configuration update retries immediately, regardless of this backoff.
 const ABAC_RETRY_INTERVAL_HOURS: i64 = 24;
 
 fn is_access_denied(error: &AlienError<CloudClientErrorData>) -> bool {
@@ -956,8 +956,8 @@ impl AwsStorageController {
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
-    /// Buckets without ABAC get an update that enables it: once for state saved before this
-    /// controller enabled ABAC, and again every `ABAC_RETRY_INTERVAL_HOURS` after a denial.
+    /// During update planning, buckets without ABAC get one migration attempt, or another
+    /// attempt after the denial backoff. Periodic observation does not call this method.
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         let config = ctx.desired_resource_config::<Storage>()?;
         let retry_due = self.abac_denied_at.is_none_or(|denied_at| {
@@ -1106,7 +1106,8 @@ impl AwsStorageController {
 
     /// Enables ABAC so the `aws:ResourceTag/deployment` conditions in the deployment's grants
     /// are evaluated against this bucket's tags. On access denied, the bucket keeps working,
-    /// the denial is recorded and reported in the heartbeat, and `needs_update` retries later.
+    /// the denial is recorded and reported in the heartbeat. A later explicit update or
+    /// update-planning pass can retry; periodic observation does not initiate mutations.
     /// Review the setup permissions or applicable access policy before retrying.
     async fn enable_abac(
         &mut self,
@@ -2156,6 +2157,88 @@ mod tests {
 
         executor.step().await.unwrap();
         assert!(heartbeat_issue_sources(&executor).is_empty());
+    }
+
+    #[rstest]
+    #[case::backoff_elapsed(ABAC_RETRY_INTERVAL_HOURS + 1, true)]
+    #[case::within_backoff(1, false)]
+    #[tokio::test]
+    async fn denied_abac_retries_during_planning_and_not_periodic_refresh(
+        #[case] hours_since_denial: i64,
+        #[case] retry_due: bool,
+    ) {
+        use crate::core::{serialize_controller, StackExecutor};
+        use alien_aws_clients::AwsClientConfigExt;
+        use alien_core::{
+            AwsClientConfig, ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot,
+            ExternalBindings, Resource, Stack, StackResourceState, StackSettings, StackState,
+        };
+
+        let storage = basic_storage();
+        let stack = Stack::new("abac-retry".to_string())
+            .add(storage.clone(), ResourceLifecycle::Live)
+            .build();
+        let mut controller = AwsStorageController::mock_ready(&storage.id);
+        controller.abac_enabled = false;
+        controller.abac_denied_at = Some(Utc::now() - chrono::Duration::hours(hours_since_denial));
+        let mut resource = StackResourceState::new_pending(
+            "storage".to_string(),
+            Resource::new(storage.clone()),
+            Some(ResourceLifecycle::Live),
+            vec![],
+        );
+        resource.status = ResourceStatus::Running;
+        resource.outputs = controller.build_outputs();
+        resource.internal_state = Some(serialize_controller(&controller).unwrap());
+        let mut state = StackState::new(Platform::Aws);
+        state.resource_prefix = "test".to_string();
+        state.resources.insert(storage.id.clone(), resource);
+
+        let mut mock_s3 = MockS3Api::new();
+        mock_s3
+            .expect_enable_bucket_abac()
+            .times(usize::from(retry_due))
+            .returning(|_| Ok(()));
+        expect_ready_heartbeat_reads(&mut mock_s3);
+        let deployment_config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        let executor =
+            StackExecutor::builder(&stack, ClientConfig::Aws(Box::new(AwsClientConfig::mock())))
+                .deployment_config(&deployment_config)
+                .service_provider(setup_mock_service_provider(Arc::new(mock_s3)))
+                .build()
+                .unwrap();
+
+        let observed = executor.refresh(state).await.unwrap().next_state;
+        let resource = &observed.resources[&storage.id];
+        assert_eq!(resource.status, ResourceStatus::Running);
+        assert_eq!(
+            resource.internal_state.as_ref().unwrap()["abacEnabled"],
+            false
+        );
+
+        let planned = executor.step(observed).await.unwrap().next_state;
+        let resource = &planned.resources[&storage.id];
+        assert_eq!(
+            resource.internal_state.as_ref().unwrap()["abacEnabled"],
+            retry_due
+        );
+        assert_eq!(
+            resource.status,
+            if retry_due {
+                ResourceStatus::Updating
+            } else {
+                ResourceStatus::Running
+            }
+        );
     }
 
     #[tokio::test]
