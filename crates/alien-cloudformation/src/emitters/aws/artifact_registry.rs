@@ -219,12 +219,9 @@ fn ecr_policy_document(ctx: &EmitContext<'_>, push: bool) -> Result<CfExpression
             ("Effect", CfExpression::from("Allow")),
             (
                 "Action",
-                CfExpression::list([
-                    CfExpression::from("ecr:CreateRepository"),
-                    CfExpression::from("ecr:TagResource"),
-                ]),
+                CfExpression::list([CfExpression::from("ecr:CreateRepository")]),
             ),
-            ("Resource", resources),
+            ("Resource", resources.clone()),
             (
                 "Condition",
                 CfExpression::object([
@@ -235,8 +232,33 @@ fn ecr_policy_document(ctx: &EmitContext<'_>, push: bool) -> Result<CfExpression
                             CfExpression::ref_("AWS::StackName"),
                         )]),
                     ),
-                    ("StringEqualsIfExists", existing_tag),
+                    ("StringEqualsIfExists", existing_tag.clone()),
                 ]),
+            ),
+        ]));
+        statements.push(CfExpression::object([
+            ("Sid", CfExpression::from("OwnRepositoryTagging")),
+            ("Effect", CfExpression::from("Allow")),
+            (
+                "Action",
+                CfExpression::list([CfExpression::from("ecr:TagResource")]),
+            ),
+            ("Resource", resources),
+            (
+                "Condition",
+                CfExpression::object([(
+                    "StringEquals",
+                    CfExpression::object([
+                        (
+                            format!("aws:RequestTag/{ALIEN_STACK_TAG_KEY}"),
+                            CfExpression::ref_("AWS::StackName"),
+                        ),
+                        (
+                            format!("aws:ResourceTag/{ALIEN_STACK_TAG_KEY}"),
+                            CfExpression::ref_("AWS::StackName"),
+                        ),
+                    ]),
+                )]),
             ),
         ]));
     }

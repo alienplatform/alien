@@ -1597,7 +1597,6 @@ Resources:
             Effect: Allow
             Action:
             - ecr:CreateRepository
-            - ecr:TagResource
             Resource:
             - Fn::GetAtt:
               - RegistryRepository
@@ -1608,6 +1607,21 @@ Resources:
                 aws:RequestTag/deployment:
                   Ref: AWS::StackName
               StringEqualsIfExists:
+                aws:ResourceTag/deployment:
+                  Ref: AWS::StackName
+          - Sid: OwnRepositoryTagging
+            Effect: Allow
+            Action:
+            - ecr:TagResource
+            Resource:
+            - Fn::GetAtt:
+              - RegistryRepository
+              - Arn
+            - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
+            Condition:
+              StringEquals:
+                aws:RequestTag/deployment:
+                  Ref: AWS::StackName
                 aws:ResourceTag/deployment:
                   Ref: AWS::StackName
       Tags:

@@ -229,12 +229,9 @@ fn ecr_role_policy(repo_label: &str, role_label: &str, push: bool) -> hcl::struc
             ("Effect", Expression::String("Allow".to_string())),
             (
                 "Action",
-                Expression::Array(vec![
-                    Expression::String("ecr:CreateRepository".to_string()),
-                    Expression::String("ecr:TagResource".to_string()),
-                ]),
+                Expression::Array(vec![Expression::String("ecr:CreateRepository".to_string())]),
             ),
-            ("Resource", resources),
+            ("Resource", resources.clone()),
             (
                 "Condition",
                 expr::object([
@@ -245,8 +242,36 @@ fn ecr_role_policy(repo_label: &str, role_label: &str, push: bool) -> hcl::struc
                             expr::traversal(["local", "resource_prefix"]),
                         )]),
                     ),
-                    ("StringEqualsIfExists", existing_tag),
+                    ("StringEqualsIfExists", existing_tag.clone()),
                 ]),
+            ),
+        ]));
+        statements.push(expr::object([
+            (
+                "Sid",
+                Expression::String("OwnRepositoryTagging".to_string()),
+            ),
+            ("Effect", Expression::String("Allow".to_string())),
+            (
+                "Action",
+                Expression::Array(vec![Expression::String("ecr:TagResource".to_string())]),
+            ),
+            ("Resource", resources),
+            (
+                "Condition",
+                expr::object([(
+                    "StringEquals",
+                    expr::object([
+                        (
+                            format!("aws:RequestTag/{ALIEN_STACK_TAG_KEY}"),
+                            expr::traversal(["local", "resource_prefix"]),
+                        ),
+                        (
+                            format!("aws:ResourceTag/{ALIEN_STACK_TAG_KEY}"),
+                            expr::traversal(["local", "resource_prefix"]),
+                        ),
+                    ]),
+                )]),
             ),
         ]));
     }

@@ -1296,13 +1296,24 @@ impl AwsArtifactRegistryController {
                 },
                 {
                     "Effect": "Allow",
-                    "Action": ["ecr:CreateRepository", "ecr:TagResource"],
+                    "Action": ["ecr:CreateRepository"],
                     "Resource": format!("arn:aws:ecr:{}:{}:repository/{}-{}-*", aws_cfg.region, aws_cfg.account_id, ctx.resource_prefix, registry_id),
                     "Condition": {
                         "StringEquals": {
                             format!("aws:RequestTag/{ALIEN_STACK_TAG_KEY}"): ctx.resource_prefix
                         },
                         "StringEqualsIfExists": {
+                            format!("aws:ResourceTag/{ALIEN_STACK_TAG_KEY}"): ctx.resource_prefix
+                        }
+                    }
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": ["ecr:TagResource"],
+                    "Resource": format!("arn:aws:ecr:{}:{}:repository/{}-{}-*", aws_cfg.region, aws_cfg.account_id, ctx.resource_prefix, registry_id),
+                    "Condition": {
+                        "StringEquals": {
+                            format!("aws:RequestTag/{ALIEN_STACK_TAG_KEY}"): ctx.resource_prefix,
                             format!("aws:ResourceTag/{ALIEN_STACK_TAG_KEY}"): ctx.resource_prefix
                         }
                     }
@@ -1561,10 +1572,17 @@ mod tests {
                     .iter()
                     .any(|action| action == "ecr:PutImage")
             });
+        assert_eq!(permits("ecr:CreateRepository", None, Some("test")), push);
+        assert!(
+            !permits("ecr:TagResource", None, Some("test")),
+            "untagged legacy repositories cannot be claimed"
+        );
         for action in ["ecr:CreateRepository", "ecr:TagResource"] {
-            assert_eq!(permits(action, None, Some("test")), push);
+            assert_eq!(permits(action, Some("test"), Some("test")), push);
             assert!(!permits(action, None, None));
             assert!(!permits(action, None, Some("test-prod")));
+            assert!(!permits(action, Some("test"), None));
+            assert!(!permits(action, Some("test"), Some("test-prod")));
             assert!(
                 !permits(action, Some("test-prod"), Some("test")),
                 "foreign resources cannot be retagged"

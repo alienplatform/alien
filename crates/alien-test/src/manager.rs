@@ -515,7 +515,9 @@ impl TestManager {
                         section.aws =
                             Some(ArtifactRegistryBinding::Ecr(EcrArtifactRegistryBinding {
                                 repository_prefix: BindingValue::Value("alien-e2e".to_string()),
-                                deployment_prefix: None,
+                                deployment_prefix: Some(BindingValue::Value(
+                                    "alien-e2e".to_string(),
+                                )),
                                 pull_role_arn: Some(BindingValue::Value(pull_role.clone())),
                                 push_role_arn: Some(BindingValue::Value(push_role.clone())),
                             }));

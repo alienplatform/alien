@@ -395,6 +395,7 @@ state-dir = ".alien-state"
 [artifact-registry.aws]
 service = "ecr"
 repositoryPrefix = "alien-e2e"
+deploymentPrefix = "alien-e2e"
 pushRoleArn = "${e2e_aws_ar_push_role_arn}"
 pullRoleArn = "${e2e_aws_ar_pull_role_arn}"
 
