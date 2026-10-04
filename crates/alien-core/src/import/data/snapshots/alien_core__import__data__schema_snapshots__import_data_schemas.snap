@@ -26,6 +26,13 @@ expression: schemas
         "description": "AWS account ID that owns the ECR registry.",
         "type": "string"
       },
+      "deploymentPrefix": {
+        "description": "Deployment tag applied to newly created repositories.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "pullRoleArn": {
         "description": "IAM role ARN with pull-only access.",
         "type": "string"

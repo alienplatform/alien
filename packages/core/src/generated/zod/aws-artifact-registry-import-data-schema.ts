@@ -10,6 +10,7 @@ import * as z from "zod";
  */
 export const AwsArtifactRegistryImportDataSchema = z.object({
     "accountId": z.string().describe("AWS account ID that owns the ECR registry."),
+"deploymentPrefix": z.string().describe("Deployment tag applied to newly created repositories.").nullish(),
 "pullRoleArn": z.string().describe("IAM role ARN with pull-only access."),
 "pushRoleArn": z.string().describe("IAM role ARN with push and pull access."),
 "region": z.string().describe("AWS region for the registry endpoint."),

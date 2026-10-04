@@ -171,11 +171,14 @@ impl AsyncTestContext for AwsProviderArtifactRegistryTestContext {
         let pull_role_arn = std::env::var("ALIEN_TEST_AWS_ECR_PULL_ROLE_ARN").ok();
         let push_role_arn = std::env::var("ALIEN_TEST_AWS_ECR_PUSH_ROLE_ARN").ok();
 
-        let binding = alien_core::bindings::ArtifactRegistryBinding::ecr(
+        let mut binding = alien_core::bindings::ArtifactRegistryBinding::ecr(
             "test".to_string(),
             pull_role_arn,
             push_role_arn,
         );
+        if let alien_core::bindings::ArtifactRegistryBinding::Ecr(config) = &mut binding {
+            config.deployment_prefix = Some(BindingValue::Value("test".to_string()));
+        }
 
         // Set up environment for the provider
         let mut env_map: HashMap<String, String> = HashMap::new();

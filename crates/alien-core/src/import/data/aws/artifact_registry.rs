@@ -16,6 +16,9 @@ pub struct AwsArtifactRegistryImportData {
     pub registry_endpoint: String,
     /// Prefix used for repositories owned by this stack.
     pub repository_prefix: String,
+    /// Deployment tag applied to newly created repositories.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment_prefix: Option<String>,
     /// IAM role ARN with pull-only access.
     pub pull_role_arn: String,
     /// IAM role ARN with push and pull access.

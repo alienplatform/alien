@@ -639,6 +639,10 @@ Resources:
             - s3:GetObjectAcl
             - s3:GetObjectVersion
             - s3:ListBucket
+            Condition:
+              StringEqualsIfExists:
+                aws:ResourceTag/deployment:
+                  Fn::Sub: ${AWS::StackName}
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:s3:::${AWS::StackName}-*
@@ -650,6 +654,10 @@ Resources:
             - sqs:GetQueueAttributes
             - sqs:GetQueueUrl
             - sqs:SendMessage
+            Condition:
+              StringEqualsIfExists:
+                aws:ResourceTag/deployment:
+                  Fn::Sub: ${AWS::StackName}
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
@@ -706,6 +714,9 @@ Resources:
               aws:RequestTag/deployment:
                 Fn::Sub: ${AWS::StackName}
               aws:RequestTag/managed-by: runtime
+            StringEqualsIfExists:
+              aws:ResourceTag/deployment:
+                Fn::Sub: ${AWS::StackName}
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
@@ -776,6 +787,10 @@ Resources:
           Sid: InspectVpcForLambdaNetworking
         - Action:
           - iam:PassRole
+          Condition:
+            StringEqualsIfExists:
+              aws:ResourceTag/deployment:
+                Fn::Sub: ${AWS::StackName}
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-sa
@@ -927,6 +942,9 @@ Resources:
               aws:RequestTag/deployment:
                 Fn::Sub: ${AWS::StackName}
               aws:RequestTag/managed-by: runtime
+            StringEqualsIfExists:
+              aws:ResourceTag/deployment:
+                Fn::Sub: ${AWS::StackName}
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
@@ -953,6 +971,10 @@ Resources:
           - s3:GetBucketVersioning
           - s3:GetEncryptionConfiguration
           - s3:GetLifecycleConfiguration
+          Condition:
+            StringEqualsIfExists:
+              aws:ResourceTag/deployment:
+                Fn::Sub: ${AWS::StackName}
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:s3:::${AWS::StackName}-*
@@ -960,6 +982,10 @@ Resources:
         - Action:
           - sqs:GetQueueAttributes
           - sqs:ListQueueTags
+          Condition:
+            StringEqualsIfExists:
+              aws:ResourceTag/deployment:
+                Fn::Sub: ${AWS::StackName}
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
@@ -970,6 +996,10 @@ Resources:
           - dynamodb:DescribeTimeToLive
           - dynamodb:ListTables
           - dynamodb:ListTagsOfResource
+          Condition:
+            StringEqualsIfExists:
+              aws:ResourceTag/deployment:
+                Fn::Sub: ${AWS::StackName}
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AWS::StackName}-*
@@ -977,6 +1007,10 @@ Resources:
         - Action:
           - ssm:DeleteParameter
           - ssm:PutParameter
+          Condition:
+            StringEqualsIfExists:
+              aws:ResourceTag/deployment:
+                Fn::Sub: ${AWS::StackName}
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-*
@@ -1496,6 +1530,10 @@ Resources:
               - RegistryRepository
               - Arn
             - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
+            Condition:
+              StringEqualsIfExists:
+                aws:ResourceTag/deployment:
+                  Ref: AWS::StackName
       Tags:
       - Key: managed-by
         Value: setup
@@ -1542,7 +1580,6 @@ Resources:
             - ecr:GetDownloadUrlForLayer
             - ecr:ListImages
             - ecr:CompleteLayerUpload
-            - ecr:CreateRepository
             - ecr:DeleteRepository
             - ecr:InitiateLayerUpload
             - ecr:PutImage
@@ -1552,6 +1589,41 @@ Resources:
               - RegistryRepository
               - Arn
             - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
+            Condition:
+              StringEqualsIfExists:
+                aws:ResourceTag/deployment:
+                  Ref: AWS::StackName
+          - Sid: TaggedRepositoryCreation
+            Effect: Allow
+            Action:
+            - ecr:CreateRepository
+            Resource:
+            - Fn::GetAtt:
+              - RegistryRepository
+              - Arn
+            - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
+            Condition:
+              StringEquals:
+                aws:RequestTag/deployment:
+                  Ref: AWS::StackName
+              StringEqualsIfExists:
+                aws:ResourceTag/deployment:
+                  Ref: AWS::StackName
+          - Sid: OwnRepositoryTagging
+            Effect: Allow
+            Action:
+            - ecr:TagResource
+            Resource:
+            - Fn::GetAtt:
+              - RegistryRepository
+              - Arn
+            - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
+            Condition:
+              StringEquals:
+                aws:RequestTag/deployment:
+                  Ref: AWS::StackName
+                aws:ResourceTag/deployment:
+                  Ref: AWS::StackName
       Tags:
       - Key: managed-by
         Value: setup
@@ -1640,7 +1712,11 @@ Resources:
           - s3:GetBucketVersioning
           - s3:GetEncryptionConfiguration
           - s3:GetLifecycleConfiguration
-        - Effect: Allow
+        - Condition:
+            StringEqualsIfExists:
+              aws:ResourceTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+          Effect: Allow
           Resource:
             Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-secrets-*
           Sid: WriteSsmParameters
@@ -1933,6 +2009,8 @@ Resources:
             Fn::Sub: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}
           repositoryPrefix:
             Fn::Sub: ${AWS::StackName}-registry
+          deploymentPrefix:
+            Ref: AWS::StackName
           pullRoleArn:
             Fn::GetAtt:
             - RegistryPullRole
@@ -2289,6 +2367,8 @@ Outputs:
             Fn::Sub: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}
           repositoryPrefix:
             Fn::Sub: ${AWS::StackName}-registry
+          deploymentPrefix:
+            Ref: AWS::StackName
           pullRoleArn:
             Fn::GetAtt:
             - RegistryPullRole

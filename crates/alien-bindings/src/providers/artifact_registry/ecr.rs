@@ -9,11 +9,11 @@ use crate::{
 use alien_aws_clients::{
     ecr::{
         CreateRepositoryRequest, DescribeRepositoriesRequest, EcrApi, EcrClient,
-        GetRepositoryPolicyRequest, SetRepositoryPolicyRequest,
+        GetRepositoryPolicyRequest, SetRepositoryPolicyRequest, Tag,
     },
     AwsClientConfigExt as _, AwsCredentialProvider,
 };
-use alien_core::bindings::ArtifactRegistryBinding;
+use alien_core::{bindings::ArtifactRegistryBinding, ALIEN_STACK_TAG_KEY};
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use base64::engine::{general_purpose::STANDARD as BASE64, Engine as _};
@@ -29,6 +29,7 @@ pub struct EcrArtifactRegistry {
     ecr_client: EcrClient,
     binding_name: String,
     repository_prefix: String,
+    deployment_prefix: Option<String>,
     pull_role_arn: Option<String>,
     push_role_arn: Option<String>,
 }
@@ -188,6 +189,19 @@ impl EcrArtifactRegistry {
                 reason: "Failed to extract repository_prefix from binding".to_string(),
             })?;
 
+        let deployment_prefix = config
+            .deployment_prefix
+            .map(|v| {
+                v.into_value(&binding_name, "deployment_prefix").context(
+                    ErrorData::BindingConfigInvalid {
+                        env_var: binding_env_var(&binding_name),
+                        binding_name: binding_name.clone(),
+                        reason: "Failed to extract deployment_prefix from binding".to_string(),
+                    },
+                )
+            })
+            .transpose()?;
+
         let pull_role_arn = config
             .pull_role_arn
             .map(|v| {
@@ -219,6 +233,7 @@ impl EcrArtifactRegistry {
             ecr_client,
             binding_name,
             repository_prefix,
+            deployment_prefix,
             pull_role_arn,
             push_role_arn,
         })
@@ -407,6 +422,12 @@ impl ArtifactRegistry for EcrArtifactRegistry {
 
     async fn create_repository(&self, repo_name: &str) -> Result<RepositoryResponse> {
         let full_repo_name = self.make_full_repo_name(repo_name);
+        let deployment_prefix = self.deployment_prefix.as_deref().filter(|v| !v.is_empty())
+            .ok_or_else(|| AlienError::new(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&self.binding_name),
+                binding_name: self.binding_name.clone(),
+                reason: "ECR repository creation requires deploymentPrefix; refresh the deployment setup and binding configuration before creating repositories".to_string(),
+            }))?;
 
         info!(
             repo_name = %repo_name,
@@ -448,6 +469,10 @@ impl ArtifactRegistry for EcrArtifactRegistry {
 
         let request = CreateRepositoryRequest::builder()
             .repository_name(full_repo_name.clone())
+            .tags(vec![Tag {
+                key: ALIEN_STACK_TAG_KEY.to_string(),
+                value: deployment_prefix.to_string(),
+            }])
             .build();
 
         let response = match ecr_client.create_repository(request).await {
@@ -1141,6 +1166,111 @@ impl ArtifactRegistry for EcrArtifactRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::{AwsClientConfig, AwsCredentials, AwsServiceOverrides};
+    use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+    use std::{collections::HashMap, sync::Arc};
+
+    async fn registry(
+        deployment_prefix: Option<&str>,
+        exists: bool,
+    ) -> (
+        EcrArtifactRegistry,
+        tokio::sync::mpsc::Receiver<Value>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let (sender, receiver) = tokio::sync::mpsc::channel(8);
+        let router = Router::new().route("/", post(
+            move |State(sender): State<Arc<tokio::sync::mpsc::Sender<Value>>>, body: axum::body::Bytes| async move {
+                let request: Value = serde_json::from_slice(&body).unwrap();
+                sender.send(request.clone()).await.unwrap();
+                if exists {
+                    (StatusCode::BAD_REQUEST, Json(json!({
+                        "__type": "RepositoryAlreadyExistsException", "message": "Already exists"
+                    })))
+                } else {
+                    (StatusCode::OK, Json(json!({"repository": {
+                        "repositoryArn": "arn:aws:ecr:us-east-1:123456789012:repository/example",
+                        "registryId": "123456789012",
+                        "repositoryName": request["repositoryName"],
+                        "repositoryUri": "123456789012.dkr.ecr.us-east-1.amazonaws.com/example",
+                        "createdAt": 0.0
+                    }})))
+                }
+            }
+        )).with_state(Arc::new(sender));
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let credentials = AwsCredentialProvider::from_config_sync(AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-1".to_string(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "test-key".to_string(),
+                secret_access_key: "test-secret".to_string(),
+                session_token: None,
+            },
+            service_overrides: Some(AwsServiceOverrides {
+                endpoints: HashMap::from([("ecr".to_string(), endpoint)]),
+            }),
+        });
+        let mut binding = ArtifactRegistryBinding::ecr(
+            "acme-prod-artifacts-images",
+            None::<String>,
+            None::<String>,
+        );
+        if let ArtifactRegistryBinding::Ecr(config) = &mut binding {
+            config.deployment_prefix = deployment_prefix.map(|v| v.to_string().into());
+        }
+        (
+            EcrArtifactRegistry::new("registry".to_string(), binding, &credentials)
+                .await
+                .unwrap(),
+            receiver,
+            server,
+        )
+    }
+
+    #[tokio::test]
+    async fn new_repositories_use_the_explicit_deployment_tag() {
+        let (registry, mut requests, server) = registry(Some("acme-prod"), false).await;
+        let response = registry.create_repository("worker").await.unwrap();
+        assert_eq!(response.name, "acme-prod-artifacts-images-worker");
+        let request = requests.recv().await.unwrap();
+        assert_eq!(request["repositoryName"], response.name);
+        assert_eq!(
+            request["tags"],
+            json!([{ "Key": ALIEN_STACK_TAG_KEY, "Value": "acme-prod" }])
+        );
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn existing_repositories_are_not_retagged_on_conflict() {
+        let (registry, mut requests, server) = registry(Some("acme-prod"), true).await;
+        assert_eq!(
+            registry.create_repository("worker").await.unwrap().name,
+            "acme-prod-artifacts-images-worker"
+        );
+        requests.recv().await.unwrap();
+        assert!(requests.try_recv().is_err());
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn legacy_bindings_require_setup_refresh_before_creating_repositories() {
+        let (registry, mut requests, server) = registry(None, false).await;
+        assert_eq!(
+            registry.upstream_repository_prefix(),
+            "acme-prod-artifacts-images"
+        );
+        let error = registry.create_repository("worker").await.unwrap_err();
+        assert!(error.message.contains("refresh the deployment setup"));
+        assert!(requests.try_recv().is_err());
+        server.abort();
+        let _ = server.await;
+    }
 
     #[test]
     fn lookup_tries_the_routable_name_before_the_logical_one() {

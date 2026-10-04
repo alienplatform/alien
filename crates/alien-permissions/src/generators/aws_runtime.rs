@@ -2,7 +2,10 @@ use std::collections::HashSet;
 
 use crate::{
     error::{ErrorData, Result},
-    generators::labels::{entry_pascal_label, has_explicit_label},
+    generators::{
+        aws_deployment_scope::condition_template,
+        labels::{entry_pascal_label, has_explicit_label},
+    },
     variables::VariableInterpolator,
     BindingTarget, PermissionContext,
 };
@@ -139,7 +142,10 @@ impl AwsRuntimePermissionsGenerator {
                 &binding_spec.not_resources,
                 context,
             )?;
-            let conditions = self.extract_conditions(binding_spec, context)?;
+            let conditions = self.extract_conditions(
+                condition_template(&platform_permission.effect, binding_spec),
+                context,
+            )?;
 
             let statement_id = self.statement_id(
                 permission_set,
@@ -170,13 +176,13 @@ impl AwsRuntimePermissionsGenerator {
         })
     }
 
-    /// Extract AWS conditions from binding spec
+    /// Interpolate a statement's condition template
     fn extract_conditions(
         &self,
-        binding_spec: &alien_core::AwsBindingSpec,
+        condition_template: Option<IndexMap<String, IndexMap<String, String>>>,
         context: &PermissionContext,
     ) -> Result<IndexMap<String, IndexMap<String, String>>> {
-        if let Some(condition_template) = &binding_spec.condition {
+        if let Some(condition_template) = &condition_template {
             let mut interpolated_conditions = IndexMap::new();
 
             for (condition_key, condition_values) in condition_template {
