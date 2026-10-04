@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 pub struct EcrArtifactRegistryBinding {
     /// Repository prefix for this registry (used to construct ECR repository names)
     pub repository_prefix: BindingValue<String>,
+    /// Deployment tag applied to newly created repositories.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment_prefix: Option<BindingValue<String>>,
     /// ARN of the IAM role for pull permissions (optional — omit for single-account)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_role_arn: Option<BindingValue<String>>,
@@ -88,6 +91,7 @@ impl ArtifactRegistryBinding {
     ) -> Self {
         Self::Ecr(EcrArtifactRegistryBinding {
             repository_prefix: repository_prefix.into(),
+            deployment_prefix: None,
             pull_role_arn: pull_role_arn.map(|v| v.into()),
             push_role_arn: push_role_arn.map(|v| v.into()),
         })

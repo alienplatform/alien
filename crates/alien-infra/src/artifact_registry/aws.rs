@@ -10,9 +10,9 @@ use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi};
 use alien_core::{
     standard_resource_tags, ArtifactRegistry, ArtifactRegistryHeartbeatData,
     ArtifactRegistryHeartbeatStatus, ArtifactRegistryOutputs, AwsEcrArtifactRegistryHeartbeatData,
-    AwsEcrRepositoryHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
-    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
-    ResourceStatus, ALIEN_STACK_TAG_KEY,
+    AwsEcrRepositoryHeartbeatData, HeartbeatBackend, InitialSetupAuthority, ObservedHealth,
+    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceLifecycle,
+    ResourceOutputs, ResourceStatus, ALIEN_STACK_TAG_KEY,
 };
 
 use alien_aws_clients::aws::ecr::{
@@ -48,6 +48,8 @@ pub struct AwsArtifactRegistryController {
     pub(crate) push_role_arn: Option<String>,
     /// The repository prefix (resource id)
     pub(crate) repository_prefix: Option<String>,
+    /// Deployment identity for tagging newly created repositories.
+    pub(crate) deployment_prefix: Option<String>,
 }
 
 #[controller]
@@ -73,6 +75,7 @@ impl AwsArtifactRegistryController {
 
         // Store the repository prefix using resource_prefix-config.id pattern
         self.repository_prefix = Some(format!("{}-{}", ctx.resource_prefix, config.id));
+        self.deployment_prefix = Some(ctx.resource_prefix.to_string());
 
         info!(
             registry_id = %config.id,
@@ -531,6 +534,7 @@ impl AwsArtifactRegistryController {
             role_name = %push_role_name,
             "Push role policy updated successfully"
         );
+        self.deployment_prefix = Some(ctx.resource_prefix.to_string());
 
         Ok(HandlerAction::Continue {
             state: UpdatingReplication,
@@ -897,11 +901,14 @@ impl AwsArtifactRegistryController {
         use alien_core::bindings::ArtifactRegistryBinding;
 
         if let Some(repository_prefix) = &self.repository_prefix {
-            let binding = ArtifactRegistryBinding::ecr(
+            let mut binding = ArtifactRegistryBinding::ecr(
                 repository_prefix.clone(),
                 self.pull_role_arn.clone(),
                 self.push_role_arn.clone(),
             );
+            if let ArtifactRegistryBinding::Ecr(config) = &mut binding {
+                config.deployment_prefix = self.deployment_prefix.clone().map(Into::into);
+            }
 
             Ok(Some(
                 serde_json::to_value(binding).into_alien_error().context(
@@ -914,6 +921,27 @@ impl AwsArtifactRegistryController {
         } else {
             Ok(None)
         }
+    }
+
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        if self.repository_prefix.is_none() || self.deployment_prefix.is_some() {
+            return Ok(false);
+        }
+        let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
+        Ok(
+            match ctx
+                .state
+                .resources
+                .get(&config.id)
+                .and_then(|entry| entry.lifecycle)
+            {
+                Some(ResourceLifecycle::Live) => true,
+                Some(ResourceLifecycle::Frozen) => {
+                    ctx.initial_setup_authority == InitialSetupAuthority::DirectSetup
+                }
+                None => false,
+            },
+        )
     }
 }
 
@@ -1261,11 +1289,23 @@ impl AwsArtifactRegistryController {
                         "ecr:DescribeRepositories",
                         "ecr:DescribeImages",
                         "ecr:ListImages",
-                        "ecr:CreateRepository",
                         "ecr:DeleteRepository"
                     ],
                     "Resource": format!("arn:aws:ecr:{}:{}:repository/{}-{}-*", aws_cfg.region, aws_cfg.account_id, ctx.resource_prefix, registry_id),
                     "Condition": own_repositories_condition(ctx.resource_prefix)
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": ["ecr:CreateRepository", "ecr:TagResource"],
+                    "Resource": format!("arn:aws:ecr:{}:{}:repository/{}-{}-*", aws_cfg.region, aws_cfg.account_id, ctx.resource_prefix, registry_id),
+                    "Condition": {
+                        "StringEquals": {
+                            format!("aws:RequestTag/{ALIEN_STACK_TAG_KEY}"): ctx.resource_prefix
+                        },
+                        "StringEqualsIfExists": {
+                            format!("aws:ResourceTag/{ALIEN_STACK_TAG_KEY}"): ctx.resource_prefix
+                        }
+                    }
                 }
             ]
         });
@@ -1283,6 +1323,7 @@ impl AwsArtifactRegistryController {
             pull_role_arn: Some(format!("arn:aws:iam::{}:role/test-pull-role", account_id)),
             push_role_arn: Some(format!("arn:aws:iam::{}:role/test-push-role", account_id)),
             repository_prefix: Some("test-artifact-registry".to_string()),
+            deployment_prefix: Some("test".to_string()),
             _internal_stay_count: None,
         }
     }
@@ -1373,6 +1414,7 @@ fn emit_aws_artifact_registry_heartbeat(
 mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
+    use crate::core::ResourceController;
     use crate::MockPlatformServiceProvider;
     use alien_aws_clients::iam::{
         AttachedPolicies, CreateRoleResponse, CreateRoleResult, ListAttachedRolePoliciesResponse,
@@ -1415,9 +1457,10 @@ mod tests {
             .returning(|request| Ok(create_successful_role_response(&request.role_name)));
 
         // Mock successful policy attachment
-        mock_iam
-            .expect_put_role_policy()
-            .returning(|_, _, _| Ok(()));
+        mock_iam.expect_put_role_policy().returning(|_, _, policy| {
+            assert_repository_policy_boundary(policy);
+            Ok(())
+        });
 
         // Mock successful policy deletion (for both roles)
         mock_iam
@@ -1458,9 +1501,10 @@ mod tests {
             .returning(|request| Ok(create_successful_role_response(&request.role_name)));
 
         // Mock successful policy attachment (for both create and update)
-        mock_iam
-            .expect_put_role_policy()
-            .returning(|_, _, _| Ok(()));
+        mock_iam.expect_put_role_policy().returning(|_, _, policy| {
+            assert_repository_policy_boundary(policy);
+            Ok(())
+        });
 
         // Mock successful trust policy update (for updates)
         mock_iam
@@ -1468,6 +1512,64 @@ mod tests {
             .returning(|_, _| Ok(()));
 
         Arc::new(mock_iam)
+    }
+
+    fn assert_repository_policy_boundary(policy: &str) {
+        let policy: serde_json::Value = serde_json::from_str(policy).unwrap();
+        let permits =
+            |action: &str, existing: Option<&str>, requested: Option<&str>| {
+                policy["Statement"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|statement| {
+                        let actions = statement["Action"].as_array().unwrap();
+                        if !actions.iter().any(|candidate| candidate == action) {
+                            return false;
+                        }
+                        statement["Condition"].as_object().unwrap().iter().all(
+                            |(operator, values)| {
+                                values.as_object().unwrap().iter().all(|(key, value)| {
+                                    let actual = if key.starts_with("aws:ResourceTag/") {
+                                        existing
+                                    } else {
+                                        requested
+                                    };
+                                    match actual {
+                                        Some(actual) => value == actual,
+                                        None => operator == "StringEqualsIfExists",
+                                    }
+                                })
+                            },
+                        )
+                    })
+            };
+        assert!(permits("ecr:BatchGetImage", Some("test"), None));
+        assert!(
+            permits("ecr:BatchGetImage", None, None),
+            "legacy untagged access remains compatible"
+        );
+        assert!(!permits("ecr:BatchGetImage", Some("test-prod"), None));
+        let push = policy["Statement"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|statement| {
+                statement["Action"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|action| action == "ecr:PutImage")
+            });
+        for action in ["ecr:CreateRepository", "ecr:TagResource"] {
+            assert_eq!(permits(action, None, Some("test")), push);
+            assert!(!permits(action, None, None));
+            assert!(!permits(action, None, Some("test-prod")));
+            assert!(
+                !permits(action, Some("test-prod"), Some("test")),
+                "foreign resources cannot be retagged"
+            );
+        }
     }
 
     fn setup_mock_service_provider(mock_iam: Arc<MockIamApi>) -> Arc<MockPlatformServiceProvider> {
@@ -1586,6 +1688,7 @@ mod tests {
             pull_role_arn: Some("arn:aws:iam::123456789012:role/short-registry-pull".to_string()),
             push_role_arn: Some("arn:aws:iam::123456789012:role/short-registry-push".to_string()),
             repository_prefix: Some("test-registry".to_string()),
+            deployment_prefix: Some("test".to_string()),
             _internal_stay_count: None,
         };
 
@@ -1632,5 +1735,101 @@ mod tests {
         executor.update(registry).unwrap();
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn legacy_repository_metadata_updates_only_under_its_owner() {
+        for (lifecycle, authority, expected) in [
+            (
+                ResourceLifecycle::Live,
+                InitialSetupAuthority::ImportedHandoff,
+                true,
+            ),
+            (
+                ResourceLifecycle::Frozen,
+                InitialSetupAuthority::DirectSetup,
+                true,
+            ),
+            (
+                ResourceLifecycle::Frozen,
+                InitialSetupAuthority::ImportedHandoff,
+                false,
+            ),
+        ] {
+            let registry = basic_artifact_registry();
+            let mut controller =
+                AwsArtifactRegistryController::mock_ready("123456789012", "us-east-1");
+            controller.deployment_prefix = None;
+            let mock_provider =
+                setup_mock_service_provider(setup_mock_client_for_creation_and_update());
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(registry.clone())
+                .controller(controller)
+                .platform(Platform::Aws)
+                .resource_lifecycle(lifecycle)
+                .initial_setup_authority(authority)
+                .service_provider(mock_provider)
+                .with_test_dependencies()
+                .build()
+                .await
+                .unwrap();
+            assert_eq!(executor.needs_update().unwrap(), expected);
+            if expected {
+                executor.update(registry).unwrap();
+                executor.run_until_terminal().await.unwrap();
+                assert!(!executor.needs_update().unwrap());
+                let binding = executor
+                    .internal_state::<AwsArtifactRegistryController>()
+                    .unwrap()
+                    .get_binding_params()
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(binding["deploymentPrefix"], "test");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_policy_migration_keeps_repository_metadata_pending() {
+        let mut iam = MockIamApi::new();
+        iam.expect_update_assume_role_policy()
+            .returning(|_, _| Ok(()));
+        iam.expect_put_role_policy().returning(|role_name, _, _| {
+            if role_name.ends_with("-push") {
+                Err(AlienError::new(
+                    alien_client_core::ErrorData::RemoteAccessDenied {
+                        resource_type: "IAM role".to_string(),
+                        resource_name: role_name.to_string(),
+                    },
+                ))
+            } else {
+                Ok(())
+            }
+        });
+        let registry = basic_artifact_registry();
+        let mut controller = AwsArtifactRegistryController::mock_ready("123456789012", "us-east-1");
+        controller.deployment_prefix = None;
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(registry.clone())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(Arc::new(iam)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.update(registry).unwrap();
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("policy migration must propagate IAM failures");
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+        assert_ne!(executor.status(), ResourceStatus::Running);
+        assert!(executor.needs_update().unwrap());
+        assert!(executor
+            .internal_state::<AwsArtifactRegistryController>()
+            .unwrap()
+            .deployment_prefix
+            .is_none());
     }
 }

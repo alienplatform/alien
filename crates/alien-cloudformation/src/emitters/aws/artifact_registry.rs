@@ -75,6 +75,7 @@ impl CfEmitter for AwsArtifactRegistryEmitter {
                 CfExpression::sub("${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}"),
             ),
             ("repositoryPrefix", stack_name(registry.id())),
+            ("deploymentPrefix", CfExpression::ref_("AWS::StackName")),
             ("pullRoleArn", CfExpression::get_att(pull_role_id, "Arn")),
             ("pushRoleArn", CfExpression::get_att(push_role_id, "Arn")),
         ]))
@@ -88,6 +89,7 @@ impl CfEmitter for AwsArtifactRegistryEmitter {
         Ok(Some(CfExpression::object([
             ("service", CfExpression::from("ecr")),
             ("repositoryPrefix", stack_name(registry.id())),
+            ("deploymentPrefix", CfExpression::ref_("AWS::StackName")),
             ("pullRoleArn", CfExpression::get_att(pull_role_id, "Arn")),
             ("pushRoleArn", CfExpression::get_att(push_role_id, "Arn")),
         ])))
@@ -172,7 +174,6 @@ fn ecr_policy_document(ctx: &EmitContext<'_>, push: bool) -> Result<CfExpression
     if push {
         repository_actions.extend([
             "ecr:CompleteLayerUpload",
-            "ecr:CreateRepository",
             "ecr:DeleteRepository",
             "ecr:InitiateLayerUpload",
             "ecr:PutImage",
@@ -180,47 +181,68 @@ fn ecr_policy_document(ctx: &EmitContext<'_>, push: bool) -> Result<CfExpression
         ]);
     }
 
-    Ok(CfExpression::object([
-        ("Version", CfExpression::from("2012-10-17")),
-        (
-            "Statement",
-            CfExpression::list([
-                CfExpression::object([
-                    ("Sid", CfExpression::from("GetAuthorizationToken")),
-                    ("Effect", CfExpression::from("Allow")),
-                    ("Action", CfExpression::from("ecr:GetAuthorizationToken")),
-                    ("Resource", CfExpression::from("*")),
+    let resources = CfExpression::list([
+        CfExpression::get_att(repository_id, "Arn"),
+        CfExpression::sub(format!(
+            "arn:${{AWS::Partition}}:ecr:${{AWS::Region}}:${{AWS::AccountId}}:repository/${{AWS::StackName}}-{}-*",
+            registry.id()
+        )),
+    ]);
+    let existing_tag = CfExpression::object([(
+        format!("aws:ResourceTag/{ALIEN_STACK_TAG_KEY}"),
+        CfExpression::ref_("AWS::StackName"),
+    )]);
+    let mut statements = vec![
+        CfExpression::object([
+            ("Sid", CfExpression::from("GetAuthorizationToken")),
+            ("Effect", CfExpression::from("Allow")),
+            ("Action", CfExpression::from("ecr:GetAuthorizationToken")),
+            ("Resource", CfExpression::from("*")),
+        ]),
+        CfExpression::object([
+            ("Sid", CfExpression::from("RepositoryAccess")),
+            ("Effect", CfExpression::from("Allow")),
+            (
+                "Action",
+                CfExpression::list(repository_actions.into_iter().map(CfExpression::from)),
+            ),
+            ("Resource", resources.clone()),
+            (
+                "Condition",
+                CfExpression::object([("StringEqualsIfExists", existing_tag.clone())]),
+            ),
+        ]),
+    ];
+    if push {
+        statements.push(CfExpression::object([
+            ("Sid", CfExpression::from("TaggedRepositoryCreation")),
+            ("Effect", CfExpression::from("Allow")),
+            (
+                "Action",
+                CfExpression::list([
+                    CfExpression::from("ecr:CreateRepository"),
+                    CfExpression::from("ecr:TagResource"),
                 ]),
+            ),
+            ("Resource", resources),
+            (
+                "Condition",
                 CfExpression::object([
-                    ("Sid", CfExpression::from("RepositoryAccess")),
-                    ("Effect", CfExpression::from("Allow")),
                     (
-                        "Action",
-                        CfExpression::list(repository_actions.into_iter().map(CfExpression::from)),
-                    ),
-                    (
-                        "Resource",
-                        CfExpression::list([
-                            CfExpression::get_att(repository_id, "Arn"),
-                            CfExpression::sub(format!(
-                                "arn:${{AWS::Partition}}:ecr:${{AWS::Region}}:${{AWS::AccountId}}:repository/${{AWS::StackName}}-{}-*",
-                                registry.id()
-                            )),
-                        ]),
-                    ),
-                    (
-                        "Condition",
+                        "StringEquals",
                         CfExpression::object([(
-                            "StringEqualsIfExists",
-                            CfExpression::object([(
-                                format!("aws:ResourceTag/{ALIEN_STACK_TAG_KEY}"),
-                                CfExpression::ref_("AWS::StackName"),
-                            )]),
+                            format!("aws:RequestTag/{ALIEN_STACK_TAG_KEY}"),
+                            CfExpression::ref_("AWS::StackName"),
                         )]),
                     ),
+                    ("StringEqualsIfExists", existing_tag),
                 ]),
-            ]),
-        ),
+            ),
+        ]));
+    }
+    Ok(CfExpression::object([
+        ("Version", CfExpression::from("2012-10-17")),
+        ("Statement", CfExpression::list(statements)),
     ]))
 }
 

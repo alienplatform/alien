@@ -9,7 +9,9 @@ use crate::{
     },
     expr,
 };
-use alien_core::{import::EmitContext, ArtifactRegistry, Result, ServiceAccount};
+use alien_core::{
+    import::EmitContext, ArtifactRegistry, Result, ServiceAccount, ALIEN_STACK_TAG_KEY,
+};
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -104,6 +106,7 @@ impl TfEmitter for AwsArtifactRegistryEmitter {
                 "repositoryPrefix",
                 expr::template(format!("${{local.resource_prefix}}-{}", registry.id())),
             ),
+            ("deploymentPrefix", expr::traversal(["local", "resource_prefix"])),
             (
                 "pullRoleArn",
                 expr::traversal(["aws_iam_role", &format!("{label}_pull"), "arn"]),
@@ -123,6 +126,10 @@ impl TfEmitter for AwsArtifactRegistryEmitter {
             (
                 "repositoryPrefix",
                 expr::template(format!("${{local.resource_prefix}}-{}", registry.id())),
+            ),
+            (
+                "deploymentPrefix",
+                expr::traversal(["local", "resource_prefix"]),
             ),
             (
                 "pullRoleArn",
@@ -170,7 +177,6 @@ fn ecr_role_policy(repo_label: &str, role_label: &str, push: bool) -> hcl::struc
     if push {
         for action in [
             "ecr:CompleteLayerUpload",
-            "ecr:CreateRepository",
             "ecr:DeleteRepository",
             "ecr:InitiateLayerUpload",
             "ecr:PutImage",
@@ -180,39 +186,73 @@ fn ecr_role_policy(repo_label: &str, role_label: &str, push: bool) -> hcl::struc
         }
     }
 
+    let resources = Expression::Array(vec![
+        expr::traversal(["aws_ecr_repository", repo_label, "arn"]),
+        expr::raw(format!(
+            "format(\"%s-*\", aws_ecr_repository.{repo_label}.arn)"
+        )),
+    ]);
+    let existing_tag = expr::object([(
+        format!("aws:ResourceTag/{ALIEN_STACK_TAG_KEY}"),
+        expr::traversal(["local", "resource_prefix"]),
+    )]);
+    let mut statements = vec![
+        expr::object([
+            (
+                "Sid",
+                Expression::String("GetAuthorizationToken".to_string()),
+            ),
+            ("Effect", Expression::String("Allow".to_string())),
+            (
+                "Action",
+                Expression::String("ecr:GetAuthorizationToken".to_string()),
+            ),
+            ("Resource", Expression::String("*".to_string())),
+        ]),
+        expr::object([
+            ("Sid", Expression::String("RepositoryAccess".to_string())),
+            ("Effect", Expression::String("Allow".to_string())),
+            ("Action", Expression::Array(actions)),
+            ("Resource", resources.clone()),
+            (
+                "Condition",
+                expr::object([("StringEqualsIfExists", existing_tag.clone())]),
+            ),
+        ]),
+    ];
+    if push {
+        statements.push(expr::object([
+            (
+                "Sid",
+                Expression::String("TaggedRepositoryCreation".to_string()),
+            ),
+            ("Effect", Expression::String("Allow".to_string())),
+            (
+                "Action",
+                Expression::Array(vec![
+                    Expression::String("ecr:CreateRepository".to_string()),
+                    Expression::String("ecr:TagResource".to_string()),
+                ]),
+            ),
+            ("Resource", resources),
+            (
+                "Condition",
+                expr::object([
+                    (
+                        "StringEquals",
+                        expr::object([(
+                            format!("aws:RequestTag/{ALIEN_STACK_TAG_KEY}"),
+                            expr::traversal(["local", "resource_prefix"]),
+                        )]),
+                    ),
+                    ("StringEqualsIfExists", existing_tag),
+                ]),
+            ),
+        ]));
+    }
     let policy = jsonencode(expr::object([
         ("Version", Expression::String("2012-10-17".to_string())),
-        (
-            "Statement",
-            Expression::Array(vec![
-                expr::object([
-                    (
-                        "Sid",
-                        Expression::String("GetAuthorizationToken".to_string()),
-                    ),
-                    ("Effect", Expression::String("Allow".to_string())),
-                    (
-                        "Action",
-                        Expression::String("ecr:GetAuthorizationToken".to_string()),
-                    ),
-                    ("Resource", Expression::String("*".to_string())),
-                ]),
-                expr::object([
-                    ("Sid", Expression::String("RepositoryAccess".to_string())),
-                    ("Effect", Expression::String("Allow".to_string())),
-                    ("Action", Expression::Array(actions)),
-                    (
-                        "Resource",
-                        Expression::Array(vec![
-                            expr::traversal(["aws_ecr_repository", repo_label, "arn"]),
-                            expr::raw(format!(
-                                "format(\"%s-*\", aws_ecr_repository.{repo_label}.arn)"
-                            )),
-                        ]),
-                    ),
-                ]),
-            ]),
-        ),
+        ("Statement", Expression::Array(statements)),
     ]));
 
     resource_block(

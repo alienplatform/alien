@@ -187,7 +187,6 @@ Resources:
             - ecr:GetDownloadUrlForLayer
             - ecr:ListImages
             - ecr:CompleteLayerUpload
-            - ecr:CreateRepository
             - ecr:DeleteRepository
             - ecr:InitiateLayerUpload
             - ecr:PutImage
@@ -198,6 +197,23 @@ Resources:
               - Arn
             - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
             Condition:
+              StringEqualsIfExists:
+                aws:ResourceTag/deployment:
+                  Ref: AWS::StackName
+          - Sid: TaggedRepositoryCreation
+            Effect: Allow
+            Action:
+            - ecr:CreateRepository
+            - ecr:TagResource
+            Resource:
+            - Fn::GetAtt:
+              - RegistryRepository
+              - Arn
+            - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
+            Condition:
+              StringEquals:
+                aws:RequestTag/deployment:
+                  Ref: AWS::StackName
               StringEqualsIfExists:
                 aws:ResourceTag/deployment:
                   Ref: AWS::StackName
@@ -276,6 +292,8 @@ Outputs:
             Fn::Sub: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}
           repositoryPrefix:
             Fn::Sub: ${AWS::StackName}-registry
+          deploymentPrefix:
+            Ref: AWS::StackName
           pullRoleArn:
             Fn::GetAtt:
             - RegistryPullRole
