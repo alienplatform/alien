@@ -685,6 +685,75 @@ mod tests {
         ReconcileRequest,
     };
 
+    #[tokio::test]
+    async fn completed_receipt_recovery_returns_only_an_acknowledgment() {
+        let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+        store
+            .expect_acknowledge_completed_execution()
+            .times(2)
+            .withf(|_, deployment, session, claim| {
+                deployment == "dep_test"
+                    && session == "session_test"
+                    && claim.operation_id == "operation_test"
+                    && claim.attempt_id == "attempt_test"
+            })
+            .returning(|_, _, _, _| Ok(true));
+        let request: AgentSyncRequest = serde_json::from_value(json!({
+            "deploymentId": "dep_test", "session": "session_test",
+            "supportsExecutionClaims": true,
+            "executionClaim": { "operationId": "operation_test", "attemptId": "attempt_test" },
+            "currentState": { "status": "running" },
+        }))
+        .expect("valid replay request");
+        for error in ["DEPLOYMENT_UPDATE_CLAIM_LOST", "DEPLOYMENT_LEASE_LOST"] {
+            let response = super::acknowledge_completed_claim(
+                &store,
+                &crate::auth::Subject::system(),
+                &request,
+                error,
+            )
+            .await
+            .expect("acknowledge completed receipt")
+            .expect("successful recovery");
+            assert_eq!(
+                serde_json::to_value(response).expect("serialize acknowledgment"),
+                json!({})
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unrelated_errors_and_uncompleted_claims_are_not_acknowledged() {
+        let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+        store
+            .expect_acknowledge_completed_execution()
+            .times(1)
+            .returning(|_, _, _, _| Ok(false));
+        let request: AgentSyncRequest = serde_json::from_value(json!({
+            "deploymentId": "dep_test", "session": "session_test",
+            "executionClaim": { "operationId": "operation_test", "attemptId": "attempt_test" },
+        }))
+        .expect("valid request");
+        assert!(super::acknowledge_completed_claim(
+            &store,
+            &crate::auth::Subject::system(),
+            &request,
+            "SYNC_FAILED"
+        )
+        .await
+        .expect("unrelated error")
+        .is_none());
+        assert!(super::acknowledge_completed_claim(
+            &store,
+            &crate::auth::Subject::system(),
+            &request,
+            "DEPLOYMENT_UPDATE_CLAIM_LOST"
+        )
+        .await
+        .expect("live claim is not recovered")
+        .is_none());
+    }
+
     #[test]
     fn release_stack_platform_keeps_imported_kubernetes_deployment_platform() {
         assert_eq!(
@@ -1505,6 +1574,40 @@ async fn reconcile_agent_report(
         ("bearer" = [])
     )
 ))]
+/// A completed receipt grants no authority to replay a report or take new work.
+async fn acknowledge_completed_claim(
+    store: &dyn crate::traits::DeploymentStore,
+    subject: &auth::Subject,
+    request: &AgentSyncRequest,
+    error_code: &str,
+) -> Result<Option<AgentSyncResponse>, alien_error::AlienError> {
+    if !matches!(
+        error_code,
+        "DEPLOYMENT_LEASE_LOST" | "DEPLOYMENT_UPDATE_CLAIM_LOST"
+    ) {
+        return Ok(None);
+    }
+    let Some(claim) = request.execution_claim.as_ref() else {
+        return Ok(None);
+    };
+    if !store
+        .acknowledge_completed_execution(subject, &request.deployment_id, &request.session, claim)
+        .await?
+    {
+        return Ok(None);
+    }
+    Ok(Some(AgentSyncResponse {
+        execution_claim: None,
+        current_state: None,
+        target: None,
+        commands_url: None,
+        target_operations_bundle_set: None,
+        target_dynamic_containers: None,
+        tunnel_url: None,
+        target_operator_image: None,
+    }))
+}
+
 async fn agent_sync(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1558,6 +1661,18 @@ async fn agent_sync(
             )
             .await
         {
+            match acknowledge_completed_claim(
+                state.deployment_store.as_ref(),
+                &subject,
+                &req,
+                &error.code,
+            )
+            .await
+            {
+                Ok(Some(response)) => return Json(response).into_response(),
+                Ok(None) => {}
+                Err(ack_error) => return ack_error.into_response(),
+            }
             return error.into_response();
         }
     }
