@@ -62,6 +62,8 @@ port_check = { workspace = true }
 
 # OCI image extraction
 dockdash = { workspace = true }
+# Reads the OCI archive index to identify loaded images
+tar = { workspace = true }
 
 # HTTP client
 reqwest = { workspace = true, features = ["json"] }
