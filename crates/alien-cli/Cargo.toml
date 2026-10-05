@@ -98,6 +98,7 @@ toml = "0.9"
 crossterm = { workspace = true }
 
 [dev-dependencies]
+httpmock = { workspace = true }
 http = { workspace = true }
 snapbox = "0.6.0"
 predicates = "3.0.4"
