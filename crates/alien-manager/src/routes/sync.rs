@@ -1455,6 +1455,7 @@ mod tests {
             manager_url: None,
             deployment_token: None,
             native_image_host: None,
+            volume_restores: Vec::new(),
         }
     }
 
@@ -2270,6 +2271,11 @@ fn build_target_deployment_config(
         .maybe_manager_url(Some(manager_url))
         .maybe_deployment_token(agent_token)
         .maybe_native_image_host(native_image_host)
+        .volume_restores(
+            deployment_config
+                .map(|config| config.volume_restores.clone())
+                .unwrap_or_default(),
+        )
         .build()
 }
 

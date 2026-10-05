@@ -34,6 +34,7 @@ use utoipa::OpenApi;
     PersistentStorage,
     VolumeBackups,
     VolumeOutput,
+    VolumeRestoreOutput,
     KubernetesSecretMount,
     KubernetesHttpProbe,
     ContainerSecurity,

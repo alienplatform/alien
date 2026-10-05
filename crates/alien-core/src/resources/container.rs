@@ -651,6 +651,24 @@ pub struct VolumeOutput {
     /// When the latest completed snapshot was started (RFC 3339)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_snapshot_at: Option<String>,
+    /// The latest volume restore performed on this ordinal, if any
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_restore: Option<VolumeRestoreOutput>,
+}
+
+/// A completed volume restore.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeRestoreOutput {
+    /// ID of the restore request
+    pub request_id: String,
+    /// Snapshot the volume was restored from
+    pub snapshot_id: String,
+    /// Snapshot of the replaced volume, taken just before it was deleted
+    pub replaced_volume_snapshot_id: String,
+    /// When the restored volume was put in place (RFC 3339)
+    pub completed_at: String,
 }
 
 impl ResourceOutputsDefinition for ContainerOutputs {
