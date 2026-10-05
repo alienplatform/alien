@@ -200,6 +200,16 @@ impl ComputeClusterMutation {
                 },
             ));
         }
+        let target_refs: std::collections::HashMap<_, _> = stack
+            .resources
+            .iter()
+            .map(|(id, entry)| {
+                (
+                    id.clone(),
+                    ResourceRef::new(entry.config.resource_type(), id.clone()),
+                )
+            })
+            .collect();
         for entry in stack.resources.values_mut() {
             let Some(cluster) = entry.config.downcast_mut::<ComputeCluster>() else {
                 continue;
@@ -207,7 +217,19 @@ impl ComputeClusterMutation {
             let Some(profile) = &mut cluster.node_permissions else {
                 continue;
             };
-            for references in profile.0.values_mut() {
+            for (target_id, references) in &mut profile.0 {
+                let target = target_refs.get(target_id).ok_or_else(|| {
+                    AlienError::new(crate::error::ErrorData::StackMutationFailed {
+                        mutation_name: self.description().to_string(),
+                        message: format!("Node permission target '{target_id}' does not exist"),
+                        resource_id: Some(cluster.id.clone()),
+                    })
+                })?;
+                // Node grants are applied by the cluster after the target is ready.
+                // The runner validates the complete graph after dependency wiring.
+                if !entry.dependencies.contains(target) {
+                    entry.dependencies.push(target.clone());
+                }
                 for reference in references {
                     let set = reference
                         .resolve(|name| alien_permissions::get_permission_set(name).cloned())
@@ -1099,6 +1121,170 @@ mod tests {
             })
             .permissions("test".to_string())
             .build()
+    }
+
+    fn node_dependency_stack() -> Stack {
+        let storage = alien_core::Storage::new("objects".to_string()).build();
+        let daemon = Daemon::new("app".to_string())
+            .code(DaemonCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .cluster("compute".to_string())
+            .permissions("reader".to_string())
+            .link(&storage)
+            .build();
+        let mut stack = Stack::new("example".to_string())
+            .add(
+                Network::new("network".to_string())
+                    .settings(NetworkSettings::Create {
+                        cidr: None,
+                        availability_zones: 2,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(storage, ResourceLifecycle::Frozen)
+            .add(
+                ComputeCluster::new("compute".to_string())
+                    .node_permissions(
+                        alien_core::PermissionProfile::new()
+                            .resource("objects", ["storage/data-read"]),
+                    )
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(daemon, ResourceLifecycle::Live)
+            .permission(
+                "reader",
+                alien_core::PermissionProfile::new().resource("objects", ["storage/data-read"]),
+            )
+            .build();
+        stack.resources.get_mut("compute").unwrap().dependencies =
+            vec![ResourceRef::new(Network::RESOURCE_TYPE, "network")];
+        stack
+    }
+
+    fn node_dependency_runner() -> crate::PreflightRunner {
+        let mut registry = crate::PreflightRegistry::new();
+        registry.add_mutation(Box::new(ComputeClusterMutation));
+        registry.add_mutation(Box::new(crate::mutations::ServiceAccountMutation));
+        registry.add_mutation(Box::new(
+            crate::mutations::ServiceAccountDependenciesMutation,
+        ));
+        crate::PreflightRunner::with_registry(registry)
+    }
+
+    #[tokio::test]
+    async fn node_targets_preserve_typed_dependencies_profiles_and_links() {
+        let state = StackState::new(Platform::Gcp);
+        let mut config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        // External locations do not replace the declared resource's identity/type.
+        config.external_bindings.insert(
+            "objects",
+            alien_core::ExternalBinding::Storage(alien_core::StorageBinding::gcs(
+                "existing-objects",
+            )),
+        );
+        let stack = node_dependency_stack();
+        let profiles = stack.permissions.clone();
+        let app = stack.resources["app"].config.clone();
+        let runner = node_dependency_runner();
+        let prepared = runner
+            .apply_mutations(stack, &state, &config)
+            .await
+            .unwrap();
+        assert_eq!(
+            prepared.resources["compute"].dependencies,
+            vec![
+                ResourceRef::new(Network::RESOURCE_TYPE, "network"),
+                ResourceRef::new(alien_core::Storage::RESOURCE_TYPE, "objects"),
+            ]
+        );
+        assert_eq!(
+            prepared.resources["objects"].dependencies,
+            vec![ResourceRef::new(
+                alien_core::ServiceAccount::RESOURCE_TYPE,
+                "reader-sa"
+            )]
+        );
+        assert!(prepared.resources["reader-sa"].dependencies.is_empty());
+        assert_eq!(prepared.permissions, profiles);
+        assert_eq!(prepared.resources["app"].config, app);
+        let check = crate::compile_time::ValidResourceDependenciesCheck
+            .check(&prepared, Platform::Gcp)
+            .await
+            .unwrap();
+        assert!(check.success, "{:?}", check.errors);
+        let repeated = runner
+            .apply_mutations(prepared.clone(), &state, &config)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&repeated).unwrap(),
+            serde_json::to_value(&prepared).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn node_target_cycle_is_rejected_by_post_mutation_dependency_validation() {
+        let mut stack = node_dependency_stack();
+        stack
+            .resources
+            .get_mut("objects")
+            .unwrap()
+            .dependencies
+            .push(ResourceRef::new(ComputeCluster::RESOURCE_TYPE, "compute"));
+        assert!(
+            crate::compile_time::ValidResourceDependenciesCheck
+                .check(&stack, Platform::Gcp)
+                .await
+                .unwrap()
+                .success
+        );
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let error = node_dependency_runner()
+            .apply_mutations(stack, &StackState::new(Platform::Gcp), &config)
+            .await
+            .expect_err("node target creates a real cycle");
+        assert_eq!(error.code, "VALIDATION_FAILED");
+        assert!(format!("{error:?}").contains("POST_MUTATION_DEPENDENCY_INVALID"));
+    }
+
+    #[tokio::test]
+    async fn absent_node_grants_leave_existing_dependencies_unchanged() {
+        let mut stack = node_dependency_stack();
+        stack
+            .resources
+            .get_mut("compute")
+            .unwrap()
+            .config
+            .downcast_mut::<ComputeCluster>()
+            .unwrap()
+            .node_permissions = None;
+        let before = serde_json::to_value(&stack).unwrap();
+        let after = ComputeClusterMutation
+            .materialize_node_permissions(stack, Platform::Gcp)
+            .await
+            .unwrap();
+        assert_eq!(serde_json::to_value(&after).unwrap(), before);
     }
 
     #[tokio::test]

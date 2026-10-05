@@ -2118,26 +2118,43 @@ mod tests {
             .collect::<Vec<_>>();
         bindings[0].members = vec![member.to_string(), other.to_string()];
         let old_role = bindings[0].role.clone();
+        let owned_prefix = ResourcePermissionsHelper::gcp_stack_custom_role_name_prefix(&context);
+        assert!(old_role.starts_with(&owned_prefix));
+        let unrelated = Binding {
+            role: "projects/test-project/roles/unrelated_signer".to_string(),
+            members: vec![member.to_string()],
+            condition: None,
+        };
+        bindings.push(unrelated.clone());
         assert!(
             ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
                 &mut bindings,
                 vec![],
                 member,
+                &[owned_prefix.clone()],
                 &[],
-                &[old_role.clone()]
             )
         );
-        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings.len(), 2);
         assert_eq!(bindings[0].role, old_role);
         assert_eq!(bindings[0].members, vec![other]);
+        assert_eq!(
+            serde_json::to_value(&bindings[1]).unwrap(),
+            serde_json::to_value(&unrelated).unwrap()
+        );
+        let converged = bindings.clone();
         assert!(
             !ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
                 &mut bindings,
                 vec![],
                 member,
+                &[owned_prefix],
                 &[],
-                &[old_role]
             )
+        );
+        assert_eq!(
+            serde_json::to_value(&bindings).unwrap(),
+            serde_json::to_value(&converged).unwrap()
         );
     }
 
