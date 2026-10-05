@@ -1694,6 +1694,7 @@ impl KubernetesContainerController {
                 },
                 replicas: Vec::new(), // Replica details tracked separately
                 volumes: Vec::new(),
+                volume_backups: None,
                 public_endpoints: self
                     .public_endpoint
                     .effective_public_url()

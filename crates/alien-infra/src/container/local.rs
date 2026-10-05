@@ -678,6 +678,7 @@ impl LocalContainerController {
                 public_endpoints: local_public_endpoint_outputs(info),
                 replicas: Vec::new(), // TODO: Add replica status
                 volumes: Vec::new(),
+                volume_backups: None,
             })
         })
     }

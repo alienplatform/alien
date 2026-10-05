@@ -642,6 +642,36 @@ pub struct ContainerOutputs {
     /// Persistent volumes, one per replica ordinal, with their latest snapshot.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub volumes: Vec<VolumeOutput>,
+    /// Whether the persistent volumes' snapshot schedule is in place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume_backups: Option<VolumeBackupsStatus>,
+}
+
+/// Whether a container's snapshot schedule is in place.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeBackupsStatus {
+    /// Current state of the schedule
+    pub state: VolumeBackupsState,
+    /// What is missing when the state is `setupRequired`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// State of a container's snapshot schedule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum VolumeBackupsState {
+    /// The cloud's scheduler is taking snapshots.
+    Active,
+    /// Backups are turned off in the stack.
+    Disabled,
+    /// The deployment's management permissions predate volume backups. The
+    /// container keeps running without a schedule until the installation's
+    /// setup is updated; the controller then applies the schedule by itself.
+    SetupRequired,
 }
 
 /// A replica's persistent volume and its latest completed snapshot.

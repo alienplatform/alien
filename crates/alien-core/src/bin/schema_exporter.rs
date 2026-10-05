@@ -35,6 +35,8 @@ use utoipa::OpenApi;
     VolumeBackups,
     VolumeOutput,
     VolumeRestoreOutput,
+    VolumeBackupsStatus,
+    VolumeBackupsState,
     KubernetesSecretMount,
     KubernetesHttpProbe,
     ContainerSecurity,
