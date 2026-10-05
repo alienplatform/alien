@@ -36,6 +36,7 @@ async fn executor(image: &str) -> SingleControllerExecutor {
     }))
     .unwrap();
     SingleControllerExecutor::builder()
+        .real_delays()
         .resource(
             Sandbox::new("agents".to_string())
                 .code(SandboxCode::Image {
