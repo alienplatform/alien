@@ -11,6 +11,9 @@ import { PermissionSetSchema } from "./permission-set-schema.js";
  */
 export const ServiceAccountSchema = z.object({
     "id": z.string().describe("Identifier for the service account. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."),
+"resourcePermissionSets": z.optional(z.object({
+    
+    }).catchall(z.array(z.lazy(() => PermissionSetSchema).describe("A permission set that can be applied across different cloud platforms"))).describe("Resolved grants for concrete resource IDs, captured for setup comparison.")),
 get "stackPermissionSets"(){
                 return z.array(PermissionSetSchema.describe("A permission set that can be applied across different cloud platforms")).describe("Stack-level permission sets that apply to all resources in the stack.\nThese are derived from the \"*\" scope in the permission profile.\nResource-scoped permissions are handled by individual resource controllers.")
               }
