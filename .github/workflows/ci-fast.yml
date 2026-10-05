@@ -83,8 +83,11 @@ jobs:
               # The smoke test qualifies the published images, and its own harness
               # is what proves it fails loudly. Both run in this job.
               - 'scripts/smoke-sandbox-agent*'
+            # A dependency bump can break the full client, which workspace builds don't compile.
             platform_sdk:
               - 'client-sdks/platform/rust/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
             typescript:
               - 'mise*.toml'
               - 'rust-toolchain.toml'
