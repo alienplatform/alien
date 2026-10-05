@@ -490,7 +490,9 @@ jobs:
         uses: orhun/git-cliff-action@v4
         with:
           config: cliff.toml
-          args: --latest --strip header
+          # The release tag does not exist yet: render the commits since the
+          # previous tag under the new version.
+          args: --unreleased --tag v${{ needs.prepare.outputs.version }} --strip header
         env:
           OUTPUT: CHANGELOG-release.md
 
