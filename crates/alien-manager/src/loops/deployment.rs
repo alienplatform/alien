@@ -85,6 +85,7 @@ fn synthesize_byo_horizon_machine_image() -> Option<alien_core::HorizonMachineIm
     }
 
     Some(HorizonMachineImage {
+        runtime_isolation_generation: 0,
         channel: "byo".to_string(),
         machine_image_version: "byo-local".to_string(),
         horizond_version: "byo".to_string(),
