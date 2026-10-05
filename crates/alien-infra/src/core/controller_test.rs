@@ -595,6 +595,50 @@ impl SingleControllerExecutor {
     }
 
     /// Gets the current status of the controller.
+    /// Runs `f` with the controller context the next step would see, for
+    /// checks that are not steps (for example `needs_update`).
+    pub fn with_context<T>(&self, f: impl FnOnce(&ResourceControllerContext<'_>) -> T) -> T {
+        let desired_config = self
+            .desired_stack
+            .resources
+            .get(&self.resource_id)
+            .map(|entry| entry.config.clone())
+            .expect("the resource is in the desired stack");
+        let deployment_config = DeploymentConfig::builder()
+            .stack_settings(self.stack_settings.clone())
+            .maybe_management_config(self.management_config.clone())
+            .maybe_compute_backend(self.compute_backend.clone())
+            .environment_variables(self.environment_variables.clone())
+            .maybe_monitoring(self.monitoring.clone())
+            .external_bindings(self.external_bindings.clone())
+            .allow_frozen_changes(false)
+            .maybe_domain_metadata(self.domain_metadata.clone())
+            .maybe_public_endpoints(self.public_endpoints.clone())
+            .volume_restores(self.volume_restores.clone())
+            .manager_url("https://test-manager.alien.dev".to_string())
+            .deployment_token("test-deployment-token".to_string())
+            .build();
+        let context = ResourceControllerContext {
+            desired_config: &desired_config,
+            platform: self.platform,
+            client_config: self.client_config.clone(),
+            state: &self.stack_state,
+            resource_prefix: &self.resource_prefix,
+            registry: &self.registry,
+            desired_stack: &self.desired_stack,
+            service_provider: &self.service_provider,
+            deployment_config: &deployment_config,
+            initial_setup_authority: self.initial_setup_authority,
+            heartbeat_collector: HeartbeatCollector::default(),
+        };
+        f(&context)
+    }
+
+    /// Whether the controller asks for an update with an unchanged config.
+    pub fn needs_update(&self) -> Result<bool> {
+        self.with_context(|ctx| self.controller.needs_update(ctx))
+    }
+
     /// Replaces the volume restore requests the next steps see in the deployment config.
     pub fn set_volume_restores(&mut self, requests: Vec<alien_core::VolumeRestoreRequest>) {
         self.volume_restores = requests;
