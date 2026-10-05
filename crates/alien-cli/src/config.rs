@@ -210,8 +210,9 @@ async fn ensure_core_available(
         .join(version);
 
     let cache_node_modules = cache_dir.join("node_modules");
+    let is_ready = |node_modules: &Path| node_modules.join("@alienplatform/core").exists();
 
-    if cache_node_modules.join("@alienplatform/core").exists() {
+    if is_ready(&cache_node_modules) {
         debug!(
             "Using cached @alienplatform/core from {}",
             cache_dir.display()
@@ -225,13 +226,27 @@ async fn ensure_core_available(
         cache_dir.display()
     );
 
-    tokio::fs::create_dir_all(&cache_dir)
+    // Install into a private directory and rename it into place, so another `alien` process
+    // never sees a half-written cache: the cache directory only ever appears complete.
+    let cache_parent = cache_dir
+        .parent()
+        .expect("the cache directory always has a parent");
+    tokio::fs::create_dir_all(cache_parent)
         .await
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
             operation: "create".to_string(),
-            file_path: cache_dir.display().to_string(),
+            file_path: cache_parent.display().to_string(),
             reason: "Failed to create cache directory".to_string(),
+        })?;
+    let staging = tempfile::Builder::new()
+        .prefix(&format!(".{version}-"))
+        .tempdir_in(cache_parent)
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "create".to_string(),
+            file_path: cache_parent.display().to_string(),
+            reason: "Failed to create a staging directory for the cache".to_string(),
         })?;
 
     // Write a minimal package.json
@@ -239,19 +254,19 @@ async fn ensure_core_available(
         r#"{{"name":"alien-core-cache","type":"module","dependencies":{{"@alienplatform/core":"{}"}}}}"#,
         version
     );
-    tokio::fs::write(cache_dir.join("package.json"), &package_json)
+    tokio::fs::write(staging.path().join("package.json"), &package_json)
         .await
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
             operation: "write".to_string(),
-            file_path: cache_dir.join("package.json").display().to_string(),
+            file_path: staging.path().join("package.json").display().to_string(),
             reason: "Failed to write cache package.json".to_string(),
         })?;
 
     // Install using the runtime (bun install)
     let install_output = tokio::process::Command::new(runtime.executable())
         .arg("install")
-        .current_dir(&cache_dir)
+        .current_dir(staging.path())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()
@@ -268,6 +283,32 @@ async fn ensure_core_available(
                 message: format!("Failed to install @alienplatform/core: {}", stderr),
             },
         ));
+    }
+
+    // A directory without the package is a partial install from an older CLI; replace it.
+    if cache_dir.exists() && !is_ready(&cache_node_modules) {
+        tokio::fs::remove_dir_all(&cache_dir)
+            .await
+            .into_alien_error()
+            .context(ErrorData::FileOperationFailed {
+                operation: "remove".to_string(),
+                file_path: cache_dir.display().to_string(),
+                reason: "Failed to remove an incomplete cache".to_string(),
+            })?;
+    }
+
+    if let Err(error) = tokio::fs::rename(staging.path(), &cache_dir).await {
+        // Another process finished first; its cache is complete, so use it.
+        if !is_ready(&cache_node_modules) {
+            return Err(error)
+                .into_alien_error()
+                .context(ErrorData::FileOperationFailed {
+                    operation: "rename".to_string(),
+                    file_path: cache_dir.display().to_string(),
+                    reason: "Failed to move the installed cache into place".to_string(),
+                });
+        }
+        debug!("Another process installed the cache first; using it");
     }
 
     info!("Cached @alienplatform/core installed successfully");
