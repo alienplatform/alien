@@ -691,7 +691,7 @@ fn collect_strict_schemas(value: &Value, pointer: &str, found: &mut Vec<String>)
 }
 
 #[test]
-fn binding_normalization_refuses_overlapping_or_optional_tags() {
+fn binding_normalization_leaves_overlapping_or_optional_tags_unchanged() {
     let branch = json!({
         "type": "object", "required": ["type"],
         "properties": {"type": {"type": "string", "enum": ["storage"]}}
@@ -706,7 +706,10 @@ fn binding_normalization_refuses_overlapping_or_optional_tags() {
         let document = json!({"components": {"schemas": {
             "ExternalBinding": {"anyOf": [branch, other]}
         }}});
-        assert!(openapi_filter::normalize_openapi(&document).is_err());
+        assert_eq!(
+            openapi_filter::normalize_openapi(&document).unwrap(),
+            document
+        );
     }
 }
 
@@ -781,5 +784,108 @@ fn both_modes_preserve_constraints_when_normalizing_disjoint_nullable_enums() {
                 document["components"]["schemas"]["State"]["properties"][name]
             );
         }
+    }
+}
+
+#[test]
+fn both_modes_normalize_only_proven_disjoint_required_tags() {
+    let branch = |tags: Value| {
+        json!({"allOf": [
+            {"type": "object", "required": ["payload"], "properties": {"payload": {"type": "integer"}}},
+            {"type": "object", "required": ["backend"], "properties": {"backend": {"type": "string", "enum": tags}}}
+        ]})
+    };
+    let union = json!({
+        "anyOf": [branch(json!(["first", "second"])), branch(json!(["third"]))],
+        "description": "Tagged payload", "minProperties": 2,
+        "example": {"anyOf": [{"type": "example"}]}
+    });
+    let mut expected = union.clone();
+    expected["oneOf"] = expected.as_object_mut().unwrap().remove("anyOf").unwrap();
+    let mut cases = serde_json::Map::new();
+    cases.insert("disjoint".into(), union.clone());
+    let mut overlapping = union.clone();
+    overlapping["anyOf"][1] = branch(json!(["second", "third"]));
+    cases.insert("overlapping".into(), overlapping);
+    for (name, value) in [("optional", json!([])), ("missing", Value::Null)] {
+        let mut schema = union.clone();
+        schema["anyOf"][1]["allOf"][1]["required"] = value;
+        cases.insert(name.into(), schema);
+    }
+    let mut nullable = union.clone();
+    nullable["anyOf"][1]["nullable"] = json!(true);
+    cases.insert("nullable".into(), nullable);
+    let mut reference = union.clone();
+    reference["anyOf"][1]["allOf"][1]["$ref"] = json!("#/components/schemas/Other");
+    cases.insert("reference".into(), reference);
+    let mut outer_reference = union.clone();
+    outer_reference["$ref"] = json!("#/components/schemas/Other");
+    cases.insert("outerReference".into(), outer_reference);
+    let mut sibling = union;
+    sibling["oneOf"] = json!([{"type": "object"}]);
+    cases.insert("sibling".into(), sibling);
+    let document = json!({
+        "paths": {"/payload": {"post": {"operationId": "payload", "responses": {
+            "200": {"description": "ok", "content": {"application/json": {
+                "schema": {"allOf": [{"$ref": "#/components/schemas/Payload"}], "type": "object", "properties": cases}
+            }}}
+        }}}},
+        "components": {"schemas": {
+            "Payload": {"type": "object", "properties": cases},
+            "Other": {"type": "object"}
+        }}
+    });
+    for normalized in [
+        openapi_filter::normalize_openapi(&document).unwrap(),
+        openapi_filter::filter_openapi(&document, &["payload"]).unwrap(),
+    ] {
+        // Dereference shared anonymous objects so deduplication does not obscure
+        // whether the union retained every original constraint and annotation.
+        let expand = |value: &Value| dereference(value, &normalized, 0);
+        let inline = &normalized["paths"]["/payload"]["post"]["responses"]["200"]["content"]
+            ["application/json"]["schema"];
+        assert_eq!(
+            expand(&inline["properties"]),
+            expand(&normalized["components"]["schemas"]["Payload"]["properties"])
+        );
+        let properties = &normalized["components"]["schemas"]["Payload"]["properties"];
+        assert_eq!(expand(&properties["disjoint"]), expand(&expected));
+        for (name, original) in &cases {
+            if name != "disjoint" {
+                assert_eq!(expand(&properties[name]), expand(original), "{name}");
+            }
+        }
+    }
+}
+
+fn dereference(value: &Value, document: &Value, depth: usize) -> Value {
+    assert!(depth < 64, "fixture references must not cycle");
+    match value {
+        Value::Object(object) => {
+            if object.len() == 1 {
+                if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
+                    return dereference(
+                        document
+                            .pointer(reference.strip_prefix('#').unwrap())
+                            .unwrap(),
+                        document,
+                        depth + 1,
+                    );
+                }
+            }
+            Value::Object(
+                object
+                    .iter()
+                    .map(|(key, value)| (key.clone(), dereference(value, document, depth + 1)))
+                    .collect(),
+            )
+        }
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .map(|value| dereference(value, document, depth + 1))
+                .collect(),
+        ),
+        other => other.clone(),
     }
 }

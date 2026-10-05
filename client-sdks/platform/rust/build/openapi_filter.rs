@@ -763,6 +763,19 @@ fn decode_json_pointer_segment(segment: &str) -> String {
 // representation. Remove only demonstrably redundant JSON alternatives; keep
 // sibling constraints and all concrete binding fields unchanged.
 fn normalize_binding_unions(document: &mut Map<String, Value>) -> Result<(), String> {
+    if let Some(paths) = document.get_mut("paths") {
+        normalize_tagged_unions_in_openapi(paths);
+    }
+    if let Some(components) = document
+        .get_mut("components")
+        .and_then(Value::as_object_mut)
+    {
+        for (section, value) in components {
+            if section != "schemas" {
+                normalize_tagged_unions_in_openapi(value);
+            }
+        }
+    }
     let Some(schemas) = document
         .get_mut("components")
         .and_then(|components| components.get_mut("schemas"))
@@ -778,26 +791,8 @@ fn normalize_binding_unions(document: &mut Map<String, Value>) -> Result<(), Str
             simplify_unrestricted_json_unions(schema);
         }
     }
-    if let Some(binding) = schemas.get_mut("ExternalBinding") {
-        if let Some(branches) = binding.get("anyOf").and_then(Value::as_array) {
-            // Each category requires a distinct literal `type`, so at most one
-            // branch can match. oneOf preserves acceptance and generates an enum
-            // instead of flattened Options that consume each other's input.
-            let mut seen = BTreeSet::new();
-            for branch in branches {
-                let tags = required_type_tags(branch).ok_or_else(|| {
-                    "ExternalBinding alternatives must have required literal type tags".to_string()
-                })?;
-                if tags.iter().any(|tag| !seen.insert(tag.clone())) {
-                    return Err(
-                        "ExternalBinding alternatives have overlapping type tags".to_string()
-                    );
-                }
-            }
-            let object = binding.as_object_mut().expect("union is an object");
-            let branches = object.remove("anyOf").expect("union was checked");
-            object.insert("oneOf".to_string(), branches);
-        }
+    for schema in schemas.values_mut() {
+        normalize_disjoint_tagged_unions(schema);
     }
     Ok(())
 }
@@ -828,44 +823,134 @@ fn simplify_unrestricted_json_unions(schema: &mut Value) {
     .expect("JSON union simplification is infallible");
 }
 
-// Return a conservative set of possible required string tags. Intersections
-// need only one tagged member; every alternative of a union must be tagged.
-fn required_type_tags(schema: &Value) -> Option<BTreeSet<String>> {
-    if schema.get("nullable") == Some(&Value::Bool(true)) {
+// Required finite string tags prove that at most one branch can match. An
+// allOf member is sufficient: every matching value must satisfy that member.
+// References are deliberately left unresolved rather than guessing their tags.
+fn required_string_tags(schema: &Value, field: &str) -> Option<BTreeSet<String>> {
+    if schema.get("nullable") == Some(&Value::Bool(true)) || schema.get("$ref").is_some() {
         return None;
     }
     if schema.get("type").and_then(Value::as_str) == Some("object")
         && schema
-            .get("required")?
-            .as_array()?
-            .contains(&Value::String("type".to_string()))
+            .get("required")
+            .and_then(Value::as_array)
+            .is_some_and(|required| required.contains(&Value::String(field.to_string())))
     {
-        let tag = schema.pointer("/properties/type")?;
-        if tag.get("type").and_then(Value::as_str) == Some("string")
-            && tag.get("nullable") != Some(&Value::Bool(true))
+        if let Some(tag) = schema
+            .get("properties")
+            .and_then(|properties| properties.get(field))
         {
-            let tags: Option<BTreeSet<String>> = tag
-                .get("enum")?
-                .as_array()?
-                .iter()
-                .map(|value| value.as_str().map(str::to_string))
-                .collect();
-            return tags.filter(|tags| !tags.is_empty());
+            if tag.get("type").and_then(Value::as_str) == Some("string")
+                && tag.get("nullable") != Some(&Value::Bool(true))
+                && tag.get("$ref").is_none()
+            {
+                if let Some(values) = tag.get("enum").and_then(Value::as_array) {
+                    let tags: Option<BTreeSet<String>> = values
+                        .iter()
+                        .map(|value| value.as_str().map(str::to_string))
+                        .collect();
+                    if let Some(tags) = tags.filter(|tags| !tags.is_empty()) {
+                        return Some(tags);
+                    }
+                }
+            }
         }
     }
     if let Some(branches) = schema.get("allOf").and_then(Value::as_array) {
-        return branches.iter().find_map(required_type_tags);
+        if let Some(tags) = branches
+            .iter()
+            .find_map(|branch| required_string_tags(branch, field))
+        {
+            return Some(tags);
+        }
     }
     for keyword in ["anyOf", "oneOf"] {
         if let Some(branches) = schema.get(keyword).and_then(Value::as_array) {
             let mut tags = BTreeSet::new();
             for branch in branches {
-                tags.extend(required_type_tags(branch)?);
+                tags.extend(required_string_tags(branch, field)?);
             }
             return (!tags.is_empty()).then_some(tags);
         }
     }
     None
+}
+
+fn candidate_tag_fields(schema: &Value, fields: &mut BTreeSet<String>) {
+    if let Some(required) = schema.get("required").and_then(Value::as_array) {
+        fields.extend(
+            required
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string),
+        );
+    }
+    for keyword in ["allOf", "anyOf", "oneOf"] {
+        if let Some(branches) = schema.get(keyword).and_then(Value::as_array) {
+            for branch in branches {
+                candidate_tag_fields(branch, fields);
+            }
+        }
+    }
+}
+
+// OpenAPI containers use `schema` to introduce Schema Objects. Literal payloads
+// and extensions are not schemas, even if they contain the same keywords.
+fn normalize_tagged_unions_in_openapi(value: &mut Value) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                normalize_tagged_unions_in_openapi(value);
+            }
+        }
+        Value::Object(object) => {
+            for (key, value) in object {
+                if key == "schema" {
+                    normalize_disjoint_tagged_unions(value);
+                } else if matches!(key.as_str(), "example" | "examples" | "default" | "enum")
+                    || key.starts_with("x-")
+                {
+                    continue;
+                } else {
+                    normalize_tagged_unions_in_openapi(value);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn normalize_disjoint_tagged_unions(schema: &mut Value) {
+    if let Some(object) = schema.as_object_mut() {
+        if !object.contains_key("oneOf") && !object.contains_key("$ref") {
+            let disjoint = object
+                .get("anyOf")
+                .and_then(Value::as_array)
+                .is_some_and(|branches| {
+                    let Some(first) = branches.first() else {
+                        return false;
+                    };
+                    let mut fields = BTreeSet::new();
+                    candidate_tag_fields(first, &mut fields);
+                    fields.iter().any(|field| {
+                        let mut seen = BTreeSet::new();
+                        branches.iter().all(|branch| {
+                            required_string_tags(branch, field)
+                                .is_some_and(|tags| tags.into_iter().all(|tag| seen.insert(tag)))
+                        })
+                    })
+                });
+            if disjoint {
+                let branches = object.remove("anyOf").expect("union was checked");
+                object.insert("oneOf".to_string(), branches);
+            }
+        }
+    }
+    for_schema_children_mut(schema, |child| {
+        normalize_disjoint_tagged_unions(child);
+        Ok::<(), ()>(())
+    })
+    .expect("tagged union normalization is infallible");
 }
 
 // A closed string enum and null are disjoint. Progenitor needs oneOf here
