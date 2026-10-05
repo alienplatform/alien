@@ -94,6 +94,13 @@ jobs:
             worker_integration:
               - 'Cargo.toml'
               - 'Cargo.lock'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'turbo.json'
+              - 'examples/package.json'
+              - 'examples/pnpm-lock.yaml'
+              - 'examples/pnpm-workspace.yaml'
               - 'rust-toolchain.toml'
               - 'mise*.toml'
               - 'crates/alien-local/**'
