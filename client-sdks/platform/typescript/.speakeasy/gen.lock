@@ -4,7 +4,7 @@ management:
   docVersion: 1.0.0
   speakeasyVersion: 1.799.0
   generationVersion: 2.941.0
-  releaseVersion: 3.3.27
+  releaseVersion: 3.3.28
 persistentEdits:
   generation_id: 080c0564-4271-49b3-aa59-b2e9a93d06d4
   pristine_commit_hash: 578dc0a8e6da1e0e601befe63c9030720ed5a4cc
