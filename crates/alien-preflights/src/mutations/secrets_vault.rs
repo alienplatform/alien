@@ -71,13 +71,19 @@ impl StackMutation for SecretsVaultMutation {
         });
 
         // Vault-native deployer secrets live in this vault: the deployer
-        // writes them there, and workloads read them from it.
-        let deployer_secrets_need_vault = stack.inputs.iter().any(|input| {
-            alien_core::is_deployer_secret_input(input)
-                && input.platforms.as_ref().is_none_or(|platforms| {
-                    platforms.is_empty() || platforms.contains(&stack_state.platform)
-                })
-        });
+        // writes them there, and workloads read them from it. A secret with a
+        // stored value is delivered from that value and needs no vault, so a
+        // deployment installed before slots were vault-native is not asked to
+        // add this setup-owned vault on its next update.
+        let stored = alien_core::stored_input_values(
+            &stack.inputs,
+            &config.input_values,
+            &config.environment_variables,
+        );
+        let deployer_secrets_need_vault =
+            alien_core::deployer_secret_slots(&stack.inputs, &stored, stack_state.platform)
+                .iter()
+                .any(|slot| !slot.has_stored_value);
 
         explicitly_configured
             || worker_needs_vault
@@ -1064,8 +1070,28 @@ mod tests {
 
         input.platforms = None;
         input.provided_by = vec![StackInputProvider::Developer];
-        stack.inputs = vec![input];
+        stack.inputs = vec![input.clone()];
         assert!(!SecretsVaultMutation.should_run(&stack, &stack_state, &config));
+
+        // A secret either side may provide, whose developer value reaches the
+        // deployment through its variable, has no slot and needs no vault: an
+        // installed deployment must not be asked to add one on update.
+        input.provided_by = vec![StackInputProvider::Developer, StackInputProvider::Deployer];
+        input.env = vec![StackInputEnvironmentMapping {
+            name: "DATABASE_PASSWORD".to_string(),
+            target_resources: None,
+            var_type: None,
+        }];
+        stack.inputs = vec![input];
+        assert!(SecretsVaultMutation.should_run(&stack, &stack_state, &config));
+        let mut delivered = config.clone();
+        delivered.environment_variables.variables = vec![alien_core::EnvironmentVariable {
+            name: "DATABASE_PASSWORD".to_string(),
+            value: "developer-value".to_string(),
+            var_type: alien_core::EnvironmentVariableType::Secret,
+            target_resources: None,
+        }];
+        assert!(!SecretsVaultMutation.should_run(&stack, &stack_state, &delivered));
     }
 
     #[tokio::test]
