@@ -14,6 +14,7 @@ pub use aws::cloudcontrol::{CloudControlApi, CloudControlClient};
 pub use aws::cloudformation::{CloudFormationApi, CloudFormationClient};
 pub use aws::cloudwatch::{CloudWatchApi, CloudWatchClient};
 pub use aws::codebuild::{CodeBuildApi, CodeBuildClient};
+pub use aws::dlm::{DlmApi, DlmClient};
 pub use aws::dynamodb::{DynamoDbApi, DynamoDbClient};
 pub use aws::ec2::{Ec2Api, Ec2Client};
 pub use aws::ecr::{EcrApi, EcrClient};

@@ -8,6 +8,7 @@ use alien_aws_clients::{
     cloudcontrol::{CloudControlApi, CloudControlClient},
     cloudformation::{CloudFormationApi, CloudFormationClient},
     codebuild::{CodeBuildApi, CodeBuildClient},
+    dlm::{DlmApi, DlmClient},
     dynamodb::{DynamoDbApi, DynamoDbClient},
     ec2::{Ec2Api, Ec2Client},
     ecr::{EcrApi, EcrClient},
@@ -162,6 +163,7 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn EventBridgeApi>>;
     async fn get_aws_kms_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn KmsApi>>;
+    async fn get_aws_dlm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn DlmApi>>;
 
     // GCP clients
     fn get_gcp_iam_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpIamApi>>;
@@ -590,6 +592,19 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             })?;
         Ok(Arc::new(KmsClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
+    async fn get_aws_dlm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn DlmApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(DlmClient::new(
             reqwest::Client::new(),
             credentials,
         )))

@@ -209,6 +209,20 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
     async fn attach_volume(&self, request: AttachVolumeRequest) -> Result<AttachVolumeResponse>;
     async fn detach_volume(&self, request: DetachVolumeRequest) -> Result<DetachVolumeResponse>;
 
+    // Snapshot Operations
+    /// Starts a snapshot of a volume. EC2 offers no idempotency token for this call:
+    /// callers that must not create duplicates look for an existing tagged snapshot first.
+    async fn create_snapshot(&self, request: CreateSnapshotRequest) -> Result<Snapshot>;
+    async fn describe_snapshots(
+        &self,
+        request: DescribeSnapshotsRequest,
+    ) -> Result<DescribeSnapshotsResponse>;
+    async fn delete_snapshot(&self, snapshot_id: &str) -> Result<()>;
+
+    // Tag Operations
+    async fn create_tags(&self, request: CreateTagsRequest) -> Result<()>;
+    async fn delete_tags(&self, request: DeleteTagsRequest) -> Result<()>;
+
     // Launch Template Operations
     async fn create_launch_template(
         &self,
@@ -503,6 +517,19 @@ impl Ec2Client {
                 resource_type: "SecurityGroupRule".into(),
                 resource_name: resource.into(),
             },
+            "InvalidSnapshot.NotFound" | "InvalidSnapshotID.NotFound" => {
+                ErrorData::RemoteResourceNotFound {
+                    resource_type: "Snapshot".into(),
+                    resource_name: resource.into(),
+                }
+            }
+            // A snapshot still used by a registered image.
+            "InvalidSnapshot.InUse" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "Snapshot".into(),
+                resource_name: resource.into(),
+            },
+            "SnapshotCreationPerVolumeRateExceeded" => ErrorData::RateLimitExceeded { message },
             "InvalidVolume.NotFound" | "InvalidVolumeID.NotFound" => {
                 ErrorData::RemoteResourceNotFound {
                     resource_type: "Volume".into(),
@@ -661,6 +688,69 @@ impl Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
+        form_data
+    }
+
+    fn create_snapshot_form_data(request: &CreateSnapshotRequest) -> HashMap<String, String> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "CreateSnapshot".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        form_data.insert("VolumeId".to_string(), request.volume_id.clone());
+        if let Some(description) = &request.description {
+            form_data.insert("Description".to_string(), description.clone());
+        }
+        if let Some(tag_specs) = &request.tag_specifications {
+            Self::add_tag_specifications(&mut form_data, tag_specs);
+        }
+        form_data
+    }
+
+    fn describe_snapshots_form_data(request: &DescribeSnapshotsRequest) -> HashMap<String, String> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "DescribeSnapshots".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        for (i, snapshot_id) in request.snapshot_ids.iter().flatten().enumerate() {
+            form_data.insert(format!("SnapshotId.{}", i + 1), snapshot_id.clone());
+        }
+        for (i, owner) in request.owner_ids.iter().flatten().enumerate() {
+            form_data.insert(format!("Owner.{}", i + 1), owner.clone());
+        }
+        if let Some(filters) = &request.filters {
+            Self::add_filters(&mut form_data, filters);
+        }
+        if let Some(max_results) = request.max_results {
+            form_data.insert("MaxResults".to_string(), max_results.to_string());
+        }
+        if let Some(next_token) = &request.next_token {
+            form_data.insert("NextToken".to_string(), next_token.clone());
+        }
+        form_data
+    }
+
+    fn create_tags_form_data(request: &CreateTagsRequest) -> HashMap<String, String> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "CreateTags".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        for (i, resource_id) in request.resource_ids.iter().enumerate() {
+            form_data.insert(format!("ResourceId.{}", i + 1), resource_id.clone());
+        }
+        for (i, tag) in request.tags.iter().enumerate() {
+            form_data.insert(format!("Tag.{}.Key", i + 1), tag.key.clone());
+            form_data.insert(format!("Tag.{}.Value", i + 1), tag.value.clone());
+        }
+        form_data
+    }
+
+    fn delete_tags_form_data(request: &DeleteTagsRequest) -> HashMap<String, String> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "DeleteTags".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        for (i, resource_id) in request.resource_ids.iter().enumerate() {
+            form_data.insert(format!("ResourceId.{}", i + 1), resource_id.clone());
+        }
+        for (i, key) in request.tag_keys.iter().enumerate() {
+            form_data.insert(format!("Tag.{}.Key", i + 1), key.clone());
+        }
         form_data
     }
 
@@ -1695,6 +1785,52 @@ impl Ec2Api for Ec2Client {
         }
 
         self.send_form(form_data, "DetachVolume", &request.volume_id)
+            .await
+    }
+
+    // ---------------------------------------------------------------------------
+    // Snapshot Operations
+    // ---------------------------------------------------------------------------
+
+    async fn create_snapshot(&self, request: CreateSnapshotRequest) -> Result<Snapshot> {
+        let form_data = Self::create_snapshot_form_data(&request);
+        self.send_form(form_data, "CreateSnapshot", &request.volume_id)
+            .await
+    }
+
+    async fn describe_snapshots(
+        &self,
+        request: DescribeSnapshotsRequest,
+    ) -> Result<DescribeSnapshotsResponse> {
+        let form_data = Self::describe_snapshots_form_data(&request);
+        self.send_form(form_data, "DescribeSnapshots", "Snapshot")
+            .await
+    }
+
+    async fn delete_snapshot(&self, snapshot_id: &str) -> Result<()> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "DeleteSnapshot".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        form_data.insert("SnapshotId".to_string(), snapshot_id.to_string());
+        self.send_form_no_body(form_data, "DeleteSnapshot", snapshot_id)
+            .await
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tag Operations
+    // ---------------------------------------------------------------------------
+
+    async fn create_tags(&self, request: CreateTagsRequest) -> Result<()> {
+        let form_data = Self::create_tags_form_data(&request);
+        let resource = request.resource_ids.join(",");
+        self.send_form_no_body(form_data, "CreateTags", &resource)
+            .await
+    }
+
+    async fn delete_tags(&self, request: DeleteTagsRequest) -> Result<()> {
+        let form_data = Self::delete_tags_form_data(&request);
+        let resource = request.resource_ids.join(",");
+        self.send_form_no_body(form_data, "DeleteTags", &resource)
             .await
     }
 
@@ -3544,6 +3680,92 @@ pub struct VolumeAttachment {
     pub delete_on_termination: Option<bool>,
 }
 
+// ---------------------------------------------------------------------------
+// Snapshot and Tag Request/Response Types
+// ---------------------------------------------------------------------------
+
+/// Request to snapshot a volume.
+#[derive(Debug, Clone, Serialize, Builder)]
+pub struct CreateSnapshotRequest {
+    pub volume_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Tags for the snapshot (resource type `snapshot`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag_specifications: Option<Vec<TagSpecification>>,
+}
+
+/// Request to describe snapshots.
+///
+/// Pass `owner_ids: ["self"]` to list only this account's snapshots. EC2 rejects
+/// `max_results` together with `snapshot_ids`.
+#[derive(Debug, Clone, Serialize, Builder, Default)]
+pub struct DescribeSnapshotsRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<Vec<Filter>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_results: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_token: Option<String>,
+}
+
+/// Response from describing snapshots.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DescribeSnapshotsResponse {
+    #[serde(rename = "snapshotSet")]
+    pub snapshot_set: Option<SnapshotSet>,
+    #[serde(rename = "nextToken")]
+    pub next_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<Snapshot>,
+}
+
+/// An EBS snapshot, as returned by `CreateSnapshot` and `DescribeSnapshots`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Snapshot {
+    pub snapshot_id: Option<String>,
+    pub volume_id: Option<String>,
+    /// `pending`, `completed`, `error`, `recoverable` or `recovering`.
+    #[serde(rename = "status")]
+    pub state: Option<String>,
+    pub status_message: Option<String>,
+    pub start_time: Option<String>,
+    pub progress: Option<String>,
+    pub owner_id: Option<String>,
+    /// Size of the source volume in GiB.
+    pub volume_size: Option<i32>,
+    pub description: Option<String>,
+    pub encrypted: Option<bool>,
+    pub storage_tier: Option<String>,
+    #[serde(rename = "tagSet")]
+    pub tag_set: Option<TagSet>,
+}
+
+/// Request to add or overwrite tags on EC2 resources.
+#[derive(Debug, Clone, Serialize, Builder)]
+pub struct CreateTagsRequest {
+    pub resource_ids: Vec<String>,
+    pub tags: Vec<Tag>,
+}
+
+/// Request to remove tags (by key, whatever their value) from EC2 resources.
+#[derive(Debug, Clone, Serialize, Builder)]
+pub struct DeleteTagsRequest {
+    pub resource_ids: Vec<String>,
+    pub tag_keys: Vec<String>,
+}
+
 /// Request to attach a volume.
 #[derive(Debug, Clone, Serialize, Builder)]
 pub struct AttachVolumeRequest {
@@ -3865,6 +4087,199 @@ mod error_mapping_tests {
 #[cfg(test)]
 mod volume_operation_tests {
     use super::*;
+
+    #[test]
+    fn create_volume_from_snapshot_sends_snapshot_id() {
+        let request = CreateVolumeRequest::builder()
+            .availability_zone("us-west-2a".to_string())
+            .snapshot_id("snap-0123456789abcdef0".to_string())
+            .size(64)
+            .build();
+
+        let form = Ec2Client::create_volume_form_data(&request);
+
+        assert_eq!(
+            form.get("SnapshotId").map(String::as_str),
+            Some("snap-0123456789abcdef0")
+        );
+        assert_eq!(form.get("Size").map(String::as_str), Some("64"));
+    }
+
+    #[test]
+    fn snapshot_operations_map_to_ec2_query_parameters() {
+        let create = CreateSnapshotRequest::builder()
+            .volume_id("vol-0123456789abcdef0".to_string())
+            .description("final snapshot".to_string())
+            .tag_specifications(vec![TagSpecification {
+                resource_type: "snapshot".to_string(),
+                tags: vec![Tag {
+                    key: "alien-snapshot-kind".to_string(),
+                    value: "final".to_string(),
+                }],
+            }])
+            .build();
+        let create_form = Ec2Client::create_snapshot_form_data(&create);
+        assert_eq!(
+            create_form.get("Action").map(String::as_str),
+            Some("CreateSnapshot")
+        );
+        assert_eq!(
+            create_form.get("VolumeId").map(String::as_str),
+            Some("vol-0123456789abcdef0")
+        );
+        assert_eq!(
+            create_form
+                .get("TagSpecification.1.ResourceType")
+                .map(String::as_str),
+            Some("snapshot")
+        );
+        assert_eq!(
+            create_form
+                .get("TagSpecification.1.Tag.1.Key")
+                .map(String::as_str),
+            Some("alien-snapshot-kind")
+        );
+
+        let describe = DescribeSnapshotsRequest::builder()
+            .owner_ids(vec!["self".to_string()])
+            .filters(vec![Filter {
+                name: "tag:Container".to_string(),
+                values: vec!["db".to_string()],
+            }])
+            .max_results(1000)
+            .build();
+        let describe_form = Ec2Client::describe_snapshots_form_data(&describe);
+        assert_eq!(describe_form.get("Owner.1").map(String::as_str), Some("self"));
+        assert_eq!(
+            describe_form.get("Filter.1.Name").map(String::as_str),
+            Some("tag:Container")
+        );
+        assert_eq!(
+            describe_form.get("Filter.1.Value.1").map(String::as_str),
+            Some("db")
+        );
+        assert_eq!(
+            describe_form.get("MaxResults").map(String::as_str),
+            Some("1000")
+        );
+        assert!(!describe_form.contains_key("SnapshotId.1"));
+    }
+
+    #[test]
+    fn tag_operations_map_to_ec2_query_parameters() {
+        let create = Ec2Client::create_tags_form_data(
+            &CreateTagsRequest::builder()
+                .resource_ids(vec!["vol-1".to_string()])
+                .tags(vec![Tag {
+                    key: "Ordinal".to_string(),
+                    value: "2".to_string(),
+                }])
+                .build(),
+        );
+        assert_eq!(create.get("Action").map(String::as_str), Some("CreateTags"));
+        assert_eq!(create.get("ResourceId.1").map(String::as_str), Some("vol-1"));
+        assert_eq!(create.get("Tag.1.Key").map(String::as_str), Some("Ordinal"));
+        assert_eq!(create.get("Tag.1.Value").map(String::as_str), Some("2"));
+
+        let delete = Ec2Client::delete_tags_form_data(
+            &DeleteTagsRequest::builder()
+                .resource_ids(vec!["vol-1".to_string()])
+                .tag_keys(vec!["RestoreOrdinal".to_string()])
+                .build(),
+        );
+        assert_eq!(delete.get("Action").map(String::as_str), Some("DeleteTags"));
+        assert_eq!(
+            delete.get("Tag.1.Key").map(String::as_str),
+            Some("RestoreOrdinal")
+        );
+        // Without a value, EC2 removes the tag whatever its value.
+        assert!(!delete.contains_key("Tag.1.Value"));
+    }
+
+    #[test]
+    fn describe_snapshots_reads_state_start_time_and_tags() {
+        let response: DescribeSnapshotsResponse = quick_xml::de::from_str(
+            r#"<DescribeSnapshotsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+                <requestId>12345678-1234-1234-1234-3755ba4b9fa6</requestId>
+                <snapshotSet>
+                    <item>
+                        <snapshotId>snap-0abcdef1234567890</snapshotId>
+                        <volumeId>vol-01234567890abcdef</volumeId>
+                        <status>completed</status>
+                        <startTime>2025-02-03T23:53:18.195Z</startTime>
+                        <progress>100%</progress>
+                        <ownerId>123456789012</ownerId>
+                        <volumeSize>8</volumeSize>
+                        <description>My root volume snapshot</description>
+                        <tagSet>
+                            <item><key>Ordinal</key><value>1</value></item>
+                        </tagSet>
+                        <encrypted>true</encrypted>
+                        <storageTier>standard</storageTier>
+                    </item>
+                </snapshotSet>
+            </DescribeSnapshotsResponse>"#,
+        )
+        .expect("DescribeSnapshots response should deserialize");
+        let snapshot = &response.snapshot_set.expect("snapshot set").items[0];
+        assert_eq!(snapshot.snapshot_id.as_deref(), Some("snap-0abcdef1234567890"));
+        assert_eq!(snapshot.state.as_deref(), Some("completed"));
+        assert_eq!(
+            snapshot.start_time.as_deref(),
+            Some("2025-02-03T23:53:18.195Z")
+        );
+        assert_eq!(snapshot.volume_size, Some(8));
+        assert_eq!(snapshot.owner_id.as_deref(), Some("123456789012"));
+        let tags = &snapshot.tag_set.as_ref().expect("tags").items;
+        assert_eq!((tags[0].key.as_str(), tags[0].value.as_str()), ("Ordinal", "1"));
+
+        let created: Snapshot = quick_xml::de::from_str(
+            r#"<CreateSnapshotResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+                <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
+                <snapshotId>snap-1234567890abcdef0</snapshotId>
+                <volumeId>vol-1234567890abcdef0</volumeId>
+                <status>pending</status>
+                <startTime>2025-02-03T23:53:18.000Z</startTime>
+                <progress>60%</progress>
+                <ownerId>111122223333</ownerId>
+                <volumeSize>30</volumeSize>
+                <description>Daily Backup</description>
+            </CreateSnapshotResponse>"#,
+        )
+        .expect("CreateSnapshot response should deserialize");
+        assert_eq!(created.snapshot_id.as_deref(), Some("snap-1234567890abcdef0"));
+        assert_eq!(created.state.as_deref(), Some("pending"));
+    }
+
+    #[test]
+    fn snapshot_error_codes_map_to_their_kind() {
+        let body = |code: &str| {
+            format!(
+                "<Response><Errors><Error><Code>{code}</Code><Message>m</Message></Error></Errors>\
+                 <RequestID>r</RequestID></Response>"
+            )
+        };
+        assert!(matches!(
+            Ec2Client::map_ec2_error(
+                StatusCode::BAD_REQUEST,
+                &body("InvalidSnapshot.NotFound"),
+                "DescribeSnapshots",
+                "snap-1",
+                None
+            ),
+            Some(ErrorData::RemoteResourceNotFound { .. })
+        ));
+        assert!(matches!(
+            Ec2Client::map_ec2_error(
+                StatusCode::BAD_REQUEST,
+                &body("InvalidSnapshot.InUse"),
+                "DeleteSnapshot",
+                "snap-1",
+                None
+            ),
+            Some(ErrorData::RemoteResourceConflict { .. })
+        ));
+    }
 
     #[test]
     fn create_volume_maps_idempotency_token_to_ec2_query_parameter() {
