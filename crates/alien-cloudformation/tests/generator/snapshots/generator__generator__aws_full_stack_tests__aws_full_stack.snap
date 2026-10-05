@@ -754,6 +754,13 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
           Sid: ManageLambdaFunctions
         - Action:
+          - logs:CreateLogGroup
+          - logs:PutRetentionPolicy
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-*
+          Sid: ManageLambdaLogGroups
+        - Action:
           - lambda:CreateEventSourceMapping
           - lambda:DeleteEventSourceMapping
           - lambda:GetEventSourceMapping

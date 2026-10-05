@@ -372,12 +372,6 @@ pub struct DeployerSecretReport {
 }
 
 impl DeployerSecretReport {
-    /// Whether the secret exists in the store, so deleting the deployment
-    /// leaves it behind for the deployer to delete.
-    pub fn is_kept_on_delete(&self) -> bool {
-        self.status != DeployerSecretStatus::Missing
-    }
-
     /// Whether this slot keeps the workload from starting.
     pub fn blocks_start(&self) -> bool {
         self.required && self.status != DeployerSecretStatus::Present

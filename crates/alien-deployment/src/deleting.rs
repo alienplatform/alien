@@ -49,11 +49,7 @@ pub async fn handle_delete_pending(
         })?;
         // Deployer secrets hold values the deployer wrote; Alien never owned
         // them, so they stay. Their reports carry the command that deletes them.
-        for report in runtime_metadata
-            .deployer_secrets
-            .iter()
-            .filter(|report| report.is_kept_on_delete())
-        {
+        for report in &runtime_metadata.deployer_secrets {
             info!(
                 secret = %report.location.name,
                 delete_command = report.location.delete_command.as_deref().unwrap_or_default(),

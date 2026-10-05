@@ -1648,6 +1648,14 @@ async fn deploy_task_with_environment(
         (None, None)
     };
     let plan = existing_deployment_plan(&status, active_update, ctx.is_platform());
+    if plan == ExistingDeploymentPlan::WaitForManager {
+        return Err(AlienError::new(ErrorData::DeploymentFailed {
+            message: format!(
+                "Deployment '{}' is {status:?} with an update waiting for setup. Setup can run once the manager returns it to running; check `alien deployments get {}`.",
+                resolved_args.name, tracked_deployment.deployment_id
+            ),
+        }));
+    }
     if plan == ExistingDeploymentPlan::NothingToDo {
         steps.complete(2, Some("Nothing to deploy".to_string()));
         steps.skip(3, Some("Already running".to_string()));
@@ -1764,39 +1772,30 @@ async fn deploy_task_with_environment(
     // configuration error, not an observe-only deployment.
     if current.target_release.is_none() {
         if let Some(release_id) = deployment.desired_release_id.as_ref() {
-            let url = format!("{}/v1/releases/{}", manager_ctx.manager_url, release_id);
-            let response = manager_ctx
-                .http_client
-                .get(&url)
-                .header(
-                    reqwest::header::AUTHORIZATION,
-                    format!("Bearer {}", tracked_deployment.api_key),
+            current.target_release = Some(
+                load_release(
+                    &manager_ctx,
+                    &tracked_deployment.api_key,
+                    release_id,
+                    platform,
                 )
-                .send()
-                .await
-                .into_alien_error()
-                .context(ErrorData::ApiRequestFailed {
-                    message: format!("loading target release '{release_id}'"),
-                    url: Some(url.clone()),
-                })?;
-            let response = response.error_for_status().into_alien_error().context(
-                ErrorData::ApiRequestFailed {
-                    message: format!("loading target release '{release_id}'"),
-                    url: Some(url),
-                },
-            )?;
-            let release_json = response
-                .json::<serde_json::Value>()
-                .await
-                .into_alien_error()
-                .context(ErrorData::ConfigurationError {
-                    message: format!("Failed to decode target release '{release_id}'"),
-                })?;
-            current.target_release = Some(target_release_from_json(
-                release_id,
-                platform,
-                release_json,
-            )?);
+                .await?,
+            );
+        }
+    }
+    // Setup on an installed deployment reconciles its state with the manager
+    // at every step; without the installed release that would clear it.
+    if matches!(plan, ExistingDeploymentPlan::SetupUpdate { .. }) {
+        if let Some(release_id) = deployment.current_release_id.as_ref() {
+            current.current_release = Some(
+                load_release(
+                    &manager_ctx,
+                    &tracked_deployment.api_key,
+                    release_id,
+                    platform,
+                )
+                .await?,
+            );
         }
     }
 
@@ -2412,6 +2411,46 @@ fn is_local_private_url(url: &str) -> bool {
         || url.starts_with("https://127.0.0.1:")
 }
 
+/// Loads a release's stack from the manager with the deployment token.
+async fn load_release(
+    manager_ctx: &crate::execution_context::ManagerContext,
+    deployment_token: &str,
+    release_id: &str,
+    platform: Platform,
+) -> Result<alien_core::ReleaseInfo> {
+    let url = format!("{}/v1/releases/{}", manager_ctx.manager_url, release_id);
+    let response = manager_ctx
+        .http_client
+        .get(&url)
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {deployment_token}"),
+        )
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("loading release '{release_id}'"),
+            url: Some(url.clone()),
+        })?;
+    let response =
+        response
+            .error_for_status()
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: format!("loading release '{release_id}'"),
+                url: Some(url),
+            })?;
+    let release_json = response
+        .json::<serde_json::Value>()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to decode release '{release_id}'"),
+        })?;
+    target_release_from_json(release_id, platform, release_json)
+}
+
 fn target_release_from_json(
     release_id: &str,
     platform: Platform,
@@ -2478,6 +2517,9 @@ enum ExistingDeploymentPlan {
     SetupUpdate { retry: bool },
     /// Running with nothing pending.
     NothingToDo,
+    /// An update waits for setup while the deployment is in a status the
+    /// setup lock does not accept; the manager has to move it first.
+    WaitForManager,
 }
 
 impl ExistingDeploymentPlan {
@@ -2517,7 +2559,16 @@ fn existing_deployment_plan(
             return ExistingDeploymentPlan::SetupUpdate { retry: true };
         }
         if active_update == Some(ActiveUpdate::WaitingForSetup) {
-            return ExistingDeploymentPlan::SetupUpdate { retry: false };
+            // The setup lock takes an installed deployment only while it
+            // runs or after a failed provisioning, update or refresh.
+            return if matches!(
+                status,
+                DeploymentStatus::Running | DeploymentStatus::ProvisioningFailed
+            ) {
+                ExistingDeploymentPlan::SetupUpdate { retry: false }
+            } else {
+                ExistingDeploymentPlan::WaitForManager
+            };
         }
     }
     if *status == DeploymentStatus::Running && active_update.is_none() {
@@ -2721,6 +2772,12 @@ mod tests {
             ),
             (
                 DeploymentStatus::UpdatePending,
+                Some(ActiveUpdate::WaitingForSetup),
+                true,
+                WaitForManager,
+            ),
+            (
+                DeploymentStatus::ProvisioningFailed,
                 Some(ActiveUpdate::WaitingForSetup),
                 true,
                 SetupUpdate { retry: false },

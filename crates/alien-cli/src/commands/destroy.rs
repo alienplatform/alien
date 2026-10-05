@@ -444,19 +444,13 @@ async fn destroy_tracked_deployment(
     Ok(())
 }
 
-/// The deployer secrets that exist in the deployment's secret store.
+/// The deployer secret slots, all of them: a report can predate the deployer
+/// writing the secret, so a slot last seen missing may hold a value by now.
 pub(crate) fn kept_deployer_secrets(
     runtime_metadata: Option<&alien_core::RuntimeMetadata>,
 ) -> Vec<DeployerSecretReport> {
     runtime_metadata
-        .map(|metadata| {
-            metadata
-                .deployer_secrets
-                .iter()
-                .filter(|report| report.is_kept_on_delete())
-                .cloned()
-                .collect()
-        })
+        .map(|metadata| metadata.deployer_secrets.clone())
         .unwrap_or_default()
 }
 
@@ -483,7 +477,9 @@ pub(crate) fn print_kept_deployer_secrets(reports: &[DeployerSecretReport]) {
     }
     println!(
         "{}",
-        dim_label("Kept deployer secrets (you wrote them, so Alien does not delete them):")
+        dim_label(
+            "Deployer secrets are kept (you write them, so Alien does not delete them). Delete any you wrote and no longer need:"
+        )
     );
     for line in kept_deployer_secret_lines(reports) {
         println!("  {line}");
@@ -529,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn destroy_names_each_kept_deployer_secret_with_its_delete_command() {
+    fn destroy_names_every_deployer_secret_slot_with_its_delete_command() {
         use alien_core::DeployerSecretStatus::{Invalid, Missing, Present};
 
         let state = DeploymentState {
@@ -558,9 +554,10 @@ mod tests {
             kept_deployer_secret_lines(&kept),
             vec![
                 "Token (stack-secrets-input-token): aws ssm delete-parameter --region us-east-1 --name 'stack-secrets-input-token'".to_string(),
+                "Unwritten (stack-secrets-input-unwritten): aws ssm delete-parameter --region us-east-1 --name 'stack-secrets-input-unwritten'".to_string(),
                 "Plaintext (stack-secrets-input-plaintext): aws ssm delete-parameter --region us-east-1 --name 'stack-secrets-input-plaintext'".to_string(),
             ],
-            "a secret that was never written has nothing to delete"
+            "a slot last reported missing may have been written since"
         );
     }
 

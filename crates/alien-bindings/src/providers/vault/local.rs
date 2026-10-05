@@ -39,7 +39,8 @@ impl LocalVault {
 
     /// How many times each secret was written. A counter rather than a
     /// timestamp: two writes can share a modification time, and a counter
-    /// says nothing about the value.
+    /// says nothing about the value. Like the secrets file, it assumes one
+    /// writer at a time (the developer's own machine).
     async fn load_versions(&self) -> Result<HashMap<String, u64>> {
         let versions_file = self.versions_file_path();
         if !versions_file.exists() {
@@ -203,8 +204,11 @@ impl crate::traits::Vault for LocalVault {
     async fn set_secret(&self, secret_name: &str, value: &str) -> Result<()> {
         let mut secrets = self.load_secrets().await?;
         secrets.insert(secret_name.to_string(), value.to_string());
-        self.save_secrets(&secrets).await?;
-        self.bump_version(secret_name).await
+        // Count the write before making it: if saving the value then fails,
+        // the next update restarts the workload once more than needed, but a
+        // new value can never sit behind an unchanged version.
+        self.bump_version(secret_name).await?;
+        self.save_secrets(&secrets).await
     }
 
     /// Delete a secret
