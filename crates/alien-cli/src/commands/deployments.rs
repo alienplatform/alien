@@ -124,6 +124,7 @@ impl DeploymentsArgs {
                 | DeploymentsCmd::Machines { json: true, .. }
                 | DeploymentsCmd::Volumes { json: true, .. }
                 | DeploymentsCmd::RestoreVolume { json: true, .. }
+                | DeploymentsCmd::CancelVolumeRestore { json: true, .. }
                 | DeploymentsCmd::Retry { json: true, .. }
                 | DeploymentsCmd::Redeploy { json: true, .. }
                 | DeploymentsCmd::Pin { json: true, .. }
@@ -302,6 +303,21 @@ pub enum DeploymentsCmd {
         yes: bool,
 
         /// Print the restore request as machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Cancel a pending volume restore
+    ///
+    /// Use it when a restore keeps failing. A restore whose volume was already
+    /// swapped still finishes.
+    CancelVolumeRestore {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Restore request ID, as shown by `alien deployments volumes`
+        request_id: String,
+
+        /// Print the cancelled request as machine-readable JSON
         #[arg(long)]
         json: bool,
     },
@@ -579,6 +595,33 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                     snapshot,
                 },
                 confirmation_mode,
+                json,
+            )
+            .await
+        }
+        DeploymentsCmd::CancelVolumeRestore {
+            id,
+            request_id,
+            json,
+        } => {
+            if !ctx.is_platform() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "command".to_string(),
+                    message: "Volume restores are available on Alien Platform deployments."
+                        .to_string(),
+                }));
+            }
+            let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
+            let client = ctx.sdk_client().await?;
+            let deployment = crate::platform_deployment_resolver::resolve(
+                &ctx, &client, &workspace, &id, None, !json,
+            )
+            .await?;
+            cancel_volume_restore_task(
+                &client,
+                workspace.as_str(),
+                &String::from(deployment.id),
+                &request_id,
                 json,
             )
             .await
@@ -2194,6 +2237,45 @@ async fn restore_volume_task(
     Ok(())
 }
 
+async fn cancel_volume_restore_task(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment_id: &str,
+    request_id: &str,
+    json: bool,
+) -> Result<()> {
+    let cancelled = client
+        .cancel_deployment_volume_restore()
+        .id(deployment_id)
+        .request_id(request_id)
+        .workspace(workspace)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!(
+                "cancelling volume restore '{request_id}' of deployment '{deployment_id}'"
+            ),
+            url: None,
+        })?
+        .into_inner();
+
+    if json {
+        return print_json(&cancelled);
+    }
+    println!("{}", success_line("Volume restore cancelled."));
+    println!(
+        "{}",
+        dim_label("If the deployment failed on this restore, retry it to bring it back to running.")
+    );
+    println!(
+        "{} {}",
+        dim_label("Next"),
+        command(&format!("alien deployments retry {deployment_id}"))
+    );
+    Ok(())
+}
+
 async fn list_platform_volume_restores(
     client: &alien_platform_api::Client,
     workspace: &str,
@@ -3630,6 +3712,42 @@ mod tests {
             started.elapsed() < Duration::from_millis(250),
             "absolute timeout must include the poll await"
         );
+    }
+
+    #[test]
+    fn volume_restore_commands_parse_in_their_documented_form() {
+        let restore = DeploymentsArgs::try_parse_from([
+            "deployments",
+            "restore-volume",
+            "production/db",
+            "--resource",
+            "postgres",
+            "--ordinal",
+            "1",
+            "--snapshot",
+            "snap-0123",
+        ])
+        .expect("restore-volume should parse");
+        assert!(matches!(
+            restore.cmd,
+            DeploymentsCmd::RestoreVolume { ref resource, ordinal: 1, ref snapshot, yes: false, json: false, .. }
+                if resource == "postgres" && snapshot == "snap-0123"
+        ));
+
+        let cancel = DeploymentsArgs::try_parse_from([
+            "deployments",
+            "cancel-volume-restore",
+            "production/db",
+            "vrst_0123",
+            "--json",
+        ])
+        .expect("cancel-volume-restore should parse");
+        assert!(cancel.wants_json_output());
+        assert!(matches!(
+            cancel.cmd,
+            DeploymentsCmd::CancelVolumeRestore { ref request_id, json: true, .. }
+                if request_id == "vrst_0123"
+        ));
     }
 
     fn container_config(id: &str) -> serde_json::Value {
