@@ -339,8 +339,8 @@ mod tests {
             .expect("deleting a missing secret should succeed");
 
         assert!(
-            !temp_dir.path().join("secrets.json").exists(),
-            "a no-op delete must not create a secrets file"
+            !temp_dir.path().join("vault").exists(),
+            "a no-op delete must not create any vault state"
         );
     }
 }
