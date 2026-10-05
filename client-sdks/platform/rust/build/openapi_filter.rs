@@ -34,6 +34,7 @@ const OPEN_STRING_ENUM_SCHEMAS: &[(&str, &str)] = &[
 /// Keep this list explicit: adding a Platform API call should require a review
 /// of the compiler input it brings into the always-enabled CLI graph.
 pub const REQUIRED_OPERATION_IDS: &[&str] = &[
+    "cancelDeploymentVolumeRestore",
     "configureProjectBuckets",
     "configureProjectDeployments",
     "configureProjectKeys",
@@ -46,6 +47,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "createDeploymentGroup",
     "createDeploymentGroupToken",
     "createDeploymentToken",
+    "createDeploymentVolumeRestore",
     "createProject",
     "createRelease",
     "createReleaseChannel",
@@ -81,6 +83,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "listDeployments",
     "listEvents",
     "listDeploymentMachines",
+    "listDeploymentVolumeRestores",
     "listManagerEvents",
     "listManagers",
     "listMemberships",
