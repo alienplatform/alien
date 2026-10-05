@@ -2,7 +2,7 @@
 //!
 //! This module provides functionality to load Alien stack configurations from various file formats:
 //! - **TypeScript files** (`.ts`): Dynamically executed using Bun or Node.js
-//! - **JavaScript files** (`.js`): Dynamically executed using Bun or Node.js  
+//! - **JavaScript files** (`.js`): Dynamically executed using Bun or Node.js
 //! - **JSON files** (`.json`): Directly parsed as serialized Stack objects
 //!
 //! ## Configuration Discovery
@@ -39,7 +39,6 @@ use alien_core::{alien_event, AlienEvent, Stack};
 use alien_error::{Context, IntoAlienError};
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
-use tokio::io::AsyncWriteExt;
 use tracing::{debug, error, info, warn};
 
 /// JavaScript runtime for executing TypeScript configurations
@@ -305,15 +304,6 @@ async fn load_javascript_or_typescript_config(config_file: PathBuf) -> Result<St
     debug!("Temporary script file created at: {}", temp_path.display());
 
     debug!("Creating script file...");
-    let mut script_file = tokio::fs::File::create(&temp_path)
-        .await
-        .into_alien_error()
-        .context(ErrorData::FileOperationFailed {
-            operation: "create".to_string(),
-            file_path: temp_path.display().to_string(),
-            reason: "Unable to write to temporary file".to_string(),
-        })?;
-
     // Create script content - works for both Bun and Node.js
     let script_content = format!(
         "
@@ -333,8 +323,7 @@ async fn load_javascript_or_typescript_config(config_file: PathBuf) -> Result<St
     );
     debug!("Script content created, writing to temporary file...");
 
-    script_file
-        .write_all(script_content.as_bytes())
+    tokio::fs::write(temp_path, script_content.as_bytes())
         .await
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
@@ -431,15 +420,6 @@ pub async fn test_with_specific_runtime(
             })?;
     let temp_path = temp_file.path();
 
-    let mut script_file = tokio::fs::File::create(&temp_path)
-        .await
-        .into_alien_error()
-        .context(ErrorData::FileOperationFailed {
-            operation: "create".to_string(),
-            file_path: temp_path.display().to_string(),
-            reason: "Unable to write to temporary file".to_string(),
-        })?;
-
     // Create script content - works for both Bun and Node.js
     let script_content = format!(
         "
@@ -458,8 +438,7 @@ pub async fn test_with_specific_runtime(
         })?
     );
 
-    script_file
-        .write_all(script_content.as_bytes())
+    tokio::fs::write(temp_path, script_content.as_bytes())
         .await
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {

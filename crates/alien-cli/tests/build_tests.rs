@@ -166,10 +166,10 @@ fn test_build_command_json_output_is_valid() {
         .arg("aws")
         .arg("--json")
         .env_remove("RUST_LOG")
-        .assert();
+        .assert()
+        .success();
 
     let output = assert.get_output();
-    assert!(output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let payload: serde_json::Value = serde_json::from_str(&stdout).unwrap();
