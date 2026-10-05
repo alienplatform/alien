@@ -11,7 +11,8 @@
             "elasticloadbalancing:DescribeTargetGroups",
             "elasticloadbalancing:DescribeTargetHealth",
             "elasticloadbalancing:DescribeListeners",
-            "ec2:DescribeVolumes"
+            "ec2:DescribeVolumes",
+            "ec2:DescribeSnapshots"
           ]
         },
         "binding": {
