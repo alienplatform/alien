@@ -6,13 +6,13 @@
 //! using the instance catalog.
 
 use crate::error::Result;
-use crate::StackMutation;
+use crate::{compile_time::PermissionSetsExistCheck, CompileTimeCheck, StackMutation};
 use alien_core::{
     compute_planner::{capacity_group_requirements, validate_compute_pool_selection},
     instance_catalog::{self, WorkloadRequirements},
     CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Container,
-    Daemon, DeploymentConfig, MachineProfile, Network, Platform, ResourceEntry, ResourceLifecycle,
-    ResourceRef, Stack, StackState,
+    Daemon, DeploymentConfig, MachineProfile, Network, PermissionSetReference, Platform,
+    ResourceEntry, ResourceLifecycle, ResourceRef, Stack, StackState,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -38,6 +38,14 @@ impl StackMutation for ComputeClusterMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> bool {
+        if stack.resources.values().any(|entry| {
+            entry
+                .config
+                .downcast_ref::<ComputeCluster>()
+                .is_some_and(|cluster| cluster.node_permissions.is_some())
+        }) {
+            return true;
+        }
         if stack_state.platform == Platform::Kubernetes {
             return false;
         }
@@ -147,6 +155,9 @@ impl StackMutation for ComputeClusterMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<Stack> {
+        let stack = self
+            .materialize_node_permissions(stack, stack_state.platform)
+            .await?;
         let has_cluster = stack
             .resources
             .values()
@@ -165,6 +176,58 @@ impl StackMutation for ComputeClusterMutation {
 }
 
 impl ComputeClusterMutation {
+    async fn materialize_node_permissions(
+        &self,
+        mut stack: Stack,
+        platform: Platform,
+    ) -> Result<Stack> {
+        if !stack.resources.values().any(|entry| {
+            entry
+                .config
+                .downcast_ref::<ComputeCluster>()
+                .is_some_and(|cluster| cluster.node_permissions.is_some())
+        }) {
+            return Ok(stack);
+        }
+        // Use the same concrete-target and platform validation as compilation.
+        let validation = PermissionSetsExistCheck.check(&stack, platform).await?;
+        if !validation.success {
+            return Err(AlienError::new(
+                crate::error::ErrorData::StackMutationFailed {
+                    mutation_name: self.description().to_string(),
+                    message: validation.errors.join("; "),
+                    resource_id: None,
+                },
+            ));
+        }
+        for entry in stack.resources.values_mut() {
+            let Some(cluster) = entry.config.downcast_mut::<ComputeCluster>() else {
+                continue;
+            };
+            let Some(profile) = &mut cluster.node_permissions else {
+                continue;
+            };
+            for references in profile.0.values_mut() {
+                for reference in references {
+                    let set = reference
+                        .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                        .ok_or_else(|| {
+                            AlienError::new(crate::error::ErrorData::StackMutationFailed {
+                                mutation_name: self.description().to_string(),
+                                message: format!(
+                                    "Unknown node permission set '{}'",
+                                    reference.id()
+                                ),
+                                resource_id: Some(cluster.id.clone()),
+                            })
+                        })?;
+                    *reference = PermissionSetReference::Inline(set);
+                }
+            }
+        }
+        Ok(stack)
+    }
+
     fn materialize_persistent_container_pools(
         &self,
         mut stack: Stack,
@@ -1036,6 +1099,63 @@ mod tests {
             })
             .permissions("test".to_string())
             .build()
+    }
+
+    #[tokio::test]
+    async fn explicit_node_grants_are_materialized_without_workloads() {
+        let stack = Stack::new("example".to_string())
+            .add(
+                alien_core::Storage::new("objects".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ComputeCluster::new("compute".to_string())
+                    .node_permissions(
+                        alien_core::PermissionProfile::new()
+                            .resource("objects", ["storage/data-read"]),
+                    )
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let state = StackState {
+            platform: Platform::Gcp,
+            resources: Default::default(),
+            resource_prefix: "test".to_string(),
+        };
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        assert!(ComputeClusterMutation.should_run(&stack, &state, &config));
+        let prepared = ComputeClusterMutation
+            .mutate(stack.clone(), &state, &config)
+            .await
+            .unwrap();
+        let cluster = prepared.resources["compute"]
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap();
+        let expected = alien_permissions::get_permission_set("storage/data-read")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            cluster.node_permissions.as_ref().unwrap().0["objects"],
+            vec![PermissionSetReference::Inline(expected)]
+        );
+        assert!(prepared.permissions.profiles.is_empty());
+        assert!(ComputeClusterMutation
+            .materialize_node_permissions(stack.clone(), Platform::Machines)
+            .await
+            .is_err());
+        let mut missing = stack;
+        missing.resources.shift_remove("objects");
+        assert!(ComputeClusterMutation
+            .materialize_node_permissions(missing, Platform::Gcp)
+            .await
+            .is_err());
     }
 
     #[tokio::test]

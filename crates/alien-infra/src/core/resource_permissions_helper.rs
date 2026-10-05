@@ -2062,6 +2062,86 @@ mod tests {
     }
 
     #[test]
+    fn narrowed_signing_plan_removes_old_project_member_and_preserves_other_members() {
+        let current = alien_permissions::get_permission_set("storage/data-read").unwrap();
+        let mut old = current.clone();
+        for entry in old.platforms.gcp.as_mut().unwrap() {
+            if entry.grant.permissions.as_ref().is_some_and(|permissions| {
+                permissions
+                    .iter()
+                    .any(|permission| permission == "iam.serviceAccounts.signBlob")
+            }) {
+                entry.binding.resource.as_mut().unwrap().scope =
+                    "projects/${projectName}".to_string();
+            }
+        }
+        let context = PermissionContext::new()
+            .with_project_name("test-project")
+            .with_stack_prefix("test")
+            .with_resource_name("test-objects")
+            .with_service_account_name("reader");
+        let generator = GcpRuntimePermissionsGenerator::new();
+        let before = generator
+            .generate_grant_plan(&old, BindingTarget::Resource, &context)
+            .unwrap();
+        let after = generator
+            .generate_grant_plan(current, BindingTarget::Resource, &context)
+            .unwrap();
+        let project = before.bindings_for_target(GcpBindingTargetScope::Project);
+        assert_eq!(project.len(), 1);
+        assert!(after
+            .bindings_for_target(GcpBindingTargetScope::Project)
+            .is_empty());
+        assert_eq!(
+            before.bindings_for_target(GcpBindingTargetScope::CurrentResource),
+            after.bindings_for_target(GcpBindingTargetScope::CurrentResource)
+        );
+        let own = after.bindings_for_target(GcpBindingTargetScope::ServiceAccount);
+        assert_eq!(own.len(), 1);
+        assert_eq!(
+            own[0].target_resource_name.as_deref(),
+            Some(
+                "projects/test-project/serviceAccounts/reader@test-project.iam.gserviceaccount.com"
+            )
+        );
+        let roles = after.custom_roles_for_bindings(&own);
+        assert_eq!(roles.len(), 1);
+        assert_eq!(
+            roles[0].included_permissions,
+            vec!["iam.serviceAccounts.signBlob"]
+        );
+        let member = "serviceAccount:reader@test-project.iam.gserviceaccount.com";
+        let other = "serviceAccount:writer@test-project.iam.gserviceaccount.com";
+        let mut bindings = project
+            .into_iter()
+            .map(ResourcePermissionsHelper::gcp_policy_binding_from_iam_binding)
+            .collect::<Vec<_>>();
+        bindings[0].members = vec![member.to_string(), other.to_string()];
+        let old_role = bindings[0].role.clone();
+        assert!(
+            ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+                &mut bindings,
+                vec![],
+                member,
+                &[],
+                &[old_role.clone()]
+            )
+        );
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].role, old_role);
+        assert_eq!(bindings[0].members, vec![other]);
+        assert!(
+            !ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+                &mut bindings,
+                vec![],
+                member,
+                &[],
+                &[old_role]
+            )
+        );
+    }
+
+    #[test]
     fn gcp_project_member_reconciliation_removes_stale_owned_roles_only() {
         let mut bindings = vec![
             Binding {

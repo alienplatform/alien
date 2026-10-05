@@ -4,10 +4,10 @@ use tracing::info;
 use crate::core::{GcpCustomRoleNaming, ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    permissions::PermissionSetReference, GcpServiceAccountHeartbeatData, HeartbeatBackend,
-    ObservedHealth, PermissionSet, Platform, ProviderLifecycleState, ResourceHeartbeat,
-    ResourceHeartbeatData, ResourceOutputs, ResourceStatus, ServiceAccount,
-    ServiceAccountHeartbeatData, ServiceAccountHeartbeatStatus, ServiceAccountOutputs,
+    GcpServiceAccountHeartbeatData, HeartbeatBackend, ObservedHealth, PermissionSet, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, ServiceAccount, ServiceAccountHeartbeatData, ServiceAccountHeartbeatStatus,
+    ServiceAccountOutputs,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_gcp_clients::iam::{
@@ -439,33 +439,32 @@ impl GcpServiceAccountController {
             .await?;
         }
 
-        if let Some(profile_name) = config.id.strip_suffix("-sa") {
-            if let Some(profile) = ctx.desired_stack.permissions.profiles.get(profile_name) {
-                for (resource_id, permission_set_refs) in &profile.0 {
-                    if resource_id == "*" {
-                        continue;
-                    }
-                    let resource_context = permission_context
-                        .clone()
-                        .with_resource_name(format!("{}-{}", ctx.resource_prefix, resource_id));
-
-                    for permission_set_ref in permission_set_refs {
-                        let permission_set = Self::resolve_permission_set(
-                            permission_set_ref,
-                            profile_name,
-                            &config.id,
-                        )?;
-                        self.collect_project_bindings_for_permission_set(
-                            ctx,
-                            &generator,
-                            &permission_set,
-                            BindingTarget::Resource,
-                            &resource_context,
-                            &mut new_bindings,
-                        )
-                        .await?;
-                    }
-                }
+        let legacy_profile = config
+            .id
+            .strip_suffix("-sa")
+            .and_then(|name| ctx.desired_stack.permissions.profiles.get(name));
+        let concrete = config
+            .concrete_permission_sets(legacy_profile, |name| {
+                alien_permissions::get_permission_set(name).cloned()
+            })
+            .context(ErrorData::ResourceConfigInvalid {
+                message: "Cannot resolve concrete account grants".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
+        for (resource_id, sets) in concrete.iter() {
+            let resource_context = permission_context
+                .clone()
+                .with_resource_name(format!("{}-{}", ctx.resource_prefix, resource_id));
+            for set in sets {
+                self.collect_project_bindings_for_permission_set(
+                    ctx,
+                    &generator,
+                    set,
+                    BindingTarget::Resource,
+                    &resource_context,
+                    &mut new_bindings,
+                )
+                .await?;
             }
         }
 
@@ -581,25 +580,6 @@ impl GcpServiceAccountController {
         Ok(())
     }
 
-    fn resolve_permission_set(
-        permission_set_ref: &PermissionSetReference,
-        profile_name: &str,
-        service_account_id: &str,
-    ) -> Result<PermissionSet> {
-        permission_set_ref
-            .resolve(|name| alien_permissions::get_permission_set(name).cloned())
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: format!(
-                        "Permission set '{}' not found for profile '{}'",
-                        permission_set_ref.id(),
-                        profile_name
-                    ),
-                    resource_id: Some(service_account_id.to_string()),
-                })
-            })
-    }
-
     fn own_service_account_bindings(
         &self,
         ctx: &ResourceControllerContext<'_>,
@@ -631,21 +611,24 @@ impl GcpServiceAccountController {
         for set in &config.stack_permission_sets {
             collect(set, BindingTarget::Stack, &context)?;
         }
-        if let Some(profile_name) = config.id.strip_suffix("-sa") {
-            if let Some(profile) = ctx.desired_stack.permissions.profiles.get(profile_name) {
-                for (resource_id, refs) in &profile.0 {
-                    if resource_id == "*" {
-                        continue;
-                    }
-                    let resource_context = context
-                        .clone()
-                        .with_resource_name(format!("{}-{resource_id}", ctx.resource_prefix));
-                    for reference in refs {
-                        let set =
-                            Self::resolve_permission_set(reference, profile_name, &config.id)?;
-                        collect(&set, BindingTarget::Resource, &resource_context)?;
-                    }
-                }
+        let legacy_profile = config
+            .id
+            .strip_suffix("-sa")
+            .and_then(|name| ctx.desired_stack.permissions.profiles.get(name));
+        let concrete = config
+            .concrete_permission_sets(legacy_profile, |name| {
+                alien_permissions::get_permission_set(name).cloned()
+            })
+            .context(ErrorData::ResourceConfigInvalid {
+                message: "Cannot resolve concrete account grants".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
+        for (resource_id, sets) in concrete.iter() {
+            let resource_context = context
+                .clone()
+                .with_resource_name(format!("{}-{resource_id}", ctx.resource_prefix));
+            for set in sets {
+                collect(set, BindingTarget::Resource, &resource_context)?;
             }
         }
         Ok(bindings)
