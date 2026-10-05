@@ -63,8 +63,9 @@ impl KubernetesDaemonController {
 
         let daemon_set_name = kubernetes_resource_name(&ctx.resource_prefix, &config.id);
         let namespace = self.get_kubernetes_namespace(ctx)?;
-        let service_account_name =
-            kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
+        let service_account_name = config
+            .get_permissions()
+            .map(|profile| kubernetes_service_account_name(&ctx.resource_prefix, profile));
         let registry_secret_name = format!("{}-registry", daemon_set_name);
         let environment_secret_name = format!("{}-env", daemon_set_name);
         let workload_client = ctx
@@ -173,7 +174,7 @@ impl KubernetesDaemonController {
                 config,
                 &daemon_set_name,
                 &namespace,
-                &service_account_name,
+                service_account_name.as_deref(),
                 image_pull_secret_name.as_deref(),
                 env_secret_plan.as_ref(),
                 ctx,
@@ -459,8 +460,9 @@ impl KubernetesDaemonController {
         let legacy_environment_owner_proven =
             crate::core::pod_spec_references_environment_secret(pod_spec, &environment_secret_name);
 
-        let service_account_name =
-            kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
+        let service_account_name = config
+            .get_permissions()
+            .map(|profile| kubernetes_service_account_name(&ctx.resource_prefix, profile));
         let image_pull_secret_name = if let DaemonCode::Image { image } = &config.code {
             let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -509,7 +511,7 @@ impl KubernetesDaemonController {
                 config,
                 daemon_set_name,
                 namespace,
-                &service_account_name,
+                service_account_name.as_deref(),
                 image_pull_secret_name.as_deref(),
                 env_secret_plan.as_ref(),
                 ctx,
@@ -984,7 +986,7 @@ impl KubernetesDaemonController {
         config: &Daemon,
         daemon_set_name: &str,
         namespace: &str,
-        service_account_name: &str,
+        service_account_name: Option<&str>,
         image_pull_secret_name: Option<&str>,
         env_secret_plan: Option<&KubernetesEnvSecretPlan>,
         ctx: &ResourceControllerContext<'_>,
@@ -1091,7 +1093,8 @@ impl KubernetesDaemonController {
         })?;
         let pod_spec = PodSpec {
             node_selector,
-            service_account_name: Some(service_account_name.to_string()),
+            service_account_name: service_account_name.map(str::to_owned),
+            automount_service_account_token: service_account_name.is_none().then_some(false),
             containers: vec![container],
             restart_policy: Some("Always".to_string()),
             image_pull_secrets,
@@ -1294,7 +1297,7 @@ mod tests {
                 &config,
                 "agent",
                 "test-ns",
-                "agent-sa",
+                Some("agent-sa"),
                 None,
                 Some(&plan),
                 &harness.ctx(),
@@ -1377,7 +1380,7 @@ mod tests {
                 &config,
                 "agent",
                 "test-ns",
-                "agent-sa",
+                Some("agent-sa"),
                 None,
                 None,
                 &harness.ctx(),
@@ -1464,7 +1467,7 @@ mod tests {
                     &config,
                     "agent",
                     "test-ns",
-                    "agent-sa",
+                    Some("agent-sa"),
                     None,
                     Some(&plan),
                     &harness.ctx(),

@@ -39,7 +39,7 @@ impl StackMutation for ResourceLinkPermissionsMutation {
             } else if let Some(container) = entry.config.downcast_ref::<Container>() {
                 !container.links.is_empty()
             } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
-                !daemon.links.is_empty()
+                daemon.permissions.is_some() && !daemon.links.is_empty()
             } else if let Some(build) = entry.config.downcast_ref::<Build>() {
                 !build.links.is_empty()
             } else {
@@ -64,7 +64,9 @@ impl StackMutation for ResourceLinkPermissionsMutation {
             } else if let Some(container) = entry.config.downcast_ref::<Container>() {
                 collect_link_grants(&mut grants, &container.permissions, &container.links);
             } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
-                collect_link_grants(&mut grants, &daemon.permissions, &daemon.links);
+                if let Some(profile) = &daemon.permissions {
+                    collect_link_grants(&mut grants, profile, &daemon.links);
+                }
             } else if let Some(build) = entry.config.downcast_ref::<Build>() {
                 collect_link_grants(&mut grants, &build.permissions, &build.links);
             }
@@ -231,6 +233,41 @@ mod tests {
             hash: String::new(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn daemon_without_profile_keeps_links_without_authoring_grants() {
+        let storage = Storage::new("objects".to_string()).build();
+        let daemon = Daemon::new("observer".to_string())
+            .code(alien_core::DaemonCode::Image {
+                image: "observer:latest".to_string(),
+            })
+            .link(&storage)
+            .build();
+        let links = daemon.links.clone();
+        let stack = Stack::new("example".to_string())
+            .add(storage, ResourceLifecycle::Frozen)
+            .add(daemon, ResourceLifecycle::Live)
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let state = StackState::new(Platform::Gcp);
+        assert!(!ResourceLinkPermissionsMutation.should_run(&stack, &state, &config));
+        let mutated = ResourceLinkPermissionsMutation
+            .mutate(stack, &state, &config)
+            .await
+            .unwrap();
+        assert!(mutated.permissions.profiles.is_empty());
+        let daemon = mutated.resources["observer"]
+            .config
+            .downcast_ref::<Daemon>()
+            .unwrap();
+        assert_eq!(daemon.links, links);
+        assert_eq!(daemon.permissions, None);
     }
 
     #[tokio::test]

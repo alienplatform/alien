@@ -312,7 +312,10 @@ fn deployer_secret_keys_by_profile(
         let profile = if let Some(container) = entry.config.downcast_ref::<Container>() {
             &container.permissions
         } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
-            &daemon.permissions
+            let Some(profile) = &daemon.permissions else {
+                continue;
+            };
+            profile
         } else {
             continue;
         };
