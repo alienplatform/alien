@@ -58,6 +58,25 @@ export interface PersistentStorageOptions {
    * Defaults to `/data`.
    */
   mountPath?: string
+  /**
+   * Scheduled snapshots of each replica's volume, taken by the cloud's own
+   * scheduler. On by default: every 24 hours, each kept for 7 days. Pass `false`
+   * for volumes that hold nothing worth restoring, such as caches.
+   *
+   * When the container is deleted, one final snapshot of each volume is kept.
+   * Kubernetes deployments leave volume backups to the cluster's own tooling.
+   */
+  backups?: false | VolumeBackupOptions
+}
+
+export interface VolumeBackupOptions {
+  /** Hours between snapshots: 1, 2, 4, 6, 8, 12 or 24. Defaults to 24. */
+  intervalHours?: 1 | 2 | 4 | 6 | 8 | 12 | 24
+  /**
+   * Days each snapshot is kept. Defaults to 7. A volume holds at most 450
+   * snapshots, so hourly snapshots can be kept for up to 18 days.
+   */
+  retentionDays?: number
 }
 
 /**
@@ -337,13 +356,23 @@ export class Container extends ResourceBuilder {
    * Configures persistent storage and marks the container stateful.
    * Data survives container restarts.
    * @param size Storage size (e.g., "100Gi", "500Gi", "1Ti").
-   * @param options Optional mount path.
+   * @param options Optional mount path and backup schedule.
    * @returns The Container builder instance.
    */
   public persistentStorage(size: string, options: PersistentStorageOptions = {}): this {
     const persistentStorage: PersistentStorage = {
       size,
       mountPath: options.mountPath ?? "/data",
+    }
+    if (options.backups !== undefined) {
+      persistentStorage.backups =
+        options.backups === false
+          ? { enabled: false, intervalHours: 24, retentionDays: 7 }
+          : {
+              enabled: true,
+              intervalHours: options.backups.intervalHours ?? 24,
+              retentionDays: options.backups.retentionDays ?? 7,
+            }
     }
 
     this._config.persistentStorage = persistentStorage

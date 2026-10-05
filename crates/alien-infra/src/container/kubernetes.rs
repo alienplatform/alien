@@ -1693,6 +1693,7 @@ impl KubernetesContainerController {
                     None => format!("{workload_name}.svc.cluster.local"),
                 },
                 replicas: Vec::new(), // Replica details tracked separately
+                volumes: Vec::new(),
                 public_endpoints: self
                     .public_endpoint
                     .effective_public_url()

@@ -595,6 +595,7 @@ wait "$child_pid"
             desired_replicas: 1,
             internal_dns: "api".to_string(),
             replicas: Vec::new(),
+            volumes: Vec::new(),
             public_endpoints: std::collections::HashMap::from([(
                 "api".to_string(),
                 alien_core::PublicEndpointOutput {
@@ -626,6 +627,7 @@ wait "$child_pid"
             desired_replicas: 1,
             internal_dns: "api".to_string(),
             replicas: Vec::new(),
+            volumes: Vec::new(),
             public_endpoints: std::collections::HashMap::new(),
         });
 

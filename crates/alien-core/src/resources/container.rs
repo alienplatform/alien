@@ -76,6 +76,98 @@ pub struct PersistentStorage {
     pub size: String,
     /// Mount path inside the container
     pub mount_path: String,
+    /// Scheduled snapshots of each replica's volume. On by default.
+    #[serde(default)]
+    pub backups: VolumeBackups,
+}
+
+/// Hours between snapshots that every cloud's native snapshot scheduler supports.
+pub const VOLUME_BACKUP_INTERVAL_HOURS: [u32; 7] = [1, 2, 4, 6, 8, 12, 24];
+
+/// Most snapshots a volume may hold at once. Azure Disk Backup keeps at most 450
+/// scheduled snapshots per disk; the same limit applies everywhere so a stack is
+/// portable across clouds.
+pub const VOLUME_BACKUP_MAX_SNAPSHOTS: u32 = 450;
+
+/// Scheduled snapshots of a persistent volume.
+///
+/// The cloud's own scheduler takes the snapshots (AWS Data Lifecycle Manager,
+/// a Compute Engine snapshot schedule, or Azure Disk Backup), so they keep being
+/// taken while the deployment is unreachable. Snapshots are crash-consistent:
+/// the volume as it would be after a sudden power loss. When a container is
+/// deleted, Alien keeps one final snapshot of each volume.
+///
+/// Kubernetes deployments leave volume backups to the cluster's own tooling.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeBackups {
+    /// Whether snapshots are taken. Defaults to true.
+    #[serde(default = "default_volume_backups_enabled")]
+    pub enabled: bool,
+    /// Hours between snapshots: 1, 2, 4, 6, 8, 12 or 24. Defaults to 24.
+    #[serde(default = "default_volume_backup_interval_hours")]
+    pub interval_hours: u32,
+    /// Days each snapshot is kept. Defaults to 7.
+    #[serde(default = "default_volume_backup_retention_days")]
+    pub retention_days: u32,
+}
+
+fn default_volume_backups_enabled() -> bool {
+    true
+}
+
+fn default_volume_backup_interval_hours() -> u32 {
+    24
+}
+
+fn default_volume_backup_retention_days() -> u32 {
+    7
+}
+
+impl Default for VolumeBackups {
+    fn default() -> Self {
+        Self {
+            enabled: default_volume_backups_enabled(),
+            interval_hours: default_volume_backup_interval_hours(),
+            retention_days: default_volume_backup_retention_days(),
+        }
+    }
+}
+
+impl VolumeBackups {
+    /// Backups switched off.
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            ..Self::default()
+        }
+    }
+
+    /// Explains why this schedule can't run on every cloud, or `None` when it can.
+    pub fn validation_error(&self) -> Option<String> {
+        if !self.enabled {
+            return None;
+        }
+        if !VOLUME_BACKUP_INTERVAL_HOURS.contains(&self.interval_hours) {
+            return Some(format!(
+                "backup intervalHours must be one of {VOLUME_BACKUP_INTERVAL_HOURS:?}, got {}",
+                self.interval_hours
+            ));
+        }
+        if self.retention_days == 0 {
+            return Some("backup retentionDays must be at least 1".to_string());
+        }
+        let snapshots = self.retention_days * 24 / self.interval_hours;
+        if snapshots > VOLUME_BACKUP_MAX_SNAPSHOTS {
+            return Some(format!(
+                "backups every {} hours for {} days keep {snapshots} snapshots per volume; \
+                 the most is {VOLUME_BACKUP_MAX_SNAPSHOTS}",
+                self.interval_hours, self.retention_days
+            ));
+        }
+        None
+    }
 }
 
 /// Mounts an existing, setup-owned Kubernetes Secret into a Container pod.
@@ -537,6 +629,28 @@ pub struct ContainerOutputs {
     pub public_endpoints: HashMap<String, PublicEndpointOutput>,
     /// Status of each replica
     pub replicas: Vec<ReplicaStatus>,
+    /// Persistent volumes, one per replica ordinal, with their latest snapshot.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volumes: Vec<VolumeOutput>,
+}
+
+/// A replica's persistent volume and its latest completed snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeOutput {
+    /// Replica ordinal the volume belongs to
+    pub ordinal: u32,
+    /// Cloud ID of the volume (EBS volume ID, Persistent Disk name, or Managed Disk ID)
+    pub volume_id: String,
+    /// Zone the volume lives in
+    pub zone: String,
+    /// Cloud ID of the latest completed snapshot, if any
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_snapshot_id: Option<String>,
+    /// When the latest completed snapshot was started (RFC 3339)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_snapshot_at: Option<String>,
 }
 
 impl ResourceOutputsDefinition for ContainerOutputs {
@@ -788,6 +902,7 @@ mod tests {
             .persistent_storage(PersistentStorage {
                 size: "100Gi".to_string(),
                 mount_path: "/var/lib/postgresql/data".to_string(),
+                backups: VolumeBackups::default(),
             })
             .permissions("database".to_string())
             .build();

@@ -677,6 +677,7 @@ impl LocalContainerController {
                 internal_dns: info.internal_dns.clone(),
                 public_endpoints: local_public_endpoint_outputs(info),
                 replicas: Vec::new(), // TODO: Add replica status
+                volumes: Vec::new(),
             })
         })
     }

@@ -32,6 +32,8 @@ use utoipa::OpenApi;
     WorkerPublicEndpoint,
     PublicEndpointOutput,
     PersistentStorage,
+    VolumeBackups,
+    VolumeOutput,
     KubernetesSecretMount,
     KubernetesHttpProbe,
     ContainerSecurity,
