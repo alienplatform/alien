@@ -201,33 +201,42 @@ async fn ensure_core_available(
         }
     }
 
-    // No package.json or core still not resolvable — use cached install
+    // No package.json or core still not resolvable — use cached install.
+    // Every entry under `core-packages/` is published by one atomic rename (see
+    // `publish_core_cache`), so a directory there is always complete. The older
+    // `core-modules/` layout was installed in place and could be left half-written.
     let version = alien_core::VERSION;
     let cache_dir = dirs::cache_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join("alien")
-        .join("core-modules")
+        .join("core-packages")
         .join(version);
 
-    let cache_node_modules = cache_dir.join("node_modules");
-    let is_ready = |node_modules: &Path| node_modules.join("@alienplatform/core").exists();
+    let executable = runtime.executable().clone();
+    let node_modules = publish_core_cache(&cache_dir, |staging| async move {
+        install_core_into(&staging, version, &executable).await
+    })
+    .await?;
+    Ok(Some(node_modules))
+}
 
-    if is_ready(&cache_node_modules) {
+/// Returns `<cache_dir>/node_modules`, creating it if needed. `install` fills a private
+/// staging directory, which is then renamed to `cache_dir`, so other processes only ever
+/// see a complete cache. When another process publishes first, its cache is used.
+async fn publish_core_cache<F, Fut>(cache_dir: &Path, install: F) -> Result<PathBuf>
+where
+    F: FnOnce(PathBuf) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    let node_modules = cache_dir.join("node_modules");
+    if cache_dir.exists() {
         debug!(
             "Using cached @alienplatform/core from {}",
             cache_dir.display()
         );
-        return Ok(Some(cache_node_modules));
+        return Ok(node_modules);
     }
 
-    info!(
-        "Installing @alienplatform/core v{} to cache at {}",
-        version,
-        cache_dir.display()
-    );
-
-    // Install into a private directory and rename it into place, so another `alien` process
-    // never sees a half-written cache: the cache directory only ever appears complete.
     let cache_parent = cache_dir
         .parent()
         .expect("the cache directory always has a parent");
@@ -240,7 +249,7 @@ async fn ensure_core_available(
             reason: "Failed to create cache directory".to_string(),
         })?;
     let staging = tempfile::Builder::new()
-        .prefix(&format!(".{version}-"))
+        .prefix(".staging-")
         .tempdir_in(cache_parent)
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
@@ -249,24 +258,48 @@ async fn ensure_core_available(
             reason: "Failed to create a staging directory for the cache".to_string(),
         })?;
 
-    // Write a minimal package.json
+    info!(
+        "Installing @alienplatform/core to cache at {}",
+        cache_dir.display()
+    );
+    install(staging.path().to_path_buf()).await?;
+
+    if let Err(error) = tokio::fs::rename(staging.path(), cache_dir).await {
+        // Another process published first; its cache is complete.
+        if !cache_dir.exists() {
+            return Err(error)
+                .into_alien_error()
+                .context(ErrorData::FileOperationFailed {
+                    operation: "rename".to_string(),
+                    file_path: cache_dir.display().to_string(),
+                    reason: "Failed to move the installed cache into place".to_string(),
+                });
+        }
+        debug!("Another process installed the cache first; using it");
+    }
+
+    info!("Cached @alienplatform/core installed successfully");
+    Ok(node_modules)
+}
+
+/// Installs `@alienplatform/core@<version>` into `dir` with the JavaScript runtime.
+async fn install_core_into(dir: &Path, version: &str, executable: &Path) -> Result<()> {
     let package_json = format!(
         r#"{{"name":"alien-core-cache","type":"module","dependencies":{{"@alienplatform/core":"{}"}}}}"#,
         version
     );
-    tokio::fs::write(staging.path().join("package.json"), &package_json)
+    tokio::fs::write(dir.join("package.json"), &package_json)
         .await
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
             operation: "write".to_string(),
-            file_path: staging.path().join("package.json").display().to_string(),
+            file_path: dir.join("package.json").display().to_string(),
             reason: "Failed to write cache package.json".to_string(),
         })?;
 
-    // Install using the runtime (bun install)
-    let install_output = tokio::process::Command::new(runtime.executable())
+    let install_output = tokio::process::Command::new(executable)
         .arg("install")
-        .current_dir(staging.path())
+        .current_dir(dir)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()
@@ -284,35 +317,7 @@ async fn ensure_core_available(
             },
         ));
     }
-
-    // A directory without the package is a partial install from an older CLI; replace it.
-    if cache_dir.exists() && !is_ready(&cache_node_modules) {
-        tokio::fs::remove_dir_all(&cache_dir)
-            .await
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "remove".to_string(),
-                file_path: cache_dir.display().to_string(),
-                reason: "Failed to remove an incomplete cache".to_string(),
-            })?;
-    }
-
-    if let Err(error) = tokio::fs::rename(staging.path(), &cache_dir).await {
-        // Another process finished first; its cache is complete, so use it.
-        if !is_ready(&cache_node_modules) {
-            return Err(error)
-                .into_alien_error()
-                .context(ErrorData::FileOperationFailed {
-                    operation: "rename".to_string(),
-                    file_path: cache_dir.display().to_string(),
-                    reason: "Failed to move the installed cache into place".to_string(),
-                });
-        }
-        debug!("Another process installed the cache first; using it");
-    }
-
-    info!("Cached @alienplatform/core installed successfully");
-    Ok(Some(cache_node_modules))
+    Ok(())
 }
 
 /// Load a TypeScript or JavaScript configuration file using Bun or Node.js.
@@ -565,6 +570,103 @@ async fn load_json_config(config_file: PathBuf) -> Result<Stack> {
 
 #[cfg(test)]
 mod tests {
+    mod core_cache {
+        use super::super::publish_core_cache;
+        use std::time::Duration;
+
+        /// A fake `bun install`: writes the package in two steps with a pause between, so a
+        /// reader that saw the directory mid-install would find the package half-written.
+        async fn slow_install(dir: std::path::PathBuf) -> crate::Result<()> {
+            let package = dir.join("node_modules/@alienplatform/core");
+            tokio::fs::create_dir_all(&package).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            tokio::fs::write(package.join("index.js"), "export default 1;\n")
+                .await
+                .unwrap();
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn concurrent_installs_only_ever_publish_a_complete_cache() {
+            let root = tempfile::tempdir().unwrap();
+            let cache_dir = root.path().join("core-packages/1.2.3");
+
+            // Start the callers 10 ms apart, so later ones arrive while an earlier install is
+            // half-written (it takes 50 ms).
+            let handles: Vec<_> = (0..8u64)
+                .map(|i| {
+                    let cache_dir = cache_dir.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(10 * i)).await;
+                        let node_modules =
+                            publish_core_cache(&cache_dir, slow_install).await.unwrap();
+                        // Whoever wins, the cache this caller gets back is already complete.
+                        let index = node_modules.join("@alienplatform/core/index.js");
+                        assert_eq!(
+                            std::fs::read_to_string(index).unwrap(),
+                            "export default 1;\n"
+                        );
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.await.unwrap();
+            }
+
+            let leftovers: Vec<_> = std::fs::read_dir(root.path().join("core-packages"))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .collect();
+            assert_eq!(
+                leftovers,
+                ["1.2.3"],
+                "staging directories should be cleaned up"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_published_cache_is_reused_without_installing() {
+            let root = tempfile::tempdir().unwrap();
+            let cache_dir = root.path().join("core-packages/1.2.3");
+            publish_core_cache(&cache_dir, slow_install).await.unwrap();
+
+            let node_modules = publish_core_cache(&cache_dir, |_| async {
+                panic!("a published cache must not be installed again")
+            })
+            .await
+            .unwrap();
+            assert_eq!(node_modules, cache_dir.join("node_modules"));
+        }
+
+        #[tokio::test]
+        async fn a_failed_install_publishes_nothing() {
+            let root = tempfile::tempdir().unwrap();
+            let cache_dir = root.path().join("core-packages/1.2.3");
+
+            let result = publish_core_cache(&cache_dir, |_| async {
+                Err(alien_error::AlienError::new(
+                    crate::ErrorData::ConfigurationError {
+                        message: "install failed".to_string(),
+                    },
+                ))
+            })
+            .await;
+
+            assert!(result.is_err());
+            assert!(
+                !cache_dir.exists(),
+                "a failed install must not leave a cache behind"
+            );
+            assert_eq!(
+                std::fs::read_dir(root.path().join("core-packages"))
+                    .unwrap()
+                    .count(),
+                0,
+                "the staging directory should be removed"
+            );
+        }
+    }
+
     use super::*;
     use std::fs;
     use tempfile::TempDir;
