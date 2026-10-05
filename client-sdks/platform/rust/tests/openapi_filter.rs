@@ -727,3 +727,59 @@ fn constrained_json_alternatives_are_not_simplified() {
         document
     );
 }
+
+#[test]
+fn both_modes_preserve_constraints_when_normalizing_disjoint_nullable_enums() {
+    let scalar = json!({
+        "anyOf": [
+            {"type": "string", "enum": ["frozen", "live"], "description": "Lifecycle"},
+            {"type": "string", "nullable": true, "enum": [null]}
+        ],
+        "description": "Optional lifecycle", "default": null
+    });
+    let mut expected = scalar.clone();
+    expected["oneOf"] = expected.as_object_mut().unwrap().remove("anyOf").unwrap();
+    let mut overlapping = scalar.clone();
+    overlapping["anyOf"][0]["nullable"] = json!(true);
+    let mut constrained_null = scalar.clone();
+    constrained_null["anyOf"][1]["maxLength"] = json!(0);
+    let mut reference_sibling = scalar.clone();
+    reference_sibling["anyOf"][0]["$ref"] = json!("#/components/schemas/Other");
+    let mut existing_one_of = scalar.clone();
+    existing_one_of["oneOf"] = json!([{"type": "string"}]);
+    let document = json!({
+        "paths": {"/state": {"get": {
+            "operationId": "state", "responses": {"200": {
+                "description": "ok", "content": {"application/json": {
+                    "schema": {"$ref": "#/components/schemas/State"}
+                }}
+            }}
+        }}},
+        "components": {"schemas": {
+            "State": {"type": "object", "properties": {
+                "lifecycle": scalar, "overlapping": overlapping,
+                "constrainedNull": constrained_null, "referenceSibling": reference_sibling,
+                "existingOneOf": existing_one_of
+            }},
+            "Other": {"type": "string"}
+        }}
+    });
+    for normalized in [
+        openapi_filter::normalize_openapi(&document).unwrap(),
+        openapi_filter::filter_openapi(&document, &["state"]).unwrap(),
+    ] {
+        let properties = &normalized["components"]["schemas"]["State"]["properties"];
+        assert_eq!(properties["lifecycle"], expected);
+        for name in [
+            "overlapping",
+            "constrainedNull",
+            "referenceSibling",
+            "existingOneOf",
+        ] {
+            assert_eq!(
+                properties[name],
+                document["components"]["schemas"]["State"]["properties"][name]
+            );
+        }
+    }
+}

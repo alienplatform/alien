@@ -770,6 +770,9 @@ fn normalize_binding_unions(document: &mut Map<String, Value>) -> Result<(), Str
     else {
         return Ok(());
     };
+    for schema in schemas.values_mut() {
+        normalize_nullable_string_enums(schema);
+    }
     if schemas.get("JsonValue") == Some(&serde_json::json!({})) {
         for schema in schemas.values_mut() {
             simplify_unrestricted_json_unions(schema);
@@ -863,4 +866,36 @@ fn required_type_tags(schema: &Value) -> Option<BTreeSet<String>> {
         }
     }
     None
+}
+
+// A closed string enum and null are disjoint. Progenitor needs oneOf here
+// to generate a scalar enum instead of a flattened struct that rejects strings.
+fn normalize_nullable_string_enums(schema: &mut Value) {
+    if let Some(object) = schema.as_object_mut() {
+        let disjoint =
+            object
+                .get("anyOf")
+                .and_then(Value::as_array)
+                .is_some_and(|branches| {
+                    branches.len() == 2 && branches.iter().any(|branch| {
+                branch == &serde_json::json!({"type": "string", "nullable": true, "enum": [null]})
+            }) && branches.iter().any(|branch| {
+                branch.get("$ref").is_none()
+                    && branch.get("type").and_then(Value::as_str) == Some("string")
+                    && branch.get("nullable") != Some(&Value::Bool(true))
+                    && branch.get("enum").and_then(Value::as_array).is_some_and(|values| {
+                        !values.is_empty() && values.iter().all(Value::is_string)
+                    })
+            })
+                });
+        if disjoint && !object.contains_key("oneOf") {
+            let branches = object.remove("anyOf").expect("union was checked");
+            object.insert("oneOf".to_string(), branches);
+        }
+    }
+    for_schema_children_mut(schema, |child| {
+        normalize_nullable_string_enums(child);
+        Ok::<(), ()>(())
+    })
+    .expect("nullable enum normalization is infallible");
 }
