@@ -4,7 +4,6 @@ Small operational scripts used by root `package.json` commands and GitHub Action
 
 ## Release
 
-- **`build-npm-packages.sh`** — Used by `.github/workflows/release.yml` to package and publish `@alienplatform/cli` from downloaded binary artifacts. Requires `VERSION`, `NODE_AUTH_TOKEN`, and the release workflow artifact layout under `./artifacts/`.
 - **`smoke-sandbox-agent.sh`** — Used by `.github/workflows/release.yml` to qualify the published `alien-sandbox-agent` image on both `linux/amd64` and `linux/arm64`, and usable on any GCP sandbox image built from the same contract. Takes the image reference and needs a Docker daemon that can pull it. `--platforms` narrows the platforms probed, and `--tools docker/sandbox-default-tools.txt` also runs every tool of the default sandbox base as the image's user. `scripts/smoke-sandbox-agent.test.sh` runs every probe and every failure mode against a stub `docker`, so the script itself is testable without a daemon or an image.
 
 ## Test environment
