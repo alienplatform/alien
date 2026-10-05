@@ -55,6 +55,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       typescript: ${{ steps.filter.outputs.typescript }}
+      platform_sdk: ${{ steps.filter.outputs.platform_sdk }}
     steps:
       - uses: actions/checkout@v7
 
@@ -82,6 +83,11 @@ jobs:
               # The smoke test qualifies the published images, and its own harness
               # is what proves it fails loudly. Both run in this job.
               - 'scripts/smoke-sandbox-agent*'
+            # A dependency bump can break the full client, which workspace builds don't compile.
+            platform_sdk:
+              - 'client-sdks/platform/rust/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
             typescript:
               - 'mise*.toml'
               - 'rust-toolchain.toml'
@@ -281,6 +287,12 @@ jobs:
           cargo nextest run --workspace \
             --features alien-manager/openapi,alien-bindings/platform-sdk \
             --filter-expr "${FILTER_CLAUSES[*]}"
+
+      - name: Platform SDK full-api tests
+        # The workspace builds the filtered client; tests that need operations outside it
+        # (`#![cfg(feature = "full-api")]`) run here, when the SDK changes.
+        if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.platform_sdk == 'true'
+        run: cargo test --locked -p alien-platform-api --features full-api
 
       - name: Sandbox agent privileged tests
         # The agent runs as root and drops to a different uid before every spawn.
