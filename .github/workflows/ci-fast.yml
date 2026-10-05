@@ -161,9 +161,10 @@ jobs:
   rust:
     name: Rust crates
     needs: [pr-conventions, changes]
+    # Skipped when a pull request changed only documentation inside the Rust paths.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      needs.changes.outputs.rust == 'true'
+      (needs.changes.outputs.rust == 'true' && needs.changes.outputs.rust_mode != 'none')
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 120
     env:

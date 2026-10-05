@@ -4,7 +4,7 @@
 Usage: affected-rust-packages.py <base-sha> <head-sha>
 
 Prints GitHub Actions outputs (key=value lines):
-  mode       "affected" or "full"
+  mode       "affected", "full", or "none" (only documentation changed)
   packages   cargo package arguments, e.g. "-p alien-cli -p alien-manager"
   features   the CI feature list, limited to selected packages
   core       "true" when alien-core is selected (the image contract test)
@@ -16,6 +16,9 @@ dev-dependency or as a build-dependency) on an affected package. A change to any
 outside the workspace packages selects every package ("full"), unless it is documentation:
 manifests, the lockfile, toolchain and CI config, Dockerfiles, scripts, examples and the
 TypeScript packages can all change what Rust tests see.
+
+Packages under `examples/` and `tests/` are fixtures: other packages' tests read their files
+(for example the CLI checks every example's template.toml), so a change there selects "full".
 """
 
 import json
@@ -29,6 +32,8 @@ CI_FEATURES = ["alien-manager/openapi", "alien-bindings/platform-sdk"]
 # Paths outside the packages that cannot change a Rust build or test.
 IGNORED_PREFIXES = ("docs/", ".claude/", ".agents/")
 IGNORED_SUFFIXES = (".md", ".mdx")
+# Fixture packages whose files other packages' tests read.
+FIXTURE_PREFIXES = ("examples/", "tests/")
 
 
 def run(*args: str) -> str:
@@ -57,13 +62,18 @@ def main() -> None:
     changed: set[str] = set()
     full_reason = None
     for path in changed_files:
+        if path.startswith(IGNORED_PREFIXES) or path.endswith(IGNORED_SUFFIXES):
+            continue
+        if path.startswith(FIXTURE_PREFIXES):
+            full_reason = path
+            break
         owner = next(
             (name for name, directory in by_depth if PurePosixPath(path).is_relative_to(directory)),
             None,
         )
         if owner is not None:
             changed.add(owner)
-        elif not (path.startswith(IGNORED_PREFIXES) or path.endswith(IGNORED_SUFFIXES)):
+        else:
             full_reason = path
             break
 
@@ -79,7 +89,7 @@ def main() -> None:
                 continue
             selected.add(name)
             pending.extend(dependents[name] - selected)
-        mode = "affected"
+        mode = "affected" if selected else "none"
 
     features = [feature for feature in CI_FEATURES if feature.split("/")[0] in selected]
     print(f"mode={mode}")
@@ -88,7 +98,11 @@ def main() -> None:
     print(f"core={'true' if 'alien-core' in selected else 'false'}")
     print(f"agent={'true' if 'alien-sandbox-agent' in selected else 'false'}")
     print(f"count={len(selected)}")
-    reason = f"{full_reason} is outside the packages" if full_reason else f"{len(changed)} changed package(s)"
+    reason = (
+        f"{full_reason} needs the whole workspace"
+        if full_reason
+        else f"{len(changed)} changed package(s)"
+    )
     print(f"Rust test selection: {mode}, {len(selected)} of {len(packages)} packages ({reason})", file=sys.stderr)
 
 
