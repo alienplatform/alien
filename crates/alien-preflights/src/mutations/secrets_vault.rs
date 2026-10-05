@@ -340,10 +340,27 @@ fn deployer_secret_keys_by_profile(
         }
     }
 
+    // A slot that still has a value stored from before deployer secrets were
+    // vault-native is delivered from that value, so its workload needs no read
+    // grant yet. Granting it anyway would change the setup-owned profile of
+    // every deployment installed before vault-native slots, and the next
+    // update would be refused until setup reran. Once the stored value is
+    // gone, the slot is granted like any other, and that update asks for setup.
+    let stored: BTreeSet<&str> = slots
+        .iter()
+        .filter(|slot| slot.has_stored_value)
+        .map(|slot| slot.vault_key.as_str())
+        .collect();
     Ok(by_profile
         .into_iter()
-        .filter(|(_, (_, keys))| !keys.is_empty())
-        .map(|(profile, (_, keys))| (profile, keys))
+        .map(|(profile, (_, keys))| {
+            let keys: BTreeSet<String> = keys
+                .into_iter()
+                .filter(|key| !stored.contains(key.as_str()))
+                .collect();
+            (profile, keys)
+        })
+        .filter(|(_, keys)| !keys.is_empty())
         .collect())
 }
 
@@ -555,6 +572,8 @@ fn add_vault_permissions_to_management(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compatibility::PermissionProfilesUnchangedCheck;
+    use crate::StackCompatibilityCheck;
     use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
     use alien_core::{
         Container, ContainerCode, EnvironmentVariablesSnapshot, ExternalBindings, Platform,
@@ -1418,6 +1437,50 @@ mod tests {
             .await
             .unwrap();
         assert!(deployer_secrets_read_set(&result, "shared").is_some());
+    }
+
+    /// A deployment installed before deployer secrets were vault-native still
+    /// delivers the value it stored, so its workload's setup-owned profile
+    /// must not gain a vault read grant on the next update: the profile
+    /// compatibility check would refuse that update until setup reran. Once
+    /// the stored value is gone the slot is read from the vault and granted.
+    #[tokio::test]
+    async fn a_slot_with_a_stored_value_is_not_granted_until_it_is_vault_native() {
+        let state = StackState::new(Platform::Aws);
+        let stack = deployer_secret_stack(&[("api", "api-profile")], &["api"]);
+        let mut legacy = deployer_secret_config();
+        legacy.input_values.insert(
+            "apiKey".to_string(),
+            serde_json::json!("stored-before-slots"),
+        );
+
+        let updated = SecretsVaultMutation
+            .mutate(stack.clone(), &state, &legacy)
+            .await
+            .expect("a stored deployer secret value prepares");
+        assert!(deployer_secrets_read_set(&updated, "api-profile").is_none());
+        assert_eq!(
+            updated.permissions.profiles["api-profile"], stack.permissions.profiles["api-profile"],
+            "the profile must stay as the earlier release installed it"
+        );
+        let compatibility = PermissionProfilesUnchangedCheck
+            .check_with_config(&stack, &updated, &legacy)
+            .await
+            .expect("check runs");
+        assert!(
+            !compatibility
+                .errors
+                .iter()
+                .any(|error| error.contains("api-profile")),
+            "{:?}",
+            compatibility.errors
+        );
+
+        let vault_native = SecretsVaultMutation
+            .mutate(stack, &state, &deployer_secret_config())
+            .await
+            .expect("an empty slot prepares");
+        assert!(deployer_secrets_read_set(&vault_native, "api-profile").is_some());
     }
 
     #[tokio::test]
