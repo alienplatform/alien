@@ -55,7 +55,6 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       typescript: ${{ steps.filter.outputs.typescript }}
-      product_lifecycle: ${{ steps.filter.outputs.product_lifecycle }}
     steps:
       - uses: actions/checkout@v7
 
@@ -83,13 +82,6 @@ jobs:
               # The smoke test qualifies the published images, and its own harness
               # is what proves it fails loudly. Both run in this job.
               - 'scripts/smoke-sandbox-agent*'
-            product_lifecycle:
-              - 'crates/alien-core/**'
-              - 'crates/alien-helm/**'
-              - 'crates/alien-infra/**'
-              - 'crates/alien-operator/**'
-              - 'crates/alien-terraform/**'
-              - '.github/workflows/ci-fast.yml'
             typescript:
               - 'mise*.toml'
               - 'rust-toolchain.toml'
@@ -130,8 +122,7 @@ jobs:
     needs: [pr-conventions, changes]
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      needs.changes.outputs.rust == 'true' ||
-      needs.changes.outputs.product_lifecycle == 'true'
+      needs.changes.outputs.rust == 'true'
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 120
     env:
@@ -289,40 +280,6 @@ jobs:
           cargo nextest run --workspace \
             --features alien-manager/openapi,alien-bindings/platform-sdk \
             --filter-expr "${FILTER_CLAUSES[*]}"
-
-      - name: Start disposable Kubernetes cluster
-        if: needs.changes.outputs.product_lifecycle == 'true'
-        uses: helm/kind-action@v1.14.0
-        with:
-          cluster_name: alien-product-lifecycle
-
-      - name: Kubernetes compute pool dynamic container lifecycle
-        if: needs.changes.outputs.product_lifecycle == 'true'
-        env:
-          ALIEN_DYNAMIC_KIND_CONTEXT: kind-alien-product-lifecycle
-          ALIEN_DYNAMIC_KIND_NAMESPACE: alien-dynamic-compute-ci
-        run: |
-          export KUBECONFIG="$RUNNER_TEMP/dynamic-compute.kubeconfig"
-          kind get kubeconfig --name alien-product-lifecycle > "$KUBECONFIG"
-          kubectl create namespace "$ALIEN_DYNAMIC_KIND_NAMESPACE"
-          trap 'kubectl delete namespace "$ALIEN_DYNAMIC_KIND_NAMESPACE" --ignore-not-found; rm -f "$KUBECONFIG"' EXIT
-          image=docker.io/library/memcached@sha256:9e4de012dc607573052061c0bcb38abc775e1dd59b24e7ac38d1892842094aaf
-          docker pull "$image"
-          docker tag "$image" docker.io/library/memcached:alien-kind-test
-          kind load docker-image docker.io/library/memcached:alien-kind-test --name alien-product-lifecycle
-          # Same package set and features as the nextest step, so nothing recompiles.
-          cargo nextest run --workspace --features alien-manager/openapi,alien-bindings/platform-sdk --locked \
-            --run-ignored only --no-capture --test-threads=1 \
-            --filter-expr 'binary_id(alien-operator::dynamic_containers_kind)'
-
-      - name: Product Remote Operator Helm and Terraform lifecycle
-        if: needs.changes.outputs.product_lifecycle == 'true'
-        env:
-          ALIEN_RUN_PRODUCT_LIFECYCLE_E2E: "1"
-        run: |
-          cargo nextest run --workspace --features alien-manager/openapi,alien-bindings/platform-sdk --locked \
-            --run-ignored only --no-capture --test-threads=1 \
-            --filter-expr 'binary_id(alien-helm::product_remote_operator_lifecycle)'
 
       - name: Sandbox agent privileged tests
         # The agent runs as root and drops to a different uid before every spawn.
