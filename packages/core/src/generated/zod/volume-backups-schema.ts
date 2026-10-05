@@ -11,7 +11,7 @@ import * as z from "zod";
 export const VolumeBackupsSchema = z.object({
     "enabled": z.optional(z.boolean().describe("Whether snapshots are taken. Defaults to true.")),
 "intervalHours": z.optional(z.int().min(0).describe("Hours between snapshots: 1, 2, 4, 6, 8, 12 or 24. Defaults to 24.")),
-"retentionDays": z.optional(z.int().min(0).describe("Days each snapshot is kept. Defaults to 7."))
+"retentionDays": z.optional(z.int().min(0).describe("Days each snapshot is kept, at most 365. Defaults to 7."))
     }).describe("Scheduled snapshots of a persistent volume.\n\nThe cloud's own scheduler takes the snapshots (AWS Data Lifecycle Manager,\na Compute Engine snapshot schedule, or Azure Disk Backup), so they keep being\ntaken while the deployment is unreachable. Snapshots are crash-consistent:\nthe volume as it would be after a sudden power loss. When a container is\ndeleted, Alien keeps one final snapshot of each volume.\n\nKubernetes deployments leave volume backups to the cluster's own tooling.")
 
 export type VolumeBackups = z.infer<typeof VolumeBackupsSchema>

@@ -7,6 +7,7 @@ import * as z from "zod";
 import { ContainerStatusSchema } from "./container-status-schema.js";
 import { PublicEndpointOutputSchema } from "./public-endpoint-output-schema.js";
 import { ReplicaStatusSchema } from "./replica-status-schema.js";
+import { VolumeBackupsStatusSchema } from "./volume-backups-status-schema.js";
 import { VolumeOutputSchema } from "./volume-output-schema.js";
 
 /**
@@ -25,6 +26,9 @@ get "replicas"(){
               },
 get "status"(){
                 return ContainerStatusSchema.describe("Container status in the managed container backend.")
+              },
+get "volumeBackups"(){
+                return z.union([VolumeBackupsStatusSchema, z.null()]).optional()
               },
 get "volumes"(){
                 return z.array(VolumeOutputSchema.describe("A replica's persistent volume and its latest completed snapshot.")).describe("Persistent volumes, one per replica ordinal, with their latest snapshot.").optional()

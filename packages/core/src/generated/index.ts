@@ -442,6 +442,8 @@ export type { VaultHeartbeatStatus } from "./zod/vault-heartbeat-status-schema.j
 export type { VaultOutputs } from "./zod/vault-outputs-schema.js";
 export type { Vault } from "./zod/vault-schema.js";
 export type { VolumeBackups } from "./zod/volume-backups-schema.js";
+export type { VolumeBackupsState } from "./zod/volume-backups-state-schema.js";
+export type { VolumeBackupsStatus } from "./zod/volume-backups-status-schema.js";
 export type { VolumeOutput } from "./zod/volume-output-schema.js";
 export type { VolumeRestoreOutput } from "./zod/volume-restore-output-schema.js";
 export type { WorkerCode } from "./zod/worker-code-schema.js";
@@ -896,6 +898,8 @@ export { VaultHeartbeatStatusSchema } from "./zod/vault-heartbeat-status-schema.
 export { VaultOutputsSchema } from "./zod/vault-outputs-schema.js";
 export { VaultSchema } from "./zod/vault-schema.js";
 export { VolumeBackupsSchema } from "./zod/volume-backups-schema.js";
+export { VolumeBackupsStateSchema } from "./zod/volume-backups-state-schema.js";
+export { VolumeBackupsStatusSchema } from "./zod/volume-backups-status-schema.js";
 export { VolumeOutputSchema } from "./zod/volume-output-schema.js";
 export { VolumeRestoreOutputSchema } from "./zod/volume-restore-output-schema.js";
 export { WorkerCodeSchema } from "./zod/worker-code-schema.js";
