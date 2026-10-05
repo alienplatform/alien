@@ -72,6 +72,16 @@ impl LocalVault {
     async fn bump_version(&self, secret_name: &str) -> Result<()> {
         let mut versions = self.load_versions().await?;
         *versions.entry(secret_name.to_string()).or_default() += 1;
+        tokio::fs::create_dir_all(&self.vault_dir)
+            .await
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to create vault directory: {}",
+                    self.vault_dir.display()
+                ),
+                resource_id: None,
+            })?;
         let versions_file = self.versions_file_path();
         let json = serde_json::to_string_pretty(&versions)
             .into_alien_error()
@@ -237,7 +247,8 @@ mod tests {
 
     fn test_vault() -> (LocalVault, TempDir) {
         let temp_dir = TempDir::new().expect("tempdir");
-        let vault = LocalVault::new("secrets".to_string(), temp_dir.path().to_path_buf());
+        // A vault directory that does not exist yet, as on first use.
+        let vault = LocalVault::new("secrets".to_string(), temp_dir.path().join("vault"));
         (vault, temp_dir)
     }
 
