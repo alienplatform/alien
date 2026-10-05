@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use tracing::{debug, info};
 
-use crate::core::ResourceControllerContext;
+use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::lambda_microvms::{
     CreateMicrovmImageRequest, MicrovmCodeArtifact, MicrovmCpuConfiguration, MicrovmImageBuild,
@@ -374,11 +374,44 @@ impl AwsSandboxController {
                 self.promote_pending_version();
                 info!(sandbox_id = %config.id, version = %image_version, "MicroVM image is active");
                 Ok(HandlerAction::Continue {
-                    state: Ready,
+                    state: ApplyingResourcePermissions,
                     suggested_delay: None,
                 })
             }
         }
+    }
+
+    /// Grants each permission profile what it was given on this sandbox, scoped to its image.
+    ///
+    /// A Worker that creates sessions needs `lambda:RunMicrovm` and friends on this image, and
+    /// those come only from the profile's resource-scoped sets. The helper writes them only
+    /// while setup owns the sandbox (a Frozen one a direct setup builds); a template-installed
+    /// sandbox gets the same policies from the template.
+    #[handler(
+        state = ApplyingResourcePermissions,
+        on_failure = ProvisionFailed,
+        status = ResourceStatus::Provisioning
+    )]
+    async fn applying_resource_permissions(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Sandbox>()?;
+
+        // The bare id: the sandbox sets name the image as `${stackPrefix}-${resourceName}`, and
+        // the image is named `<resource prefix>-<id>`.
+        ResourcePermissionsHelper::apply_aws_resource_scoped_permissions(
+            ctx,
+            &config.id,
+            &config.id,
+            Sandbox::RESOURCE_TYPE.as_ref(),
+        )
+        .await?;
+
+        Ok(HandlerAction::Continue {
+            state: Ready,
+            suggested_delay: None,
+        })
     }
 
     #[handler(
@@ -1274,12 +1307,14 @@ mod tests {
         deserialize_controller, serialize_controller, MockPlatformServiceProvider,
         ResourceController,
     };
+    use alien_aws_clients::iam::MockIamApi;
     use alien_aws_clients::lambda_microvms::{
         CreateMicrovmImageResponse, MicrovmImage, MicrovmImageVersion, MockLambdaMicrovmsApi,
         UpdateMicrovmImageResponse,
     };
+    use alien_core::permissions::{PermissionProfile, PermissionSetReference};
     use alien_core::{Platform, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     const IMAGE_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents";
     const BUILD_ROLE_ARN: &str = "arn:aws:iam::123456789012:role/test-agents-build";
@@ -1823,6 +1858,134 @@ mod tests {
         assert_eq!(binding["previewPorts"][0], 8080);
         assert_eq!(binding["idlePauseSeconds"], 600);
         assert_eq!(binding["maxLifetimeSeconds"], 1800);
+    }
+
+    /// A Worker creates sessions under its profile's role, so a direct setup that builds a Frozen
+    /// sandbox has to grant each profile the sets it was given on this sandbox, scoped to this
+    /// image. Without it the Worker's first `RunMicrovm` is denied.
+    #[tokio::test]
+    async fn a_direct_setup_grants_each_profile_its_sandbox_sets_on_this_image() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm_image()
+            .withf(|identifier| identifier == IMAGE_ARN)
+            .times(1)
+            .returning(|_| Err(not_found()));
+        client
+            .expect_create_microvm_image()
+            .times(1)
+            .returning(|_| Ok(created_response()));
+        client
+            .expect_get_microvm_image_version()
+            .times(1)
+            .returning(|_, _| Ok(active_version()));
+        let client = Arc::new(client);
+
+        let put_policies: Arc<Mutex<Vec<(String, String, serde_json::Value)>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let mut iam = MockIamApi::new();
+        let recorded = put_policies.clone();
+        iam.expect_put_role_policy()
+            .returning(move |role, name, document| {
+                recorded.lock().expect("lock").push((
+                    role.to_string(),
+                    name.to_string(),
+                    serde_json::from_str(document).expect("policy is JSON"),
+                ));
+                Ok(())
+            });
+        let iam = Arc::new(iam);
+
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_microvms_client()
+            .returning(move |_| Ok(client.clone()));
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+
+        let mut profile = PermissionProfile::new();
+        profile.0.insert(
+            "agents".to_string(),
+            vec![
+                PermissionSetReference::from_name("sandbox/management"),
+                PermissionSetReference::from_name("sandbox/execute"),
+            ],
+        );
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox())
+            .controller(runtime_seeded_controller())
+            .platform(Platform::Aws)
+            .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
+            .initial_setup_authority(alien_core::InitialSetupAuthority::DirectSetup)
+            .permission_profile("execution", profile)
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .expect("executor should build");
+
+        // Step through the create flow only; `Ready` polls the image, which this test is not about.
+        while executor.status() != ResourceStatus::Running {
+            executor.step().await.expect("create flow step");
+        }
+
+        let put_policies = put_policies.lock().expect("lock");
+        let granted: Vec<(&str, &str)> = put_policies
+            .iter()
+            .map(|(role, name, _)| (role.as_str(), name.as_str()))
+            .collect();
+        assert_eq!(
+            granted,
+            vec![
+                ("execution-sa", "alien-agents-sandbox-management"),
+                ("execution-sa", "alien-agents-sandbox-execute"),
+            ]
+        );
+
+        // Every action each set grants, mapped to the resources it is granted on.
+        let mut actions: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (_, _, document) in put_policies.iter() {
+            for statement in document["Statement"].as_array().expect("statements") {
+                assert_eq!(statement["Effect"], "Allow");
+                let resources: Vec<String> = match &statement["Resource"] {
+                    serde_json::Value::String(resource) => vec![resource.clone()],
+                    serde_json::Value::Array(resources) => resources
+                        .iter()
+                        .map(|resource| resource.as_str().expect("string").to_string())
+                        .collect(),
+                    other => panic!("unexpected Resource {other}"),
+                };
+                let statement_actions: Vec<String> = match &statement["Action"] {
+                    serde_json::Value::String(action) => vec![action.clone()],
+                    serde_json::Value::Array(actions) => actions
+                        .iter()
+                        .map(|action| action.as_str().expect("string").to_string())
+                        .collect(),
+                    other => panic!("unexpected Action {other}"),
+                };
+                for action in statement_actions {
+                    actions.entry(action).or_default().extend(resources.clone());
+                }
+            }
+        }
+        for action in [
+            "lambda:RunMicrovm",
+            "lambda:TerminateMicrovm",
+            "lambda:CreateMicrovmAuthToken",
+            "lambda:GetMicrovm",
+        ] {
+            assert_eq!(
+                actions.get(action),
+                Some(&vec![IMAGE_ARN.to_string()]),
+                "{action} is granted on this sandbox's image alone"
+            );
+        }
+        // AWS authorizes the connector pass against an id it assigns, so no name can scope it.
+        assert_eq!(
+            actions.get("lambda:PassNetworkConnector"),
+            Some(&vec!["*".to_string()])
+        );
     }
 
     // ─────────────── UPDATE FLOW ──────────────────────────────────────────

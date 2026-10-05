@@ -1365,3 +1365,125 @@ fn remote_queue_requires_running_frozen_queue_and_matching_platform() {
     }
     assert!(remote_queue_binding(&deployment, "missing").is_err());
 }
+
+/// A release store whose reads fail, as when the backing service is unreachable.
+struct FailingReleaseStore;
+
+#[async_trait]
+impl ReleaseStore for FailingReleaseStore {
+    async fn create_release(
+        &self,
+        _caller: &Subject,
+        _params: CreateReleaseParams,
+    ) -> Result<ReleaseRecord, AlienError> {
+        unreachable!("remote binding resolution never creates releases")
+    }
+
+    async fn get_release(
+        &self,
+        _caller: &Subject,
+        _id: &str,
+    ) -> Result<Option<ReleaseRecord>, AlienError> {
+        Err(AlienError::new(alien_error::GenericError {
+            message: "release store credentials token=secret-value rejected".to_string(),
+        }))
+    }
+
+    async fn get_latest_release(
+        &self,
+        _caller: &Subject,
+    ) -> Result<Option<ReleaseRecord>, AlienError> {
+        unreachable!("remote binding resolution never lists releases")
+    }
+
+    async fn list_releases(&self, _caller: &Subject) -> Result<Vec<ReleaseRecord>, AlienError> {
+        unreachable!("remote binding resolution never lists releases")
+    }
+}
+
+fn deployment_after_failed_update() -> DeploymentRecord {
+    let mut deployment = deployment(StackState::new(Platform::Aws));
+    deployment.status = "update-failed".to_string();
+    deployment.current_release_id = Some("current".to_string());
+    deployment.desired_release_id = Some("desired".to_string());
+    deployment
+}
+
+/// The caller sees the error the manager actually sends: a typed, retryable 503 rather than a
+/// sanitized internal 500.
+fn assert_desired_release_unavailable(error: AlienError<ErrorData>, reason: &str) {
+    let external = error.into_external();
+    assert_eq!(external.code, "REMOTE_BINDING_DESIRED_RELEASE_UNAVAILABLE");
+    assert_eq!(external.http_status_code, Some(503));
+    assert!(external.retryable);
+    assert!(!external.internal);
+    assert_eq!(
+        external.message,
+        format!(
+            "Desired release 'desired' of deployment 'deployment' could not be loaded to check remote binding access: {reason}"
+        )
+    );
+    assert!(
+        external.source.is_none(),
+        "release store details stay in the manager log"
+    );
+}
+
+#[tokio::test]
+async fn missing_desired_release_refuses_with_a_retryable_typed_error() {
+    let store = StubReleaseStore {
+        releases: HashMap::from([(
+            "current".to_string(),
+            release("current", Platform::Aws, storage_stack(true)),
+        )]),
+    };
+
+    let error = sandbox_may_share_the_identity(&store, &deployment_after_failed_update())
+        .await
+        .expect_err("an unreadable desired release must not be treated as sandbox-free");
+    assert_desired_release_unavailable(error, "the release was not found");
+}
+
+#[tokio::test]
+async fn failing_release_store_refuses_without_exposing_store_details() {
+    let error =
+        sandbox_may_share_the_identity(&FailingReleaseStore, &deployment_after_failed_update())
+            .await
+            .expect_err("a release store failure must refuse the binding");
+    assert_desired_release_unavailable(error, "the release store request failed");
+}
+
+#[tokio::test]
+async fn readable_desired_release_after_a_failed_update_is_checked_for_sandboxes() {
+    let sandbox_free = StubReleaseStore {
+        releases: HashMap::from([(
+            "desired".to_string(),
+            release("desired", Platform::Aws, storage_stack(true)),
+        )]),
+    };
+    assert!(
+        !sandbox_may_share_the_identity(&sandbox_free, &deployment_after_failed_update())
+            .await
+            .expect("a readable desired release resolves"),
+        "a desired release without a remote sandbox leaves the identity unshared"
+    );
+
+    let with_sandbox = StubReleaseStore {
+        releases: HashMap::from([(
+            "desired".to_string(),
+            release(
+                "desired",
+                Platform::Aws,
+                Stack::new("stack".to_string())
+                    .add_with_remote_access(sandbox_resource(), ResourceLifecycle::Frozen)
+                    .build(),
+            ),
+        )]),
+    };
+    assert!(
+        sandbox_may_share_the_identity(&with_sandbox, &deployment_after_failed_update())
+            .await
+            .expect("a readable desired release resolves"),
+        "a desired release that adds a remote sandbox may share the identity"
+    );
+}
