@@ -141,6 +141,7 @@ fn is_user_intent(data: &Value) -> bool {
                 | "DeploymentReleasePinned"
                 | "DeploymentReleaseUnpinned"
                 | "DeploymentEnvironmentUpdated"
+                | "DeploymentVolumeRestoreRequested"
                 | "DeploymentDeletionRequested"
         )
     )
@@ -159,6 +160,11 @@ fn event_title(data: &Value, state: &Value) -> String {
         ("DeploymentRedeployRequested", "failed") => "Redeployment Failed".to_string(),
         ("DeploymentRedeployRequested", "success") => "Deployment Redeployed".to_string(),
         ("DeploymentRedeployRequested", "started") => "Redeployment In Progress".to_string(),
+        ("DeploymentVolumeRestoreRequested", "failed") => "Volume Restore Failed".to_string(),
+        ("DeploymentVolumeRestoreRequested", "success") => "Volume Restore Applied".to_string(),
+        ("DeploymentVolumeRestoreRequested", "started") => {
+            "Volume Restore In Progress".to_string()
+        }
         ("DeploymentCreated", _) => "Deployment Created".to_string(),
         ("DeploymentReleased", _)
             if data.get("previousReleaseId").is_some_and(Value::is_string) =>
@@ -177,6 +183,7 @@ fn event_title(data: &Value, state: &Value) -> String {
         ("DeploymentReleasePinned", _) => "Release Pinned".to_string(),
         ("DeploymentReleaseUnpinned", _) => "Release Unpinned".to_string(),
         ("DeploymentEnvironmentUpdated", _) => "Configuration Update Requested".to_string(),
+        ("DeploymentVolumeRestoreRequested", _) => "Volume Restore Requested".to_string(),
         ("DeploymentDeletionRequested", _) => "Deployment Deletion Requested".to_string(),
         _ => humanize_event_type(event_type),
     }
@@ -221,6 +228,16 @@ fn event_details(data: &Value, state: &Value) -> String {
             data.get("channel").and_then(Value::as_str),
         ) {
             (Some(previous), Some(current)) => format!("{previous} → {current}"),
+            _ => String::new(),
+        },
+        "DeploymentVolumeRestoreRequested" => match (
+            data.get("resourceId").and_then(Value::as_str),
+            data.get("ordinal").and_then(Value::as_u64),
+            data.get("snapshotId").and_then(Value::as_str),
+        ) {
+            (Some(resource), Some(ordinal), Some(snapshot)) => {
+                format!("{resource} replica {ordinal} from {snapshot}")
+            }
             _ => String::new(),
         },
         "DeploymentDeleted" => "Resources torn down".to_string(),

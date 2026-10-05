@@ -25,6 +25,7 @@ use alien_platform_api::types::{
     DeploymentUpdateOperationSummaryInner, GetDeploymentId, GetDeploymentWorkspace,
     ListDeploymentsIncludeItem, NewDeploymentRequest, PinDeploymentReleaseId,
     PinDeploymentReleaseWorkspace, PinReleaseRequest, PinReleaseRequestReleaseId,
+    CreateVolumeRestoreRequest, VolumeRestore,
 };
 use alien_platform_api::SdkResultExt as _;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -121,6 +122,8 @@ impl DeploymentsArgs {
                 | DeploymentsCmd::Events { json: true, .. }
                 | DeploymentsCmd::Wait { json: true, .. }
                 | DeploymentsCmd::Machines { json: true, .. }
+                | DeploymentsCmd::Volumes { json: true, .. }
+                | DeploymentsCmd::RestoreVolume { json: true, .. }
                 | DeploymentsCmd::Retry { json: true, .. }
                 | DeploymentsCmd::Redeploy { json: true, .. }
                 | DeploymentsCmd::Pin { json: true, .. }
@@ -261,6 +264,44 @@ pub enum DeploymentsCmd {
         id: String,
 
         /// Print the complete inventory as machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show container volumes, their latest snapshots and restores
+    Volumes {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Replace a replica's persistent volume with a volume made from a snapshot
+    ///
+    /// The replica is stopped while its volume is swapped. The replaced volume is
+    /// snapshotted before it is deleted, so the restore can be undone by restoring
+    /// that snapshot.
+    RestoreVolume {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Container resource that owns the volume
+        #[arg(long)]
+        resource: String,
+
+        /// Replica ordinal whose volume is replaced
+        #[arg(long)]
+        ordinal: u32,
+
+        /// Snapshot to restore, as shown by `alien deployments volumes`
+        #[arg(long)]
+        snapshot: String,
+
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+
+        /// Print the restore request as machine-readable JSON
         #[arg(long)]
         json: bool,
     },
@@ -478,6 +519,66 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 &client,
                 workspace.as_str(),
                 &String::from(deployment.id),
+                json,
+            )
+            .await
+        }
+        DeploymentsCmd::Volumes { id, json } => {
+            #[cfg(feature = "platform")]
+            if ctx.is_platform() {
+                let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
+                let resolved = crate::platform_deployment_resolver::resolve_with_manager(
+                    &ctx, &id, None, !json,
+                )
+                .await?;
+                let deployment_id = String::from(resolved.detail.id);
+                let deployment =
+                    resolve_deployment_reference(&resolved.manager.client, &deployment_id).await?;
+                let client = ctx.sdk_client().await?;
+                let restores = list_platform_volume_restores(
+                    &client,
+                    workspace.as_str(),
+                    &deployment_id,
+                )
+                .await?;
+                return volumes_task(&deployment, Some(restores), json);
+            }
+            let manager = resolve_manager_client(&ctx, None, !json).await?;
+            let deployment = resolve_deployment_reference(&manager, &id).await?;
+            volumes_task(&deployment, None, json)
+        }
+        DeploymentsCmd::RestoreVolume {
+            id,
+            resource,
+            ordinal,
+            snapshot,
+            yes,
+            json,
+        } => {
+            if !ctx.is_platform() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "command".to_string(),
+                    message: "Volume restores are available on Alien Platform deployments."
+                        .to_string(),
+                }));
+            }
+            let confirmation_mode = restore_confirmation_mode(yes, json)?;
+            let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
+            let client = ctx.sdk_client().await?;
+            let deployment = crate::platform_deployment_resolver::resolve(
+                &ctx, &client, &workspace, &id, None, !json,
+            )
+            .await?;
+            restore_volume_task(
+                &client,
+                workspace.as_str(),
+                &deployment,
+                VolumeRestoreTarget {
+                    resource,
+                    ordinal,
+                    snapshot,
+                },
+                confirmation_mode,
                 json,
             )
             .await
@@ -2005,6 +2106,251 @@ fn resource_summaries(stack_state: alien_core::StackState) -> Vec<ResourceSummar
     summaries
 }
 
+#[derive(Debug, Clone)]
+struct VolumeRestoreTarget {
+    resource: String,
+    ordinal: u32,
+    snapshot: String,
+}
+
+fn restore_confirmation_mode(yes: bool, json: bool) -> Result<ConfirmationMode> {
+    InteractionMode::current(json).confirmation_mode(
+        yes,
+        "Restoring a volume replaces a replica's data and needs confirmation. Re-run with `--yes`.",
+    )
+}
+
+async fn restore_volume_task(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment: &DeploymentDetailResponse,
+    target: VolumeRestoreTarget,
+    confirmation_mode: ConfirmationMode,
+    json: bool,
+) -> Result<()> {
+    let deployment_id = String::from(deployment.id.clone());
+    if !json {
+        println!(
+            "{}",
+            contextual_heading("Restoring volume", &deployment.name, &[])
+        );
+        println!("{} {}", dim_label("ID"), deployment_id);
+        println!("{} {}", dim_label("Resource"), target.resource);
+        println!("{} {}", dim_label("Replica"), target.ordinal);
+        println!("{} {}", dim_label("Snapshot"), target.snapshot);
+        println!(
+            "{}",
+            dim_label(
+                "The replica is stopped while its volume is swapped. Its current volume is snapshotted before it is deleted."
+            )
+        );
+    }
+    if matches!(confirmation_mode, ConfirmationMode::Prompt)
+        && !prompt_confirm("Replace this replica's volume?", false)?
+    {
+        println!("{}", dim_label("Restore cancelled."));
+        return Ok(());
+    }
+
+    let body = CreateVolumeRestoreRequest {
+        resource_id: target.resource.as_str().try_into().map_err(|_| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "resource".to_string(),
+                message: "Resource IDs are 1 to 64 characters.".to_string(),
+            })
+        })?,
+        ordinal: target.ordinal.into(),
+        snapshot_id: target.snapshot.as_str().try_into().map_err(|_| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "snapshot".to_string(),
+                message: "Snapshot IDs are 1 to 1024 characters.".to_string(),
+            })
+        })?,
+    };
+    let restore = client
+        .create_deployment_volume_restore()
+        .id(deployment_id.as_str())
+        .workspace(workspace)
+        .body(body)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("requesting a volume restore for deployment '{deployment_id}'"),
+            url: None,
+        })?
+        .into_inner();
+
+    if json {
+        return print_json(&restore);
+    }
+    println!("{}", success_line("Volume restore requested."));
+    println!("{} {}", dim_label("Request"), String::from(restore.id));
+    println!(
+        "{} {}",
+        dim_label("Next"),
+        command(&format!("alien deployments volumes {deployment_id}"))
+    );
+    Ok(())
+}
+
+async fn list_platform_volume_restores(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment_id: &str,
+) -> Result<Vec<VolumeRestore>> {
+    Ok(client
+        .list_deployment_volume_restores()
+        .id(deployment_id)
+        .workspace(workspace)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("listing volume restores for deployment '{deployment_id}'"),
+            url: None,
+        })?
+        .into_inner()
+        .items)
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct VolumeSummary {
+    resource: String,
+    ordinal: u32,
+    volume_id: String,
+    zone: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_snapshot_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_snapshot_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_restore: Option<alien_core::VolumeRestoreOutput>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VolumesOutput {
+    volumes: Vec<VolumeSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    restores: Option<Vec<VolumeRestore>>,
+}
+
+fn volumes_task(
+    deployment: &DeploymentResponse,
+    restores: Option<Vec<VolumeRestore>>,
+    json: bool,
+) -> Result<()> {
+    let volumes = deployment
+        .stack_state
+        .as_ref()
+        .map(|value| {
+            serde_json::from_value::<alien_core::StackState>(value.clone())
+                .into_alien_error()
+                .context(ErrorData::JsonError {
+                    operation: "deserialization".to_string(),
+                    reason: "Failed to inspect deployment volumes".to_string(),
+                })
+                .map(volume_summaries)
+        })
+        .transpose()?
+        .unwrap_or_default();
+
+    if json {
+        return print_json(&VolumesOutput { volumes, restores });
+    }
+
+    if volumes.is_empty() {
+        println!(
+            "{}",
+            dim_label("No containers with persistent storage have reported volumes yet.")
+        );
+    } else {
+        let mut table = make_table(&[
+            "Resource",
+            "Replica",
+            "Volume",
+            "Zone",
+            "Latest snapshot",
+            "Snapshot time",
+        ]);
+        for volume in &volumes {
+            table.add_row(vec![
+                volume.resource.clone(),
+                volume.ordinal.to_string(),
+                volume.volume_id.clone(),
+                volume.zone.clone(),
+                volume
+                    .last_snapshot_id
+                    .clone()
+                    .unwrap_or_else(|| "—".to_string()),
+                volume
+                    .last_snapshot_at
+                    .clone()
+                    .unwrap_or_else(|| "—".to_string()),
+            ]);
+        }
+        print_table(table);
+    }
+
+    let Some(restores) = restores.filter(|restores| !restores.is_empty()) else {
+        return Ok(());
+    };
+    println!();
+    println!("{}", heading("Restores"));
+    let mut table = make_table(&[
+        "Request", "Resource", "Replica", "Snapshot", "Status", "Requested",
+    ]);
+    for restore in restores {
+        table.add_row(vec![
+            String::from(restore.id).into(),
+            restore.resource_id.into(),
+            restore.ordinal.to_string().into(),
+            restore.snapshot_id.into(),
+            status_cell(&restore.status.to_string()),
+            restore
+                .created_at
+                .format("%Y-%m-%d %H:%M UTC")
+                .to_string()
+                .into(),
+        ]);
+    }
+    print_table(table);
+    Ok(())
+}
+
+fn volume_summaries(stack_state: alien_core::StackState) -> Vec<VolumeSummary> {
+    let mut volumes: Vec<_> = stack_state
+        .resources
+        .iter()
+        .flat_map(|(name, resource)| {
+            resource
+                .outputs
+                .as_ref()
+                .and_then(|outputs| outputs.downcast_ref::<alien_core::ContainerOutputs>())
+                .map(|outputs| outputs.volumes.as_slice())
+                .unwrap_or_default()
+                .iter()
+                .map(move |volume| VolumeSummary {
+                    resource: name.clone(),
+                    ordinal: volume.ordinal,
+                    volume_id: volume.volume_id.clone(),
+                    zone: volume.zone.clone(),
+                    last_snapshot_id: volume.last_snapshot_id.clone(),
+                    last_snapshot_at: volume.last_snapshot_at.clone(),
+                    last_restore: volume.last_restore.clone(),
+                })
+        })
+        .collect();
+    volumes.sort_by(|left, right| {
+        left.resource
+            .cmp(&right.resource)
+            .then(left.ordinal.cmp(&right.ordinal))
+    });
+    volumes
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DeploymentWaitOutput {
@@ -3284,6 +3630,84 @@ mod tests {
             started.elapsed() < Duration::from_millis(250),
             "absolute timeout must include the poll await"
         );
+    }
+
+    #[test]
+    fn volume_summaries_list_every_container_volume_in_order() {
+        let stack_state: alien_core::StackState = serde_json::from_value(serde_json::json!({
+            "platform": "aws",
+            "resourcePrefix": "test",
+            "resources": {
+                "web": {
+                    "type": "container",
+                    "status": "running",
+                    "config": { "type": "container", "id": "web" },
+                    "outputs": {
+                        "type": "container",
+                        "name": "web",
+                        "status": "running",
+                        "currentReplicas": 1,
+                        "desiredReplicas": 1,
+                        "internalDns": "web.svc",
+                        "replicas": []
+                    }
+                },
+                "db": {
+                    "type": "container",
+                    "status": "running",
+                    "config": { "type": "container", "id": "db" },
+                    "outputs": {
+                        "type": "container",
+                        "name": "db",
+                        "status": "running",
+                        "currentReplicas": 2,
+                        "desiredReplicas": 2,
+                        "internalDns": "db.svc",
+                        "replicas": [],
+                        "volumes": [
+                            { "ordinal": 1, "volumeId": "vol-1", "zone": "us-east-1b" },
+                            {
+                                "ordinal": 0,
+                                "volumeId": "vol-0",
+                                "zone": "us-east-1a",
+                                "lastSnapshotId": "snap-0",
+                                "lastSnapshotAt": "2026-10-05T00:00:00Z",
+                                "lastRestore": {
+                                    "requestId": "vrst_1",
+                                    "snapshotId": "snap-old",
+                                    "replacedVolumeSnapshotId": "snap-replaced",
+                                    "completedAt": "2026-10-04T00:00:00Z"
+                                }
+                            }
+                        ]
+                    }
+                },
+                "jobs": {
+                    "type": "queue",
+                    "status": "running",
+                    "config": { "type": "queue", "id": "jobs" }
+                }
+            }
+        }))
+        .expect("stack state should deserialize");
+
+        let volumes = volume_summaries(stack_state);
+        assert_eq!(
+            volumes
+                .iter()
+                .map(|volume| (volume.resource.as_str(), volume.ordinal, volume.volume_id.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("db", 0, "vol-0"), ("db", 1, "vol-1")]
+        );
+        assert_eq!(volumes[0].last_snapshot_id.as_deref(), Some("snap-0"));
+        assert_eq!(
+            volumes[0]
+                .last_restore
+                .as_ref()
+                .map(|restore| restore.request_id.as_str()),
+            Some("vrst_1")
+        );
+        assert_eq!(volumes[1].last_snapshot_id, None);
     }
 
     #[test]
