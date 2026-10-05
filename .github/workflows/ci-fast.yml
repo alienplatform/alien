@@ -548,16 +548,10 @@ jobs:
         run: pnpm -C packages/commands test:integration
 
       - name: Install operation compiler generation tools
-        id: wasm_bindgen
         run: |
           MISE_DATA_DIR="$RUNNER_TEMP/mise-rust" mise -E release-prepare install rust
           VERSION=$(node -e 'const fs = require("node:fs"); console.log(fs.readFileSync("Cargo.lock", "utf8").match(/name = "wasm-bindgen"\nversion = "([^"]+)"/)[1])')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      # A prebuilt wasm-bindgen-cli at the Cargo.lock version, instead of compiling it each run.
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: wasm-bindgen@${{ steps.wasm_bindgen.outputs.version }}
+          MISE_DATA_DIR="$RUNNER_TEMP/mise-rust" mise -E release-prepare exec -- cargo install --locked --version "$VERSION" wasm-bindgen-cli
 
       - name: Regenerate local TypeScript APIs
         run: pnpm generate
