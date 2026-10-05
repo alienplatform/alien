@@ -6336,6 +6336,17 @@ mod tests {
         // Run create flow
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
+        let delays = executor.take_suggested_delays();
+        // Cloud Run and its networking are long-running operations, so create polls.
+        assert!(
+            !delays.is_empty(),
+            "GCP worker create should poll at least once"
+        );
+        crate::core::controller_test::assert_polling_delays(
+            &delays,
+            std::time::Duration::from_secs(1),
+            "GCP worker create",
+        );
 
         // Verify outputs are available
         let outputs = executor.outputs().unwrap();
@@ -6364,22 +6375,20 @@ mod tests {
         // Run delete flow
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Deleted);
+        let delays = executor.take_suggested_delays();
+        // Deleting the service and its networking also waits on operations.
+        assert!(
+            !delays.is_empty(),
+            "GCP worker delete should poll at least once"
+        );
+        crate::core::controller_test::assert_polling_delays(
+            &delays,
+            std::time::Duration::from_secs(1),
+            "GCP worker delete",
+        );
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
-
-        // The controller waits between polls of the cloud API; it never hot-loops.
-        let delays = executor.suggested_delays();
-        assert!(
-            !delays.is_empty(),
-            "create and delete should poll GCP at least once"
-        );
-        assert!(
-            delays
-                .iter()
-                .all(|delay| *delay >= std::time::Duration::from_secs(1)),
-            "every GCP poll should wait at least a second, got {delays:?}"
-        );
     }
 
     #[tokio::test]

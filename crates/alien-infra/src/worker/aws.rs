@@ -5404,6 +5404,17 @@ mod tests {
         // Run create flow
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
+        let delays = executor.take_suggested_delays();
+        // Lambda creation is asynchronous, so create polls until the function is active.
+        assert!(
+            !delays.is_empty(),
+            "AWS worker create should poll at least once"
+        );
+        crate::core::controller_test::assert_polling_delays(
+            &delays,
+            std::time::Duration::from_secs(1),
+            "AWS worker create",
+        );
 
         // Verify outputs are available
         let outputs = executor.outputs().unwrap();
@@ -5417,22 +5428,15 @@ mod tests {
         // Run delete flow
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Deleted);
+        // Lambda deletion completes in the call, so delete may not poll at all.
+        crate::core::controller_test::assert_polling_delays(
+            &executor.take_suggested_delays(),
+            std::time::Duration::from_secs(1),
+            "AWS worker delete",
+        );
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
-
-        // The controller waits between polls of the cloud API; it never hot-loops.
-        let delays = executor.suggested_delays();
-        assert!(
-            !delays.is_empty(),
-            "create and delete should poll AWS at least once"
-        );
-        assert!(
-            delays
-                .iter()
-                .all(|delay| *delay >= std::time::Duration::from_secs(1)),
-            "every AWS poll should wait at least a second, got {delays:?}"
-        );
     }
 
     // ─────────────── UPDATE FLOW TESTS ────────────────────────────────

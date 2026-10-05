@@ -266,6 +266,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
 
+/// Asserts that no wait suggested during one phase (create, update, delete) is shorter than
+/// `min_delay`; a shorter wait would hammer the cloud API in production.
+pub fn assert_polling_delays(delays: &[Duration], min_delay: Duration, phase: &str) {
+    assert!(
+        delays.iter().all(|delay| *delay >= min_delay),
+        "{phase} polls should each wait at least {min_delay:?}, got {delays:?}"
+    );
+}
+
 /// How [`SingleControllerExecutor`] waits between controller steps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DelayMode {
@@ -433,6 +442,12 @@ impl SingleControllerExecutor {
     /// to pin polling behavior; with the default [`DelayMode::Record`] they are not slept.
     pub fn suggested_delays(&self) -> &[Duration] {
         &self.suggested_delays
+    }
+
+    /// Returns the delays recorded since the last call and clears them, so a test can check
+    /// one phase (create, update, delete) at a time.
+    pub fn take_suggested_delays(&mut self) -> Vec<Duration> {
+        std::mem::take(&mut self.suggested_delays)
     }
 
     /// Records the controller's suggested delay, rejects an implausible one, and waits
