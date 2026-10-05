@@ -2,7 +2,7 @@
 //!
 //! This module provides functionality to load Alien stack configurations from various file formats:
 //! - **TypeScript files** (`.ts`): Dynamically executed using Bun or Node.js
-//! - **JavaScript files** (`.js`): Dynamically executed using Bun or Node.js  
+//! - **JavaScript files** (`.js`): Dynamically executed using Bun or Node.js
 //! - **JSON files** (`.json`): Directly parsed as serialized Stack objects
 //!
 //! ## Configuration Discovery
