@@ -15,7 +15,7 @@ use crate::ui::{
 use alien_cli_common::network::{self, NetworkArgs};
 use alien_core::{is_valid_resource_prefix, ComputeClusterOutputs, RESOURCE_PREFIX_ERROR_MESSAGE};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_manager_api::types::DeploymentResponse;
+use alien_manager_api::types::{DeleteDeploymentAction, DeploymentResponse};
 use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use alien_manager_api::SdkResultExtReadingBody as _;
 use alien_platform_api::types::{
@@ -269,6 +269,12 @@ pub enum DeploymentsCmd {
         /// Deployment ID, or <deployment-group-name>/<deployment-name>
         id: String,
 
+        /// Remove only the deployment record, without cleaning up its resources. Use when the
+        /// resources are already gone (for example, the CloudFormation stack or Helm release was
+        /// deleted) and the deployment is stuck.
+        #[arg(long)]
+        forget: bool,
+
         /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
@@ -476,7 +482,12 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             )
             .await
         }
-        DeploymentsCmd::Delete { id, yes } => {
+        DeploymentsCmd::Delete { id, forget, yes } => {
+            let action = if forget {
+                DeleteDeploymentAction::Forget
+            } else {
+                DeleteDeploymentAction::Cleanup
+            };
             #[cfg(feature = "platform")]
             if ctx.is_platform() {
                 let resolved = crate::platform_deployment_resolver::resolve_with_manager(
@@ -486,12 +497,13 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 return delete_deployment_task(
                     &resolved.manager.client,
                     &String::from(resolved.detail.id),
+                    action,
                     yes,
                 )
                 .await;
             }
             let manager = resolve_manager_client(&ctx, None, true).await?;
-            delete_deployment_task(&manager, &id, yes).await
+            delete_deployment_task(&manager, &id, action, yes).await
         }
         DeploymentsCmd::Retry { id, json } => {
             #[cfg(feature = "platform")]
@@ -1484,21 +1496,42 @@ fn observed_rollout_state(resource: &ObservedRolloutResource) -> &'static str {
 async fn delete_deployment_task(
     client: &alien_manager_api::Client,
     reference: &str,
+    action: DeleteDeploymentAction,
     yes: bool,
 ) -> Result<()> {
     let confirmation_mode = delete_confirmation_mode(yes)?;
     let deployment = resolve_deployment_reference(client, reference).await?;
+    let forget = matches!(action, DeleteDeploymentAction::Forget);
 
     println!(
         "{}",
-        contextual_heading("Deleting deployment", &deployment.name, &[])
+        contextual_heading(
+            if forget {
+                "Forgetting deployment"
+            } else {
+                "Deleting deployment"
+            },
+            &deployment.name,
+            &[]
+        )
     );
     println!("{} {}", dim_label("ID"), deployment.id);
     println!("{} {}", dim_label("Status"), deployment.status);
+    if forget {
+        println!(
+            "{}",
+            dim_label(
+                "Only the deployment record is removed. Any resources still running are left in place."
+            )
+        );
+    }
 
-    if matches!(confirmation_mode, ConfirmationMode::Prompt)
-        && !prompt_confirm("Are you sure you want to delete this deployment?", false)?
-    {
+    let question = if forget {
+        "Are you sure you want to forget this deployment?"
+    } else {
+        "Are you sure you want to delete this deployment?"
+    };
+    if matches!(confirmation_mode, ConfirmationMode::Prompt) && !prompt_confirm(question, false)? {
         println!("{}", dim_label("Deletion cancelled."));
         return Ok(());
     }
@@ -1506,9 +1539,7 @@ async fn delete_deployment_task(
     let accepted = client
         .delete_deployment()
         .id(&deployment.id)
-        .body(alien_manager_api::types::DeleteDeploymentRequest {
-            action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
-        })
+        .body(alien_manager_api::types::DeleteDeploymentRequest { action })
         .send()
         .await
         .into_sdk_error()
@@ -2803,6 +2834,87 @@ mod tests {
             axum::serve(listener, app).await.expect("serve");
         });
         alien_manager_api::Client::new(&format!("http://{addr}"))
+    }
+
+    /// Serve the deployment read and delete routes on loopback, recording each delete body.
+    async fn fake_delete_manager() -> (
+        alien_manager_api::Client,
+        Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    ) {
+        type Bodies = Arc<std::sync::Mutex<Vec<serde_json::Value>>>;
+
+        async fn read_deployment() -> Response {
+            Json(deployment_with_releases(Some("rel_a"), Some("rel_a"))).into_response()
+        }
+
+        async fn delete_deployment(
+            State(bodies): State<Bodies>,
+            Json(body): Json<serde_json::Value>,
+        ) -> Response {
+            let action = body["action"].clone();
+            bodies.lock().expect("bodies lock").push(body);
+            (
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "action": action,
+                    "cleanupRequired": false,
+                    "message": "Deployment record deleted",
+                })),
+            )
+                .into_response()
+        }
+
+        let bodies: Bodies = Arc::default();
+        let app = Router::new()
+            .route("/v1/deployments/dep_1", get(read_deployment))
+            .route(
+                "/v1/deployments/dep_1/delete",
+                axum::routing::post(delete_deployment),
+            )
+            .with_state(bodies.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let addr = listener.local_addr().expect("local addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        (
+            alien_manager_api::Client::new(&format!("http://{addr}")),
+            bodies,
+        )
+    }
+
+    #[tokio::test]
+    async fn delete_forget_asks_the_server_to_drop_only_the_record() {
+        let parsed = DeploymentsArgs::try_parse_from([
+            "deployments",
+            "delete",
+            "dep_1",
+            "--forget",
+            "--yes",
+        ])
+        .expect("--forget parses");
+        let DeploymentsCmd::Delete { id, forget, yes } = parsed.cmd else {
+            panic!("expected the delete subcommand");
+        };
+        assert!(forget && yes);
+
+        let (client, bodies) = fake_delete_manager().await;
+        delete_deployment_task(&client, &id, DeleteDeploymentAction::Forget, yes)
+            .await
+            .expect("forget should be accepted");
+        delete_deployment_task(&client, &id, DeleteDeploymentAction::Cleanup, yes)
+            .await
+            .expect("cleanup should be accepted");
+
+        assert_eq!(
+            *bodies.lock().expect("bodies lock"),
+            vec![
+                serde_json::json!({ "action": "forget" }),
+                serde_json::json!({ "action": "cleanup" }),
+            ]
+        );
     }
 
     #[tokio::test]
