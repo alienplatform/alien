@@ -3675,6 +3675,8 @@ pub struct VolumeAttachment {
     pub volume_id: Option<String>,
     pub instance_id: Option<String>,
     pub device: Option<String>,
+    /// `attaching`, `attached`, `detaching`, `detached` or `busy`. EC2 names it `status`.
+    #[serde(rename = "status")]
     pub state: Option<String>,
     pub attach_time: Option<String>,
     pub delete_on_termination: Option<bool>,
@@ -4547,6 +4549,40 @@ mod tests {
             Some("vol-0123456789abcdef0")
         );
         assert_eq!(volumes[0].state.as_deref(), Some("available"));
+    }
+
+    #[test]
+    fn describe_volumes_reads_the_attachment_status() {
+        // Sample from the EC2 DescribeVolumes reference: the attachment state is `<status>`.
+        let response: DescribeVolumesResponse = quick_xml::de::from_str(
+            r#"<DescribeVolumesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+                <volumeSet>
+                    <item>
+                        <volumeId>vol-1234567890abcdef0</volumeId>
+                        <size>80</size>
+                        <availabilityZone>us-east-1a</availabilityZone>
+                        <status>in-use</status>
+                        <attachmentSet>
+                            <item>
+                                <volumeId>vol-1234567890abcdef0</volumeId>
+                                <instanceId>i-1234567890abcdef0</instanceId>
+                                <device>/dev/sdh</device>
+                                <status>attached</status>
+                                <attachTime>YYYY-MM-DDTHH:MM:SS.SSSZ</attachTime>
+                                <deleteOnTermination>false</deleteOnTermination>
+                            </item>
+                        </attachmentSet>
+                        <volumeType>standard</volumeType>
+                    </item>
+                </volumeSet>
+            </DescribeVolumesResponse>"#,
+        )
+        .expect("DescribeVolumes response should deserialize");
+        let volume = &response.volume_set.expect("volume set").items[0];
+        let attachment = &volume.attachment_set.as_ref().expect("attachments").items[0];
+        assert_eq!(volume.state.as_deref(), Some("in-use"));
+        assert_eq!(attachment.state.as_deref(), Some("attached"));
+        assert_eq!(attachment.instance_id.as_deref(), Some("i-1234567890abcdef0"));
     }
 
     #[test]
