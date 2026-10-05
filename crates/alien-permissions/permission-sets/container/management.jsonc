@@ -157,37 +157,10 @@
       }
     ],
     "azure": [
-      // Volume backups and restores on update: reconcile the Azure Disk Backup vault, policy,
-      // backup instances and the vault identity's role assignments; restore a replica's volume
-      // by creating a disk from a snapshot, snapshotting the replaced disk and deleting it.
+      // Volume backup status: list the container's snapshots to report the newest one per replica
       {
         "grant": {
-          "actions": [
-            "Microsoft.DataProtection/backupVaults/read",
-            "Microsoft.DataProtection/backupVaults/write",
-            "Microsoft.DataProtection/backupVaults/delete",
-            "Microsoft.DataProtection/backupVaults/operationResults/read",
-            "Microsoft.DataProtection/backupVaults/operationStatus/read",
-            "Microsoft.DataProtection/backupVaults/backupPolicies/read",
-            "Microsoft.DataProtection/backupVaults/backupPolicies/write",
-            "Microsoft.DataProtection/backupVaults/backupPolicies/delete",
-            "Microsoft.DataProtection/backupVaults/validateForBackup/action",
-            "Microsoft.DataProtection/backupVaults/backupInstances/read",
-            "Microsoft.DataProtection/backupVaults/backupInstances/write",
-            "Microsoft.DataProtection/backupVaults/backupInstances/delete",
-            "Microsoft.DataProtection/backupVaults/backupInstances/suspendBackups/action",
-            "Microsoft.DataProtection/backupVaults/backupInstances/operationResults/read",
-            "Microsoft.DataProtection/locations/operationStatus/read",
-            "Microsoft.DataProtection/locations/operationResults/read",
-            "Microsoft.Compute/snapshots/read",
-            "Microsoft.Compute/snapshots/write",
-            "Microsoft.Compute/snapshots/delete",
-            "Microsoft.Compute/disks/write",
-            "Microsoft.Compute/disks/delete",
-            "Microsoft.Authorization/roleAssignments/read",
-            "Microsoft.Authorization/roleAssignments/write",
-            "Microsoft.Authorization/roleAssignments/delete"
-          ]
+          "actions": ["Microsoft.Compute/snapshots/read"]
         },
         "binding": {
           "stack": {

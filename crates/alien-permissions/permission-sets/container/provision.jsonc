@@ -953,8 +953,10 @@
           }
         }
       },
-      // Volume backups: an Azure Disk Backup vault per container with its policy and one backup
-      // instance per disk, and the final snapshot taken on delete. The vault identity's role
+      // Volume backups and restores: an Azure Disk Backup vault per container with its policy and
+      // one backup instance per disk (suspended, not deleted, when backups are turned off), the
+      // final snapshot taken on delete, and the snapshot of a disk replaced by a restore. The
+      // restored disk itself uses the Managed Disks grant above. The vault identity's role
       // assignments (Disk Backup Reader on each disk, Disk Snapshot Contributor on the resource
       // group) use the roleAssignments grants above. The vault identity reads disk contents;
       // this identity never does, so no beginGetAccess.
@@ -974,6 +976,7 @@
             "Microsoft.DataProtection/backupVaults/backupInstances/write",
             "Microsoft.DataProtection/backupVaults/backupInstances/delete",
             "Microsoft.DataProtection/backupVaults/backupInstances/suspendBackups/action",
+            "Microsoft.DataProtection/backupVaults/backupInstances/resumeBackups/action",
             "Microsoft.DataProtection/backupVaults/backupInstances/operationResults/read",
             "Microsoft.DataProtection/locations/operationStatus/read",
             "Microsoft.DataProtection/locations/operationResults/read",
