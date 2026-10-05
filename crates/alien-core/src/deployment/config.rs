@@ -44,6 +44,7 @@ pub struct DeploymentConfig {
     /// Trusted presence metadata only: never values, gate answers, or authority.
     /// Absent on legacy targets; an explicit empty list means no stored secrets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub stored_secret_input_ids: Option<Vec<String>>,
     /// Allow frozen resource changes during updates
     /// When true, skips the frozen resources compatibility check.
