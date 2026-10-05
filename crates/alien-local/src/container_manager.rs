@@ -1672,7 +1672,8 @@ struct OciDescriptor {
     digest: String,
 }
 
-/// Digest of the single image an OCI archive's `index.json` points at.
+/// Digest of the first image an OCI archive's `index.json` lists: the same
+/// image whose config digest `dockdash::Image::from_tarball` reads.
 fn oci_archive_manifest_digest(tarball_path: &Path) -> std::io::Result<String> {
     let mut archive = tar::Archive::new(std::fs::File::open(tarball_path)?);
     // Seeking skips over layer blobs instead of reading them.
@@ -1683,13 +1684,12 @@ fn oci_archive_manifest_digest(tarball_path: &Path) -> std::io::Result<String> {
             continue;
         }
         let index: OciIndex = serde_json::from_reader(entry).map_err(std::io::Error::other)?;
-        return match index.manifests.as_slice() {
-            [manifest] => Ok(manifest.digest.clone()),
-            manifests => Err(std::io::Error::other(format!(
-                "expected one image in index.json, found {}",
-                manifests.len()
-            ))),
-        };
+        return index
+            .manifests
+            .into_iter()
+            .next()
+            .map(|manifest| manifest.digest)
+            .ok_or_else(|| std::io::Error::other("index.json lists no images"));
     }
     Err(std::io::Error::other("archive has no index.json"))
 }
