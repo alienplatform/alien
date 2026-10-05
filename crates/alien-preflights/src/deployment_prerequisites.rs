@@ -76,10 +76,21 @@ fn stack_requires_managed_container_backend(stack: &Stack) -> bool {
     })
 }
 
-fn resources_requiring_domain_metadata(stack: &Stack) -> Vec<String> {
+/// Public HTTP containers whose domain Alien generates. Resources listed in
+/// `stackSettings.domains.customDomains` bring their own domain and
+/// certificate, so they do not need domain metadata.
+fn resources_requiring_domain_metadata(stack: &Stack, config: &DeploymentConfig) -> Vec<String> {
+    let custom_domains = config
+        .stack_settings
+        .domains
+        .as_ref()
+        .and_then(|domains| domains.custom_domains.as_ref());
     let mut resources = Vec::new();
 
     for (resource_id, entry) in stack.resources() {
+        if custom_domains.is_some_and(|domains| domains.contains_key(resource_id)) {
+            continue;
+        }
         if let Some(container) = entry.config.downcast_ref::<Container>() {
             if container
                 .public_endpoints
@@ -232,10 +243,10 @@ impl DeploymentPrerequisiteCheck for DomainMetadataRequiredCheck {
         &self,
         stack: &Stack,
         stack_state: &StackState,
-        _config: &DeploymentConfig,
+        config: &DeploymentConfig,
     ) -> bool {
         is_cloud_platform(stack_state.platform)
-            && !resources_requiring_domain_metadata(stack).is_empty()
+            && !resources_requiring_domain_metadata(stack, config).is_empty()
     }
 
     async fn check(
@@ -244,11 +255,12 @@ impl DeploymentPrerequisiteCheck for DomainMetadataRequiredCheck {
         _stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<CheckResult> {
-        if config.domain_metadata.is_some() {
+        let resources = resources_requiring_domain_metadata(stack, config);
+        if resources.is_empty() || config.domain_metadata.is_some() {
             return Ok(CheckResult::success());
         }
 
-        let resource_list = resources_requiring_domain_metadata(stack).join(", ");
+        let resource_list = resources.join(", ");
         Ok(CheckResult::failed(vec![format!(
             "Cloud public HTTP container deployments require domain metadata. \
              Found containers with exposed HTTP ports: {resource_list}. \
@@ -714,7 +726,8 @@ mod tests {
     use alien_core::{
         bindings::{KvBinding, StorageBinding},
         permissions::PermissionsConfig,
-        CertificateStatus, ContainerCode, DnsRecordStatus, DomainMetadata, EnvironmentVariable,
+        AwsCustomCertificateConfig, CertificateStatus, ContainerCode, CustomCertificateConfig,
+        CustomDomainConfig, DnsRecordStatus, DomainMetadata, DomainSettings, EnvironmentVariable,
         EnvironmentVariableType, EnvironmentVariablesSnapshot, ExternalBinding, HealthCheck,
         PublicEndpoint, Resource, ResourceDomainInfo, ResourceEntry, ResourceLifecycle,
         ResourceSpec, Storage, Worker, WorkerCode, WorkerPublicEndpoint,
@@ -1214,6 +1227,72 @@ mod tests {
             .unwrap();
 
         assert!(result.success);
+    }
+
+    fn custom_domain_settings(resource_ids: &[&str]) -> DomainSettings {
+        DomainSettings {
+            custom_domains: Some(
+                resource_ids
+                    .iter()
+                    .map(|id| {
+                        (
+                            id.to_string(),
+                            CustomDomainConfig {
+                                domain: format!("{id}.example.com"),
+                                certificate: CustomCertificateConfig {
+                                    aws: Some(AwsCustomCertificateConfig {
+                                        certificate_arn: format!(
+                                            "arn:aws:acm:us-east-1:123456789012:certificate/{id}"
+                                        ),
+                                    }),
+                                    ..Default::default()
+                                },
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            public_endpoint_target: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn domain_metadata_not_required_when_every_public_container_has_custom_domain() {
+        let mut resources = IndexMap::new();
+        resources.insert("web".to_string(), create_public_container_entry("web"));
+        let stack = create_stack(resources);
+        let mut config = deployment_config();
+        config.stack_settings.domains = Some(custom_domain_settings(&["web"]));
+        let check = DomainMetadataRequiredCheck;
+
+        assert!(!check.should_run(&stack, &stack_state(Platform::Aws), &config));
+        let result = check
+            .check(&stack, &stack_state(Platform::Aws), &config)
+            .await
+            .unwrap();
+        assert!(result.success, "unexpected errors: {:?}", result.errors);
+    }
+
+    #[tokio::test]
+    async fn domain_metadata_required_only_for_containers_without_custom_domain() {
+        let mut resources = IndexMap::new();
+        resources.insert("web".to_string(), create_public_container_entry("web"));
+        resources.insert("api".to_string(), create_public_container_entry("api"));
+        let stack = create_stack(resources);
+        let mut config = deployment_config();
+        config.stack_settings.domains = Some(custom_domain_settings(&["web"]));
+        let check = DomainMetadataRequiredCheck;
+
+        assert!(check.should_run(&stack, &stack_state(Platform::Aws), &config));
+        let result = check
+            .check(&stack, &stack_state(Platform::Aws), &config)
+            .await
+            .unwrap();
+
+        assert!(!result.success);
+        assert_eq!(result.errors.len(), 1);
+        assert!(result.errors[0].contains("container 'api' (public endpoint)"));
+        assert!(!result.errors[0].contains("'web'"));
     }
 
     #[tokio::test]
