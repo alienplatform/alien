@@ -469,8 +469,9 @@ pub trait DataProtectionApi: Send + Sync + std::fmt::Debug {
         backup_instance_name: &str,
     ) -> Result<BackupInstanceResource>;
 
-    /// Stops future backups of an instance and keeps its recovery points until the policy
-    /// expires them (the latest one is kept until the instance is deleted). Long-running.
+    /// Stops future backups of an instance and keeps its recovery points ("stop protection and
+    /// retain data as per policy"; the latest one is kept until the instance is deleted).
+    /// Long-running.
     async fn suspend_backups(
         &self,
         resource_group: &str,
@@ -478,7 +479,17 @@ pub trait DataProtectionApi: Send + Sync + std::fmt::Debug {
         backup_instance_name: &str,
     ) -> Result<OperationResult<()>>;
 
-    /// Stops protection and deletes the instance's backup data. Long-running.
+    /// Resumes backups of an instance whose backups were suspended. Long-running.
+    async fn resume_backups(
+        &self,
+        resource_group: &str,
+        vault_name: &str,
+        backup_instance_name: &str,
+    ) -> Result<OperationResult<()>>;
+
+    /// Stops protection and deletes the instance's backup data. From API version 2025-09-01
+    /// the instance moves to soft delete; its operational snapshots stay until the soft-delete
+    /// period ends, and are never cleaned up if the vault is soft-deleted too. Long-running.
     async fn delete_backup_instance(
         &self,
         resource_group: &str,
@@ -494,7 +505,8 @@ pub struct AzureDataProtectionClient {
 }
 
 impl AzureDataProtectionClient {
-    const API_VERSION: &'static str = "2025-09-01";
+    /// Latest GA version of the Data Protection API.
+    const API_VERSION: &'static str = "2026-07-01";
 
     pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
         let endpoint = token_cache.management_endpoint().to_string();
@@ -801,6 +813,29 @@ impl DataProtectionApi for AzureDataProtectionClient {
         })
     }
 
+    async fn resume_backups(
+        &self,
+        resource_group: &str,
+        vault_name: &str,
+        backup_instance_name: &str,
+    ) -> Result<OperationResult<()>> {
+        let path = format!(
+            "{}/backupInstances/{backup_instance_name}/resumeBackups",
+            self.vault_path(resource_group, vault_name)
+        );
+        let req = self
+            .signed_request(Method::POST, self.url(&path), None)
+            .await?;
+        let result: OperationResult<serde_json::Value> = self
+            .base
+            .execute_request_with_long_running_support(req, "ResumeBackups", backup_instance_name)
+            .await?;
+        Ok(match result {
+            OperationResult::Completed(_) => OperationResult::Completed(()),
+            OperationResult::LongRunning(operation) => OperationResult::LongRunning(operation),
+        })
+    }
+
     async fn delete_backup_instance(
         &self,
         resource_group: &str,
@@ -965,7 +1000,7 @@ mod tests {
             .mock_async(|when, then| {
                 when.method(PUT)
                     .path(VAULT_PATH)
-                    .query_param("api-version", "2025-09-01")
+                    .query_param("api-version", "2026-07-01")
                     .json_body(json!({
                         "location": "eastus",
                         "tags": {"alien-stack": "stack"},
@@ -1026,7 +1061,7 @@ mod tests {
             .mock_async(|when, then| {
                 when.method(PUT)
                     .path(format!("{VAULT_PATH}/backupInstances/stack-db-disk-0"))
-                    .query_param("api-version", "2025-09-01")
+                    .query_param("api-version", "2026-07-01")
                     .json_body(json!({
                         "properties": {
                             "objectType": "BackupInstance",
@@ -1085,7 +1120,7 @@ mod tests {
             .mock_async(|when, then| {
                 when.method(POST)
                     .path(format!("{VAULT_PATH}/validateForBackup"))
-                    .query_param("api-version", "2025-09-01")
+                    .query_param("api-version", "2026-07-01")
                     .json_body_partial(
                         r#"{"backupInstance": {"objectType": "BackupInstance", "dataSourceInfo": {"resourceName": "stack-db-disk-0"}}}"#,
                     );
@@ -1158,13 +1193,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn suspend_and_delete_instance_hit_documented_routes() {
+    async fn suspend_resume_and_delete_instance_hit_documented_routes() {
         let server = MockServer::start_async().await;
         let suspend = server
             .mock_async(|when, then| {
                 when.method(POST)
                     .path(format!("{VAULT_PATH}/backupInstances/stack-db-disk-0/suspendBackups"))
-                    .query_param("api-version", "2025-09-01");
+                    .query_param("api-version", "2026-07-01");
                 then.status(202).header(
                     "Location",
                     "https://management.azure.com/subscriptions/s/providers/Microsoft.DataProtection/locations/eastus/operationResults/op3",
@@ -1175,11 +1210,25 @@ mod tests {
             .mock_async(|when, then| {
                 when.method(DELETE)
                     .path(format!("{VAULT_PATH}/backupInstances/stack-db-disk-0"))
-                    .query_param("api-version", "2025-09-01");
+                    .query_param("api-version", "2026-07-01");
                 then.status(204);
             })
             .await;
+        let resume = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path(format!("{VAULT_PATH}/backupInstances/stack-db-disk-0/resumeBackups"))
+                    .query_param("api-version", "2026-07-01");
+                then.status(200).json_body(json!({}));
+            })
+            .await;
         let client = test_client(&server);
+        let resumed = client
+            .resume_backups("rg", "stack-db-backups", "stack-db-disk-0")
+            .await
+            .expect("resume");
+        assert!(matches!(resumed, OperationResult::Completed(())));
+        resume.assert_async().await;
         let suspended = client
             .suspend_backups("rg", "stack-db-backups", "stack-db-disk-0")
             .await
