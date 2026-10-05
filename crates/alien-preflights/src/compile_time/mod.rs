@@ -54,7 +54,9 @@ pub use single_exposed_port_check::SingleExposedPortCheck;
 pub use single_queue_trigger::SingleQueueTriggerCheck;
 pub use stack_inputs::StackInputsDefinitionCheck;
 pub use trigger_edge_ownership::TriggerEdgeOwnershipCheck;
-pub use unique_endpoint_host_labels::UniqueEndpointHostLabelsCheck;
+pub use unique_endpoint_host_labels::{
+    endpoint_host_label_conflicts, UniqueEndpointHostLabelsCheck,
+};
 pub use unique_resources::UniqueResourcesCheck;
 pub use valid_resource_dependencies::{
     validate_stack_dependencies, ValidResourceDependenciesCheck,

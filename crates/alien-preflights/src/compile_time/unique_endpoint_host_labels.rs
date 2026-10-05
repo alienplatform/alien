@@ -19,16 +19,17 @@ impl CompileTimeCheck for UniqueEndpointHostLabelsCheck {
         "Validate that public endpoints get distinct hostnames"
     }
 
-    fn should_run(&self, stack: &Stack, _platform: Platform) -> bool {
-        stack.resources().any(|(_, entry)| {
-            entry.config.downcast_ref::<Container>().is_some()
-                || entry.config.downcast_ref::<Daemon>().is_some()
-                || entry.config.downcast_ref::<Worker>().is_some()
-        })
+    fn should_run(&self, stack: &Stack, platform: Platform) -> bool {
+        always_generates_hostnames(platform)
+            && stack.resources().any(|(_, entry)| {
+                entry.config.downcast_ref::<Container>().is_some()
+                    || entry.config.downcast_ref::<Daemon>().is_some()
+                    || entry.config.downcast_ref::<Worker>().is_some()
+            })
     }
 
-    async fn check(&self, stack: &Stack, _platform: Platform) -> crate::error::Result<CheckResult> {
-        let failures = host_label_conflicts(stack);
+    async fn check(&self, stack: &Stack, platform: Platform) -> crate::error::Result<CheckResult> {
+        let failures = endpoint_host_label_conflicts(stack, platform);
         if failures.is_empty() {
             Ok(CheckResult::success())
         } else {
@@ -46,13 +47,31 @@ struct HostnameEndpoint<'a> {
     gated: bool,
 }
 
+/// Cloud and machines deployments always give public endpoints generated hostnames. Kubernetes
+/// does only when the deployment chooses generated exposure, and local and test deployments never
+/// do, so a release for those platforms cannot know that two endpoints collide.
+fn always_generates_hostnames(platform: Platform) -> bool {
+    matches!(
+        platform,
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Machines
+    )
+}
+
+/// Describes each pair of public endpoints in `stack` that would get the same generated hostname
+/// on `platform`.
+///
+/// Callers that accept new stacks outside the build (a release API) refuse them with this too.
+///
 /// Only HTTP endpoints on containers and daemons, and every worker endpoint, get a generated
 /// hostname; TCP endpoints are reached through their load balancer address.
 ///
 /// Two gated resources may be alternatives that are never enabled together, so they may share a
 /// host label. A collision involving an ungated resource happens whenever the other resource
 /// exists.
-fn host_label_conflicts(stack: &Stack) -> Vec<String> {
+pub fn endpoint_host_label_conflicts(stack: &Stack, platform: Platform) -> Vec<String> {
+    if !always_generates_hostnames(platform) {
+        return Vec::new();
+    }
     let mut endpoints = Vec::new();
     for (resource_id, resource_entry) in stack.resources() {
         let config = &resource_entry.config;
@@ -214,6 +233,16 @@ mod tests {
             .flat_map(|result| result.errors.iter())
             .collect();
         assert_eq!(messages, vec![GATEWAY_PROBE_CONFLICT]);
+
+        // Kubernetes generates hostnames only with generated exposure, chosen per deployment,
+        // and local deployments never do, so the build cannot refuse the stack for them.
+        for platform in [Platform::Kubernetes, Platform::Local] {
+            assert!(
+                endpoint_host_label_conflicts(&stack_with_shared_endpoint_name(), platform)
+                    .is_empty(),
+                "{platform} has no build-time hostname conflict"
+            );
+        }
     }
 
     /// A release published before this check existed may already carry such endpoints. The

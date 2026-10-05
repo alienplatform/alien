@@ -1552,11 +1552,14 @@ async fn delete_deployment_task(
     // The server says what it accepted, e.g. that runtime cleanup is done but the setup (a
     // CloudFormation stack) still has to be deleted, which a fixed message would hide.
     println!("{}", success_line(&format!("{}.", accepted.message)));
-    println!(
-        "{} {}",
-        dim_label("Next"),
-        command(&format!("alien deployments get {}", deployment.id))
-    );
+    // A forgotten deployment has no record left to read.
+    if !forget {
+        println!(
+            "{} {}",
+            dim_label("Next"),
+            command(&format!("alien deployments get {}", deployment.id))
+        );
+    }
 
     Ok(())
 }
