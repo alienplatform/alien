@@ -47,6 +47,19 @@ pub async fn handle_delete_pending(
             vault_name: "secrets".to_string(),
             reason: "Failed to delete deployment-owned secrets before runtime cleanup".to_string(),
         })?;
+        // Deployer secrets hold values the deployer wrote; Alien never owned
+        // them, so they stay. Their reports carry the command that deletes them.
+        for report in runtime_metadata
+            .deployer_secrets
+            .iter()
+            .filter(|report| report.is_kept_on_delete())
+        {
+            info!(
+                secret = %report.location.name,
+                delete_command = report.location.delete_command.as_deref().unwrap_or_default(),
+                "Keeping deployer secret"
+            );
+        }
     }
 
     let prepared = prepare_runtime_resources_for_destroy(&mut stack_state).context(

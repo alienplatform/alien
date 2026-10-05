@@ -12,6 +12,7 @@ import { DeployerSecretStoreSchema } from "./deployer-secret-store-schema.js";
 export const DeployerSecretLocationSchema = z.object({
     "cliCommand": z.string().describe("Command that writes the value, with `<VALUE>` in place of the secret."),
 "consoleUrl": z.string().describe("Cloud console page where the secret is created, when the store has one.").nullish(),
+"deleteCommand": z.string().describe("Command that deletes the secret. Deleting a deployment keeps the\nsecrets the deployer wrote, since Alien never owned their values.").nullish(),
 "name": z.string().describe("Full name of the secret in that store."),
 get "store"(){
                 return DeployerSecretStoreSchema.describe("The secret store a deployer writes a vault-native secret into.")

@@ -2,6 +2,7 @@ use std::future::Future;
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
+use crate::commands::destroy::{kept_deployer_secrets, print_kept_deployer_secrets};
 use crate::commands::event_display::{print_event_table, EventDisplayRow};
 use crate::deployment_tracking::DeploymentTracker;
 use crate::error::{ErrorData, Result};
@@ -1502,6 +1503,15 @@ async fn delete_deployment_task(
     let confirmation_mode = delete_confirmation_mode(yes)?;
     let deployment = resolve_deployment_reference(client, reference).await?;
     let forget = matches!(action, DeleteDeploymentAction::Forget);
+    let runtime_metadata: Option<alien_core::RuntimeMetadata> = deployment
+        .runtime_metadata
+        .as_ref()
+        .map(|metadata| serde_json::to_value(metadata).and_then(serde_json::from_value))
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize runtime_metadata".to_string(),
+        })?;
 
     println!(
         "{}",
@@ -1554,6 +1564,7 @@ async fn delete_deployment_task(
     println!("{}", success_line(&format!("{}.", accepted.message)));
     // A forgotten deployment has no record left to read.
     if !forget {
+        print_kept_deployer_secrets(&kept_deployer_secrets(runtime_metadata.as_ref()));
         println!(
             "{} {}",
             dim_label("Next"),

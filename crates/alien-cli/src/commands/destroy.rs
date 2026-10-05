@@ -11,7 +11,10 @@ use crate::deployment_tracking::{DeploymentTracker, TrackedDeployment};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::{ExecutionMode, ManagerContext};
 use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps};
-use alien_core::{ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, Platform};
+use alien_core::{
+    ClientConfig, DeployerSecretReport, DeploymentConfig, DeploymentState, DeploymentStatus,
+    Platform,
+};
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome};
 use alien_deployment::manager_api_transport::{
     acquire_setup_delete_deployment, combine_operation_and_finalization, final_reconcile,
@@ -244,6 +247,10 @@ async fn destroy_tracked_deployment(
         protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
     };
 
+    // Deployer secrets were written by the deployer, not Alien, so deletion
+    // keeps them. Name each one with the command that deletes it.
+    let kept_deployer_secrets = kept_deployer_secrets(current.runtime_metadata.as_ref());
+
     let stack_settings: alien_core::StackSettings = deployment
         .stack_settings
         .map(serde_json::from_value)
@@ -418,6 +425,7 @@ async fn destroy_tracked_deployment(
     }
     drop(steps);
 
+    print_kept_deployer_secrets(&kept_deployer_secrets);
     println!(
         "{} {} ({})",
         dim_label("Deployment"),
@@ -436,6 +444,52 @@ async fn destroy_tracked_deployment(
     Ok(())
 }
 
+/// The deployer secrets that exist in the deployment's secret store.
+pub(crate) fn kept_deployer_secrets(
+    runtime_metadata: Option<&alien_core::RuntimeMetadata>,
+) -> Vec<DeployerSecretReport> {
+    runtime_metadata
+        .map(|metadata| {
+            metadata
+                .deployer_secrets
+                .iter()
+                .filter(|report| report.is_kept_on_delete())
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// One line per kept deployer secret: what it is, where, and how to delete it.
+fn kept_deployer_secret_lines(reports: &[DeployerSecretReport]) -> Vec<String> {
+    reports
+        .iter()
+        .map(|report| {
+            let location = match report.location.vault_name.as_deref() {
+                Some(vault) => format!("{} in {vault}", report.location.name),
+                None => report.location.name.clone(),
+            };
+            match report.location.delete_command.as_deref() {
+                Some(delete) => format!("{} ({location}): {delete}", report.label),
+                None => format!("{} ({location})", report.label),
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn print_kept_deployer_secrets(reports: &[DeployerSecretReport]) {
+    if reports.is_empty() {
+        return;
+    }
+    println!(
+        "{}",
+        dim_label("Kept deployer secrets (you wrote them, so Alien does not delete them):")
+    );
+    for line in kept_deployer_secret_lines(reports) {
+        println!("  {line}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,6 +503,66 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     const DEPLOYMENT_TOKEN: &str = "deployment-secret";
+
+    fn deployer_secret(
+        label: &str,
+        status: alien_core::DeployerSecretStatus,
+    ) -> DeployerSecretReport {
+        let location = alien_core::deployer_secret_location(
+            &alien_core::bindings::VaultBinding::parameter_store("stack-secrets"),
+            &format!("input-{}", label.to_lowercase()),
+            &alien_core::DeployerSecretLocationContext {
+                aws_region: Some("us-east-1".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("location");
+        DeployerSecretReport {
+            input_id: label.to_lowercase(),
+            label: label.to_string(),
+            required: true,
+            status,
+            message: None,
+            version: None,
+            location,
+        }
+    }
+
+    #[test]
+    fn destroy_names_each_kept_deployer_secret_with_its_delete_command() {
+        use alien_core::DeployerSecretStatus::{Invalid, Missing, Present};
+
+        let state = DeploymentState {
+            status: DeploymentStatus::DeletePending,
+            platform: Platform::Aws,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(alien_core::RuntimeMetadata {
+                deployer_secrets: vec![
+                    deployer_secret("Token", Present),
+                    deployer_secret("Unwritten", Missing),
+                    deployer_secret("Plaintext", Invalid),
+                ],
+                ..Default::default()
+            }),
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        };
+
+        let kept = kept_deployer_secrets(state.runtime_metadata.as_ref());
+
+        assert_eq!(
+            kept_deployer_secret_lines(&kept),
+            vec![
+                "Token (stack-secrets-input-token): aws ssm delete-parameter --region us-east-1 --name 'stack-secrets-input-token'".to_string(),
+                "Plaintext (stack-secrets-input-plaintext): aws ssm delete-parameter --region us-east-1 --name 'stack-secrets-input-plaintext'".to_string(),
+            ],
+            "a secret that was never written has nothing to delete"
+        );
+    }
 
     #[derive(Default)]
     struct ManagerState {
