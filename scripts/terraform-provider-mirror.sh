@@ -9,9 +9,9 @@
 # Usage: scripts/terraform-provider-mirror.sh <mirror-dir> <cli-config-file>
 # Then export TF_CLI_CONFIG_FILE=<cli-config-file>.
 #
-# Keep the providers below in sync with `required_providers` in
-# crates/alien-terraform/src/generator.rs. A provider missing here still installs from the
-# registry, because the config only routes the mirrored providers to the mirror.
+# The providers below must match PROVIDER_REQUIREMENTS in crates/alien-terraform/src/generator.rs,
+# line for line and in order; the `provider_mirror_matches_generator_requirements` test fails
+# otherwise. A provider that isn't mirrored still installs from the registry.
 set -euo pipefail
 
 mirror="${1:?usage: $0 <mirror-dir> <cli-config-file>}"
