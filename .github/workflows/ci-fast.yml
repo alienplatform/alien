@@ -90,7 +90,8 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
             # What the Worker integration tests exercise: the local worker manager, the build
-            # toolchain, the bindings addon a TypeScript worker loads, and the example app.
+            # toolchain, the bindings addon a TypeScript worker loads, the example app, and the
+            # worker runtime's transports driving alien-test-app.
             worker_integration:
               - 'Cargo.toml'
               - 'Cargo.lock'
@@ -111,6 +112,8 @@ jobs:
               - 'crates/alien-worker-runtime/**'
               - 'crates/alien-worker-protocol/**'
               - 'crates/alien-ai-gateway/**'
+              - 'crates/alien-test-app/**'
+              - 'crates/alien-sdk/**'
               - 'packages/**'
               - 'examples/basic-worker-ts/**'
               - '.github/workflows/ci-fast.yml'
@@ -315,8 +318,10 @@ jobs:
             'and not binary_id(alien-ai-gateway::live_foundry_claude)'
             'and not binary_id(alien-ai-gateway::live_vertex_claude)'
 
-            # Real TypeScript workers through alien build: the Worker integration job runs them.
+            # Real TypeScript workers through alien build, and the worker runtime driving a real
+            # alien-test-app process: the Worker integration job runs them.
             'and not binary_id(alien-local::worker_integration)'
+            'and not binary_id(alien-worker-runtime::container_app)'
           )
           # Compile non-default feature coverage in the same unified graph. Running
           # these as later `cargo test` commands adds two serial recompilation tails.
@@ -594,15 +599,21 @@ jobs:
         run: pnpm exec turbo run build --filter=@alienplatform/sdk --filter=@alienplatform/commands
 
       # alien build stages the bindings addon and AI gateway it finds here. Without them it
-      # builds both in release mode inside the first test, which takes minutes.
-      - name: Build the bindings addon and AI gateway
+      # builds both in release mode inside the first test, which takes minutes. The
+      # container_app tests run alien-test-app; without ALIEN_TEST_APP_BIN each test process
+      # would build it again.
+      - name: Build the bindings addon, AI gateway and test app
         run: |
-          cargo build --locked -p alien-bindings-node --lib -p alien-ai-gateway --bin alien-ai-gateway
+          cargo build --locked -p alien-bindings-node --lib -p alien-ai-gateway --bin alien-ai-gateway \
+            -p alien-test-app --bin alien-test-app
           cp target/debug/libalien_bindings_node.so \
             crates/alien-bindings-node/alien-bindings-node.linux-arm64-gnu.node
+          echo "ALIEN_TEST_APP_BIN=$PWD/target/debug/alien-test-app" >> "$GITHUB_ENV"
 
       - name: Worker integration tests
-        run: cargo nextest run --locked -p alien-local --test worker_integration
+        run: |
+          cargo nextest run --locked -p alien-local -p alien-worker-runtime \
+            --filter-expr 'binary_id(alien-local::worker_integration) | binary_id(alien-worker-runtime::container_app)'
 
   all-tests-passed:
     name: All tests passed
