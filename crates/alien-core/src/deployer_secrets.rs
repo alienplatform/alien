@@ -84,10 +84,13 @@ pub struct DeployerSecretSlot<'a> {
 ///
 /// `values` are the deployment's stored input values. A secret input the
 /// developer may also provide is a slot only when it has no stored value: a
-/// developer value keeps today's path.
+/// developer value keeps today's path. `stored_secret_input_ids` carries trusted
+/// presence when stored secret values are intentionally absent from `values`.
+/// Presence never supplies a value for gates, defaults, or environment variables.
 pub fn deployer_secret_slots<'a>(
     inputs: &'a [StackInputDefinition],
     values: &HashMap<String, serde_json::Value>,
+    stored_secret_input_ids: &[String],
     platform: Platform,
 ) -> Vec<DeployerSecretSlot<'a>> {
     inputs
@@ -100,7 +103,8 @@ pub fn deployer_secret_slots<'a>(
                 .is_none_or(|platforms| platforms.is_empty() || platforms.contains(&platform))
         })
         .filter_map(|input| {
-            let has_stored_value = values.get(&input.id).is_some_and(|value| !value.is_null());
+            let has_stored_value = stored_secret_input_ids.contains(&input.id)
+                || values.get(&input.id).is_some_and(|value| !value.is_null());
             let developer_value =
                 has_stored_value && input.provided_by.contains(&StackInputProvider::Developer);
             (!developer_value).then(|| DeployerSecretSlot {
@@ -369,10 +373,11 @@ pub struct DeployerSecretEnv {
 pub fn deployer_secret_environment(
     inputs: &[StackInputDefinition],
     values: &HashMap<String, serde_json::Value>,
+    stored_secret_input_ids: &[String],
     platform: Platform,
     reports: &[DeployerSecretReport],
 ) -> Vec<(DeployerSecretEnv, Option<Vec<String>>)> {
-    deployer_secret_slots(inputs, values, platform)
+    deployer_secret_slots(inputs, values, stored_secret_input_ids, platform)
         .into_iter()
         .filter_map(|slot| {
             let report = reports
@@ -450,7 +455,7 @@ mod tests {
             serde_json::json!("from-before"),
         )]);
 
-        let slots = deployer_secret_slots(&inputs, &stored, Platform::Aws);
+        let slots = deployer_secret_slots(&inputs, &stored, &[], Platform::Aws);
         assert_eq!(slots.len(), 1);
         assert_eq!(slots[0].vault_key, "input-database-password");
         assert!(slots[0].has_stored_value);
@@ -465,9 +470,11 @@ mod tests {
         let with_developer_value =
             HashMap::from([("databasePassword".to_string(), serde_json::json!("dev"))]);
 
-        assert!(deployer_secret_slots(&inputs, &with_developer_value, Platform::Aws).is_empty());
+        assert!(
+            deployer_secret_slots(&inputs, &with_developer_value, &[], Platform::Aws).is_empty()
+        );
         assert_eq!(
-            deployer_secret_slots(&inputs, &HashMap::new(), Platform::Aws).len(),
+            deployer_secret_slots(&inputs, &HashMap::new(), &[], Platform::Aws).len(),
             1
         );
     }
@@ -478,7 +485,7 @@ mod tests {
         aws_only.platforms = Some(vec![Platform::Aws]);
         let inputs = vec![secret("key", vec![StackInputProvider::Developer]), aws_only];
 
-        assert!(deployer_secret_slots(&inputs, &HashMap::new(), Platform::Gcp).is_empty());
+        assert!(deployer_secret_slots(&inputs, &HashMap::new(), &[], Platform::Gcp).is_empty());
     }
 
     #[test]
@@ -604,11 +611,14 @@ mod tests {
         )];
         let no_values = HashMap::new();
 
-        assert!(deployer_secret_environment(&inputs, &no_values, Platform::Aws, &[]).is_empty());
+        assert!(
+            deployer_secret_environment(&inputs, &no_values, &[], Platform::Aws, &[]).is_empty()
+        );
 
         let env = deployer_secret_environment(
             &inputs,
             &no_values,
+            &[],
             Platform::Aws,
             &[report("databasePassword", DeployerSecretStatus::Missing)],
         );
@@ -640,8 +650,13 @@ mod tests {
         let mut azure_report = report("databasePassword", DeployerSecretStatus::Present);
         azure_report.location = location;
 
-        let env =
-            deployer_secret_environment(&inputs, &HashMap::new(), Platform::Azure, &[azure_report]);
+        let env = deployer_secret_environment(
+            &inputs,
+            &HashMap::new(),
+            &[],
+            Platform::Azure,
+            &[azure_report],
+        );
 
         assert_eq!(env.len(), 1);
         assert_eq!(env[0].0.secret_name, "input-database-password");
@@ -662,6 +677,7 @@ mod tests {
         assert!(deployer_secret_environment(
             &inputs,
             &stored,
+            &[],
             Platform::Aws,
             &[report("databasePassword", DeployerSecretStatus::Missing)],
         )
@@ -670,11 +686,96 @@ mod tests {
             deployer_secret_environment(
                 &inputs,
                 &stored,
+                &[],
                 Platform::Aws,
                 &[report("databasePassword", DeployerSecretStatus::Present)],
             )
             .len(),
             1
+        );
+    }
+    #[test]
+    fn stored_secret_ids_classify_presence_without_input_values() {
+        for required in [true, false] {
+            let mut input = secret(
+                "apiKey",
+                vec![StackInputProvider::Developer, StackInputProvider::Deployer],
+            );
+            input.required = required;
+            let inputs = vec![input];
+            let values = HashMap::new();
+            let present = vec!["apiKey".to_string()];
+            assert!(deployer_secret_slots(&inputs, &values, &present, Platform::Aws).is_empty());
+            for ids in [vec![], vec!["removedInput".to_string()]] {
+                let slots = deployer_secret_slots(&inputs, &values, &ids, Platform::Aws);
+                assert_eq!(slots.len(), 1);
+                assert!(!slots[0].has_stored_value);
+                assert_eq!(slots[0].input.required, required);
+            }
+            let null_value = HashMap::from([("apiKey".to_string(), serde_json::Value::Null)]);
+            assert!(
+                deployer_secret_slots(&inputs, &null_value, &present, Platform::Aws).is_empty()
+            );
+            assert_eq!(
+                deployer_secret_slots(&inputs, &null_value, &[], Platform::Aws).len(),
+                1
+            );
+            for status in [DeployerSecretStatus::Missing, DeployerSecretStatus::Present] {
+                assert!(deployer_secret_environment(
+                    &inputs,
+                    &values,
+                    &present,
+                    Platform::Aws,
+                    &[report("apiKey", status)]
+                )
+                .is_empty());
+            }
+            assert!(
+                values.is_empty(),
+                "presence must not manufacture an input value"
+            );
+        }
+    }
+
+    #[test]
+    fn stored_secret_ids_keep_deployer_only_slots_and_legacy_fallback() {
+        let inputs = vec![secret("apiKey", vec![StackInputProvider::Deployer])];
+        let values = HashMap::new();
+        let present = vec!["apiKey".to_string()];
+        let slots = deployer_secret_slots(&inputs, &values, &present, Platform::Aws);
+        assert_eq!(slots.len(), 1);
+        assert!(slots[0].has_stored_value);
+        assert!(deployer_secret_environment(
+            &inputs,
+            &values,
+            &present,
+            Platform::Aws,
+            &[report("apiKey", DeployerSecretStatus::Missing)]
+        )
+        .is_empty());
+        let environment = deployer_secret_environment(
+            &inputs,
+            &values,
+            &present,
+            Platform::Aws,
+            &[report("apiKey", DeployerSecretStatus::Present)],
+        );
+        assert_eq!(environment.len(), 1);
+        assert_eq!(environment[0].0.vault_key, "input-api-key");
+    }
+
+    #[test]
+    fn stored_secret_ids_do_not_change_platform_or_kind_classification() {
+        let mut input = secret("apiKey", vec![StackInputProvider::Deployer]);
+        input.platforms = Some(vec![Platform::Aws]);
+        let inputs = vec![input.clone()];
+        let present = vec!["apiKey".to_string()];
+        assert!(
+            deployer_secret_slots(&inputs, &HashMap::new(), &present, Platform::Gcp).is_empty()
+        );
+        input.kind = StackInputKind::String;
+        assert!(
+            deployer_secret_slots(&[input], &HashMap::new(), &present, Platform::Aws).is_empty()
         );
     }
 }

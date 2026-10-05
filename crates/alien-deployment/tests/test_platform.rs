@@ -252,6 +252,7 @@ fn expected_secrets_sync_hash(secret_value: &str) -> String {
 /// Create a deployment config fixture
 fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentConfig {
     DeploymentConfig {
+        stored_secret_input_ids: Vec::new(),
         input_values: Default::default(),
         deployment_name: Some("test deployment".to_string()),
         stack_settings: StackSettings::default(),
@@ -2659,6 +2660,35 @@ async fn test_missing_deployer_secret_blocks_workloads_until_written() {
             .contains("customer-only-value"),
         "the deployment state never carries the deployer's secret"
     );
+}
+
+#[tokio::test]
+async fn test_stored_dual_secret_presence_starts_without_vault_slots() {
+    let mut stack = create_test_stack("demo-stack", "demo-worker");
+    let mut input = database_password_input();
+    input
+        .provided_by
+        .push(alien_core::StackInputProvider::Developer);
+    stack.inputs = vec![input];
+    let mut config = create_test_config("hash_v1", false);
+    config.stored_secret_input_ids = vec!["databasePassword".to_string()];
+    assert!(config.input_values.is_empty());
+    let running = run_until_status(
+        create_initial_state(stack),
+        config,
+        &[
+            DeploymentStatus::Running,
+            DeploymentStatus::WaitingForSecrets,
+            DeploymentStatus::ProvisioningFailed,
+        ],
+    )
+    .await;
+    assert_eq!(running.status, DeploymentStatus::Running);
+    assert!(deployer_reports(&running).is_empty());
+    let environment = worker_environment(&running, "demo-worker");
+    assert!(!environment.contains_key("DATABASE_PASSWORD"));
+    assert!(!environment.contains_key(alien_core::ENV_ALIEN_DEPLOYER_SECRETS));
+    assert!(!environment.contains_key(alien_core::ENV_ALIEN_SECRETS));
 }
 
 #[tokio::test]

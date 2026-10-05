@@ -72,12 +72,13 @@ impl StackMutation for SecretsVaultMutation {
 
         // Vault-native deployer secrets live in this vault: the deployer
         // writes them there, and workloads read them from it.
-        let deployer_secrets_need_vault = stack.inputs.iter().any(|input| {
-            alien_core::is_deployer_secret_input(input)
-                && input.platforms.as_ref().is_none_or(|platforms| {
-                    platforms.is_empty() || platforms.contains(&stack_state.platform)
-                })
-        });
+        let deployer_secrets_need_vault = !alien_core::deployer_secret_slots(
+            &stack.inputs,
+            &config.input_values,
+            &config.stored_secret_input_ids,
+            stack_state.platform,
+        )
+        .is_empty();
 
         explicitly_configured
             || worker_needs_vault
@@ -295,7 +296,12 @@ fn deployer_secret_keys_by_profile(
 ) -> Result<BTreeMap<String, BTreeSet<String>>> {
     // The same slots delivery reads: a secret the developer may also provide
     // and has a stored developer value is not a slot.
-    let slots = alien_core::deployer_secret_slots(&stack.inputs, &config.input_values, platform);
+    let slots = alien_core::deployer_secret_slots(
+        &stack.inputs,
+        &config.input_values,
+        &config.stored_secret_input_ids,
+        platform,
+    );
     if slots.is_empty() {
         return Ok(BTreeMap::new());
     }
@@ -1042,6 +1048,37 @@ mod tests {
         input.provided_by = vec![StackInputProvider::Developer];
         stack.inputs = vec![input];
         assert!(!SecretsVaultMutation.should_run(&stack, &stack_state, &config));
+    }
+
+    #[test]
+    fn stored_dual_secret_presence_avoids_an_unneeded_vault() {
+        let mut stack = deployer_secret_stack(&[("api", "api-profile")], &["api"]);
+        stack.inputs[0]
+            .provided_by
+            .push(StackInputProvider::Developer);
+        let state = StackState::new(Platform::Gcp);
+        let mut config = deployer_secret_config();
+        assert!(config.input_values.is_empty());
+        assert!(SecretsVaultMutation.should_run(&stack, &state, &config));
+        config.stored_secret_input_ids = vec![stack.inputs[0].id.clone()];
+        assert!(!SecretsVaultMutation.should_run(&stack, &state, &config));
+        assert!(
+            deployer_secret_keys_by_profile(&stack, &config, Platform::Gcp)
+                .unwrap()
+                .is_empty()
+        );
+        stack.inputs[0].provided_by = vec![StackInputProvider::Deployer];
+        assert!(SecretsVaultMutation.should_run(&stack, &state, &config));
+        assert!(
+            !deployer_secret_keys_by_profile(&stack, &config, Platform::Gcp)
+                .unwrap()
+                .is_empty()
+        );
+        stack.inputs[0]
+            .provided_by
+            .push(StackInputProvider::Developer);
+        config.stored_secret_input_ids.clear();
+        assert!(SecretsVaultMutation.should_run(&stack, &state, &config));
     }
 
     #[tokio::test]

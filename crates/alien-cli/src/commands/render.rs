@@ -159,6 +159,7 @@ async fn prepare_stack_for_render(
 
     let stack_state = StackState::new(platform);
     let config = DeploymentConfig {
+        stored_secret_input_ids: Vec::new(),
         input_values: Default::default(),
         deployment_name: Some(stack.id().to_string()),
         stack_settings: stack_settings.clone(),
@@ -609,6 +610,7 @@ mod tests {
                 }
 
                 let config = DeploymentConfig {
+                    stored_secret_input_ids: Vec::new(),
                     input_values: Default::default(),
                     deployment_name: Some("agents-stack".to_string()),
                     stack_settings: StackSettings::default(),

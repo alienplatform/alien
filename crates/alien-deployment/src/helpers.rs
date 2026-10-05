@@ -199,6 +199,7 @@ pub fn inject_environment_variables(
     let deployer_environment = deployer_secret_environment(
         &stack.inputs,
         &config.input_values,
+        &config.stored_secret_input_ids,
         platform,
         deployer_reports,
     );
@@ -710,7 +711,12 @@ pub async fn check_deployer_secrets(
     config: &DeploymentConfig,
     platform: Platform,
 ) -> Result<Vec<DeployerSecretReport>> {
-    let slots = deployer_secret_slots(&stack.inputs, &config.input_values, platform);
+    let slots = deployer_secret_slots(
+        &stack.inputs,
+        &config.input_values,
+        &config.stored_secret_input_ids,
+        platform,
+    );
     if slots.is_empty() {
         return Ok(Vec::new());
     }
@@ -794,7 +800,12 @@ pub fn deployer_secrets_blocking_start<'a>(
     platform: Platform,
     reports: &'a [DeployerSecretReport],
 ) -> Vec<&'a DeployerSecretReport> {
-    let slots = deployer_secret_slots(&stack.inputs, &config.input_values, platform);
+    let slots = deployer_secret_slots(
+        &stack.inputs,
+        &config.input_values,
+        &config.stored_secret_input_ids,
+        platform,
+    );
     reports
         .iter()
         .filter(|report| report.blocks_start())
@@ -1232,6 +1243,76 @@ mod tests {
             .allow_frozen_changes(false)
             .external_bindings(ExternalBindings::default())
             .build()
+    }
+
+    #[tokio::test]
+    async fn stored_dual_secret_presence_skips_vault_checks_but_not_deployer_only_secrets() {
+        let mut stack = make_single_function_stack("demo-worker");
+        stack.inputs = vec![serde_json::from_value(serde_json::json!({
+            "id": "apiKey", "kind": "secret", "providedBy": ["developer", "deployer"],
+            "required": true, "label": "API key", "description": ""
+        }))
+        .unwrap()];
+        let mut config = make_config(make_snapshot(&[], &[]));
+        config.stored_secret_input_ids = vec!["apiKey".to_string()];
+        let state = StackState::new(Platform::Test);
+        let reports =
+            check_deployer_secrets(&stack, &state, &ClientConfig::Test, &config, Platform::Test)
+                .await
+                .unwrap();
+        assert!(reports.is_empty());
+        assert!(config.input_values.is_empty());
+        let missing = DeployerSecretReport {
+            input_id: "apiKey".to_string(),
+            label: "API key".to_string(),
+            required: true,
+            status: DeployerSecretStatus::Missing,
+            message: None,
+            location: alien_core::DeployerSecretLocation {
+                store: alien_core::DeployerSecretStore::LocalVault,
+                name: "input-api-key".to_string(),
+                vault_name: None,
+                console_url: None,
+                cli_command: String::new(),
+            },
+        };
+        assert!(deployer_secrets_blocking_start(
+            &stack,
+            &config,
+            Platform::Test,
+            &[missing.clone()]
+        )
+        .is_empty());
+        config.stored_secret_input_ids.clear();
+        assert!(check_deployer_secrets(
+            &stack,
+            &state,
+            &ClientConfig::Test,
+            &config,
+            Platform::Test
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            deployer_secrets_blocking_start(&stack, &config, Platform::Test, &[missing.clone()])
+                .len(),
+            1
+        );
+        config.stored_secret_input_ids = vec!["apiKey".to_string()];
+        stack.inputs[0].provided_by = vec![alien_core::StackInputProvider::Deployer];
+        assert!(check_deployer_secrets(
+            &stack,
+            &state,
+            &ClientConfig::Test,
+            &config,
+            Platform::Test
+        )
+        .await
+        .is_err());
+        assert!(
+            deployer_secrets_blocking_start(&stack, &config, Platform::Test, &[missing]).is_empty(),
+            "legacy stored presence remains a fallback until the vault is filled"
+        );
     }
 
     fn make_single_function_stack(function_id: &str) -> Stack {

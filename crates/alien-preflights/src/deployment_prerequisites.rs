@@ -736,6 +736,7 @@ mod tests {
                 hash: "empty".to_string(),
                 created_at: "2026-05-13T00:00:00Z".to_string(),
             },
+            stored_secret_input_ids: Vec::new(),
             input_values: Default::default(),
             allow_frozen_changes: false,
             compute_backend: None,

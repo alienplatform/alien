@@ -897,6 +897,7 @@ mod tests {
 
     fn test_config() -> DeploymentConfig {
         DeploymentConfig {
+            stored_secret_input_ids: Vec::new(),
             input_values: Default::default(),
             deployment_name: Some("test deployment".to_string()),
             stack_settings: StackSettings::default(),

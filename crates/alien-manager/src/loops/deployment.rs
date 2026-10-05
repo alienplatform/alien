@@ -701,6 +701,7 @@ impl DeploymentLoop {
                 .expect("stored deployment carries stack_settings");
 
             DeploymentConfig {
+                stored_secret_input_ids: Vec::new(),
                 input_values: deployment.input_values.clone(),
                 deployment_name: Some(deployment.name.clone()),
                 stack_settings: stack_settings.clone(),
