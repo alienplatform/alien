@@ -140,7 +140,7 @@
       },
       {
         "grant": {
-          "actions": ["ec2:DeleteVolume"]
+          "actions": ["ec2:DeleteVolume", "ec2:ModifyVolume"]
         },
         "binding": {
           "stack": {
@@ -465,8 +465,11 @@
           }
         }
       },
-      // The policy's execution role, trusted by dlm.amazonaws.com, with only the AWS
-      // managed DLM service policy attached.
+      // The policy's execution role `${stackPrefix}-dlm-{hash of prefix and container}`,
+      // trusted by dlm.amazonaws.com, with only the AWS managed DLM service policy
+      // attached. The calls on an existing role are scoped by name, not tags: IAM
+      // answers a tag-conditioned call on a role that does not exist with
+      // AccessDenied, and cleanup must see NoSuchEntity to treat it as already gone.
       {
         "grant": {
           "actions": [
@@ -476,9 +479,7 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-dlm"
-            ],
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -487,9 +488,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-dlm"
-            ],
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -510,27 +509,10 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-dlm"
-            ],
-            "condition": {
-              "StringEquals": {
-                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-dlm"
-            ],
-            "condition": {
-              "StringEquals": {
-                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceId}",
-                "aws:ResourceTag/${managedByTag}": "runtime"
-              }
-            }
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"]
           }
         }
       },
@@ -542,26 +524,17 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-dlm"
-            ],
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
             "condition": {
               "StringEquals": {
-                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "runtime",
                 "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"
               }
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-dlm"
-            ],
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
             "condition": {
               "StringEquals": {
-                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${resourceTag}": "${resourceId}",
-                "aws:ResourceTag/${managedByTag}": "runtime",
                 "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"
               }
             }
@@ -570,11 +543,13 @@
       },
       {
         "grant": {
-          "actions": ["iam:PassRole"]
+          "actions": [
+            "iam:PassRole"
+          ]
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-dlm"],
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
             "condition": {
               "StringEquals": {
                 "iam:PassedToService": "dlm.amazonaws.com"
@@ -582,7 +557,7 @@
             }
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-dlm"],
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
             "condition": {
               "StringEquals": {
                 "iam:PassedToService": "dlm.amazonaws.com"

@@ -1039,3 +1039,57 @@ fn no_sandbox_set_can_pass_a_role_into_a_session() {
 
     assert!(inspected > 0, "no sandbox permission set was inspected");
 }
+
+/// IAM answers a call whose grant is conditioned on `aws:ResourceTag` with AccessDenied when the
+/// role does not exist, because a missing role has no tags to match. Container cleanup deletes
+/// the volume-backup execution role whether or not it exists, and only `NoSuchEntity` tells it
+/// the role is already gone. So every call on that existing role must be scoped by name alone.
+#[test]
+fn container_backup_role_calls_on_existing_roles_are_name_scoped() {
+    let permission_set = get_permission_set("container/provision").expect("container/provision");
+    let aws_permissions = permission_set
+        .platforms
+        .aws
+        .as_ref()
+        .expect("container/provision has AWS permissions");
+    let existing_role_actions = [
+        "iam:GetRole",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:DeleteRole",
+        "iam:PassRole",
+    ];
+    for action in existing_role_actions {
+        let statements = aws_permissions
+            .iter()
+            .filter(|permission| {
+                permission
+                    .grant
+                    .actions
+                    .iter()
+                    .flatten()
+                    .any(|granted| granted == action)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(statements.len(), 1, "{action} should be granted once");
+        for binding in [
+            statements[0].binding.stack.as_ref(),
+            statements[0].binding.resource.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            assert_eq!(
+                binding.resources,
+                ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
+                "{action} must cover the controller's role name `{{prefix}}-dlm-{{hash}}`"
+            );
+            assert!(
+                !has_condition_key(binding, "aws:ResourceTag/${stackTag}")
+                    && !has_condition_key(binding, "aws:ResourceTag/${resourceTag}")
+                    && !has_condition_key(binding, "aws:ResourceTag/${managedByTag}"),
+                "{action} must not depend on the role's tags"
+            );
+        }
+    }
+}
