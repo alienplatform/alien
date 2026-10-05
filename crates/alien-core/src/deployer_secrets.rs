@@ -131,6 +131,16 @@ fn legacy_secret_delivery_complete(
 ) -> bool {
     !input.env.is_empty()
         && input.env.iter().all(|mapping| {
+            let mut matches = environment
+                .iter()
+                .filter(|variable| variable.name == mapping.name);
+            let Some(variable) = matches.next() else {
+                return false;
+            };
+            // Duplicate names have no trusted precedence, even when their scopes differ.
+            if matches.next().is_some() {
+                return false;
+            }
             !mapping.name.is_empty()
                 && mapping
                     .target_resources
@@ -140,27 +150,22 @@ fn legacy_secret_delivery_complete(
                     mapping.var_type,
                     Some(StackInputEnvironmentVariableType::Plain)
                 )
-                && environment.iter().any(|variable| {
-                    variable.name == mapping.name
-                        && variable.var_type == EnvironmentVariableType::Secret
-                        && match (&mapping.target_resources, &variable.target_resources) {
-                            (_, None) => true,
-                            (None, Some(delivered)) => {
-                                delivered.iter().any(|pattern| pattern == "*")
-                            }
-                            (Some(required), Some(delivered)) => {
-                                !required.is_empty()
-                                    && required.iter().all(|target| {
-                                        delivered.iter().any(|pattern| {
-                                            pattern == target
-                                                || pattern.strip_suffix('*').is_some_and(|prefix| {
-                                                    target.starts_with(prefix)
-                                                })
-                                        })
-                                    })
-                            }
-                        }
-                })
+                && variable.var_type == EnvironmentVariableType::Secret
+                && match (&mapping.target_resources, &variable.target_resources) {
+                    (_, None) => true,
+                    (None, Some(delivered)) => delivered.iter().any(|pattern| pattern == "*"),
+                    (Some(required), Some(delivered)) => {
+                        !required.is_empty()
+                            && required.iter().all(|target| {
+                                delivered.iter().any(|pattern| {
+                                    pattern == target
+                                        || pattern
+                                            .strip_suffix('*')
+                                            .is_some_and(|prefix| target.starts_with(prefix))
+                                })
+                            })
+                    }
+                }
         })
 }
 
@@ -521,6 +526,8 @@ mod tests {
             "deployer-only",
             "no-mappings",
             "plain-mapping",
+            "duplicate-plain",
+            "duplicate-scoped-secret",
         ] {
             let mut wire = base.clone();
             let mut input = input.clone();
@@ -532,6 +539,21 @@ mod tests {
                 "plain" => {
                     wire["environmentVariables"]["variables"][0]["type"] =
                         serde_json::json!("plain")
+                }
+                "duplicate-plain" | "duplicate-scoped-secret" => {
+                    let mut duplicate = wire["environmentVariables"]["variables"][0].clone();
+                    if case == "duplicate-plain" {
+                        duplicate["type"] = serde_json::json!("plain");
+                    } else {
+                        input.env[0].target_resources = Some(vec!["app".to_string()]);
+                        wire["environmentVariables"]["variables"][0]["targetResources"] =
+                            serde_json::json!(["app"]);
+                        duplicate["targetResources"] = serde_json::json!(["other"]);
+                    }
+                    wire["environmentVariables"]["variables"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(duplicate);
                 }
                 "wrong-name" => {
                     wire["environmentVariables"]["variables"][0]["name"] =
