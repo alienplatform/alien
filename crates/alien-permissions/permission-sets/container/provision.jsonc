@@ -472,7 +472,6 @@
             "compute.resourcePolicies.create",
             "compute.resourcePolicies.delete",
             "compute.resourcePolicies.get",
-            "compute.resourcePolicies.list",
             "compute.resourcePolicies.use",
             "compute.disks.addResourcePolicies",
             "compute.disks.removeResourcePolicies",
@@ -483,8 +482,6 @@
             "compute.snapshots.list",
             "compute.snapshots.setLabels",
             "compute.snapshots.useReadOnly",
-            "compute.globalOperations.get",
-            "compute.regionOperations.get",
             "compute.zoneOperations.get"
           ]
         },
