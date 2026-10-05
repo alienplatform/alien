@@ -4,12 +4,16 @@
 */
 
 import * as z from "zod";
+import { VolumeBackupsSchema } from "./volume-backups-schema.js";
 
 /**
  * @description Persistent storage configuration for stateful containers.
  */
 export const PersistentStorageSchema = z.object({
-    "mountPath": z.string().describe("Mount path inside the container"),
+    get "backups"(){
+                return VolumeBackupsSchema.describe("Scheduled snapshots of a persistent volume.\n\nThe cloud's own scheduler takes the snapshots (AWS Data Lifecycle Manager,\na Compute Engine snapshot schedule, or Azure Disk Backup), so they keep being\ntaken while the deployment is unreachable. Snapshots are crash-consistent:\nthe volume as it would be after a sudden power loss. When a container is\ndeleted, Alien keeps one final snapshot of each volume.\n\nKubernetes deployments leave volume backups to the cluster's own tooling.").optional()
+              },
+"mountPath": z.string().describe("Mount path inside the container"),
 "size": z.string().describe("Storage size (e.g., \"100Gi\", \"500Gi\")")
     }).describe("Persistent storage configuration for stateful containers.")
 
