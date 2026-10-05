@@ -303,7 +303,6 @@ async fn load_javascript_or_typescript_config(config_file: PathBuf) -> Result<St
     let temp_path = temp_file.path();
     debug!("Temporary script file created at: {}", temp_path.display());
 
-    debug!("Creating script file...");
     // Create script content - works for both Bun and Node.js
     let script_content = format!(
         "
@@ -323,7 +322,10 @@ async fn load_javascript_or_typescript_config(config_file: PathBuf) -> Result<St
     );
     debug!("Script content created, writing to temporary file...");
 
-    tokio::fs::write(temp_path, script_content.as_bytes())
+    // `tokio::fs::write` returns only once the bytes are written. A
+    // `tokio::fs::File` write can still be in flight when the runtime starts,
+    // and the runtime then runs an empty script that prints nothing.
+    tokio::fs::write(&temp_path, script_content.as_bytes())
         .await
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
@@ -438,7 +440,10 @@ pub async fn test_with_specific_runtime(
         })?
     );
 
-    tokio::fs::write(temp_path, script_content.as_bytes())
+    // `tokio::fs::write` returns only once the bytes are written. A
+    // `tokio::fs::File` write can still be in flight when the runtime starts,
+    // and the runtime then runs an empty script that prints nothing.
+    tokio::fs::write(&temp_path, script_content.as_bytes())
         .await
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {

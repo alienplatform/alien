@@ -614,7 +614,7 @@ impl LocalContainerManager {
     }
 
     /// `docker load` an OCI tarball and return a reference the daemon can
-    /// `create` from, using its immutable config digest.
+    /// `create` from: the image's immutable ID on the active image store.
     async fn load_oci_tarball_into_docker(
         &self,
         tarball_path: &Path,
@@ -648,25 +648,61 @@ impl LocalContainerManager {
             }));
         }
 
-        let image_id = dockdash::Image::from_tarball(tarball_path)
-            .into_alien_error()
-            .context(ErrorData::DockerContainerError {
-                container: container_id.to_string(),
-                operation: "resolve_loaded_image".to_string(),
-                reason: "Failed to read the loaded archive's config digest".to_string(),
-            })?
-            .config_digest()
-            .to_string();
-        self.docker
-            .inspect_image(&image_id)
-            .await
-            .into_alien_error()
-            .context(ErrorData::DockerContainerError {
-                container: container_id.to_string(),
-                operation: "inspect_loaded_image".to_string(),
-                reason: format!("Docker did not load image {}", image_id),
-            })?;
-        Ok(image_id)
+        // Docker's containerd image store identifies the image by the manifest
+        // digest listed in the archive's index.json; the classic store by the
+        // config digest. Both are immutable, unlike the archive's tag, which a
+        // previous load of the same tag may still point at.
+        let archive_path = tarball_path.to_path_buf();
+        let candidates = tokio::task::spawn_blocking(move || -> std::io::Result<[String; 2]> {
+            let manifest_digest = oci_archive_manifest_digest(&archive_path)?;
+            let config_digest = dockdash::Image::from_tarball(&archive_path)
+                .map_err(std::io::Error::other)?
+                .config_digest()
+                .to_string();
+            Ok([manifest_digest, config_digest])
+        })
+        .await
+        .into_alien_error()
+        .context(ErrorData::DockerContainerError {
+            container: container_id.to_string(),
+            operation: "resolve_loaded_image".to_string(),
+            reason: "Image archive reader task failed".to_string(),
+        })?
+        .into_alien_error()
+        .context(ErrorData::DockerContainerError {
+            container: container_id.to_string(),
+            operation: "resolve_loaded_image".to_string(),
+            reason: format!(
+                "Failed to read the image digests of '{}'",
+                tarball_path.display()
+            ),
+        })?;
+
+        for image_id in &candidates {
+            match self.docker.inspect_image(image_id).await {
+                Ok(_) => return Ok(image_id.clone()),
+                Err(bollard::errors::Error::DockerResponseServerError {
+                    status_code: 404, ..
+                }) => continue,
+                Err(error) => {
+                    return Err(error).into_alien_error().context(
+                        ErrorData::DockerContainerError {
+                            container: container_id.to_string(),
+                            operation: "inspect_loaded_image".to_string(),
+                            reason: format!("Failed to inspect loaded image {image_id}"),
+                        },
+                    );
+                }
+            }
+        }
+        Err(AlienError::new(ErrorData::DockerContainerError {
+            container: container_id.to_string(),
+            operation: "inspect_loaded_image".to_string(),
+            reason: format!(
+                "Docker did not load image {} (manifest) or {} (config)",
+                candidates[0], candidates[1]
+            ),
+        }))
     }
 
     /// Make a registry image available to the daemon and return a reference
@@ -1621,6 +1657,41 @@ fn shared_bind_mount_user(_bind_mounts: &[BindMount]) -> Option<String> {
     // Docker Desktop mediates bind mounts through its VM/file-sharing layer;
     // host uid/gid values do not identify the container user there.
     None
+}
+
+/// The OCI layout's `index.json`, reduced to what image identification needs.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OciIndex {
+    manifests: Vec<OciDescriptor>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OciDescriptor {
+    digest: String,
+}
+
+/// Digest of the first image an OCI archive's `index.json` lists: the same
+/// image whose config digest `dockdash::Image::from_tarball` reads.
+fn oci_archive_manifest_digest(tarball_path: &Path) -> std::io::Result<String> {
+    let mut archive = tar::Archive::new(std::fs::File::open(tarball_path)?);
+    // Seeking skips over layer blobs instead of reading them.
+    for entry in archive.entries_with_seek()? {
+        let entry = entry?;
+        let path = entry.path()?.into_owned();
+        if path.strip_prefix(".").unwrap_or(&path) != Path::new("index.json") {
+            continue;
+        }
+        let index: OciIndex = serde_json::from_reader(entry).map_err(std::io::Error::other)?;
+        return index
+            .manifests
+            .into_iter()
+            .next()
+            .map(|manifest| manifest.digest)
+            .ok_or_else(|| std::io::Error::other("index.json lists no images"));
+    }
+    Err(std::io::Error::other("archive has no index.json"))
 }
 
 #[cfg(test)]

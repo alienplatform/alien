@@ -15,8 +15,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    vault_naming, BindingValue, Platform, StackInputDefinition, StackInputKind, StackInputProvider,
-    VaultBinding,
+    vault_naming, BindingValue, EnvironmentVariablesSnapshot, Platform, StackInputDefinition,
+    StackInputKind, StackInputProvider, VaultBinding,
 };
 
 /// Prefix of every vault key that holds a deployer secret, so these keys
@@ -76,8 +76,42 @@ pub struct DeployerSecretSlot<'a> {
     /// Key of the value in the `secrets` vault.
     pub vault_key: String,
     /// The deployment still stores a value for this input from before slots
-    /// were vault-native. It is used until the slot is filled, then dropped.
+    /// were vault-native. It is used until the control plane drops it.
     pub has_stored_value: bool,
+}
+
+/// The deployment's input values as the deployer secret helpers must see them.
+///
+/// A control plane never puts a stored secret's value in `input_values`: it
+/// delivers it through the environment variables the input maps. Such an
+/// input counts as stored when every variable it maps is in `environment`, so
+/// a developer value is not mistaken for an empty deployer slot. Input and
+/// user variable names are unique, so a mapped name can only come from the
+/// input. The added entries mark presence only and carry no value.
+pub fn stored_input_values(
+    inputs: &[StackInputDefinition],
+    values: &HashMap<String, serde_json::Value>,
+    environment: &EnvironmentVariablesSnapshot,
+) -> HashMap<String, serde_json::Value> {
+    let mut stored = values.clone();
+    for input in inputs {
+        if input.kind != StackInputKind::Secret
+            || input.env.is_empty()
+            || stored.get(&input.id).is_some_and(|value| !value.is_null())
+        {
+            continue;
+        }
+        let delivered = input.env.iter().all(|mapping| {
+            environment
+                .variables
+                .iter()
+                .any(|variable| variable.name == mapping.name)
+        });
+        if delivered {
+            stored.insert(input.id.clone(), serde_json::Value::Bool(true));
+        }
+    }
+    stored
 }
 
 /// The vault-native deployer secret slots of a deployment on `platform`.
@@ -364,8 +398,10 @@ pub struct DeployerSecretEnv {
 /// secrets, each with the resources its mapping targets (`None` = all).
 ///
 /// A slot is read from the vault once Alien has a report for it, unless the
-/// deployment still stores a value from before slots were vault-native and the
-/// slot is not filled yet: that value keeps today's path until then.
+/// deployment still stores a value from before slots were vault-native: that
+/// value keeps today's path until the control plane drops it. The workload's
+/// profile gains the vault read grant at the same point, so a workload never
+/// reads a slot it may not read.
 pub fn deployer_secret_environment(
     inputs: &[StackInputDefinition],
     values: &HashMap<String, serde_json::Value>,
@@ -378,8 +414,7 @@ pub fn deployer_secret_environment(
             let report = reports
                 .iter()
                 .find(|report| report.input_id == slot.input.id)?;
-            (!slot.has_stored_value || report.status == DeployerSecretStatus::Present)
-                .then_some((slot, report))
+            (!slot.has_stored_value).then_some((slot, report))
         })
         .flat_map(|(slot, report)| {
             slot.input.env.iter().map(move |mapping| {
@@ -468,6 +503,41 @@ mod tests {
         assert!(deployer_secret_slots(&inputs, &with_developer_value, Platform::Aws).is_empty());
         assert_eq!(
             deployer_secret_slots(&inputs, &HashMap::new(), Platform::Aws).len(),
+            1
+        );
+    }
+
+    /// A control plane delivers a stored secret through its mapped variables,
+    /// never in `input_values`: a developer value delivered that way must keep
+    /// a dual-provided secret off the vault path, and only a fully delivered
+    /// input counts.
+    #[test]
+    fn a_secret_delivered_through_its_variables_counts_as_stored() {
+        let inputs = vec![secret(
+            "databasePassword",
+            vec![StackInputProvider::Developer, StackInputProvider::Deployer],
+        )];
+        let snapshot = |names: &[&str]| EnvironmentVariablesSnapshot {
+            variables: names
+                .iter()
+                .map(|name| crate::EnvironmentVariable {
+                    name: name.to_string(),
+                    value: "dev".to_string(),
+                    var_type: crate::EnvironmentVariableType::Secret,
+                    target_resources: None,
+                })
+                .collect(),
+            hash: String::new(),
+            created_at: String::new(),
+        };
+
+        let delivered =
+            stored_input_values(&inputs, &HashMap::new(), &snapshot(&["DATABASE_PASSWORD"]));
+        assert!(deployer_secret_slots(&inputs, &delivered, Platform::Aws).is_empty());
+
+        let not_delivered = stored_input_values(&inputs, &HashMap::new(), &snapshot(&["OTHER"]));
+        assert_eq!(
+            deployer_secret_slots(&inputs, &not_delivered, Platform::Aws).len(),
             1
         );
     }
@@ -649,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stored_value_keeps_today_s_path_until_the_slot_is_filled() {
+    fn a_stored_value_keeps_today_s_path_until_it_is_dropped() {
         let inputs = vec![secret(
             "databasePassword",
             vec![StackInputProvider::Deployer],
@@ -666,10 +736,20 @@ mod tests {
             &[report("databasePassword", DeployerSecretStatus::Missing)],
         )
         .is_empty());
-        assert_eq!(
+        assert!(
             deployer_secret_environment(
                 &inputs,
                 &stored,
+                Platform::Aws,
+                &[report("databasePassword", DeployerSecretStatus::Present)],
+            )
+            .is_empty(),
+            "a filled slot is not read while the stored value has no vault read grant"
+        );
+        assert_eq!(
+            deployer_secret_environment(
+                &inputs,
+                &HashMap::new(),
                 Platform::Aws,
                 &[report("databasePassword", DeployerSecretStatus::Present)],
             )
