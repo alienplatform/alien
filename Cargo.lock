@@ -4050,18 +4050,20 @@ checksum = "780955b8b195a21ab8e4ac6b60dd1dbdcec1dc6c51c0617964b08c81785e12c9"
 [[package]]
 name = "dockdash"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bdd53548f677169f62a962a5948e8f56ab371a7fce6069a856f53c294460be8"
+source = "git+https://github.com/alienplatform/dockdash?rev=e5338c004ac4be34982f20771b329f79210e768f#e5338c004ac4be34982f20771b329f79210e768f"
 dependencies = [
  "async-trait",
  "cacache",
  "container-registry 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "dirs 6.0.0",
  "flate2",
+ "libc",
  "oci-client",
  "oci-spec 0.6.7",
  "oci-tar-builder",
  "ocipkg",
+ "olpc-cjson",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "tar",
