@@ -295,7 +295,12 @@ fn deployer_secret_keys_by_profile(
 ) -> Result<BTreeMap<String, BTreeSet<String>>> {
     // The same slots delivery reads: a secret the developer may also provide
     // and has a stored developer value is not a slot.
-    let slots = alien_core::deployer_secret_slots(&stack.inputs, &config.input_values, platform);
+    let stored = alien_core::stored_input_values(
+        &stack.inputs,
+        &config.input_values,
+        &config.environment_variables,
+    );
+    let slots = alien_core::deployer_secret_slots(&stack.inputs, &stored, platform);
     if slots.is_empty() {
         return Ok(BTreeMap::new());
     }

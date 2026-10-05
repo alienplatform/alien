@@ -196,12 +196,13 @@ pub fn inject_environment_variables(
     info!("Injecting environment variables into compute resources");
 
     let snapshot = &config.environment_variables;
-    let deployer_environment = deployer_secret_environment(
+    let stored = alien_core::stored_input_values(
         &stack.inputs,
         &config.input_values,
-        platform,
-        deployer_reports,
+        &config.environment_variables,
     );
+    let deployer_environment =
+        deployer_secret_environment(&stack.inputs, &stored, platform, deployer_reports);
     for (resource_name, resource_entry) in &mut stack.resources {
         let resource_type = resource_entry.config.resource_type();
 
@@ -710,24 +711,32 @@ pub async fn check_deployer_secrets(
     config: &DeploymentConfig,
     platform: Platform,
 ) -> Result<Vec<DeployerSecretReport>> {
-    let slots = deployer_secret_slots(&stack.inputs, &config.input_values, platform);
+    let stored = alien_core::stored_input_values(
+        &stack.inputs,
+        &config.input_values,
+        &config.environment_variables,
+    );
+    let slots = deployer_secret_slots(&stack.inputs, &stored, platform);
     if slots.is_empty() {
         return Ok(Vec::new());
     }
 
-    let binding = stack_state
-        .resources
-        .get(SECRETS_VAULT_ID)
-        .and_then(|vault| vault.remote_binding_params.clone())
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::MissingConfiguration {
-                message: format!(
-                    "Stack input '{}' is a deployer secret, which lives in the deployment's \
+    // A deployment installed before its stack had a `secrets` vault has
+    // nowhere to hold a slot yet. Its workloads keep the values they were
+    // installed with until setup adds the vault, so there is nothing to
+    // report, and its refreshes must not fail on that.
+    let Some(vault) = stack_state.resources.get(SECRETS_VAULT_ID) else {
+        return Ok(Vec::new());
+    };
+    let binding = vault.remote_binding_params.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::MissingConfiguration {
+            message: format!(
+                "Stack input '{}' is a deployer secret, which lives in the deployment's \
                      '{SECRETS_VAULT_ID}' vault, but that vault has no binding yet",
-                    slots[0].input.id
-                ),
-            })
-        })?;
+                slots[0].input.id
+            ),
+        })
+    })?;
     let binding: VaultBinding =
         serde_json::from_value(binding)
             .into_alien_error()
@@ -794,7 +803,12 @@ pub fn deployer_secrets_blocking_start<'a>(
     platform: Platform,
     reports: &'a [DeployerSecretReport],
 ) -> Vec<&'a DeployerSecretReport> {
-    let slots = deployer_secret_slots(&stack.inputs, &config.input_values, platform);
+    let stored = alien_core::stored_input_values(
+        &stack.inputs,
+        &config.input_values,
+        &config.environment_variables,
+    );
+    let slots = deployer_secret_slots(&stack.inputs, &stored, platform);
     reports
         .iter()
         .filter(|report| report.blocks_start())
