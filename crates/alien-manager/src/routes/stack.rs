@@ -1322,7 +1322,7 @@ async fn prepare_import_stack(
 
     let stack_state = StackState::new(mutation_platform);
     let config = DeploymentConfig {
-        stored_secret_input_ids: Vec::new(),
+        stored_secret_input_ids: None,
         input_values: Default::default(),
         deployment_name: Some(req.deployment_name.clone()),
         stack_settings: stack_settings.clone(),

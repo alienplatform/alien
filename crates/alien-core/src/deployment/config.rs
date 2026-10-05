@@ -42,9 +42,9 @@ pub struct DeploymentConfig {
     pub input_values: HashMap<String, serde_json::Value>,
     /// IDs of applicable secret inputs stored for this exact deployment target.
     /// Trusted presence metadata only: never values, gate answers, or authority.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[builder(default)]
-    pub stored_secret_input_ids: Vec<String>,
+    /// Absent on legacy targets; an explicit empty list means no stored secrets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stored_secret_input_ids: Option<Vec<String>>,
     /// Allow frozen resource changes during updates
     /// When true, skips the frozen resources compatibility check.
     /// This requires running with elevated cloud credentials.
@@ -214,7 +214,7 @@ mod input_values_tests {
         let config: DeploymentConfig =
             serde_json::from_value(json).expect("old shape deserializes");
         assert!(config.input_values.is_empty());
-        assert!(config.stored_secret_input_ids.is_empty());
+        assert!(config.stored_secret_input_ids.is_none());
 
         let round = serde_json::to_value(&config).expect("serializes");
         assert!(round.get("storedSecretInputIds").is_none());
@@ -235,8 +235,18 @@ mod input_values_tests {
             .allow_frozen_changes(false)
             .external_bindings(ExternalBindings::default())
             .build();
-        assert!(config.stored_secret_input_ids.is_empty());
-        config.stored_secret_input_ids = vec!["apiKey".to_string(), "enableFeature".to_string()];
+        assert!(config.stored_secret_input_ids.is_none());
+        config.stored_secret_input_ids = Some(Vec::new());
+        let empty = serde_json::to_value(&config).unwrap();
+        assert_eq!(empty["storedSecretInputIds"], serde_json::json!([]));
+        assert_eq!(
+            serde_json::from_value::<DeploymentConfig>(empty)
+                .unwrap()
+                .stored_secret_input_ids,
+            Some(Vec::new())
+        );
+        config.stored_secret_input_ids =
+            Some(vec!["apiKey".to_string(), "enableFeature".to_string()]);
         let wire = serde_json::to_value(&config).unwrap();
         assert_eq!(
             wire["storedSecretInputIds"],

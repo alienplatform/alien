@@ -252,7 +252,7 @@ fn expected_secrets_sync_hash(secret_value: &str) -> String {
 /// Create a deployment config fixture
 fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentConfig {
     DeploymentConfig {
-        stored_secret_input_ids: Vec::new(),
+        stored_secret_input_ids: None,
         input_values: Default::default(),
         deployment_name: Some("test deployment".to_string()),
         stack_settings: StackSettings::default(),
@@ -2769,7 +2769,7 @@ async fn test_stored_dual_secret_presence_starts_without_vault_slots() {
         .push(alien_core::StackInputProvider::Developer);
     stack.inputs = vec![input];
     let mut config = create_test_config("hash_v1", false);
-    config.stored_secret_input_ids = vec!["databasePassword".to_string()];
+    config.stored_secret_input_ids = Some(vec!["databasePassword".to_string()]);
     assert!(config.input_values.is_empty());
     let running = run_until_status(
         create_initial_state(stack),

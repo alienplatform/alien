@@ -1380,13 +1380,13 @@ mod tests {
             None,
         );
         assert_eq!(config.input_values, stored_values);
-        assert!(config.stored_secret_input_ids.is_empty());
+        assert!(config.stored_secret_input_ids.is_none());
 
         // A control-plane-supplied config owns the values when present.
         let control_plane_values =
             HashMap::from([("enableAnalytics".to_string(), serde_json::json!(false))]);
         deployment.deployment_config = Some(DeploymentConfig {
-            stored_secret_input_ids: vec!["apiKey".to_string()],
+            stored_secret_input_ids: Some(vec!["apiKey".to_string()]),
 
             input_values: control_plane_values.clone(),
             ..test_deployment_config()
@@ -1402,7 +1402,26 @@ mod tests {
             None,
         );
         assert_eq!(config.input_values, control_plane_values);
-        assert_eq!(config.stored_secret_input_ids, vec!["apiKey".to_string()]);
+        assert_eq!(
+            config.stored_secret_input_ids,
+            Some(vec!["apiKey".to_string()])
+        );
+
+        deployment
+            .deployment_config
+            .as_mut()
+            .unwrap()
+            .stored_secret_input_ids = Some(Vec::new());
+        let empty = build_target_deployment_config(
+            &deployment,
+            StackSettings::default(),
+            None,
+            vec![],
+            "https://manager.example.test".to_string(),
+            None,
+            None,
+        );
+        assert_eq!(empty.stored_secret_input_ids, Some(Vec::new()));
 
         // A config from a control plane that predates gate answers has an
         // empty map; the stored answers must stand in, not the defaults.
@@ -1418,7 +1437,7 @@ mod tests {
             None,
         );
         assert_eq!(config.input_values, stored_values);
-        assert!(config.stored_secret_input_ids.is_empty());
+        assert!(config.stored_secret_input_ids.is_none());
     }
 
     fn uninitialized_state() -> DeploymentState {
@@ -1438,7 +1457,7 @@ mod tests {
 
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
-            stored_secret_input_ids: Vec::new(),
+            stored_secret_input_ids: None,
             input_values: Default::default(),
             deployment_name: None,
             stack_settings: StackSettings::default(),
@@ -2258,10 +2277,8 @@ fn build_target_deployment_config(
                 .filter(|values| !values.is_empty())
                 .unwrap_or_else(|| deployment.input_values.clone()),
         )
-        .stored_secret_input_ids(
-            deployment_config
-                .map(|config| config.stored_secret_input_ids.clone())
-                .unwrap_or_default(),
+        .maybe_stored_secret_input_ids(
+            deployment_config.and_then(|config| config.stored_secret_input_ids.clone()),
         )
         .maybe_management_config(management_config)
         .environment_variables(EnvironmentVariablesSnapshot {

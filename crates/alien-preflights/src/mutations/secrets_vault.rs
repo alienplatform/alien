@@ -75,7 +75,8 @@ impl StackMutation for SecretsVaultMutation {
         let deployer_secrets_need_vault = alien_core::deployer_secret_slots(
             &stack.inputs,
             &config.input_values,
-            &config.stored_secret_input_ids,
+            config.stored_secret_input_ids.as_deref(),
+            &config.environment_variables.variables,
             stack_state.platform,
         )
         .iter()
@@ -316,7 +317,8 @@ fn deployer_secret_keys_by_profile(
     let slots = alien_core::deployer_secret_slots(
         &stack.inputs,
         &config.input_values,
-        &config.stored_secret_input_ids,
+        config.stored_secret_input_ids.as_deref(),
+        &config.environment_variables.variables,
         platform,
     );
     if slots.is_empty() {
@@ -1090,8 +1092,8 @@ mod tests {
         stack.inputs = vec![input.clone()];
         assert!(!SecretsVaultMutation.should_run(&stack, &stack_state, &config));
 
-        // Only trusted input presence, not a coincident mapped variable, keeps
-        // a dual-provider developer answer off the vault path.
+        // Explicit metadata is authoritative; only legacy omission may use
+        // complete Secret delivery for a dual-provider input.
         input.provided_by = vec![StackInputProvider::Developer, StackInputProvider::Deployer];
         input.env = vec![StackInputEnvironmentMapping {
             name: "DATABASE_PASSWORD".to_string(),
@@ -1107,9 +1109,11 @@ mod tests {
             var_type: alien_core::EnvironmentVariableType::Secret,
             target_resources: None,
         }];
-        // A mapped variable alone is not authoritative stored-input presence.
+        assert!(delivered.stored_secret_input_ids.is_none());
+        assert!(!SecretsVaultMutation.should_run(&stack, &stack_state, &delivered));
+        delivered.stored_secret_input_ids = Some(Vec::new());
         assert!(SecretsVaultMutation.should_run(&stack, &stack_state, &delivered));
-        delivered.stored_secret_input_ids = vec![stack.inputs[0].id.clone()];
+        delivered.stored_secret_input_ids = Some(vec![stack.inputs[0].id.clone()]);
         assert!(!SecretsVaultMutation.should_run(&stack, &stack_state, &delivered));
     }
 
@@ -1123,7 +1127,7 @@ mod tests {
         let mut config = deployer_secret_config();
         assert!(config.input_values.is_empty());
         assert!(SecretsVaultMutation.should_run(&stack, &state, &config));
-        config.stored_secret_input_ids = vec![stack.inputs[0].id.clone()];
+        config.stored_secret_input_ids = Some(vec![stack.inputs[0].id.clone()]);
         assert!(!SecretsVaultMutation.should_run(&stack, &state, &config));
         assert!(
             deployer_secret_keys_by_profile(&stack, &config, Platform::Gcp)
@@ -1140,7 +1144,7 @@ mod tests {
         stack.inputs[0]
             .provided_by
             .push(StackInputProvider::Developer);
-        config.stored_secret_input_ids.clear();
+        config.stored_secret_input_ids = Some(Vec::new());
         assert!(SecretsVaultMutation.should_run(&stack, &state, &config));
     }
 
@@ -1186,7 +1190,7 @@ mod tests {
                 config.base_platform = Some(Platform::Gcp);
             }
             // Presence cannot turn a pure deployer secret into a developer answer.
-            config.stored_secret_input_ids = vec!["apiKey".to_string()];
+            config.stored_secret_input_ids = Some(vec!["apiKey".to_string()]);
             config.input_values.insert(
                 "unrelated".to_string(),
                 serde_json::json!("generic-canary-value"),
@@ -1211,7 +1215,7 @@ mod tests {
         config
             .input_values
             .insert("apiKey".to_string(), serde_json::Value::Null);
-        config.stored_secret_input_ids = vec!["unrelated".to_string()];
+        config.stored_secret_input_ids = Some(vec!["unrelated".to_string()]);
         config
             .environment_variables
             .variables
@@ -1228,7 +1232,7 @@ mod tests {
                 .is_err(),
             "mapped environment names must not bypass workload identity validation"
         );
-        config.stored_secret_input_ids = vec!["apiKey".to_string()];
+        config.stored_secret_input_ids = Some(vec!["apiKey".to_string()]);
         let prepared = SecretsVaultMutation
             .mutate(dual, &StackState::new(Platform::Gcp), &config)
             .await
@@ -1257,7 +1261,7 @@ mod tests {
                         .provided_by
                         .push(StackInputProvider::Developer);
                     if case == "stored-dual" {
-                        config.stored_secret_input_ids = vec!["apiKey".to_string()];
+                        config.stored_secret_input_ids = Some(vec!["apiKey".to_string()]);
                     } else {
                         config.input_values.insert(
                             "apiKey".to_string(),

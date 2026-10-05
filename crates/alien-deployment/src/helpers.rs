@@ -199,7 +199,8 @@ pub fn inject_environment_variables(
     let deployer_environment = deployer_secret_environment(
         &stack.inputs,
         &config.input_values,
-        &config.stored_secret_input_ids,
+        config.stored_secret_input_ids.as_deref(),
+        &config.environment_variables.variables,
         platform,
         deployer_reports,
     );
@@ -714,7 +715,8 @@ pub async fn check_deployer_secrets(
     let slots = deployer_secret_slots(
         &stack.inputs,
         &config.input_values,
-        &config.stored_secret_input_ids,
+        config.stored_secret_input_ids.as_deref(),
+        &config.environment_variables.variables,
         platform,
     );
     if slots.is_empty() {
@@ -806,7 +808,8 @@ pub fn deployer_secrets_blocking_start<'a>(
     let slots = deployer_secret_slots(
         &stack.inputs,
         &config.input_values,
-        &config.stored_secret_input_ids,
+        config.stored_secret_input_ids.as_deref(),
+        &config.environment_variables.variables,
         platform,
     );
     reports
@@ -1266,7 +1269,7 @@ mod tests {
         }))
         .unwrap()];
         let mut config = make_config(make_snapshot(&[], &[]));
-        config.stored_secret_input_ids = vec!["apiKey".to_string()];
+        config.stored_secret_input_ids = Some(vec!["apiKey".to_string()]);
         let mut state = StackState::new(Platform::Test);
         let reports =
             check_deployer_secrets(&stack, &state, &ClientConfig::Test, &config, Platform::Test)
@@ -1295,7 +1298,7 @@ mod tests {
             &[missing.clone()]
         )
         .is_empty());
-        config.stored_secret_input_ids.clear();
+        config.stored_secret_input_ids = Some(Vec::new());
         assert!(
             check_deployer_secrets(&stack, &state, &ClientConfig::Test, &config, Platform::Test)
                 .await
@@ -1326,7 +1329,7 @@ mod tests {
                 .len(),
             1
         );
-        config.stored_secret_input_ids = vec!["apiKey".to_string()];
+        config.stored_secret_input_ids = Some(vec!["apiKey".to_string()]);
         stack.inputs[0].provided_by = vec![alien_core::StackInputProvider::Deployer];
         assert!(check_deployer_secrets(
             &stack,
