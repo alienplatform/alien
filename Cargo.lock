@@ -469,6 +469,7 @@ dependencies = [
  "hex",
  "hostname 0.4.2",
  "http 1.5.0",
+ "httpmock",
  "indexmap 2.14.1",
  "insta",
  "keyring",

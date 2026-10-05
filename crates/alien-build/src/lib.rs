@@ -2,6 +2,7 @@ pub(crate) mod command_output;
 pub mod dependencies;
 mod dockerignore;
 pub mod error;
+mod lambda_image;
 #[cfg(test)]
 mod lambda_tests;
 pub mod merge;
@@ -1287,6 +1288,23 @@ fn strip_local_daemon_only_compute_clusters(stack: &mut Stack, platform: Platfor
     }
 }
 
+/// Check local AWS Worker images before a release cache can replace their paths.
+/// Remote image references supplied explicitly by the stack are left unchanged.
+pub fn validate_aws_worker_artifacts(stack: &Stack) -> Result<()> {
+    for target in collect_push_targets(stack)? {
+        if target.resource_type == "worker" {
+            lambda_image::validate(
+                &target.local_image_dir.join(format!(
+                    "{}.oci.tar",
+                    BinaryTarget::LinuxArm64.runtime_platform_id()
+                )),
+                target.resource_name(),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// A compute resource that has a locally-built image directory and needs to be pushed to a registry.
 #[derive(Debug)]
 struct ResourcePushTarget {
@@ -1531,6 +1549,9 @@ pub async fn push_stack(
         push_settings.repository
     );
 
+    if platform == Platform::Aws {
+        validate_aws_worker_artifacts(&stack)?;
+    }
     let to_push = collect_push_targets(&stack)?;
 
     let resource_count = to_push
@@ -1825,6 +1846,7 @@ async fn push_resource_images(
                     reason: "AWS Workers require a Linux ARM64 OCI archive".to_string(),
                 })
             })?;
+        lambda_image::validate(archive, resource_name)?;
         vec![(target, archive.clone())]
     } else if *platform == Platform::Local && matches!(resource_type, "worker" | "daemon") {
         let host = BinaryTarget::current_os();
@@ -3274,6 +3296,12 @@ async fn build_target_to_file(
 
             info!("Successfully built image from scratch");
         }
+    }
+
+    if source_layer_compression(settings, workload) == dockdash::LayerCompression::Gzip
+        && *target == BinaryTarget::LinuxArm64
+    {
+        lambda_image::validate(output_path, resource_name)?;
     }
 
     info!(

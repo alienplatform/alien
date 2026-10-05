@@ -78,6 +78,88 @@ async fn lambda_publish_archives(images: &Path, base: Option<&str>) {
 }
 
 #[tokio::test]
+async fn lambda_rejects_legacy_and_inherited_zstd_before_upload() {
+    let server = httpmock::MockServer::start_async().await;
+    let requests = server
+        .mock_async(|when, then| {
+            when.any_request();
+            then.status(500);
+        })
+        .await;
+    for gzip_application in [false, true] {
+        let images = tempdir().unwrap();
+        let old_layer = DockDashLayer::builder()
+            .unwrap()
+            .data("/base", b"legacy base", Some(0o644))
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let mut builder = DockDashImage::builder()
+            .platform("linux", &dockdash::Arch::ARM64)
+            .layer(old_layer);
+        if gzip_application {
+            builder = builder.layer(
+                DockDashLayer::builder()
+                    .unwrap()
+                    .compression(dockdash::LayerCompression::Gzip)
+                    .data("/app/job", b"new application", Some(0o755))
+                    .unwrap()
+                    .build()
+                    .await
+                    .unwrap(),
+            );
+        }
+        builder
+            .output_to(images.path().join("linux-aarch64.oci.tar"))
+            .build()
+            .await
+            .unwrap();
+        let error = push_resource_images(
+            "job",
+            "job",
+            "worker",
+            images.path(),
+            &Platform::Aws,
+            &format!("{}/tests/unused", server.address()),
+            &dockdash::PushOptions {
+                protocol: dockdash::ClientProtocol::Http,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, "INVALID_RESOURCE_CONFIG");
+        assert!(error.to_string().contains("zstd"));
+        assert!(error.to_string().contains("alien build"));
+    }
+    assert_eq!(requests.hits_async().await, 0);
+}
+
+#[tokio::test]
+async fn lambda_rejects_wrong_architecture_even_if_archive_name_says_arm64() {
+    let images = tempdir().unwrap();
+    let layer = DockDashLayer::builder()
+        .unwrap()
+        .compression(dockdash::LayerCompression::Gzip)
+        .data("/app", b"payload", Some(0o644))
+        .unwrap()
+        .build()
+        .await
+        .unwrap();
+    DockDashImage::builder()
+        .platform("linux", &dockdash::Arch::Amd64)
+        .layer(layer)
+        .output_to(images.path().join("linux-aarch64.oci.tar"))
+        .build()
+        .await
+        .unwrap();
+    let error =
+        lambda_image::validate(&images.path().join("linux-aarch64.oci.tar"), "job").unwrap_err();
+    assert!(error.to_string().contains("Linux ARM64"));
+}
+
+#[tokio::test]
 async fn aws_worker_publish_selects_arm64_but_containers_keep_both_architectures() {
     let registry = container_registry::ContainerRegistry::builder()
         .build_for_testing()

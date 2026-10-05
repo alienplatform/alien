@@ -1887,6 +1887,9 @@ async fn push_stack_with_cache(
     output_dir: &PathBuf,
     push_settings: &PushSettings,
 ) -> alien_error::Result<Stack, alien_build::error::ErrorData> {
+    if platform == Platform::Aws {
+        alien_build::validate_aws_worker_artifacts(&built_stack)?;
+    }
     let platform_str = platform.as_str();
     let mut push_cache = load_push_cache(output_dir, platform_str);
     drop_images_missing_from_registry(&built_stack, &mut push_cache, push_settings).await;
@@ -1952,7 +1955,10 @@ async fn drop_images_missing_from_registry(
 }
 
 fn push_cache_file_name(platform: &str) -> String {
-    if platform == "local" {
+    if platform == "aws" {
+        // Older entries may resolve to multi-architecture or zstd Worker images.
+        "push-cache-v3.json".to_string()
+    } else if platform == "local" {
         format!(
             "push-cache-v2-{}.json",
             alien_core::BinaryTarget::current_os().runtime_platform_id()
@@ -2217,6 +2223,92 @@ mod tests {
     use super::*;
     use alien_core::ResourceLifecycle;
 
+    #[tokio::test]
+    async fn cached_aws_worker_still_validates_its_local_archive_before_registry_access() {
+        let output = tempfile::tempdir().unwrap();
+        let output_dir = output.path().to_path_buf();
+        let artifact = output_dir.join("build/aws/job-oldhash");
+        std::fs::create_dir_all(&artifact).unwrap();
+        let layer = dockdash::Layer::builder()
+            .unwrap()
+            .data("/app/job", b"legacy application", Some(0o755))
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        dockdash::Image::builder()
+            .platform("linux", &dockdash::Arch::ARM64)
+            .layer(layer)
+            .output_to(artifact.join("linux-aarch64.oci.tar"))
+            .build()
+            .await
+            .unwrap();
+        let worker = Worker::new("job".to_string())
+            .permissions("job".to_string())
+            .code(WorkerCode::Image {
+                image: artifact.display().to_string(),
+            })
+            .build();
+        let stack = Stack::new("cached-worker".to_string())
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+        let server = httpmock::MockServer::start_async().await;
+        let requests = server
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(500);
+            })
+            .await;
+        let repository = format!("{}/tests/worker", server.address());
+        let cache = HashMap::from([(
+            "worker:job-oldhash".to_string(),
+            format!("{repository}:legacy"),
+        )]);
+        save_push_cache(&output_dir, "aws", &cache).unwrap();
+        let settings = PushSettings {
+            repository,
+            destination_label: None,
+            options: dockdash::PushOptions {
+                protocol: ClientProtocol::Http,
+                ..Default::default()
+            },
+        };
+        let error = push_stack_with_cache(stack, Platform::Aws, &output_dir, &settings)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "INVALID_RESOURCE_CONFIG");
+        assert!(error.to_string().contains("zstd"));
+        assert_eq!(requests.hits_async().await, 0);
+    }
+
+    #[test]
+    fn legacy_aws_push_cache_is_not_reused_but_other_platform_caches_are() {
+        let output = tempfile::tempdir().unwrap();
+        let output_dir = output.path().to_path_buf();
+        let legacy = HashMap::from([(
+            "worker:job-oldhash".to_string(),
+            "registry.example.com/job:multiarch".to_string(),
+        )]);
+        for platform in ["aws", "gcp"] {
+            let dir = output_dir.join("build").join(platform);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join(PUSH_CACHE_FILE),
+                serde_json::to_vec(&legacy).unwrap(),
+            )
+            .unwrap();
+        }
+        assert!(load_push_cache(&output_dir, "aws").is_empty());
+        assert_eq!(load_push_cache(&output_dir, "gcp"), legacy);
+        let current = HashMap::from([(
+            "worker:job-newhash".to_string(),
+            "registry.example.com/job:arm64-gzip".to_string(),
+        )]);
+        save_push_cache(&output_dir, "aws", &current).unwrap();
+        assert_eq!(load_push_cache(&output_dir, "aws"), current);
+        assert_eq!(load_push_cache(&output_dir, "gcp"), legacy);
+    }
+
     #[test]
     fn concurrent_push_cache_writes_each_land_whole() {
         let output = tempfile::tempdir().unwrap();
@@ -2244,7 +2336,7 @@ mod tests {
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect::<Vec<_>>();
-        assert_eq!(files, [PUSH_CACHE_FILE]);
+        assert_eq!(files, [push_cache_file_name("aws")]);
     }
 
     #[tokio::test]
