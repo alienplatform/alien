@@ -1,5 +1,5 @@
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Container, Daemon, ExposeProtocol, Platform, Stack, Worker};
+use alien_core::{Container, Daemon, ExposeProtocol, Platform, Stack, Worker, APEX_HOST_LABEL};
 use async_trait::async_trait;
 
 /// Validates public endpoint and daemon runtime configuration.
@@ -38,6 +38,7 @@ impl CompileTimeCheck for SingleExposedPortCheck {
                 validate_worker_public_endpoints(worker, &mut failures);
             }
         }
+        validate_unique_host_labels(stack, &mut failures);
 
         if failures.is_empty() {
             Ok(CheckResult::success())
@@ -182,6 +183,91 @@ fn validate_worker_public_endpoints(worker: &Worker, failures: &mut Vec<String>)
     }
 }
 
+/// A public endpoint that gets a generated hostname: `<hostLabel>.<deployment domain>`.
+struct HostnameEndpoint<'a> {
+    resource_id: &'a str,
+    endpoint_name: &'a str,
+    host_label: &'a str,
+    /// The resource exists only when its `enabledWhen` input is true.
+    gated: bool,
+}
+
+/// Generated hostnames share one deployment domain, so two endpoints in the same stack with
+/// the same host label (the endpoint name unless `hostLabel` overrides it) would get the same
+/// hostname. Only HTTP endpoints on containers and daemons get one; TCP endpoints are reached
+/// through their load balancer address.
+///
+/// Two gated resources may be alternatives that are never enabled together, so they may share
+/// a host label; the deployment rejects them if both are enabled. A collision involving an
+/// ungated resource happens whenever the other resource exists.
+fn validate_unique_host_labels(stack: &Stack, failures: &mut Vec<String>) {
+    let mut endpoints = Vec::new();
+    for (resource_id, resource_entry) in stack.resources() {
+        let config = &resource_entry.config;
+        let gated = resource_entry.enabled_when.is_some();
+        let http_endpoints = config
+            .downcast_ref::<Container>()
+            .map(|container| container.public_endpoints.as_slice())
+            .or_else(|| {
+                config
+                    .downcast_ref::<Daemon>()
+                    .map(|daemon| daemon.public_endpoints.as_slice())
+            })
+            .unwrap_or_default();
+        endpoints.extend(
+            http_endpoints
+                .iter()
+                .filter(|endpoint| endpoint.protocol == ExposeProtocol::Http)
+                .map(|endpoint| HostnameEndpoint {
+                    resource_id,
+                    endpoint_name: &endpoint.name,
+                    host_label: endpoint.effective_host_label(),
+                    gated,
+                }),
+        );
+        if let Some(worker) = config.downcast_ref::<Worker>() {
+            endpoints.extend(
+                worker
+                    .public_endpoints
+                    .iter()
+                    .map(|endpoint| HostnameEndpoint {
+                        resource_id,
+                        endpoint_name: &endpoint.name,
+                        host_label: endpoint.effective_host_label(),
+                        gated,
+                    }),
+            );
+        }
+    }
+
+    for (index, endpoint) in endpoints.iter().enumerate() {
+        let conflict = endpoints[..index].iter().find(|earlier| {
+            earlier.host_label == endpoint.host_label
+                && !(earlier.gated && endpoint.gated)
+                // Two endpoints on one resource with the same name are reported by the
+                // per-resource checks; here they would only repeat that message.
+                && !(earlier.resource_id == endpoint.resource_id
+                    && earlier.endpoint_name == endpoint.endpoint_name)
+        });
+        let Some(first) = conflict else {
+            continue;
+        };
+        let hostname = if endpoint.host_label == APEX_HOST_LABEL {
+            "the deployment's apex hostname".to_string()
+        } else {
+            format!("hostname '{}.<deployment domain>'", endpoint.host_label)
+        };
+        failures.push(format!(
+            "Public endpoints '{}' on '{}' and '{}' on '{}' would both get {}. Endpoint host labels must be unique within a stack: rename one endpoint or give it a different hostLabel.",
+            first.endpoint_name,
+            first.resource_id,
+            endpoint.endpoint_name,
+            endpoint.resource_id,
+            hostname,
+        ));
+    }
+}
+
 fn validate_daemon_runtime(daemon: &Daemon, failures: &mut Vec<String>) {
     let Some(runtime) = &daemon.runtime else {
         return;
@@ -243,7 +329,7 @@ mod tests {
     use super::*;
     use alien_core::{
         ContainerCode, DaemonCode, DaemonRuntime, DaemonRuntimeMount, PublicEndpoint, ResourceSpec,
-        Stack,
+        Stack, WorkerCode, WorkerPublicEndpoint,
     };
 
     fn container_with_endpoint_protocol(protocol: ExposeProtocol) -> Container {
@@ -270,6 +356,218 @@ mod tests {
             .replicas(1)
             .permissions("test".to_string())
             .build()
+    }
+
+    fn container_with_endpoint(id: &str, endpoint: PublicEndpoint) -> Container {
+        Container::new(id.to_string())
+            .code(ContainerCode::Image {
+                image: format!("example.test/{id}:latest"),
+            })
+            .cpu(ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(endpoint.port)
+            .public_endpoint(endpoint)
+            .replicas(1)
+            .permissions("test".to_string())
+            .build()
+    }
+
+    fn http_endpoint(name: &str, host_label: Option<&str>) -> PublicEndpoint {
+        PublicEndpoint {
+            name: name.to_string(),
+            port: 8080,
+            protocol: ExposeProtocol::Http,
+            host_label: host_label.map(str::to_string),
+            wildcard_subdomains: false,
+        }
+    }
+
+    fn worker_with_endpoint(id: &str, name: &str, host_label: Option<&str>) -> Worker {
+        Worker::new(id.to_string())
+            .code(WorkerCode::Image {
+                image: format!("example.test/{id}:latest"),
+            })
+            .permissions("test".to_string())
+            .public_endpoint(WorkerPublicEndpoint {
+                name: name.to_string(),
+                host_label: host_label.map(str::to_string),
+                wildcard_subdomains: false,
+            })
+            .build()
+    }
+
+    /// The case that reached staging: two resources each exposing an endpoint named "api".
+    /// `alien release` builds the stack through the build-time preflights, so the release must
+    /// be refused there, naming both resources.
+    #[tokio::test]
+    async fn release_build_rejects_two_resources_with_the_same_endpoint_name() {
+        let mut stack = Stack::new("test-stack".to_string())
+            .add(
+                container_with_endpoint("gateway", http_endpoint("api", None)),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(
+                container_with_endpoint("probe", http_endpoint("api", None)),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+        // Everything else about this stack is valid, so the endpoint collision is the only
+        // reason the build fails.
+        stack.permissions.profiles.insert(
+            "test".to_string(),
+            alien_core::PermissionProfile::new().global(Vec::<&str>::new()),
+        );
+
+        let error = crate::runner::PreflightRunner::new()
+            .run_build_time_preflights(&stack, Platform::Aws)
+            .await
+            .expect_err("duplicate endpoint names must fail the build");
+        let crate::error::ErrorData::ValidationFailed { results, .. } =
+            error.error.expect("validation failure carries its results")
+        else {
+            panic!("expected a validation failure");
+        };
+        let messages: Vec<&String> = results
+            .iter()
+            .flat_map(|result| result.errors.iter())
+            .collect();
+        assert_eq!(
+            messages,
+            vec![
+                "Public endpoints 'api' on 'gateway' and 'api' on 'probe' would both get hostname 'api.<deployment domain>'. Endpoint host labels must be unique within a stack: rename one endpoint or give it a different hostLabel."
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn host_label_override_collides_across_resource_types() {
+        let stack = Stack::new("test-stack".to_string())
+            .add(
+                container_with_endpoint("gateway", http_endpoint("api", None)),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(
+                worker_with_endpoint("hooks", "webhooks", Some("api")),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+
+        let result = SingleExposedPortCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .expect("preflight should run");
+        assert_eq!(
+            result.errors,
+            vec![
+                "Public endpoints 'api' on 'gateway' and 'webhooks' on 'hooks' would both get hostname 'api.<deployment domain>'. Endpoint host labels must be unique within a stack: rename one endpoint or give it a different hostLabel."
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn apex_endpoints_on_two_resources_collide() {
+        let stack = Stack::new("test-stack".to_string())
+            .add(
+                container_with_endpoint("site", http_endpoint("web", Some(APEX_HOST_LABEL))),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(
+                worker_with_endpoint("edge", "root", Some(APEX_HOST_LABEL)),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+
+        let result = SingleExposedPortCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .expect("preflight should run");
+        assert_eq!(
+            result.errors,
+            vec![
+                "Public endpoints 'web' on 'site' and 'root' on 'edge' would both get the deployment's apex hostname. Endpoint host labels must be unique within a stack: rename one endpoint or give it a different hostLabel."
+            ]
+        );
+    }
+
+    /// Two gated resources can be alternatives selected by deploy-time inputs, so the release
+    /// cannot know they collide. An ungated resource always exists, so it still conflicts.
+    #[tokio::test]
+    async fn only_ungated_resources_make_a_host_label_conflict_certain() {
+        let mut stack = Stack::new("test-stack".to_string())
+            .add(
+                worker_with_endpoint("primary", "api", None),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(
+                worker_with_endpoint("secondary", "api", None),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+        for id in ["primary", "secondary"] {
+            stack.resources.get_mut(id).expect("resource").enabled_when =
+                Some(format!("enable-{id}"));
+        }
+
+        let alternatives = SingleExposedPortCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .expect("preflight should run");
+        assert!(alternatives.success, "{:?}", alternatives.errors);
+
+        stack
+            .resources
+            .get_mut("secondary")
+            .expect("resource")
+            .enabled_when = None;
+        let result = SingleExposedPortCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .expect("preflight should run");
+        assert_eq!(
+            result.errors,
+            vec![
+                "Public endpoints 'api' on 'primary' and 'api' on 'secondary' would both get hostname 'api.<deployment domain>'. Endpoint host labels must be unique within a stack: rename one endpoint or give it a different hostLabel."
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn same_endpoint_name_with_distinct_host_labels_passes() {
+        let tcp_endpoint = PublicEndpoint {
+            name: "api".to_string(),
+            port: 5432,
+            protocol: ExposeProtocol::Tcp,
+            host_label: None,
+            wildcard_subdomains: false,
+        };
+        let stack = Stack::new("test-stack".to_string())
+            .add(
+                container_with_endpoint("gateway", http_endpoint("api", None)),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(
+                container_with_endpoint("probe", http_endpoint("api", Some("probe"))),
+                alien_core::ResourceLifecycle::Live,
+            )
+            // TCP endpoints are reached through their load balancer address, not a
+            // generated hostname, so their name cannot collide.
+            .add(
+                container_with_endpoint("database", tcp_endpoint),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+
+        let result = SingleExposedPortCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .expect("preflight should run");
+        assert!(result.success, "{:?}", result.errors);
     }
 
     #[tokio::test]
