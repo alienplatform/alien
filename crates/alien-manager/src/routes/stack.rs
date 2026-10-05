@@ -45,7 +45,7 @@ use alien_core::{
     ResourceStatus, RuntimeMetadata, SetupUpdateAuthorization, Stack, StackResourceState,
     StackSettings, StackState, RESOURCE_PREFIX_ERROR_MESSAGE,
 };
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_preflights::{compatibility::PermissionProfilesUnchangedCheck, StackCompatibilityCheck};
 
 use super::{auth, AppState};
@@ -1267,23 +1267,29 @@ async fn refuse_management_permission_changes(
         reason: format!(
             "Changing {} after setup would change the management permissions setup installed ({}). \
              Keep the value chosen at setup, or create a new deployment.",
-            changed_stack_settings(installed_settings, &req.stack_settings).join(", "),
+            changed_stack_settings(installed_settings, &req.stack_settings)?.join(", "),
             result.errors.join("; "),
         ),
     }))
 }
 
 /// Names of the top-level stack settings whose values differ.
-fn changed_stack_settings(installed: &StackSettings, requested: &StackSettings) -> Vec<String> {
-    let as_object = |settings: &StackSettings| {
+fn changed_stack_settings(
+    installed: &StackSettings,
+    requested: &StackSettings,
+) -> crate::error::Result<Vec<String>> {
+    let as_value = |settings: &StackSettings| {
         serde_json::to_value(settings)
-            .expect("stack settings always serialize to JSON")
-            .as_object()
-            .cloned()
-            .expect("stack settings serialize to a JSON object")
+            .into_alien_error()
+            .context(ErrorData::InternalError {
+                message: "Failed to serialize stack settings".to_string(),
+            })
     };
-    let installed = as_object(installed);
-    let requested = as_object(requested);
+    let installed = as_value(installed)?;
+    let requested = as_value(requested)?;
+    let empty = serde_json::Map::new();
+    let installed = installed.as_object().unwrap_or(&empty);
+    let requested = requested.as_object().unwrap_or(&empty);
     let mut changed: Vec<String> = installed
         .keys()
         .chain(requested.keys())
@@ -1292,7 +1298,7 @@ fn changed_stack_settings(installed: &StackSettings, requested: &StackSettings) 
         .collect();
     changed.sort();
     changed.dedup();
-    changed
+    Ok(changed)
 }
 
 async fn prepare_import_stack(

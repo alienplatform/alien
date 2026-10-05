@@ -287,30 +287,32 @@ impl ComputeClusterMutation {
                     .and_then(|settings| settings.pools.get(&group.group_id))
                     .and_then(|selection| selection.failure_domains())
                     .cloned();
-                // Without an explicit choice, a new persistent pool gets the planner's
-                // default. Leaving it aggregate would spread its machines over every zone
-                // while its volumes are created in one.
-                let Some(selection) = explicit_selection.or_else(|| {
-                    fresh_persistent_pools
-                        .contains(&group.group_id)
-                        .then(default_persistent_failure_domains)
-                }) else {
-                    continue;
-                };
-                let existing_group_is_aggregate = stack_state
+                let existing_group = stack_state
                     .resources
                     .get(cluster_id)
                     .and_then(|state| state.config.downcast_ref::<ComputeCluster>())
-                    .is_some_and(|existing| {
+                    .filter(|existing| {
                         existing
                             .capacity_groups
                             .iter()
                             .any(|existing_group| existing_group.group_id == group.group_id)
-                            && !existing.failure_domain_spread.contains_key(&group.group_id)
-                            && !existing
-                                .selected_failure_domains
-                                .contains_key(&group.group_id)
                     });
+                // Without an explicit choice, a persistent pool that does not exist yet gets
+                // the planner's default. Leaving it aggregate would spread its machines over
+                // every zone while its volumes are created in one. A pool that already exists
+                // keeps the topology it was created with.
+                let Some(selection) = explicit_selection.or_else(|| {
+                    (existing_group.is_none() && fresh_persistent_pools.contains(&group.group_id))
+                        .then(default_persistent_failure_domains)
+                }) else {
+                    continue;
+                };
+                let existing_group_is_aggregate = existing_group.is_some_and(|existing| {
+                    !existing.failure_domain_spread.contains_key(&group.group_id)
+                        && !existing
+                            .selected_failure_domains
+                            .contains_key(&group.group_id)
+                });
                 let is_implicit_single_domain_default = selection.spread == 1
                     && selection.selected_failure_domains.is_empty()
                     && !fresh_persistent_pools.contains(&group.group_id);
