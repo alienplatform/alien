@@ -914,6 +914,24 @@ async fn a_release_that_supersedes_an_in_flight_update_is_applied_before_it_is_r
     let release_v3 = worker_image_release("test:v3", "rel_v3");
     state.target_release = Some(release_v3.clone());
 
+    // v2 converges first. It is installed and must be reported as current
+    // while v3 is prepared, in case v3 never succeeds.
+    state = run_until_status(state, config.clone(), &[DeploymentStatus::UpdatePending]).await;
+    assert_eq!(deployed_worker_image(&state, "test-function"), "test:v2");
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("rel_v2")
+    );
+    assert_eq!(
+        state.target_release.as_ref().unwrap().release_id,
+        release_v3.release_id
+    );
+
     state = run_to_completion(state, config).await;
 
     assert_eq!(state.status, DeploymentStatus::Running);

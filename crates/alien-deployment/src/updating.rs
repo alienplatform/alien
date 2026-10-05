@@ -2,8 +2,8 @@ use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
 use alien_core::{
-    ComputeClusterOutputs, InitialSetupAuthority, Platform, ResourceLifecycle, ResourceStatus,
-    SetupScaffolding, Stack, StackState, StackStatus,
+    ComputeClusterOutputs, InitialSetupAuthority, Platform, ReleaseInfo, ResourceLifecycle,
+    ResourceStatus, SetupScaffolding, Stack, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_infra::{RunningResourcePolicy, StackExecutor};
@@ -504,6 +504,19 @@ pub async fn handle_updating(
                 target_release_id = ?target_release_id,
                 "Update converged on a superseded release; preparing the newer target"
             );
+            // The converged release is what is installed now, even if the newer
+            // target later fails. Its prepared stack stands in for the release
+            // stack, which this state no longer holds.
+            next.current_release = Some(ReleaseInfo {
+                release_id: converged_release_id,
+                version: None,
+                description: None,
+                stack: runtime_metadata.prepared_stack.clone().ok_or_else(|| {
+                    AlienError::new(ErrorData::MissingConfiguration {
+                        message: "Pending prepared stack not found in runtime metadata".to_string(),
+                    })
+                })?,
+            });
             next.status = DeploymentStatus::UpdatePending;
             next.runtime_metadata = Some(runtime_metadata);
         } else {
