@@ -43,9 +43,10 @@ use alien_core::{
     DeploymentStatus, EnvironmentInfo, EnvironmentVariablesSnapshot, ExternalBindings,
     GcpEnvironmentInfo, KubernetesCluster, Platform, RemoteStackManagement, ResourceLifecycle,
     ResourceStatus, RuntimeMetadata, SetupUpdateAuthorization, Stack, StackResourceState,
-    StackState, RESOURCE_PREFIX_ERROR_MESSAGE,
+    StackSettings, StackState, RESOURCE_PREFIX_ERROR_MESSAGE,
 };
-use alien_error::AlienError;
+use alien_error::{AlienError, Context};
+use alien_preflights::{compatibility::PermissionProfilesUnchangedCheck, StackCompatibilityCheck};
 
 use super::{auth, AppState};
 use crate::auth::{Scope, Subject};
@@ -244,10 +245,11 @@ pub async fn stack_import(
         &frozen_gating,
     );
 
-    let prepared_stack = match prepare_import_stack(source_stack, &req).await {
-        Ok(stack) => stack,
-        Err(e) => return e.into_response(),
-    };
+    let prepared_stack =
+        match prepare_import_stack(source_stack.clone(), &req, &req.stack_settings).await {
+            Ok(stack) => stack,
+            Err(e) => return e.into_response(),
+        };
 
     if let Err(error) = migrate_legacy_remote_bindings_handoff(&mut req, &prepared_stack) {
         return error.into_response();
@@ -343,6 +345,19 @@ pub async fn stack_import(
                     .into_response();
                 }
                 SetupRegistrationReplay::None => {}
+            }
+            if !activates_setup_reservation {
+                if let Some(installed_settings) = existing.stack_settings.as_ref() {
+                    if let Err(error) = refuse_management_permission_changes(
+                        &source_stack,
+                        installed_settings,
+                        &req,
+                    )
+                    .await
+                    {
+                        return error.into_response();
+                    }
+                }
             }
             let has_registration_operation = setup_metadata
                 .as_ref()
@@ -1220,9 +1235,70 @@ fn reimport_runtime_metadata(
     Ok(metadata)
 }
 
+/// Refuses setup choices whose change would alter the management permissions setup installed.
+///
+/// Some settings, such as heartbeats, decide management permission sets. A setup rerun proves
+/// only its Frozen resources (`SetupUpdateAuthorization` digests them, not permissions), so the
+/// update it schedules would fail the permission compatibility preflight after the setup artifact
+/// already reported success. Refusing here, inside the registration the artifact calls
+/// synchronously, fails the setup run itself: CloudFormation rolls the stack back and nothing is
+/// recorded. Both sides are prepared from the same source stack, so only the settings differ.
+async fn refuse_management_permission_changes(
+    source_stack: &Stack,
+    installed_settings: &StackSettings,
+    req: &StackImportRequest,
+) -> crate::error::Result<()> {
+    if installed_settings == &req.stack_settings {
+        return Ok(());
+    }
+    let installed = prepare_import_stack(source_stack.clone(), req, installed_settings).await?;
+    let requested = prepare_import_stack(source_stack.clone(), req, &req.stack_settings).await?;
+    let result = PermissionProfilesUnchangedCheck
+        .check(&installed, &requested)
+        .await
+        .context(ErrorData::InternalError {
+            message: "Failed to compare management permissions for the requested setup settings"
+                .to_string(),
+        })?;
+    if result.success {
+        return Ok(());
+    }
+    Err(AlienError::new(ErrorData::BadRequest {
+        reason: format!(
+            "Changing {} after setup would change the management permissions setup installed ({}). \
+             Keep the value chosen at setup, or create a new deployment.",
+            changed_stack_settings(installed_settings, &req.stack_settings).join(", "),
+            result.errors.join("; "),
+        ),
+    }))
+}
+
+/// Names of the top-level stack settings whose values differ.
+fn changed_stack_settings(installed: &StackSettings, requested: &StackSettings) -> Vec<String> {
+    let as_object = |settings: &StackSettings| {
+        serde_json::to_value(settings)
+            .expect("stack settings always serialize to JSON")
+            .as_object()
+            .cloned()
+            .expect("stack settings serialize to a JSON object")
+    };
+    let installed = as_object(installed);
+    let requested = as_object(requested);
+    let mut changed: Vec<String> = installed
+        .keys()
+        .chain(requested.keys())
+        .filter(|key| installed.get(*key) != requested.get(*key))
+        .cloned()
+        .collect();
+    changed.sort();
+    changed.dedup();
+    changed
+}
+
 async fn prepare_import_stack(
     source_stack: Stack,
     req: &StackImportRequest,
+    stack_settings: &StackSettings,
 ) -> crate::error::Result<Stack> {
     let runner = alien_preflights::runner::PreflightRunner::new();
     let mutation_platform = req.platform;
@@ -1242,7 +1318,7 @@ async fn prepare_import_stack(
     let config = DeploymentConfig {
         input_values: Default::default(),
         deployment_name: Some(req.deployment_name.clone()),
-        stack_settings: req.stack_settings.clone(),
+        stack_settings: stack_settings.clone(),
         management_config: req.management_config.clone(),
         environment_variables: EnvironmentVariablesSnapshot {
             variables: Vec::new(),
