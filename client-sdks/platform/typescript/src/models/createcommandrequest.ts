@@ -35,7 +35,7 @@ export type CreateCommandRequest = {
    */
   params?: any | null | undefined;
   /**
-   * Stable caller key for public invocation retries. Reuse the same key and identical request to recover the original command for up to 24 hours. Scoped to the workspace, caller, deployment, resolved target, and command name. The first accepted request wins; changed params or deadlines do not create a new command with the same key. Omit for a new invocation without retry protection.
+   * Stable caller key for public invocation retries. Requires params; use null for a command without arguments. Reuse the same key and identical request to recover the original command for up to 24 hours. Scoped to the workspace, caller, deployment, resolved target, and command name. The first accepted request wins; changed params or deadlines do not create a new command with the same key. Omit for a new invocation without retry protection.
    */
   idempotencyKey?: string | undefined;
   /**

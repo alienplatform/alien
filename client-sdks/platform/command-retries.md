@@ -34,9 +34,25 @@ fails with a retryable error, keep `request` and pass it to a later
 the request and key before sending. Do not generate a new key for each attempt.
 The SDK does not generate a key or enable retries by default.
 
+When saving the request as JSON, a `Date` deadline becomes a string. Restore it
+to a `Date` before calling the SDK again:
+
+```typescript
+const saved = JSON.parse(savedRequestJson);
+const request = {
+  ...saved,
+  deadline: saved.deadline == null ? saved.deadline : new Date(saved.deadline),
+};
+const command = await sdk.commands.create(request);
+```
+
 The key must contain 1 to 128 characters. Replay applies to the same workspace,
 authenticated caller, deployment, resolved target, and command name. The manager
 retains the mapping for up to 24 hours. A new invocation needs a new key.
+If the original request has a deadline, retry before that deadline. The manager
+validates the request before looking up the key, so an expired deadline is
+rejected even while the mapping is retained. Keep the original deadline rather
+than extending it to retry an expired invocation.
 
 The first accepted request wins. Reusing its key with different params or a
 different deadline returns the original command; it does not update that
@@ -44,6 +60,7 @@ command or reject the changed payload. Preserve the entire original request
 when retrying. Every attempt must still pass current authorization checks.
 
 Calls without a key keep their existing behavior and can execute again on
-retry. A key on a metadata-only creation without `params` does not deduplicate
-that creation. These retry guarantees require an API version that supports
+retry. A key requires invocation `params`; use `params: null` for a command
+without arguments. A metadata-only creation without `params` rejects a key.
+These retry guarantees require an API version that supports
 `idempotencyKey`; older servers may ignore the field.

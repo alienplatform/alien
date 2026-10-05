@@ -85,6 +85,7 @@ test("command retry keys survive configured transport retries and separate metho
     name: "reindex",
     params: { full: true },
     idempotencyKey: randomUUID(),
+    deadline: new Date("2026-10-06T12:00:00.000Z"),
   };
   const sent = [];
   const command = {
@@ -119,12 +120,21 @@ test("command retry keys survive configured transport retries and separate metho
       },
     },
   }), command);
-  assert.deepEqual(sent, [request, request]);
+  const serialized = JSON.parse(JSON.stringify(request));
+  assert.deepEqual(sent, [serialized, serialized]);
 
   await sdk.commands.create(request);
+  const saved = JSON.parse(JSON.stringify(request));
+  const restored = {
+    ...saved,
+    deadline: saved.deadline == null ? saved.deadline : new Date(saved.deadline),
+  };
+  await sdk.commands.create(restored);
   const next = { ...request, idempotencyKey: randomUUID() };
   await sdk.commands.create(next);
-  assert.deepEqual(sent, [request, request, request, next]);
+  assert.deepEqual(sent, [serialized, serialized, serialized, serialized, {
+    ...serialized, idempotencyKey: next.idempotencyKey,
+  }]);
 });
 
 test("legacy publish-plugin deep imports preserve Kubernetes permission exports", () => {
