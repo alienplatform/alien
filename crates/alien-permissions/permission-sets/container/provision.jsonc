@@ -911,6 +911,7 @@
             "compute.snapshots.list",
             "compute.snapshots.setLabels",
             "compute.snapshots.useReadOnly",
+            "compute.regionOperations.get",
             "compute.zoneOperations.get"
           ]
         },
