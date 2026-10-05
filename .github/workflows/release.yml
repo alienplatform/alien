@@ -79,7 +79,6 @@ jobs:
       qualification_run_id: ${{ steps.qualification.outputs.run_id }}
       qualification_head_sha: ${{ steps.qualification.outputs.head_sha }}
       release_commit: ${{ steps.merged_version.outputs.commit }}
-      platform_ref: ${{ steps.platform_revision.outputs.ref }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -103,16 +102,6 @@ jobs:
             echo "::error::Qualification must validate its exact source commit"
             exit 1
           fi
-
-      - name: Read official CLI Platform revision
-        id: platform_revision
-        run: |
-          ref=$(tr -d '[:space:]' < .github/official-cli-platform-revision)
-          if ! grep -qE '^[0-9a-f]{40}$' <<< "$ref"; then
-            echo "::error::.github/official-cli-platform-revision must contain one exact commit"
-            exit 1
-          fi
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
       - name: Test release metadata and routing
         run: node --test scripts/sdk-release-metadata.test.mjs scripts/release-routing.test.mjs
@@ -1725,17 +1714,6 @@ jobs:
           path: .ci-tool-versions
           persist-credentials: false
 
-      - uses: actions/checkout@v7
-        with:
-          repository: alienplatform/platform
-          ref: ${{ needs.prepare.outputs.platform_ref }}
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          path: platform
-
-      - uses: ./platform/.github/actions/setup-composed-cli-dependencies
-        with:
-          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
-
       - name: Restore binaries from cache
         id: binary-cache
         uses: actions/cache@v6
@@ -1746,9 +1724,8 @@ jobs:
             target/x86_64-unknown-linux-musl/release/alien-worker-runtime
             target/x86_64-unknown-linux-musl/release/alien-manager
             target/x86_64-unknown-linux-musl/release/alien-sandbox-agent
-            platform/crates/alien-clix/target/x86_64-unknown-linux-musl/release/alien
           # Bump the -bN suffix whenever the set of cached binaries changes.
-          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
+          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b2-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
 
       - uses: ./.ci-tool-versions/.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1766,9 +1743,6 @@ jobs:
           depot cargo build --release \
             -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager -p alien-sandbox-agent \
             --target x86_64-unknown-linux-musl
-          ln -sfn "$GITHUB_WORKSPACE" alien
-          depot cargo build --release --manifest-path platform/crates/alien-clix/Cargo.toml \
-            --bin alien --target x86_64-unknown-linux-musl
 
       - name: Stage binaries for upload
         run: |
@@ -1776,8 +1750,6 @@ jobs:
           for binary in alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent; do
             cp "target/x86_64-unknown-linux-musl/release/${binary}" "staged/x86_64-unknown-linux-musl/${binary}"
           done
-          cp platform/crates/alien-clix/target/x86_64-unknown-linux-musl/release/alien staged/x86_64-unknown-linux-musl/alien
-          staged/x86_64-unknown-linux-musl/alien --help >/dev/null
 
       - name: Upload x86_64 linux binaries
         uses: actions/upload-artifact@v7
@@ -1804,17 +1776,6 @@ jobs:
           path: .ci-tool-versions
           persist-credentials: false
 
-      - uses: actions/checkout@v7
-        with:
-          repository: alienplatform/platform
-          ref: ${{ needs.prepare.outputs.platform_ref }}
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          path: platform
-
-      - uses: ./platform/.github/actions/setup-composed-cli-dependencies
-        with:
-          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
-
       - name: Restore binaries from cache
         id: binary-cache
         uses: actions/cache@v6
@@ -1825,9 +1786,8 @@ jobs:
             target/aarch64-unknown-linux-musl/release/alien-worker-runtime
             target/aarch64-unknown-linux-musl/release/alien-manager
             target/aarch64-unknown-linux-musl/release/alien-sandbox-agent
-            platform/crates/alien-clix/target/aarch64-unknown-linux-musl/release/alien
           # Bump the -bN suffix whenever the set of cached binaries changes.
-          key: release-linux-aarch64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
+          key: release-linux-aarch64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b2-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
 
       - uses: ./.ci-tool-versions/.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1845,9 +1805,6 @@ jobs:
           depot cargo build --release \
             -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager -p alien-sandbox-agent \
             --target aarch64-unknown-linux-musl
-          ln -sfn "$GITHUB_WORKSPACE" alien
-          depot cargo build --release --manifest-path platform/crates/alien-clix/Cargo.toml \
-            --bin alien --target aarch64-unknown-linux-musl
 
       - name: Stage binaries for upload
         run: |
@@ -1855,8 +1812,6 @@ jobs:
           for binary in alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent; do
             cp "target/aarch64-unknown-linux-musl/release/${binary}" "staged/aarch64-unknown-linux-musl/${binary}"
           done
-          cp platform/crates/alien-clix/target/aarch64-unknown-linux-musl/release/alien staged/aarch64-unknown-linux-musl/alien
-          staged/aarch64-unknown-linux-musl/alien --help >/dev/null
 
       - name: Upload aarch64 linux binaries
         uses: actions/upload-artifact@v7
@@ -1885,17 +1840,6 @@ jobs:
           path: .ci-tool-versions
           persist-credentials: false
 
-      - uses: actions/checkout@v7
-        with:
-          repository: alienplatform/platform
-          ref: ${{ needs.prepare.outputs.platform_ref }}
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          path: platform
-
-      - uses: ./platform/.github/actions/setup-composed-cli-dependencies
-        with:
-          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
-
       - name: Restore binaries from cache
         id: binary-cache
         uses: actions/cache@v6
@@ -1903,8 +1847,7 @@ jobs:
           path: |
             target/aarch64-apple-darwin/release/alien-deploy
             target/aarch64-apple-darwin/release/alien-operator
-            platform/crates/alien-clix/target/aarch64-apple-darwin/release/alien
-          key: release-darwin-aarch64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
+          key: release-darwin-aarch64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b2-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
 
       - if: steps.binary-cache.outputs.cache-hit != 'true'
         name: Install Rust toolchain
@@ -1946,9 +1889,6 @@ jobs:
           depot cargo build --release \
             -p alien-deploy-cli -p alien-operator \
             --target aarch64-apple-darwin
-          ln -sfn "$GITHUB_WORKSPACE" alien
-          depot cargo build --release --manifest-path platform/crates/alien-clix/Cargo.toml \
-            --bin alien --target aarch64-apple-darwin
 
       - name: Stage binaries for upload
         run: |
@@ -1956,8 +1896,6 @@ jobs:
           for binary in alien-deploy alien-operator; do
             cp "target/aarch64-apple-darwin/release/${binary}" "staged/aarch64-apple-darwin/${binary}"
           done
-          cp platform/crates/alien-clix/target/aarch64-apple-darwin/release/alien staged/aarch64-apple-darwin/alien
-          staged/aarch64-apple-darwin/alien --help >/dev/null
 
       - name: Upload aarch64 darwin binaries
         uses: actions/upload-artifact@v7
@@ -1986,17 +1924,6 @@ jobs:
           path: .ci-tool-versions
           persist-credentials: false
 
-      - uses: actions/checkout@v7
-        with:
-          repository: alienplatform/platform
-          ref: ${{ needs.prepare.outputs.platform_ref }}
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          path: platform
-
-      - uses: ./platform/.github/actions/setup-composed-cli-dependencies
-        with:
-          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
-
       - name: Restore binaries from cache
         id: binary-cache
         uses: actions/cache@v6
@@ -2004,8 +1931,7 @@ jobs:
           path: |
             target/x86_64-pc-windows-msvc/release/alien-deploy.exe
             target/x86_64-pc-windows-msvc/release/alien-operator.exe
-            platform/crates/alien-clix/target/x86_64-pc-windows-msvc/release/alien.exe
-          key: release-windows-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
+          key: release-windows-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b2-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
 
       - if: steps.binary-cache.outputs.cache-hit != 'true'
         name: Install Rust toolchain
@@ -2049,9 +1975,6 @@ jobs:
           cargo build --release \
             -p alien-deploy-cli -p alien-operator \
             --target x86_64-pc-windows-msvc
-          cmd //c "mklink /J alien ."
-          cargo build --release --manifest-path platform/crates/alien-clix/Cargo.toml \
-            --bin alien --target x86_64-pc-windows-msvc
 
       - name: Stage binaries for upload
         shell: bash
@@ -2059,8 +1982,6 @@ jobs:
           mkdir -p staged/x86_64-pc-windows-msvc
           cp target/x86_64-pc-windows-msvc/release/alien-deploy.exe staged/x86_64-pc-windows-msvc/
           cp target/x86_64-pc-windows-msvc/release/alien-operator.exe staged/x86_64-pc-windows-msvc/
-          cp platform/crates/alien-clix/target/x86_64-pc-windows-msvc/release/alien.exe staged/x86_64-pc-windows-msvc/
-          staged/x86_64-pc-windows-msvc/alien.exe --help >/dev/null
 
       - name: Upload windows binaries
         uses: actions/upload-artifact@v7
@@ -2117,12 +2038,12 @@ jobs:
             fi
           }
 
-          for binary in alien alien-deploy alien-operator alien-worker-runtime alien-manager; do
+          for binary in alien-deploy alien-operator alien-worker-runtime alien-manager; do
             upload "$binary" x86_64-unknown-linux-musl linux x86_64
             upload "$binary" aarch64-unknown-linux-musl linux aarch64
           done
 
-          for binary in alien alien-deploy alien-operator; do
+          for binary in alien-deploy alien-operator; do
             upload "$binary" aarch64-apple-darwin darwin aarch64
           done
 
@@ -2146,71 +2067,9 @@ jobs:
             fi
           }
 
-          for binary in alien alien-deploy alien-operator; do
+          for binary in alien-deploy alien-operator; do
             upload_exe "$binary" x86_64-pc-windows-msvc windows x86_64
           done
-
-  # ─── GitHub Release ────────────────────────────────────────────────
-
-  qualify-github-release:
-    needs: [prepare, generate-changelog, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
-    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
-    runs-on: depot-ubuntu-24.04-arm
-    timeout-minutes: 10
-    steps:
-      - name: Download all binary artifacts
-        uses: actions/download-artifact@v8
-        with:
-          pattern: binaries-*
-          path: ./artifacts
-          merge-multiple: false
-
-      - name: Download changelog
-        uses: actions/download-artifact@v8
-        with:
-          name: changelog
-          path: .
-
-      - name: Create release archives
-        run: |
-          VERSION="${{ needs.prepare.outputs.version }}"
-          mkdir -p dist
-
-          # Linux x86_64 tarball
-          tar -czf "dist/alien-v${VERSION}-x86_64-unknown-linux-musl.tar.gz" \
-            -C artifacts/binaries-x86_64-unknown-linux-musl \
-            alien alien-deploy alien-operator alien-worker-runtime alien-manager
-
-          # Linux aarch64 tarball
-          tar -czf "dist/alien-v${VERSION}-aarch64-unknown-linux-musl.tar.gz" \
-            -C artifacts/binaries-aarch64-unknown-linux-musl \
-            alien alien-deploy alien-operator alien-worker-runtime alien-manager
-
-          # macOS aarch64 tarball
-          tar -czf "dist/alien-v${VERSION}-aarch64-apple-darwin.tar.gz" \
-            -C artifacts/binaries-aarch64-apple-darwin \
-            alien alien-deploy alien-operator
-
-          # Windows x86_64 zip
-          (cd artifacts/binaries-x86_64-pc-windows-msvc && \
-            zip "../../dist/alien-v${VERSION}-x86_64-pc-windows-msvc.zip" \
-            alien.exe alien-deploy.exe alien-operator.exe)
-
-      - name: Generate checksums
-        run: |
-          VERSION="${{ needs.prepare.outputs.version }}"
-          cd dist
-          sha256sum alien-v${VERSION}-*.tar.gz alien-v${VERSION}-*.zip > "alien-v${VERSION}-checksums.txt"
-
-      - name: Upload qualified GitHub release payload
-        uses: actions/upload-artifact@v7
-        with:
-          name: qualified-github-release
-          retention-days: 30
-          if-no-files-found: error
-          path: |
-            CHANGELOG-release.md
-            dist/
 
   # ─── Docker images + Helm chart ─────────────────────────────────────
 
@@ -2572,8 +2431,7 @@ jobs:
           helm push "dist/alien-manager-${VERSION}.tgz" oci://ghcr.io/alienplatform/charts
 
   # Publish the GitHub release only after the registries and binary store have
-  # accepted their qualified artifacts. Homebrew follows because its formula
-  # references these release assets.
+  # accepted their qualified artifacts.
   create-github-release:
     needs:
       - prepare
@@ -2584,7 +2442,6 @@ jobs:
       - publish-ai-gateway
       - upload-binaries
       - publish-images
-      - publish-npm-cli-wrapper
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
@@ -2594,12 +2451,12 @@ jobs:
           ref: ${{ needs.prepare.outputs.release_commit }}
           fetch-depth: 0
 
-      - name: Download qualified GitHub release payload
+      - name: Download qualified changelog
         uses: actions/download-artifact@v8
         with:
           run-id: ${{ needs.prepare.outputs.qualification_run_id }}
           github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          name: qualified-github-release
+          name: changelog
           path: .
 
       - name: Require immutable GitHub release protections
@@ -2685,7 +2542,7 @@ jobs:
           echo "exists=true" >> "$GITHUB_OUTPUT"
           echo "${TAG} points to the qualified release commit"
 
-      - name: Verify existing GitHub release assets
+      - name: Verify existing GitHub release
         id: verify_release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -2700,29 +2557,10 @@ jobs:
             exit 1
           fi
 
-          if [ "$release_count" = "1" ]; then
-            release=$(jq -c '.[0]' <<< "$releases")
-          else
-            release='{"assets":[],"draft":true}'
-          fi
-
-          complete=true
-          for file in dist/*; do
-            name=$(basename "$file")
-            published=$(jq -r --arg name "$name" \
-              '.assets[] | select(.name == $name) | .digest // empty' <<< "$release")
-            if [ -z "$published" ]; then
-              complete=false
-              continue
-            fi
-            checksum="sha256:$(sha256sum "$file" | awk '{print $1}')"
-            if [ "$published" != "$checksum" ]; then
-              echo "::error::GitHub release asset ${name} exists with different contents"
-              exit 1
-            fi
-          done
-          if [ "$(jq -r '.draft' <<< "$release")" = "true" ]; then
-            complete=false
+          complete=false
+          if [ "$release_count" = "1" ] &&
+             [ "$(jq -r '.[0].draft' <<< "$releases")" = "false" ]; then
+            complete=true
           fi
           echo "complete=${complete}" >> "$GITHUB_OUTPUT"
 
@@ -2736,10 +2574,6 @@ jobs:
           target_commitish: ${{ needs.prepare.outputs.release_commit }}
           name: Alien v${{ needs.prepare.outputs.version }}
           body_path: CHANGELOG-release.md
-          files: |
-            dist/alien-v*-*.tar.gz
-            dist/alien-v*-*.zip
-            dist/alien-v*-checksums.txt
           draft: true
           prerelease: false
 
@@ -2810,242 +2644,3 @@ jobs:
             exit 1
           fi
           echo "${TAG} points to the qualified release commit"
-
-  # ─── Homebrew tap ──────────────────────────────────────────────────
-
-  publish-homebrew-tap:
-    needs: [prepare, create-github-release]
-    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
-    runs-on: depot-ubuntu-24.04-arm
-    timeout-minutes: 10
-    steps:
-      - name: Download release checksums
-        run: |
-          VERSION="${{ needs.prepare.outputs.version }}"
-          gh release download "v${VERSION}" \
-            --repo "${{ github.repository }}" \
-            --pattern "alien-v${VERSION}-checksums.txt" \
-            --dir .
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Parse checksums
-        id: checksums
-        run: |
-          VERSION="${{ needs.prepare.outputs.version }}"
-          FILE="alien-v${VERSION}-checksums.txt"
-          {
-            echo "linux_x64=$(grep 'x86_64-unknown-linux-musl' "$FILE" | awk '{print $1}')"
-            echo "linux_arm64=$(grep 'aarch64-unknown-linux-musl' "$FILE" | awk '{print $1}')"
-            echo "darwin_arm64=$(grep 'aarch64-apple-darwin' "$FILE" | awk '{print $1}')"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Generate Homebrew formula
-        run: |
-          VERSION="${{ needs.prepare.outputs.version }}"
-          REPO="${{ github.repository }}"
-          cat > alien.rb << 'FORMULA_EOF'
-          class Alien < Formula
-            desc "Alien Developer Platform CLI"
-            homepage "https://alien.dev"
-            version "VERSION_PLACEHOLDER"
-            license "Apache-2.0"
-
-            on_macos do
-              on_arm do
-                url "https://github.com/REPO_PLACEHOLDER/releases/download/vVERSION_PLACEHOLDER/alien-vVERSION_PLACEHOLDER-aarch64-apple-darwin.tar.gz"
-                sha256 "SHA_DARWIN_ARM64_PLACEHOLDER"
-              end
-            end
-
-            on_linux do
-              on_intel do
-                url "https://github.com/REPO_PLACEHOLDER/releases/download/vVERSION_PLACEHOLDER/alien-vVERSION_PLACEHOLDER-x86_64-unknown-linux-musl.tar.gz"
-                sha256 "SHA_LINUX_X64_PLACEHOLDER"
-              end
-              on_arm do
-                url "https://github.com/REPO_PLACEHOLDER/releases/download/vVERSION_PLACEHOLDER/alien-vVERSION_PLACEHOLDER-aarch64-unknown-linux-musl.tar.gz"
-                sha256 "SHA_LINUX_ARM64_PLACEHOLDER"
-              end
-            end
-
-            def install
-              bin.install "alien"
-              bin.install "alien-deploy"
-            end
-
-            test do
-              assert_match version.to_s, shell_output("#{bin}/alien --version")
-            end
-          end
-          FORMULA_EOF
-
-          sed -i "s|VERSION_PLACEHOLDER|${VERSION}|g" alien.rb
-          sed -i "s|REPO_PLACEHOLDER|${REPO}|g" alien.rb
-          sed -i "s|SHA_LINUX_X64_PLACEHOLDER|${{ steps.checksums.outputs.linux_x64 }}|g" alien.rb
-          sed -i "s|SHA_LINUX_ARM64_PLACEHOLDER|${{ steps.checksums.outputs.linux_arm64 }}|g" alien.rb
-          sed -i "s|SHA_DARWIN_ARM64_PLACEHOLDER|${{ steps.checksums.outputs.darwin_arm64 }}|g" alien.rb
-
-      - name: Push formula to tap
-        run: |
-          git clone "https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/alienplatform/homebrew-tap.git" tap
-          mkdir -p tap/Formula
-          if [ -f tap/Formula/alien.rb ] &&
-             grep -q "version \"${{ needs.prepare.outputs.version }}\"" tap/Formula/alien.rb; then
-            if ! cmp -s alien.rb tap/Formula/alien.rb; then
-              echo "::error::Homebrew already has v${{ needs.prepare.outputs.version }} with different contents"
-              exit 1
-            fi
-            echo "Homebrew formula already matches v${{ needs.prepare.outputs.version }}"
-            exit 0
-          fi
-          cp alien.rb tap/Formula/alien.rb
-          cd tap
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/alien.rb
-          git diff --staged --quiet || git commit -m "Update alien to v${{ needs.prepare.outputs.version }}"
-          git push
-
-  # A release channel is one atomic pointer. Consumers resolve it before
-  # downloading immutable versioned binaries; independent latest object copies
-  # cannot provide an atomic release boundary.
-  publish-stable-channel:
-    needs: [prepare, publish-homebrew-tap]
-    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
-    runs-on: depot-ubuntu-24.04-arm
-    timeout-minutes: 5
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: arn:aws:iam::216938125589:role/alien-releases-upload
-          aws-region: us-east-1
-
-      - name: Publish stable channel
-        run: |
-          printf 'v%s\n' '${{ needs.prepare.outputs.version }}' > stable
-          published=$(aws s3 cp \
-            s3://alien-releases-prod/channels/stable - 2>/dev/null || true)
-          if [ "$published" = "$(cat stable)" ]; then
-            echo "Stable channel already points to ${published}"
-            exit 0
-          fi
-          aws s3 cp stable s3://alien-releases-prod/channels/stable \
-            --cache-control 'no-cache'
-          aws cloudfront create-invalidation \
-            --distribution-id ${{ vars.RELEASES_CLOUDFRONT_DISTRIBUTION_ID }} \
-            --paths '/channels/stable'
-
-  # ─── npm CLI wrapper ───────────────────────────────────────────────
-
-  qualify-npm-cli-wrapper:
-    needs: [prepare, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
-    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
-    runs-on: depot-ubuntu-24.04-arm
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.prepare.outputs.source_ref }}
-
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.ref }}
-          path: .ci-tool-versions
-          persist-credentials: false
-
-      - name: Install development tools
-        uses: jdx/mise-action@v5
-        env:
-          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
-          MISE_DISABLE_TOOLS: rust
-        with:
-          version: 2026.10.1
-          add_shims_to_path: false
-          working_directory: .ci-tool-versions
-          install_args: node
-          cache_key: "{{default}}-${{ hashFiles('.ci-tool-versions/package.json') }}"
-        id: mise
-      - name: Configure npm registry
-        uses: actions/setup-node@v7
-        with:
-          registry-url: https://registry.npmjs.org
-          package-manager-cache: false
-
-      - name: Download all binary artifacts
-        uses: actions/download-artifact@v8
-        with:
-          pattern: binaries-*
-          path: ./artifacts
-          merge-multiple: false
-
-      - name: Build qualified npm CLI packages
-        env:
-          MODE: qualify
-          OUTPUT_DIR: ${{ github.workspace }}/qualified/cli
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: bash scripts/build-npm-packages.sh
-
-      - name: Upload qualified npm CLI packages
-        uses: actions/upload-artifact@v7
-        with:
-          name: qualified-npm-cli
-          retention-days: 30
-          if-no-files-found: error
-          path: qualified/cli/
-
-  publish-npm-cli-wrapper:
-    needs: prepare
-    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
-    runs-on: depot-ubuntu-24.04-arm
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.prepare.outputs.release_commit }}
-
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.ref }}
-          path: .ci-tool-versions
-          persist-credentials: false
-
-      - name: Install development tools
-        uses: jdx/mise-action@v5
-        env:
-          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
-          MISE_DISABLE_TOOLS: rust
-        with:
-          version: 2026.10.1
-          add_shims_to_path: false
-          working_directory: .ci-tool-versions
-          install_args: node
-          cache_key: "{{default}}-${{ hashFiles('.ci-tool-versions/package.json') }}"
-        id: mise
-      - name: Configure npm registry
-        uses: actions/setup-node@v7
-        with:
-          registry-url: https://registry.npmjs.org
-          package-manager-cache: false
-
-      - name: Validate npm auth
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm whoami
-
-      - name: Download qualified npm CLI packages
-        uses: actions/download-artifact@v8
-        with:
-          run-id: ${{ needs.prepare.outputs.qualification_run_id }}
-          github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          name: qualified-npm-cli
-          path: qualified/cli
-
-      - name: Publish qualified npm CLI packages
-        env:
-          MODE: publish-existing
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          OUTPUT_DIR: ${{ github.workspace }}/qualified/cli
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: bash scripts/build-npm-packages.sh

@@ -78,7 +78,7 @@ jobs:
             if ! jq -e '
               (length > 0) and
               (any(.[]; .name == "qualify / prepare" and .conclusion == "success")) and
-              (any(.[]; .name == "qualify / qualify-github-release" and .conclusion == "success")) and
+              (any(.[]; .name == "qualify / qualify-images" and .conclusion == "success")) and
               (all(.[]; .conclusion == "success" or .conclusion == "skipped"))
             ' <<< "$qualified_jobs" >/dev/null; then
               echo "::error::Prior qualification jobs did not all pass"
@@ -95,8 +95,8 @@ jobs:
               binaries-aarch64-apple-darwin binaries-aarch64-unknown-linux-musl \
               binaries-x86_64-pc-windows-msvc binaries-x86_64-unknown-linux-musl \
               changelog qualified-ai-gateway qualified-bindings \
-              qualified-client-sdks qualified-crates qualified-github-release \
-              qualified-image-digests qualified-npm qualified-npm-cli \
+              qualified-client-sdks qualified-crates \
+              qualified-image-digests qualified-npm \
               qualified-python-linux-aarch64 qualified-python-linux-x86_64 \
               qualified-python-macos-aarch64 qualified-python-macos-x86_64; do
               if ! jq -e --arg name "$required" 'index($name) != null' \
