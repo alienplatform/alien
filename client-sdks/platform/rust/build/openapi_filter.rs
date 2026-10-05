@@ -15,11 +15,6 @@ const CONSUMER_NAMED_ANONYMOUS_SCHEMA_POINTERS: &[&str] = &[
     "/paths/~1v1~1projects/post/requestBody/content/application~1json/schema/properties/gitRepository",
 ];
 
-// This union also has a path-derived type used by a handwritten consumer. Its
-// nested objects already share identities, so protect only the union itself.
-const CONSUMER_NAMED_ANONYMOUS_UNION_POINTERS: &[&str] =
-    &["/components/schemas/NewDeploymentRequest/properties/stackSettings/properties/compute"];
-
 // The server adds package types without a client release. No Alien consumer matches on these
 // two response fields, so they decode as plain strings instead of closed enums. When the
 // component is present, a moved field or a missing enum fails generation.
@@ -202,12 +197,6 @@ fn deduplicate_anonymous_schemas(
             })?;
             collect_shareable_schema_keys(schema, &mut protected_shapes)?;
         }
-        for pointer in CONSUMER_NAMED_ANONYMOUS_UNION_POINTERS {
-            let schema = document_value.pointer(pointer).ok_or_else(|| {
-                format!("consumer-named anonymous union is missing at `{pointer}`")
-            })?;
-            protected_shapes.insert(canonical_schema_key(schema)?);
-        }
     }
     let schemas = document
         .get("components")
@@ -242,13 +231,8 @@ fn deduplicate_anonymous_schemas(
             continue;
         }
 
-        let kind = if schema.get("type").and_then(Value::as_str) == Some("object") {
-            "Object"
-        } else {
-            "Union"
-        };
         let name = format!(
-            "AlienShared{kind}{:016x}",
+            "AlienSharedObject{:016x}",
             stable_schema_hash(key.as_bytes())
         );
         if existing_names.contains(&name) {
@@ -284,15 +268,8 @@ fn deduplicate_anonymous_schemas(
     Ok(())
 }
 
-// Repeated unions generate distinct enums and conversion implementations at each
-// use site, even when their object branches already share component identities.
-// Share only exact schemas; retain constraints, annotations, and branch order.
 fn is_shareable_anonymous_schema(schema: &Value) -> bool {
-    schema.get("$ref").is_none()
-        && (schema.get("type").and_then(Value::as_str) == Some("object")
-            || ["anyOf", "oneOf"]
-                .iter()
-                .any(|keyword| schema.get(*keyword).is_some_and(Value::is_array)))
+    schema.get("$ref").is_none() && schema.get("type").and_then(Value::as_str) == Some("object")
 }
 
 fn collect_shareable_schema_keys(value: &Value, keys: &mut BTreeSet<String>) -> Result<(), String> {

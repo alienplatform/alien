@@ -221,7 +221,7 @@ fn gives_repeated_anonymous_objects_stable_component_identity() {
 }
 
 #[test]
-fn shares_identical_unions_without_changing_their_contracts() {
+fn preserves_inline_union_branches_constraints_and_annotations() {
     for keyword in ["anyOf", "oneOf"] {
         let union = json!({
             keyword: [
@@ -269,15 +269,8 @@ fn shares_identical_unions_without_changing_their_contracts() {
 
         let filtered = openapi_filter::filter_openapi(&document, &["values"]).unwrap();
         let properties = &filtered["components"]["schemas"]["Values"]["properties"];
-        let reference = properties["first"]["$ref"]
-            .as_str()
-            .expect("identical unions must share a component");
-        assert_eq!(properties["first"], properties["second"]);
-        let shared = filtered
-            .pointer(reference.strip_prefix('#').unwrap())
-            .unwrap();
-        // Dereferencing must recover every branch, constraint, and annotation.
-        assert_eq!(shared, &union);
+        assert_eq!(properties["first"], union);
+        assert_eq!(properties["second"], union);
         assert_eq!(properties["distinct"], distinct);
         assert_eq!(
             filtered["components"]["schemas"]["Values"]["required"],
