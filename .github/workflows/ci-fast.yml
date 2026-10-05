@@ -201,6 +201,13 @@ jobs:
           terraform_version: 1.15.3
           terraform_wrapper: false
 
+      # The generator tests run `terraform init` in a fresh directory per stack. Serve the
+      # providers from a read-only local mirror instead of downloading them each time.
+      - name: Terraform provider mirror
+        run: |
+          scripts/terraform-provider-mirror.sh "$RUNNER_TEMP/terraform-mirror" "$RUNNER_TEMP/terraform.rc"
+          echo "TF_CLI_CONFIG_FILE=$RUNNER_TEMP/terraform.rc" >> "$GITHUB_ENV"
+
       - uses: azure/setup-helm@v5
 
       - name: Install kubeconform
