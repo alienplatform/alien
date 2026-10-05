@@ -110,7 +110,10 @@ export class ComputeCluster {
   }
 
   /** Grants the node identity access to explicitly named resources only. */
-  public nodePermissions(permissions: PermissionProfile, options?: { platforms: Platform[] }): this {
+  public nodePermissions(
+    permissions: PermissionProfile,
+    options?: { platforms: Platform[] },
+  ): this {
     this._config.nodePermissions = permissions
     this._config.nodePermissionsPlatforms = options?.platforms
     return this
