@@ -221,8 +221,10 @@ pub async fn handle_update_pending(
     }
 
     // Store the mutated stack in runtime_metadata for future compatibility checks
+    let pending_prepared_release_id = target_release_id.map(str::to_string);
     let mut runtime_metadata = current.runtime_metadata.unwrap_or_default();
     runtime_metadata.pending_prepared_stack = Some(mutated_stack);
+    runtime_metadata.pending_prepared_release_id = pending_prepared_release_id;
     runtime_metadata.persisted_gate_answers = persisted_gate_answers;
 
     // Transition to Updating
@@ -484,17 +486,36 @@ pub async fn handle_updating(
             observed_inventory_batches: vec![],
         }
     } else if stack_status == StackStatus::Running {
-        info!("Update completed successfully, transitioning to Running");
-
-        next.status = DeploymentStatus::Running;
         next.stack_state = Some(step_result.next_state);
         next.error = None;
+        // The converged stack is the installed baseline either way.
         runtime_metadata.prepared_stack = runtime_metadata.pending_prepared_stack.take();
-        runtime_metadata.setup_update_authorization = None;
-        next.runtime_metadata = Some(runtime_metadata);
-        // Promote target to current: update successful
-        next.current_release = next.target_release.clone();
-        next.target_release = None;
+        let converged_release_id = runtime_metadata.pending_prepared_release_id.take();
+        let target_release_id = next
+            .target_release
+            .as_ref()
+            .and_then(|release| release.release_id.clone());
+
+        // A state prepared before the release was recorded has no id and keeps
+        // the old behavior.
+        if converged_release_id.is_some() && converged_release_id != target_release_id {
+            info!(
+                converged_release_id = ?converged_release_id,
+                target_release_id = ?target_release_id,
+                "Update converged on a superseded release; preparing the newer target"
+            );
+            next.status = DeploymentStatus::UpdatePending;
+            next.runtime_metadata = Some(runtime_metadata);
+        } else {
+            info!("Update completed successfully, transitioning to Running");
+
+            next.status = DeploymentStatus::Running;
+            runtime_metadata.setup_update_authorization = None;
+            next.runtime_metadata = Some(runtime_metadata);
+            // Promote target to current: update successful
+            next.current_release = next.target_release.clone();
+            next.target_release = None;
+        }
 
         DeploymentStepResult {
             state: next,

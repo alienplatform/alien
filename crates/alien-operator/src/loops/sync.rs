@@ -490,6 +490,7 @@ fn accept_target_release(
         deployment_state.status = alien_core::DeploymentStatus::UpdatePending;
         if let Some(metadata) = deployment_state.runtime_metadata.as_mut() {
             metadata.pending_prepared_stack = None;
+            metadata.pending_prepared_release_id = None;
         }
         deployment_state.retry_requested = false;
     }
