@@ -2336,7 +2336,10 @@ mod tests {
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect::<Vec<_>>();
-        assert_eq!(files, [push_cache_file_name("aws")]);
+        assert_eq!(
+            files,
+            [std::ffi::OsString::from(push_cache_file_name("aws"))]
+        );
     }
 
     #[tokio::test]
