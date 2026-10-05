@@ -8,7 +8,7 @@ use alien_core::{
     GcpRemoteStackManagementHeartbeatData, HeartbeatBackend, KubernetesCluster, ObservedHealth,
     Platform, ProviderLifecycleState, RemoteStackManagement, RemoteStackManagementHeartbeatData,
     RemoteStackManagementHeartbeatStatus, RemoteStackManagementOutputs, ResourceHeartbeat,
-    ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
+    ResourceHeartbeatData, ResourceOutputs, ResourceStatus, Stack,
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_gcp_clients::iam::{
@@ -18,7 +18,7 @@ use alien_macros::controller;
 #[cfg(test)]
 use alien_permissions::generators::GcpIamBinding;
 use alien_permissions::{
-    generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
+    generators::{GcpBindingTargetScope, GcpGrantPlan, GcpRuntimePermissionsGenerator},
     get_permission_set, list_permission_set_ids, BindingTarget, PermissionContext,
 };
 use chrono::Utc;
@@ -190,6 +190,14 @@ impl GcpRemoteStackManagementController {
         let permission_context = ResourcePermissionsHelper::gcp_permission_context(ctx)?
             .with_service_account_name(service_account_id.to_string());
 
+        let self_plan =
+            Self::management_service_account_plan(ctx.desired_stack, &permission_context)?;
+        ResourcePermissionsHelper::ensure_gcp_custom_roles(
+            ctx,
+            "management",
+            self_plan.custom_roles,
+        )
+        .await?;
         let mut new_bindings = Vec::new();
 
         for permission_set in &stack_sets {
@@ -345,28 +353,29 @@ impl GcpRemoteStackManagementController {
                     .unwrap_or(service_account_email)
                     .to_string(),
             );
-        let generator = GcpRuntimePermissionsGenerator::new();
         let mut self_bindings = Vec::new();
         let mut explicit_target = None;
-        for set in Self::resolve_management_permission_sets(ctx)? {
-            let plan = generator
-                .generate_grant_plan(&set, BindingTarget::Stack, &context)
-                .context(ErrorData::ResourceConfigInvalid {
-                    message: "Failed to resolve management identity grants".to_string(),
+        for binding in Self::management_service_account_plan(ctx.desired_stack, &context)?.bindings
+        {
+            let target = binding.target_resource_name.clone().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "Management identity grant is missing its explicit target".to_string(),
                     resource_id: Some(config.id.clone()),
-                })?;
-            for binding in plan.bindings_for_target(GcpBindingTargetScope::ServiceAccount) {
-                let target = binding.target_resource_name.clone().ok_or_else(|| {
-                    AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: "Management identity grant is missing its explicit target"
-                            .to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })
-                })?;
-                explicit_target = Some(target);
-                self_bindings
-                    .push(ResourcePermissionsHelper::gcp_policy_binding_from_iam_binding(binding));
+                })
+            })?;
+            if explicit_target
+                .as_ref()
+                .is_some_and(|existing| existing != &target)
+            {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "Management identity grants must name the same executing account"
+                        .to_string(),
+                    resource_id: Some(config.id.clone()),
+                }));
             }
+            explicit_target = Some(target);
+            self_bindings
+                .push(ResourcePermissionsHelper::gcp_policy_binding_from_iam_binding(binding));
         }
         let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
 
@@ -740,6 +749,88 @@ impl GcpRemoteStackManagementController {
         }
 
         Ok(permission_sets)
+    }
+
+    /// Plan only grants explicitly assigned to the management identity's own IAM policy.
+    fn management_service_account_plan(
+        stack: &Stack,
+        context: &PermissionContext,
+    ) -> Result<GcpGrantPlan> {
+        let mut result = GcpGrantPlan {
+            bindings: Vec::new(),
+            custom_roles: Vec::new(),
+        };
+        let Some(profile) = stack.management().profile() else {
+            return Ok(result);
+        };
+        let global =
+            alien_permissions::management_identity_global_refs(stack.resources.values(), profile);
+        let generator = GcpRuntimePermissionsGenerator::new();
+        for (scope, references) in &profile.0 {
+            if scope != "*" && !stack.resources.contains_key(scope) {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "Management grant must name an existing resource".to_string(),
+                    resource_id: Some(scope.clone()),
+                }));
+            }
+            let target = if scope == "*" {
+                BindingTarget::Stack
+            } else {
+                BindingTarget::Resource
+            };
+            let resource_context = if scope == "*" {
+                context.clone()
+            } else {
+                let prefix = context.stack_prefix.as_deref().ok_or_else(|| {
+                    AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message:
+                            "Concrete management grants require the deployment resource prefix"
+                                .to_string(),
+                        resource_id: Some(scope.clone()),
+                    })
+                })?;
+                context
+                    .clone()
+                    .with_resource_name(format!("{prefix}-{scope}"))
+            };
+            for reference in references {
+                if scope == "*" && !global.contains(&reference) {
+                    continue;
+                }
+                let set = reference
+                    .resolve(|name| get_permission_set(name).cloned())
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::ResourceConfigInvalid {
+                            message: format!(
+                                "Unknown management permission set '{}'",
+                                reference.id()
+                            ),
+                            resource_id: Some(scope.clone()),
+                        })
+                    })?;
+                if set.platforms.gcp.is_none() {
+                    continue;
+                }
+                let plan = generator
+                    .generate_grant_plan(&set, target, &resource_context)
+                    .context(ErrorData::ResourceConfigInvalid {
+                        message: "Failed to resolve management identity grants".to_string(),
+                        resource_id: Some(scope.clone()),
+                    })?;
+                let bindings = plan.bindings_for_target(GcpBindingTargetScope::ServiceAccount);
+                for role in plan.custom_roles_for_bindings(&bindings) {
+                    if !result.custom_roles.contains(&role) {
+                        result.custom_roles.push(role);
+                    }
+                }
+                for binding in bindings {
+                    if !result.bindings.contains(&binding) {
+                        result.bindings.push(binding);
+                    }
+                }
+            }
+        }
+        Ok(result)
     }
 
     fn global_management_role_prefixes(permission_context: &PermissionContext) -> Vec<String> {
@@ -1128,6 +1219,85 @@ mod tests {
             .with_project_name("test-project".to_string())
             .with_region("us-central1".to_string())
             .with_project_number("123456789012".to_string())
+    }
+
+    #[test]
+    fn explicit_management_data_grants_use_only_the_own_account_policy() {
+        for scope in ["*", "objects"] {
+            let context = test_permission_context().with_service_account_name("management-account");
+            let stack = Stack::new("example".to_string())
+                .add(
+                    alien_core::Storage::new("objects".to_string()).build(),
+                    alien_core::ResourceLifecycle::Frozen,
+                )
+                .management(alien_core::ManagementPermissions::Extend(
+                    alien_core::PermissionProfile::new().resource(scope, ["storage/data-read"]),
+                ))
+                .build();
+            let plan = GcpRemoteStackManagementController::management_service_account_plan(
+                &stack, &context,
+            )
+            .unwrap();
+            assert_eq!(plan.bindings.len(), 1);
+            assert_eq!(plan.custom_roles.len(), 1);
+            assert_eq!(
+                plan.custom_roles[0].included_permissions,
+                ["iam.serviceAccounts.signBlob"]
+            );
+            let binding = &plan.bindings[0];
+            assert_eq!(binding.target, GcpBindingTargetScope::ServiceAccount);
+            assert_eq!(binding.target_resource_name.as_deref(), Some("projects/test-project/serviceAccounts/management-account@test-project.iam.gserviceaccount.com"));
+            assert_eq!(
+                binding.members,
+                ["serviceAccount:management-account@test-project.iam.gserviceaccount.com"]
+            );
+            let target = if scope == "*" {
+                BindingTarget::Stack
+            } else {
+                BindingTarget::Resource
+            };
+            let canonical = GcpRuntimePermissionsGenerator::new()
+                .generate_grant_plan(
+                    get_permission_set("storage/data-read").unwrap(),
+                    target,
+                    &context.clone().with_resource_name("test-stack-objects"),
+                )
+                .unwrap();
+            assert_eq!(
+                plan.bindings,
+                canonical.bindings_for_target(GcpBindingTargetScope::ServiceAccount)
+            );
+            assert_eq!(
+                plan.custom_roles,
+                canonical.custom_roles_for_bindings(&plan.bindings)
+            );
+        }
+    }
+
+    #[test]
+    fn management_identity_has_no_implicit_data_grants() {
+        for management in [
+            alien_core::ManagementPermissions::Auto,
+            alien_core::ManagementPermissions::Extend(alien_core::PermissionProfile::new()),
+            alien_core::ManagementPermissions::Extend(
+                alien_core::PermissionProfile::new().resource("objects", ["storage/management"]),
+            ),
+        ] {
+            let stack = Stack::new("example".to_string())
+                .add(
+                    alien_core::Storage::new("objects".to_string()).build(),
+                    alien_core::ResourceLifecycle::Frozen,
+                )
+                .management(management)
+                .build();
+            let plan = GcpRemoteStackManagementController::management_service_account_plan(
+                &stack,
+                &test_permission_context().with_service_account_name("management-account"),
+            )
+            .unwrap();
+            assert!(plan.bindings.is_empty());
+            assert!(plan.custom_roles.is_empty());
+        }
     }
 
     #[test]

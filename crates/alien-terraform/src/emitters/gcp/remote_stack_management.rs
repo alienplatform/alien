@@ -15,9 +15,9 @@ use crate::{
     block::{attr, data_block, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{
-        binding_label_for_role, downcast, emit_custom_roles_for_bindings, permission_context,
-        push_iam_member, required_label, role_expression_for_binding, service_account_id_template,
-        service_account_member_for_label,
+        binding_label_for_role, downcast, emit_custom_roles_for_bindings, gate_bindings,
+        permission_context, push_iam_member, required_label, role_expression_for_binding,
+        service_account_id_template, service_account_member_for_label,
     },
     expr,
 };
@@ -73,13 +73,14 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
                 if let Some(permission_set) = permission_set_ref
                     .resolve(|name| alien_permissions::get_permission_set(name).cloned())
                 {
-                    emit_project_management_bindings(
+                    emit_management_identity_bindings(
                         &mut fragment,
                         label,
                         &member,
                         &permission_set,
                         &context,
                         BindingTarget::Stack,
+                        true,
                     )?;
                 }
             }
@@ -87,25 +88,34 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
                 let Some(resource_entry) = ctx.stack.resources.get(resource_id) else {
                     continue;
                 };
-                if resource_entry
+                let include_project_bindings = resource_entry
                     .config
                     .downcast_ref::<KubernetesCluster>()
-                    .is_none()
-                {
-                    continue;
-                }
+                    .is_some();
                 if let Some(permission_set) = permission_set_ref
                     .resolve(|name| alien_permissions::get_permission_set(name).cloned())
                 {
                     let binding_label = format!("{label}_{}", terraform_label_segment(resource_id));
-                    emit_project_management_bindings(
+                    let appended_from = fragment.resource_blocks.len();
+                    let resource_context = context
+                        .clone()
+                        .with_resource_name(format!("${{local.resource_prefix}}-{resource_id}"));
+                    emit_management_identity_bindings(
                         &mut fragment,
                         &binding_label,
                         &member,
                         &permission_set,
-                        &context,
+                        &resource_context,
                         BindingTarget::Resource,
+                        include_project_bindings,
                     )?;
+                    if !include_project_bindings {
+                        gate_bindings(
+                            &mut fragment,
+                            appended_from,
+                            resource_entry.enabled_when.as_deref(),
+                        );
+                    }
                 }
             }
         }
@@ -163,13 +173,14 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
     }
 }
 
-fn emit_project_management_bindings(
+fn emit_management_identity_bindings(
     fragment: &mut TfFragment,
     label: &str,
     member: &Expression,
     permission_set: &PermissionSet,
     context: &PermissionContext,
     binding_target: BindingTarget,
+    include_project_bindings: bool,
 ) -> Result<()> {
     if permission_set.platforms.gcp.is_none() {
         return Ok(());
@@ -186,7 +197,11 @@ fn emit_project_management_bindings(
                 ),
             })
         })?;
-    let mut bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+    let mut bindings = if include_project_bindings {
+        grant_plan.bindings_for_target(GcpBindingTargetScope::Project)
+    } else {
+        Vec::new()
+    };
     bindings.extend(grant_plan.bindings_for_target(GcpBindingTargetScope::ServiceAccount));
     let custom_roles = emit_custom_roles_for_bindings(fragment, &grant_plan, &bindings)?;
 
