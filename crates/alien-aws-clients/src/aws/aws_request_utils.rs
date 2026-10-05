@@ -345,6 +345,16 @@ pub async fn sign_send_xml<T: DeserializeOwned + Send + 'static>(
         .await
 }
 
+/// Sign the request and expect no body, in a single attempt.
+///
+/// For a create whose "already exists" answer is final, like [`sign_send_json_once`].
+pub async fn sign_send_no_response_once(
+    builder: RequestBuilder,
+    config: &AwsSignConfig,
+) -> Result<()> {
+    builder.sign_aws_request(config)?.send_no_response().await
+}
+
 /// Sign the request, retry, and expect no body (return `()` on HTTP success).
 pub async fn sign_send_no_response(builder: RequestBuilder, config: &AwsSignConfig) -> Result<()> {
     builder

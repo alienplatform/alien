@@ -7,6 +7,7 @@ use alien_aws_clients::{
     bedrock::{BedrockApi, BedrockClient},
     cloudcontrol::{CloudControlApi, CloudControlClient},
     cloudformation::{CloudFormationApi, CloudFormationClient},
+    cloudwatch_logs::{CloudWatchLogsApi, CloudWatchLogsClient},
     codebuild::{CodeBuildApi, CodeBuildClient},
     dynamodb::{DynamoDbApi, DynamoDbClient},
     ec2::{Ec2Api, Ec2Client},
@@ -132,6 +133,10 @@ pub trait PlatformServiceProvider: Send + Sync {
     ) -> Result<Arc<dyn SecretsManagerApi>>;
     async fn get_aws_rds_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn RdsApi>>;
     async fn get_aws_ssm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SsmApi>>;
+    async fn get_aws_logs_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn CloudWatchLogsApi>>;
     async fn get_aws_dynamodb_client(
         &self,
         config: &AwsClientConfig,
@@ -677,6 +682,22 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             })?;
         Ok(Arc::new(SsmClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
+    async fn get_aws_logs_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn CloudWatchLogsApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(CloudWatchLogsClient::new(
             reqwest::Client::new(),
             credentials,
         )))

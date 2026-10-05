@@ -53,6 +53,8 @@ fn critical_e2e_provider_operations_are_declared() {
             permission_set_id: "worker/provision",
             aws_actions: &[
                 "lambda:CreateFunction",
+                "logs:CreateLogGroup",
+                "logs:PutRetentionPolicy",
                 "ec2:DescribeSecurityGroups",
                 "ec2:DescribeNetworkInterfaces",
                 "ec2:DescribeSubnets",
