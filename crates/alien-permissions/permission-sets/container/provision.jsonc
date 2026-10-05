@@ -371,10 +371,37 @@
         }
       },
       // Scheduled snapshots: one Data Lifecycle Manager policy per container.
+      // AWS authorizes CreateLifecyclePolicy against no resource type, so only the
+      // request tags can bound it. Its implicit TagResource is authorized on the policy.
+      {
+        "grant": {
+          "actions": ["dlm:CreateLifecyclePolicy"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
       {
         "grant": {
           "actions": [
-            "dlm:CreateLifecyclePolicy",
             "dlm:TagResource"
           ]
         },
