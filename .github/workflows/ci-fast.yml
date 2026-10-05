@@ -89,32 +89,16 @@ jobs:
               - 'client-sdks/platform/rust/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
-            # What the Worker integration tests exercise: the local worker manager, the build
-            # toolchain, the bindings addon a TypeScript worker loads, the example app, and the
-            # worker runtime's transports driving alien-test-app.
+            # JavaScript inputs of the Worker integration job; Rust changes trigger it through `rust`.
             worker_integration:
-              - 'Cargo.toml'
-              - 'Cargo.lock'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
               - 'turbo.json'
+              - 'packages/**'
               - 'examples/package.json'
               - 'examples/pnpm-lock.yaml'
               - 'examples/pnpm-workspace.yaml'
-              - 'rust-toolchain.toml'
-              - 'mise*.toml'
-              - 'crates/alien-local/**'
-              - 'crates/alien-build/**'
-              - 'crates/alien-core/**'
-              - 'crates/alien-bindings/**'
-              - 'crates/alien-bindings-node/**'
-              - 'crates/alien-worker-runtime/**'
-              - 'crates/alien-worker-protocol/**'
-              - 'crates/alien-ai-gateway/**'
-              - 'crates/alien-test-app/**'
-              - 'crates/alien-sdk/**'
-              - 'packages/**'
               - 'examples/basic-worker-ts/**'
               - '.github/workflows/ci-fast.yml'
             typescript:
@@ -536,7 +520,12 @@ jobs:
   worker-integration:
     name: Worker integration
     needs: [pr-conventions, changes]
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.worker_integration == 'true'
+    # The tested packages, alien-test-app, the addon and the gateway depend on most workspace
+    # crates, so any Rust change runs this job; worker_integration adds the JS inputs.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.rust == 'true' ||
+      needs.changes.outputs.worker_integration == 'true'
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 45
     env:
@@ -613,7 +602,7 @@ jobs:
       - name: Worker integration tests
         run: |
           cargo nextest run --locked -p alien-local -p alien-worker-runtime \
-            --filter-expr 'binary_id(alien-local::worker_integration) | binary_id(alien-worker-runtime::container_app)'
+            --test worker_integration --test container_app
 
   all-tests-passed:
     name: All tests passed
