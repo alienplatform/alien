@@ -891,6 +891,38 @@
             "scope": "projects/${projectName}"
           }
         }
+      },
+      // Volume backups: a snapshot schedule (regional resource policy) attached to
+      // each disk, a final snapshot of each disk on delete, cleanup of scheduled
+      // snapshots, and restoring a disk from a snapshot.
+      {
+        "grant": {
+          "permissions": [
+            "compute.resourcePolicies.create",
+            "compute.resourcePolicies.delete",
+            "compute.resourcePolicies.get",
+            "compute.resourcePolicies.use",
+            "compute.disks.addResourcePolicies",
+            "compute.disks.removeResourcePolicies",
+            "compute.disks.createSnapshot",
+            "compute.snapshots.create",
+            "compute.snapshots.delete",
+            "compute.snapshots.get",
+            "compute.snapshots.list",
+            "compute.snapshots.setLabels",
+            "compute.snapshots.useReadOnly",
+            "compute.zoneOperations.get"
+          ]
+        },
+        // Compute Engine uses project NAME in resource.name (not number).
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
       }
     ],
     "azure": [
