@@ -89,6 +89,10 @@ pub const VOLUME_BACKUP_INTERVAL_HOURS: [u32; 7] = [1, 2, 4, 6, 8, 12, 24];
 /// portable across clouds.
 pub const VOLUME_BACKUP_MAX_SNAPSHOTS: u32 = 450;
 
+/// Longest a snapshot may be kept. Azure Disk Backup keeps operational snapshots
+/// for at most a year; the same limit applies everywhere for portability.
+pub const VOLUME_BACKUP_MAX_RETENTION_DAYS: u32 = 365;
+
 /// Scheduled snapshots of a persistent volume.
 ///
 /// The cloud's own scheduler takes the snapshots (AWS Data Lifecycle Manager,
@@ -108,7 +112,7 @@ pub struct VolumeBackups {
     /// Hours between snapshots: 1, 2, 4, 6, 8, 12 or 24. Defaults to 24.
     #[serde(default = "default_volume_backup_interval_hours")]
     pub interval_hours: u32,
-    /// Days each snapshot is kept. Defaults to 7.
+    /// Days each snapshot is kept, at most 365. Defaults to 7.
     #[serde(default = "default_volume_backup_retention_days")]
     pub retention_days: u32,
 }
@@ -157,6 +161,12 @@ impl VolumeBackups {
         }
         if self.retention_days == 0 {
             return Some("backup retentionDays must be at least 1".to_string());
+        }
+        if self.retention_days > VOLUME_BACKUP_MAX_RETENTION_DAYS {
+            return Some(format!(
+                "backup retentionDays must be at most {VOLUME_BACKUP_MAX_RETENTION_DAYS}, got {}",
+                self.retention_days
+            ));
         }
         let snapshots = self.retention_days * 24 / self.interval_hours;
         if snapshots > VOLUME_BACKUP_MAX_SNAPSHOTS {
