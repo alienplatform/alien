@@ -136,6 +136,32 @@
             "scope": "projects/${projectName}"
           }
         }
+      },
+      // Volume backups: keep each disk's snapshot schedule in line with the
+      // configured interval and retention, and report the latest snapshot.
+      {
+        "grant": {
+          "permissions": [
+            "compute.resourcePolicies.create",
+            "compute.resourcePolicies.delete",
+            "compute.resourcePolicies.get",
+            "compute.resourcePolicies.list",
+            "compute.resourcePolicies.use",
+            "compute.disks.addResourcePolicies",
+            "compute.disks.removeResourcePolicies",
+            "compute.snapshots.list",
+            "compute.regionOperations.get",
+            "compute.zoneOperations.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
       }
     ],
     "azure": [
