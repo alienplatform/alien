@@ -721,7 +721,7 @@ export type Availability4 = {
   source: AvailabilitySource4;
 };
 
-export type AvailabilityUnion = Availability4 | any;
+export type AvailabilityUnion = Availability4 | string;
 
 export const GetResourceDeploymentDetailReason69 = {
   Forbidden: "forbidden",
@@ -782,7 +782,7 @@ export type GetResourceDeploymentDetailDataStatus69 = {
 };
 
 export type DataExternal = {
-  availability?: Availability4 | any | null | undefined;
+  availability?: Availability4 | string | null | undefined;
   /**
    * The BYO-key provider serving this binding (e.g. "openai"). Used on the Local
    *
@@ -2506,7 +2506,7 @@ export function availability4FromJSON(
 export const AvailabilityUnion$inboundSchema: z.ZodType<
   AvailabilityUnion,
   unknown
-> = z.union([z.lazy(() => Availability4$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => Availability4$inboundSchema), z.string()]);
 
 export function availabilityUnionFromJSON(
   jsonString: string,
@@ -2592,7 +2592,7 @@ export function getResourceDeploymentDetailDataStatus69FromJSON(
 export const DataExternal$inboundSchema: z.ZodType<DataExternal, unknown> = z
   .object({
     availability: z.nullable(
-      z.union([z.lazy(() => Availability4$inboundSchema), z.any()]),
+      z.union([z.lazy(() => Availability4$inboundSchema), z.string()]),
     ).optional(),
     provider: z.string(),
     status: z.lazy(() => GetResourceDeploymentDetailDataStatus69$inboundSchema),

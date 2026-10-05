@@ -6,7 +6,6 @@
 import { ProjectListItemResponseAzure } from "@alienplatform/platform-api/models";
 
 let value: ProjectListItemResponseAzure = {
-  catalogImage: "<value>",
   idleSuspendSeconds: 334008,
 };
 ```
@@ -15,5 +14,5 @@ let value: ProjectListItemResponseAzure = {
 
 | Field                | Type                 | Required             | Description          |
 | -------------------- | -------------------- | -------------------- | -------------------- |
-| `catalogImage`       | *string*             | :heavy_check_mark:   | N/A                  |
+| `registryImage`      | *string*             | :heavy_minus_sign:   | N/A                  |
 | `idleSuspendSeconds` | *number*             | :heavy_check_mark:   | N/A                  |

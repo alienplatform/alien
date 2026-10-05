@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use axum::body::{to_bytes, Body};
@@ -40,9 +41,9 @@ use alien_manager::traits::{
     TelemetryBackend, TelemetryCaller, TelemetrySignal, TokenStore, TokenType,
 };
 
-/// Records every batch the manager passes on.
+/// Records every batch the manager passes on, after `delay`.
 #[derive(Default)]
-struct CapturedTelemetry(Mutex<Vec<(TelemetrySignal, Option<String>)>>);
+struct CapturedTelemetry(Mutex<Vec<(TelemetrySignal, Option<String>)>>, Duration);
 
 #[async_trait]
 impl TelemetryBackend for CapturedTelemetry {
@@ -52,6 +53,7 @@ impl TelemetryBackend for CapturedTelemetry {
         caller: &TelemetryCaller,
         _data: bytes::Bytes,
     ) -> Result<(), AlienError> {
+        tokio::time::sleep(self.1).await;
         self.0
             .lock()
             .unwrap()
@@ -85,6 +87,10 @@ struct Fixture {
 }
 
 async fn fixture() -> Fixture {
+    fixture_with_backend_delay(Duration::ZERO).await
+}
+
+async fn fixture_with_backend_delay(delay: Duration) -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("manager.db");
     let db = Arc::new(
@@ -186,7 +192,7 @@ async fn fixture() -> Fixture {
     );
     let command_dispatcher: Arc<dyn CommandDispatcher> = Arc::new(NullCommandDispatcher);
     let command_registry: Arc<dyn CommandRegistry> = Arc::new(InMemoryCommandRegistry::default());
-    let telemetry = Arc::new(CapturedTelemetry::default());
+    let telemetry = Arc::new(CapturedTelemetry(Mutex::default(), delay));
     std::mem::forget(tmp);
 
     let state = AppState {
@@ -342,8 +348,8 @@ async fn other_tokens_cannot_report_for_the_site() {
     );
 }
 
-/// Sends `ids` as log batches with the site's token.
-async fn report_batches(fixture: &Fixture, ids: &[i64]) -> serde_json::Value {
+/// A status report carrying `ids` as log batches, with the site's token.
+fn batches_request(fixture: &Fixture, ids: &[i64]) -> Request<Body> {
     let body = serde_json::json!({
         "state": {
             "status": "running",
@@ -356,7 +362,7 @@ async fn report_batches(fixture: &Fixture, ids: &[i64]) -> serde_json::Value {
             "data": base64::engine::general_purpose::STANDARD.encode(b"otlp"),
         })).collect::<Vec<_>>(),
     });
-    let request = Request::builder()
+    Request::builder()
         .method("POST")
         .uri(format!(
             "/v1/deployments/{}/status-report",
@@ -368,10 +374,14 @@ async fn report_batches(fixture: &Fixture, ids: &[i64]) -> serde_json::Value {
             format!("Bearer {}", fixture.site_token),
         )
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
-        .unwrap();
+        .unwrap()
+}
+
+/// Sends `ids` as log batches with the site's token.
+async fn report_batches(fixture: &Fixture, ids: &[i64]) -> serde_json::Value {
     let response = alien_manager::routes::airgap::router()
         .with_state(fixture.state.clone())
-        .oneshot(request)
+        .oneshot(batches_request(fixture, ids))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -395,6 +405,58 @@ async fn a_report_sent_again_does_not_duplicate_telemetry() {
     assert_eq!(
         fixture.telemetry.0.lock().unwrap().len(),
         3,
+        "each batch reached the backend once"
+    );
+}
+
+#[tokio::test]
+async fn a_client_that_disconnects_mid_report_does_not_cause_duplicates() {
+    let fixture = fixture_with_backend_delay(Duration::from_millis(300)).await;
+    let ids: Vec<i64> = (1..=20).collect();
+
+    // The client gives up once the first batches went through and more are
+    // in flight at the backend.
+    let request = tokio::spawn(
+        alien_manager::routes::airgap::router()
+            .with_state(fixture.state.clone())
+            .oneshot(batches_request(&fixture, &ids)),
+    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while fixture.telemetry.0.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the backend receives batches");
+    assert!(
+        fixture.telemetry.0.lock().unwrap().len() < ids.len(),
+        "batches are still in flight when the client leaves"
+    );
+    request.abort();
+    assert!(request.await.unwrap_err().is_cancelled());
+
+    // The forwarding carries on without it and records what went through,
+    // which a report without telemetry reads back.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let (status, body) = report(&fixture, &fixture.site_token, true).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            if body["telemetryThrough"] == 20 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("every batch is recorded after the client left");
+
+    // The site sends the same report again.
+    let again = report_batches(&fixture, &ids).await;
+    assert_eq!(again["telemetryAccepted"], 0, "{again}");
+    assert_eq!(again["telemetryThrough"], 20, "{again}");
+    assert_eq!(
+        fixture.telemetry.0.lock().unwrap().len(),
+        ids.len(),
         "each batch reached the backend once"
     );
 }

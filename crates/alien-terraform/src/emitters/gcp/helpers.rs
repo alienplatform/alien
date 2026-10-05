@@ -309,7 +309,8 @@ pub fn emit_custom_role_and_bindings_for_target(
     Ok(())
 }
 
-pub(crate) fn emit_custom_roles_for_bindings(
+/// Emit the custom role definitions selected by these bindings.
+pub fn emit_custom_roles_for_bindings(
     fragment: &mut TfFragment,
     grant_plan: &alien_permissions::generators::GcpGrantPlan,
     bindings: &[GcpIamBinding],
@@ -377,7 +378,8 @@ pub(crate) fn binding_label_role_segment(role: &str) -> String {
     role.rsplit('/').next().unwrap_or(role).replace('-', "_")
 }
 
-pub(crate) fn binding_label_for_role(role: &str, custom_roles: &[GcpCustomRole]) -> Result<String> {
+/// Return the canonical Terraform label for a predefined or generated role.
+pub fn binding_label_for_role(role: &str, custom_roles: &[GcpCustomRole]) -> Result<String> {
     if role.starts_with("roles/") {
         return Ok(binding_label_role_segment(role));
     }
@@ -386,7 +388,8 @@ pub(crate) fn binding_label_for_role(role: &str, custom_roles: &[GcpCustomRole])
     Ok(custom_role_label(custom_role))
 }
 
-pub(crate) fn role_expression_for_binding(
+/// Resolve a binding role to its predefined name or generated Terraform reference.
+pub fn role_expression_for_binding(
     role: &str,
     custom_roles: &[GcpCustomRole],
 ) -> Result<Expression> {

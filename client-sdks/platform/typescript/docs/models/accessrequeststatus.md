@@ -5,11 +5,11 @@
 ```typescript
 import { AccessRequestStatus } from "@alienplatform/platform-api/models";
 
-let value: AccessRequestStatus = "expired";
+let value: AccessRequestStatus = "rejected";
 ```
 
 ## Values
 
 ```typescript
-"pending-approval" | "queued" | "customer-approved" | "expired" | "rejected"
+"pending-approval" | "queued" | "customer-approved" | "expired" | "rejected" | "revoked"
 ```

@@ -614,8 +614,7 @@ impl LocalContainerManager {
     }
 
     /// `docker load` an OCI tarball and return a reference the daemon can
-    /// `create` from, re-tagging by image ID when the containerd image store
-    /// registered only the tar's literal annotation name.
+    /// `create` from: the image's immutable ID on the active image store.
     async fn load_oci_tarball_into_docker(
         &self,
         tarball_path: &Path,
@@ -649,113 +648,61 @@ impl LocalContainerManager {
             }));
         }
 
-        // Parse output to extract image tag
-        // docker load output format: "Loaded image: <tag>" or "Loaded image ID: sha256:..."
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let loaded_image = stdout
-            .lines()
-            .find_map(|line| {
-                let trimmed = line.trim();
-                if trimmed.starts_with("Loaded image:") {
-                    Some(
-                        trimmed
-                            .trim_start_matches("Loaded image:")
-                            .trim()
-                            .to_string(),
-                    )
-                } else if trimmed.starts_with("Loaded image ID:") {
-                    Some(
-                        trimmed
-                            .trim_start_matches("Loaded image ID:")
-                            .trim()
-                            .to_string(),
-                    )
-                } else {
-                    None
+        // Docker's containerd image store identifies the image by the manifest
+        // digest listed in the archive's index.json; the classic store by the
+        // config digest. Both are immutable, unlike the archive's tag, which a
+        // previous load of the same tag may still point at.
+        let archive_path = tarball_path.to_path_buf();
+        let candidates = tokio::task::spawn_blocking(move || -> std::io::Result<[String; 2]> {
+            let manifest_digest = oci_archive_manifest_digest(&archive_path)?;
+            let config_digest = dockdash::Image::from_tarball(&archive_path)
+                .map_err(std::io::Error::other)?
+                .config_digest()
+                .to_string();
+            Ok([manifest_digest, config_digest])
+        })
+        .await
+        .into_alien_error()
+        .context(ErrorData::DockerContainerError {
+            container: container_id.to_string(),
+            operation: "resolve_loaded_image".to_string(),
+            reason: "Image archive reader task failed".to_string(),
+        })?
+        .into_alien_error()
+        .context(ErrorData::DockerContainerError {
+            container: container_id.to_string(),
+            operation: "resolve_loaded_image".to_string(),
+            reason: format!(
+                "Failed to read the image digests of '{}'",
+                tarball_path.display()
+            ),
+        })?;
+
+        for image_id in &candidates {
+            match self.docker.inspect_image(image_id).await {
+                Ok(_) => return Ok(image_id.clone()),
+                Err(bollard::errors::Error::DockerResponseServerError {
+                    status_code: 404, ..
+                }) => continue,
+                Err(error) => {
+                    return Err(error).into_alien_error().context(
+                        ErrorData::DockerContainerError {
+                            container: container_id.to_string(),
+                            operation: "inspect_loaded_image".to_string(),
+                            reason: format!("Failed to inspect loaded image {image_id}"),
+                        },
+                    );
                 }
-            })
-            .unwrap_or_else(|| {
-                // Fallback: generate a tag
-                format!("alien-local/{}:latest", container_id)
-            });
-
-        info!(
-            image_tag = %loaded_image,
-            container_id = %container_id,
-            tarball = %tarball_path.display(),
-            "Successfully loaded OCI image with docker load"
-        );
-
-        // With Docker's containerd image store, `docker load` registers the
-        // image under the tar's literal `io.containerd.image.name` annotation
-        // (e.g. `worker:tag`), while every docker CLI/API lookup normalizes
-        // the reference to `docker.io/library/worker:tag` — a name the load
-        // did NOT register, so `create` fails with "No such image" even
-        // though the content is present. Re-tagging by image ID registers
-        // the normalized reference. Uses the same bollard client `create`
-        // will use (a CLI `docker tag` could target a different daemon via
-        // the active docker context). On the classic image store the initial
-        // inspect succeeds and nothing else runs.
-        if self.docker.inspect_image(&loaded_image).await.is_err() {
-            let images = self
-                .docker
-                .list_images(None::<bollard::image::ListImagesOptions<String>>)
-                .await
-                .into_alien_error()
-                .context(ErrorData::DockerContainerError {
-                    container: container_id.to_string(),
-                    operation: "list_images".to_string(),
-                    reason: "Failed to list images to locate the loaded OCI image".to_string(),
-                })?;
-            // Compare with the `docker.io/library/` default-registry prefix
-            // stripped from both sides: depending on the image store, the
-            // daemon may report the tag in literal or normalized form.
-            let normalize = |t: &str| {
-                t.strip_prefix("docker.io/library/")
-                    .unwrap_or(t)
-                    .to_string()
-            };
-            let wanted = normalize(&loaded_image);
-            let image_id = images
-                .iter()
-                .find(|img| img.repo_tags.iter().any(|t| normalize(t) == wanted))
-                .map(|img| img.id.clone())
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::DockerContainerError {
-                        container: container_id.to_string(),
-                        operation: "resolve_loaded_image".to_string(),
-                        reason: format!(
-                            "docker load reported image '{}' but the daemon can neither \
-                             inspect it nor list it — the load did not register usable content",
-                            loaded_image
-                        ),
-                    })
-                })?;
-            let (repo, tag) = loaded_image.rsplit_once(':').ok_or_else(|| {
-                AlienError::new(ErrorData::DockerContainerError {
-                    container: container_id.to_string(),
-                    operation: "resolve_loaded_image".to_string(),
-                    reason: format!("Loaded image reference '{}' has no tag", loaded_image),
-                })
-            })?;
-            self.docker
-                .tag_image(
-                    &image_id,
-                    Some(bollard::image::TagImageOptions { repo, tag }),
-                )
-                .await
-                .into_alien_error()
-                .context(ErrorData::DockerContainerError {
-                    container: container_id.to_string(),
-                    operation: "tag_image".to_string(),
-                    reason: format!(
-                        "Failed to tag loaded image {} as {}",
-                        image_id, loaded_image
-                    ),
-                })?;
+            }
         }
-
-        Ok(loaded_image)
+        Err(AlienError::new(ErrorData::DockerContainerError {
+            container: container_id.to_string(),
+            operation: "inspect_loaded_image".to_string(),
+            reason: format!(
+                "Docker did not load image {} (manifest) or {} (config)",
+                candidates[0], candidates[1]
+            ),
+        }))
     }
 
     /// Make a registry image available to the daemon and return a reference
@@ -765,11 +712,12 @@ impl LocalContainerManager {
     /// 2. Daemon-side pull with `deployment:<token>` basic auth (the manager
     ///    registry proxy's pull credential) — proxies the daemon can reach
     ///    over HTTPS, e.g. the E2E harness's public manager URL.
-    /// 3. Host-side pull via dockdash with the same credential, then
-    ///    `docker load` — the dev server's proxy lives on the HOST's
-    ///    localhost, which the daemon cannot reach (and would refuse as a
-    ///    plain-HTTP registry anyway). The operator process CAN reach it,
-    ///    exactly like the local worker manager's image pulls.
+    /// 3. Host-side pull via dockdash with the same credential (anonymous
+    ///    when there is none), then `docker load` — the dev server's proxy
+    ///    lives on the HOST's localhost, which the daemon cannot reach (and
+    ///    would refuse as a plain-HTTP registry anyway). The operator process
+    ///    CAN reach it, exactly like the local worker manager's image pulls.
+    ///    Loopback registries skip steps 1 and 2.
     async fn pull_registry_image(
         &self,
         image: &str,
@@ -783,56 +731,70 @@ impl LocalContainerManager {
             ..Default::default()
         });
 
-        // 1. Daemon-side, anonymous.
-        if self
-            .docker
-            .create_image(options.clone(), None, None)
-            .try_collect::<Vec<_>>()
-            .await
-            .is_ok()
-        {
-            return Ok(image.to_string());
-        }
+        // Docker Desktop's daemon cannot reach the manager's host loopback registry.
+        let host_local = image.starts_with("127.0.0.1:")
+            || image.starts_with("localhost:")
+            || image.starts_with("[::1]:");
+        if !host_local {
+            // 1. Daemon-side, anonymous.
+            if self
+                .docker
+                .create_image(options.clone(), None, None)
+                .try_collect::<Vec<_>>()
+                .await
+                .is_ok()
+            {
+                return Ok(image.to_string());
+            }
 
-        let Some(token) = proxy_token else {
-            return Err(AlienError::new(ErrorData::DockerContainerError {
-                container: container_id.to_string(),
-                operation: "pull_image".to_string(),
-                reason: format!(
-                    "Anonymous pull of '{}' failed and no deployment token is available",
-                    image
-                ),
-            }));
-        };
+            let Some(token) = proxy_token else {
+                return Err(AlienError::new(ErrorData::DockerContainerError {
+                    container: container_id.to_string(),
+                    operation: "pull_image".to_string(),
+                    reason: format!(
+                        "Anonymous pull of '{}' failed and no deployment token is available",
+                        image
+                    ),
+                }));
+            };
 
-        // 2. Daemon-side, deployment-token auth.
-        info!(
-            image = %image,
-            container_id = %container_id,
-            "Anonymous pull rejected; retrying with deployment-token auth"
-        );
-        let credentials = bollard::auth::DockerCredentials {
-            username: Some("deployment".to_string()),
-            password: Some(token.to_string()),
-            ..Default::default()
-        };
-        if self
-            .docker
-            .create_image(options, None, Some(credentials))
-            .try_collect::<Vec<_>>()
-            .await
-            .is_ok()
-        {
-            return Ok(image.to_string());
+            // 2. Daemon-side, deployment-token auth.
+            info!(
+                image = %image,
+                container_id = %container_id,
+                "Anonymous pull rejected; retrying with deployment-token auth"
+            );
+            let credentials = bollard::auth::DockerCredentials {
+                username: Some("deployment".to_string()),
+                password: Some(token.to_string()),
+                ..Default::default()
+            };
+            if self
+                .docker
+                .create_image(options, None, Some(credentials))
+                .try_collect::<Vec<_>>()
+                .await
+                .is_ok()
+            {
+                return Ok(image.to_string());
+            }
         }
+        // A remote registry without a token already returned above, so only a loopback
+        // registry pulls anonymously here; it may serve public images without credentials.
+        let auth = match proxy_token {
+            Some(token) => {
+                dockdash::RegistryAuth::Basic("deployment".to_string(), token.to_string())
+            }
+            None => dockdash::RegistryAuth::Anonymous,
+        };
 
         // 3. Host-side pull + docker load.
         info!(
             image = %image,
             container_id = %container_id,
-            "Daemon-side pulls failed; pulling on the host and loading into Docker"
+            "Pulling on the host and loading into Docker"
         );
-        let protocol = if image.starts_with("127.0.0.1") || image.starts_with("localhost") {
+        let protocol = if host_local {
             dockdash::ClientProtocol::Http
         } else {
             dockdash::ClientProtocol::Https
@@ -847,21 +809,14 @@ impl LocalContainerManager {
             .pull_policy(dockdash::PullPolicy::Always)
             .protocol(protocol)
             .platform(container_target.oci_os(), &arch)
-            .auth(dockdash::RegistryAuth::Basic(
-                "deployment".to_string(),
-                token.to_string(),
-            ))
+            .auth(auth)
             .build()
             .await
             .into_alien_error()
             .context(ErrorData::DockerContainerError {
                 container: container_id.to_string(),
                 operation: "pull_image".to_string(),
-                reason: format!(
-                    "Pull of '{}' failed anonymously, with deployment-token auth via the \
-                     daemon, and via the host-side registry client",
-                    image
-                ),
+                reason: format!("Host-side registry pull of '{}' failed", image),
             })?;
 
         self.load_oci_tarball_into_docker(pulled.path(), container_id)
@@ -1132,16 +1087,9 @@ impl LocalContainerManager {
                 // On Linux: maps to host gateway IP
                 // On Mac/Windows: Docker Desktop provides this automatically, but explicit is fine
                 extra_hosts: Some(vec!["host.docker.internal:host-gateway".to_string()]),
-                // Restart exited containers like every managed platform does.
-                // Without this a container that races its peers at startup —
-                // e.g. nginx resolving an upstream before that service joined
-                // the network — stays Exited forever, while in production it
-                // would self-heal. ALWAYS (not ON_FAILURE) matches the
-                // Kubernetes Deployment default and also covers entrypoints
-                // that exit 0 on failure; Docker applies exponential backoff
-                // between restarts, and a manual stop/rm still sticks.
+                // Recover crashes, but preserve a manual stop across Docker daemon restarts.
                 restart_policy: Some(bollard::models::RestartPolicy {
-                    name: Some(bollard::models::RestartPolicyNameEnum::ALWAYS),
+                    name: Some(bollard::models::RestartPolicyNameEnum::UNLESS_STOPPED),
                     maximum_retry_count: None,
                 }),
                 ..Default::default()
@@ -1709,6 +1657,41 @@ fn shared_bind_mount_user(_bind_mounts: &[BindMount]) -> Option<String> {
     // Docker Desktop mediates bind mounts through its VM/file-sharing layer;
     // host uid/gid values do not identify the container user there.
     None
+}
+
+/// The OCI layout's `index.json`, reduced to what image identification needs.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OciIndex {
+    manifests: Vec<OciDescriptor>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OciDescriptor {
+    digest: String,
+}
+
+/// Digest of the first image an OCI archive's `index.json` lists: the same
+/// image whose config digest `dockdash::Image::from_tarball` reads.
+fn oci_archive_manifest_digest(tarball_path: &Path) -> std::io::Result<String> {
+    let mut archive = tar::Archive::new(std::fs::File::open(tarball_path)?);
+    // Seeking skips over layer blobs instead of reading them.
+    for entry in archive.entries_with_seek()? {
+        let entry = entry?;
+        let path = entry.path()?.into_owned();
+        if path.strip_prefix(".").unwrap_or(&path) != Path::new("index.json") {
+            continue;
+        }
+        let index: OciIndex = serde_json::from_reader(entry).map_err(std::io::Error::other)?;
+        return index
+            .manifests
+            .into_iter()
+            .next()
+            .map(|manifest| manifest.digest)
+            .ok_or_else(|| std::io::Error::other("index.json lists no images"));
+    }
+    Err(std::io::Error::other("archive has no index.json"))
 }
 
 #[cfg(test)]

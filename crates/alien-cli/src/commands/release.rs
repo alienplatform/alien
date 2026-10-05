@@ -1875,8 +1875,8 @@ fn prebuilt_source_error(resource_type: &str, resource_id: &str) -> AlienError<E
 // pushed remote image URIs. This lets `alien release` skip pushing when the
 // same build artifacts were already pushed in a prior release.
 
-/// Push cache file name, stored at `.alien/build/{platform}/push-cache.json`.
-const PUSH_CACHE_FILE: &str = "push-cache.json";
+/// Push cache file name, stored at `.alien/build/{platform}/push-cache-v2.json`.
+const PUSH_CACHE_FILE: &str = "push-cache-v2.json";
 
 /// Pushes the built stack's local images, reusing the pushed reference of any artifact already
 /// pushed to the same repository. `push_stack` tags every push afresh, so this cache is what
@@ -1951,12 +1951,23 @@ async fn drop_images_missing_from_registry(
     }
 }
 
+fn push_cache_file_name(platform: &str) -> String {
+    if platform == "local" {
+        format!(
+            "push-cache-v2-{}.json",
+            alien_core::BinaryTarget::current_os().runtime_platform_id()
+        )
+    } else {
+        PUSH_CACHE_FILE.to_string()
+    }
+}
+
 /// Load the push cache for a platform. Returns an empty map on any error.
 fn load_push_cache(output_dir: &PathBuf, platform: &str) -> HashMap<String, String> {
     let cache_path = output_dir
         .join("build")
         .join(platform)
-        .join(PUSH_CACHE_FILE);
+        .join(push_cache_file_name(platform));
     match fs::read_to_string(&cache_path) {
         Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
         Err(_) => HashMap::new(),
@@ -1972,7 +1983,7 @@ fn save_push_cache(
     let cache_path = output_dir
         .join("build")
         .join(platform)
-        .join(PUSH_CACHE_FILE);
+        .join(push_cache_file_name(platform));
     let content = serde_json::to_string_pretty(cache)
         .into_alien_error()
         .context(ErrorData::JsonError {
@@ -2024,9 +2035,12 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>, reposito
     let mut hits = 0;
 
     for (_resource_id, resource_entry) in stack.resources_mut() {
+        let cache_kind = resource_entry.config.resource_type().as_ref().to_string();
         if let Some(func) = resource_entry.config.downcast_mut::<Worker>() {
             if let WorkerCode::Image { ref image } = func.code {
-                if let Some(key) = cache_key_from_path(image) {
+                if let Some(key) =
+                    cache_key_from_path(image).map(|key| format!("{}:{}", cache_kind, key))
+                {
                     if let Some(cached_uri) = cache
                         .get(&key)
                         .filter(|uri| image_uri_belongs_to_repository(uri, repository))
@@ -2044,7 +2058,9 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>, reposito
             }
         } else if let Some(container) = resource_entry.config.downcast_mut::<Container>() {
             if let ContainerCode::Image { ref image } = container.code {
-                if let Some(key) = cache_key_from_path(image) {
+                if let Some(key) =
+                    cache_key_from_path(image).map(|key| format!("{}:{}", cache_kind, key))
+                {
                     if let Some(cached_uri) = cache
                         .get(&key)
                         .filter(|uri| image_uri_belongs_to_repository(uri, repository))
@@ -2062,7 +2078,9 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>, reposito
             }
         } else if let Some(daemon) = resource_entry.config.downcast_mut::<Daemon>() {
             if let DaemonCode::Image { ref image } = daemon.code {
-                if let Some(key) = cache_key_from_path(image) {
+                if let Some(key) =
+                    cache_key_from_path(image).map(|key| format!("{}:{}", cache_kind, key))
+                {
                     if let Some(cached_uri) = cache
                         .get(&key)
                         .filter(|uri| image_uri_belongs_to_repository(uri, repository))
@@ -2080,7 +2098,9 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>, reposito
             }
         } else if let Some(sandbox) = resource_entry.config.downcast_mut::<Sandbox>() {
             if let SandboxCode::Image { ref image } = sandbox.code {
-                if let Some(key) = cache_key_from_path(image) {
+                if let Some(key) =
+                    cache_key_from_path(image).map(|key| format!("{}:{}", cache_kind, key))
+                {
                     if let Some(cached_uri) = cache
                         .get(&key)
                         .filter(|uri| image_uri_belongs_to_repository(uri, repository))
@@ -2182,7 +2202,10 @@ fn collect_push_cache_entries(
             // Find the original local path for this resource to use as cache key
             if let Some(original_path) = pre_push_images.get(resource_id) {
                 if let Some(key) = cache_key_from_path(original_path) {
-                    cache.insert(key, uri);
+                    cache.insert(
+                        format!("{}:{}", resource_entry.config.resource_type().as_ref(), key),
+                        uri,
+                    );
                 }
             }
         }
@@ -2271,7 +2294,7 @@ mod tests {
             .add(sandbox_with_image(&local_path), ResourceLifecycle::Live)
             .build();
         let cache = HashMap::from([(
-            "sbx-9f8e7d6c".to_string(),
+            "sandbox:sbx-9f8e7d6c".to_string(),
             "registry.example.com/base:tag".to_string(),
         )]);
         let hits = apply_push_cache(&mut stack, &cache, "registry.example.com/base");
@@ -2299,7 +2322,7 @@ mod tests {
         let mut collected = HashMap::new();
         collect_push_cache_entries(&pushed, &pre_push, &mut collected);
         assert_eq!(
-            collected.get("sbx-9f8e7d6c").map(String::as_str),
+            collected.get("sandbox:sbx-9f8e7d6c").map(String::as_str),
             Some("registry.example.com/base:pushed")
         );
 
@@ -2328,7 +2351,7 @@ mod tests {
             .add(daemon_with_image(&local_path), ResourceLifecycle::Live)
             .build();
         let cache = HashMap::from([(
-            "operator-a1b2c3d4".to_string(),
+            "daemon:operator-a1b2c3d4".to_string(),
             "registry.example.com/operator:tag".to_string(),
         )]);
         let hits = apply_push_cache(&mut stack, &cache, "registry.example.com/operator");
@@ -2357,9 +2380,44 @@ mod tests {
         let mut collected = HashMap::new();
         collect_push_cache_entries(&pushed, &pre_push, &mut collected);
         assert_eq!(
-            collected.get("operator-a1b2c3d4").map(String::as_str),
+            collected
+                .get("daemon:operator-a1b2c3d4")
+                .map(String::as_str),
             Some("registry.example.com/operator:pushed")
         );
+    }
+
+    #[test]
+    fn native_worker_cache_does_not_replace_a_linux_resource_sharing_its_artifacts() {
+        let local_dir = tempfile::tempdir().unwrap();
+        let artifact_dir = local_dir.path().join("shared-artifacts");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let local_path = artifact_dir.to_string_lossy().into_owned();
+        let mut stack = Stack::new("cache-test".to_string())
+            .add(
+                Worker::new("worker".to_string())
+                    .code(WorkerCode::Image {
+                        image: local_path.clone(),
+                    })
+                    .permissions("execution".to_string())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .add(sandbox_with_image(&local_path), ResourceLifecycle::Live)
+            .build();
+        let cache = HashMap::from([(
+            "worker:shared-artifacts".to_string(),
+            "registry.example.com/base:native".to_string(),
+        )]);
+        assert_eq!(
+            apply_push_cache(&mut stack, &cache, "registry.example.com/base"),
+            1
+        );
+        let sandbox = stack
+            .resources()
+            .find_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
+            .unwrap();
+        assert_eq!(sandbox.code, SandboxCode::Image { image: local_path });
     }
 
     #[test]
@@ -2380,7 +2438,7 @@ mod tests {
             )
             .build();
         let cache = HashMap::from([(
-            "worker-a1b2c3d4".to_string(),
+            "worker:worker-a1b2c3d4".to_string(),
             "manager.dev.example/artifacts-project-a:worker-tag".to_string(),
         )]);
 

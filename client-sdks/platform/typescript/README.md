@@ -30,6 +30,7 @@ Developer-friendly & type-safe Typescript SDK specifically catered to leverage _
   * [Authentication](#authentication)
   * [Available Resources and Operations](#available-resources-and-operations)
   * [Standalone functions](#standalone-functions)
+  * [React hooks with TanStack Query](#react-hooks-with-tanstack-query)
   * [Global Parameters](#global-parameters)
   * [Retries](#retries)
   * [Error Handling](#error-handling)
@@ -55,24 +56,32 @@ The SDK can be installed with either [npm](https://www.npmjs.com/), [pnpm](https
 
 ```bash
 npm add <UNSET>
+# Install optional peer dependencies if you plan to use React hooks
+npm add @tanstack/react-query react react-dom
 ```
 
 ### PNPM
 
 ```bash
 pnpm add <UNSET>
+# Install optional peer dependencies if you plan to use React hooks
+pnpm add @tanstack/react-query react react-dom
 ```
 
 ### Bun
 
 ```bash
 bun add <UNSET>
+# Install optional peer dependencies if you plan to use React hooks
+bun add @tanstack/react-query react react-dom
 ```
 
 ### Yarn
 
 ```bash
 yarn add <UNSET>
+# Install optional peer dependencies if you plan to use React hooks
+yarn add @tanstack/react-query react react-dom
 ```
 
 > [!NOTE]
@@ -154,6 +163,11 @@ run();
 * [getWorkspaceInvitationPreview](docs/sdks/alien/README.md#getworkspaceinvitationpreview)
 * [getPendingWorkspaceInvitation](docs/sdks/alien/README.md#getpendingworkspaceinvitation)
 * [acceptWorkspaceInvitation](docs/sdks/alien/README.md#acceptworkspaceinvitation)
+* [getProjectLogExport](docs/sdks/alien/README.md#getprojectlogexport)
+* [updateProjectLogExport](docs/sdks/alien/README.md#updateprojectlogexport)
+* [testProjectLogExport](docs/sdks/alien/README.md#testprojectlogexport)
+* [getLogExportDeliveryConfig](docs/sdks/alien/README.md#getlogexportdeliveryconfig)
+* [reportLogExportDelivery](docs/sdks/alien/README.md#reportlogexportdelivery)
 * [listWorkspaceInvitations](docs/sdks/alien/README.md#listworkspaceinvitations)
 * [createWorkspaceInvitation](docs/sdks/alien/README.md#createworkspaceinvitation)
 * [resendWorkspaceInvitation](docs/sdks/alien/README.md#resendworkspaceinvitation)
@@ -176,7 +190,7 @@ run();
 
 ### [AgentSessions](docs/sdks/agentsessions/README.md)
 
-* [list](docs/sdks/agentsessions/README.md#list) - List ai-agent monitor sessions for this workspace. Newest first, capped at 50.
+* [list](docs/sdks/agentsessions/README.md#list) - List ai-agent monitor sessions for this workspace, or for one project. Newest first, capped at 50.
 * [get](docs/sdks/agentsessions/README.md#get) - Retrieve one ai-agent monitor session by id.
 * [events](docs/sdks/agentsessions/README.md#events) - Incrementally read a session's event log (steps, tool calls, report deltas, approvals, status transitions). Pass the previous response's `latestSeq` as `after` to fetch only new events.
 * [stop](docs/sdks/agentsessions/README.md#stop) - Stop (cancel) a running or queued ai-agent monitor session. Proxies to the ai-agent service, minting a fresh CLI session for the caller so the ai-agent's own auth applies. Idempotent — stopping an already-terminal session is a 200 no-op.
@@ -270,6 +284,7 @@ run();
 * [listFilterEnvironments](docs/sdks/deployments/README.md#listfilterenvironments) - List distinct effective environments used by deployments. Used for filter dropdowns.
 * [listFilterDeploymentGroups](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
 * [get](docs/sdks/deployments/README.md#get) - Retrieve a deployment by ID.
+* [getUpdateOperation](docs/sdks/deployments/README.md#getupdateoperation) - Retrieve a deployment update operation by its durable operation ID.
 * [getInfo](docs/sdks/deployments/README.md#getinfo) - Get deployment connection information including command endpoint and resource URLs.
 * [import](docs/sdks/deployments/README.md#import) - Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
 * [setFirstPartyDeploymentInputs](docs/sdks/deployments/README.md#setfirstpartydeploymentinputs) - Store operator-provided input values on a first-party deployment session token so CLI/local deploys apply them.
@@ -366,13 +381,16 @@ run();
 * [approveAccessRequest](docs/sdks/operations/README.md#approveaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
 * [denyAccessRequest](docs/sdks/operations/README.md#denyaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
 * [getAccessRequestCoordinates](docs/sdks/operations/README.md#getaccessrequestcoordinates) - The customer's kubectl approve command for a queued access request, or null until the operator has materialized the grant CR and reported its coordinates. Polled by the Slack handler to update the access-plan card.
-* [getLiveDebugGrant](docs/sdks/operations/README.md#getlivedebuggrant) - Find an approved, unexpired access request whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request.
+* [getLiveDebugGrant](docs/sdks/operations/README.md#getlivedebuggrant) - Find an approved, unexpired access request the caller created whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request. Only the requester's own grants match: a debug session must present a grant its caller requested, so another principal's grant is never returned here.
+* [getAccessRequestActivity](docs/sdks/operations/README.md#getaccessrequestactivity) - The operation commands and debug sessions an access request authorized, with each command's verification outcome. Authorized like getAccessRequest.
+* [revokeAccessRequest](docs/sdks/operations/README.md#revokeaccessrequest) - Revoke a pending, queued or customer-approved access request. The principal that created the request, or any workspace member or administrator who can read its project, may revoke it. Commands the grant authorized that have not been dispatched are failed; dispatched commands finish. Linked debug sessions are stopped and refuse their next request. Revoking an already revoked request returns it unchanged.
 * [getAccessRequest](docs/sdks/operations/README.md#getaccessrequest) - Get an access request by id.
 
 ### [OperatorManifests](docs/sdks/operatormanifests/README.md)
 
 * [prepareOperatorManifestPackage](docs/sdks/operatormanifests/README.md#prepareoperatormanifestpackage) - Prepare the white-labeled Operator image for an Operate install
 * [renderOperatorManifest](docs/sdks/operatormanifests/README.md#renderoperatormanifest) - Render a Kubernetes Operator manifest
+* [checkEcsBootstrapWrite](docs/sdks/operatormanifests/README.md#checkecsbootstrapwrite) - Checks a Remote Operator setup token and its exact AWS target before the local bootstrap command writes a registration secret. A registered stack cannot use this path.
 * [renderOperatorEcsCloudFormation](docs/sdks/operatormanifests/README.md#renderoperatorecscloudformation) - Render a Remote Operator ECS Fargate CloudFormation installer
 
 ### [Packages](docs/sdks/packages/README.md)
@@ -406,7 +424,7 @@ run();
 * [configureKeys](docs/sdks/projects/README.md#configurekeys) - Enable customer-owned application encryption without requiring an application Release.
 * [configureBuckets](docs/sdks/projects/README.md#configurebuckets) - Enable buckets without requiring a project Release.
 * [configureRegistry](docs/sdks/projects/README.md#configureregistry) - Enable customer-owned container registries without requiring an application Release.
-* [configureRemoteSandbox](docs/sdks/projects/README.md#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. The clouds it publishes to follow the sources configured: an AWS bundle, an Azure catalog image, or both.
+* [configureRemoteSandbox](docs/sdks/projects/README.md#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. Without a custom image it publishes to every cloud on Alien's default image, which the project then follows. A custom image publishes to AWS; a public one with a linux/amd64 variant also publishes to Azure, and to GCP once Alien has built its GCP image.
 * [ensureSandboxBaseImageRepository](docs/sdks/projects/README.md#ensuresandboxbaseimagerepository) - Ensure the project's private image repository exists and return where to push a private sandbox base image. Name the pushed image as the remote sandbox base image afterwards.
 * [getCapabilityOverview](docs/sdks/projects/README.md#getcapabilityoverview) - Get safe, server-derived capability status for a Project.
 * [getRemoteOperatorSummary](docs/sdks/projects/README.md#getremoteoperatorsummary) - Get the authoritative Remote Operator project summary
@@ -513,7 +531,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`acceptWorkspaceInvitation`](docs/sdks/alien/README.md#acceptworkspaceinvitation)
 - [`agentSessionsEvents`](docs/sdks/agentsessions/README.md#events) - Incrementally read a session's event log (steps, tool calls, report deltas, approvals, status transitions). Pass the previous response's `latestSeq` as `after` to fetch only new events.
 - [`agentSessionsGet`](docs/sdks/agentsessions/README.md#get) - Retrieve one ai-agent monitor session by id.
-- [`agentSessionsList`](docs/sdks/agentsessions/README.md#list) - List ai-agent monitor sessions for this workspace. Newest first, capped at 50.
+- [`agentSessionsList`](docs/sdks/agentsessions/README.md#list) - List ai-agent monitor sessions for this workspace, or for one project. Newest first, capped at 50.
 - [`agentSessionsStop`](docs/sdks/agentsessions/README.md#stop) - Stop (cancel) a running or queued ai-agent monitor session. Proxies to the ai-agent service, minting a fresh CLI session for the caller so the ai-agent's own auth applies. Idempotent — stopping an already-terminal session is a 200 no-op.
 - [`apiKeysCreate`](docs/sdks/apikeys/README.md#create) - Create a new API key.
 - [`apiKeysDeleteMultiple`](docs/sdks/apikeys/README.md#deletemultiple) - Permanently delete multiple API keys.
@@ -584,6 +602,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentsGetInputs`](docs/sdks/deployments/README.md#getinputs) - Get the active input definitions and current non-secret values for a deployment.
 - [`deploymentsGetSetupRegistrationOperation`](docs/sdks/deployments/README.md#getsetupregistrationoperation) - Get setup registration operation status.
 - [`deploymentsGetStats`](docs/sdks/deployments/README.md#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
+- [`deploymentsGetUpdateOperation`](docs/sdks/deployments/README.md#getupdateoperation) - Retrieve a deployment update operation by its durable operation ID.
 - [`deploymentsImport`](docs/sdks/deployments/README.md#import) - Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
 - [`deploymentsList`](docs/sdks/deployments/README.md#list) - Retrieve all deployments.
 - [`deploymentsListFilterDeploymentGroups`](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
@@ -615,7 +634,9 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`getAwsVirtualKey`](docs/sdks/alien/README.md#getawsvirtualkey)
 - [`getDeploymentCredentialRotation`](docs/sdks/alien/README.md#getdeploymentcredentialrotation)
 - [`getDeploymentCredentialRotationValues`](docs/sdks/alien/README.md#getdeploymentcredentialrotationvalues)
+- [`getLogExportDeliveryConfig`](docs/sdks/alien/README.md#getlogexportdeliveryconfig)
 - [`getPendingWorkspaceInvitation`](docs/sdks/alien/README.md#getpendingworkspaceinvitation)
+- [`getProjectLogExport`](docs/sdks/alien/README.md#getprojectlogexport)
 - [`getWorkspaceInvitationPreview`](docs/sdks/alien/README.md#getworkspaceinvitationpreview)
 - [`getWorkspaceInviteLink`](docs/sdks/alien/README.md#getworkspaceinvitelink)
 - [`incidentsGet`](docs/sdks/incidents/README.md#get) - Get an authorized incident without Slack transport metadata.
@@ -652,18 +673,21 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`operationsCreateBundleUploadUrl`](docs/sdks/operations/README.md#createbundleuploadurl) - Get a presigned S3 URL to upload a custom operations plugin bundle ZIP. Upload the ZIP with a PUT to the returned url (sending the given Content-Type), then call POST /plugins to register it.
 - [`operationsDenyAccessRequest`](docs/sdks/operations/README.md#denyaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
 - [`operationsGetAccessRequest`](docs/sdks/operations/README.md#getaccessrequest) - Get an access request by id.
+- [`operationsGetAccessRequestActivity`](docs/sdks/operations/README.md#getaccessrequestactivity) - The operation commands and debug sessions an access request authorized, with each command's verification outcome. Authorized like getAccessRequest.
 - [`operationsGetAccessRequestCoordinates`](docs/sdks/operations/README.md#getaccessrequestcoordinates) - The customer's kubectl approve command for a queued access request, or null until the operator has materialized the grant CR and reported its coordinates. Polled by the Slack handler to update the access-plan card.
-- [`operationsGetLiveDebugGrant`](docs/sdks/operations/README.md#getlivedebuggrant) - Find an approved, unexpired access request whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request.
+- [`operationsGetLiveDebugGrant`](docs/sdks/operations/README.md#getlivedebuggrant) - Find an approved, unexpired access request the caller created whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request. Only the requester's own grants match: a debug session must present a grant its caller requested, so another principal's grant is never returned here.
 - [`operationsGetPolicy`](docs/sdks/operations/README.md#getpolicy) - Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual.
 - [`operationsInvoke`](docs/sdks/operations/README.md#invoke) - Invoke a plugin operation against a deployment. Honors the project's per-command approval policy.
 - [`operationsListAccessRequests`](docs/sdks/operations/README.md#listaccessrequests) - List a project's access requests, newest first.
 - [`operationsListPlugins`](docs/sdks/operations/README.md#listplugins) - List available operations plugins (builtin + custom) for a project, with their operations and risk tiers.
 - [`operationsPublishPlugin`](docs/sdks/operations/README.md#publishplugin) - Register a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Replaces any existing plugin of the same name in that project. New custom plugins are enabled by default. Returns the cloud permission delta versus the previously enabled set.
 - [`operationsQueueAccessRequest`](docs/sdks/operations/README.md#queueaccessrequest) - Engineer gate — approve a pending access request, queuing it for the operator to materialize. Records who queued it.
+- [`operationsRevokeAccessRequest`](docs/sdks/operations/README.md#revokeaccessrequest) - Revoke a pending, queued or customer-approved access request. The principal that created the request, or any workspace member or administrator who can read its project, may revoke it. Commands the grant authorized that have not been dispatched are failed; dispatched commands finish. Linked debug sessions are stopped and refuse their next request. Revoking an already revoked request returns it unchanged.
 - [`operationsSetBuiltinPlugins`](docs/sdks/operations/README.md#setbuiltinplugins) - Replace the complete set of enabled built-in operations plugins for a project. Returns the cloud permission delta versus the previously enabled set.
 - [`operationsSetPluginEnabled`](docs/sdks/operations/README.md#setpluginenabled) - Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are distributed to Operators and can be invoked. Returns the cloud permission delta versus the previously enabled set. With `dryRun`, validates the change and returns the delta without saving it.
 - [`operationsUpdatePolicy`](docs/sdks/operations/README.md#updatepolicy) - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
 - [`operationsVerifyCheck`](docs/sdks/operations/README.md#verifycheck) - One verification poll cycle for an original operation command. Loads that command's authoritative stored result and dispatch-time verification contract, dispatches the frozen read-only poll operation once, and evaluates its frozen success condition. Callers poll this repeatedly per the returned policy.
+- [`operatorManifestsCheckEcsBootstrapWrite`](docs/sdks/operatormanifests/README.md#checkecsbootstrapwrite) - Checks a Remote Operator setup token and its exact AWS target before the local bootstrap command writes a registration secret. A registered stack cannot use this path.
 - [`operatorManifestsPrepareOperatorManifestPackage`](docs/sdks/operatormanifests/README.md#prepareoperatormanifestpackage) - Prepare the white-labeled Operator image for an Operate install
 - [`operatorManifestsRenderOperatorEcsCloudFormation`](docs/sdks/operatormanifests/README.md#renderoperatorecscloudformation) - Render a Remote Operator ECS Fargate CloudFormation installer
 - [`operatorManifestsRenderOperatorManifest`](docs/sdks/operatormanifests/README.md#renderoperatormanifest) - Render a Kubernetes Operator manifest
@@ -680,7 +704,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsConfigureKeys`](docs/sdks/projects/README.md#configurekeys) - Enable customer-owned application encryption without requiring an application Release.
 - [`projectsConfigureModels`](docs/sdks/projects/README.md#configuremodels) - Configure customer-owned model providers without requiring an application Release.
 - [`projectsConfigureRegistry`](docs/sdks/projects/README.md#configureregistry) - Enable customer-owned container registries without requiring an application Release.
-- [`projectsConfigureRemoteSandbox`](docs/sdks/projects/README.md#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. The clouds it publishes to follow the sources configured: an AWS bundle, an Azure catalog image, or both.
+- [`projectsConfigureRemoteSandbox`](docs/sdks/projects/README.md#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. Without a custom image it publishes to every cloud on Alien's default image, which the project then follows. A custom image publishes to AWS; a public one with a linux/amd64 variant also publishes to Azure, and to GCP once Alien has built its GCP image.
 - [`projectsConfigureSource`](docs/sdks/projects/README.md#configuresource) - Connect a GitHub repository or Alien template to an existing project.
 - [`projectsCreate`](docs/sdks/projects/README.md#create) - Create a new project.
 - [`projectsCreateFromTemplate`](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace.
@@ -714,6 +738,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`releasesListDeployments`](docs/sdks/releases/README.md#listdeployments) - List the project's deployments with their rollout state relative to this release.
 - [`releasesPromote`](docs/sdks/releases/README.md#promote)
 - [`remoteBindingsCreateExternalAccess`](docs/sdks/remotebindings/README.md#createexternalaccess) - Create short-lived Remote Bindings access for a external resource
+- [`reportLogExportDelivery`](docs/sdks/alien/README.md#reportlogexportdelivery)
 - [`resendWorkspaceInvitation`](docs/sdks/alien/README.md#resendworkspaceinvitation)
 - [`resolveResolve`](docs/sdks/resolve/README.md#resolve) - Resolve manager for a project and platform
 - [`resourcesGetDeploymentDetail`](docs/sdks/resources/README.md#getdeploymentdetail)
@@ -736,6 +761,8 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`syncReconcile`](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model requests that include a session verify lock ownership. Pull model state reports are accepted as authz-gated agent progress even when they carry an agent-sync session. Accepts full DeploymentState after step() execution.
 - [`syncRelease`](docs/sdks/sync/README.md#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
 - [`syncRenew`](docs/sdks/sync/README.md#renew)
+- [`testProjectLogExport`](docs/sdks/alien/README.md#testprojectlogexport)
+- [`updateProjectLogExport`](docs/sdks/alien/README.md#updateprojectlogexport)
 - [`userCompleteProfileSetup`](docs/sdks/user/README.md#completeprofilesetup) - Complete the required beta intake and profile setup dialog.
 - [`userCreateWorkspace`](docs/sdks/user/README.md#createworkspace) - Create a new workspace. The current user will be automatically added as an admin.
 - [`userGetProfile`](docs/sdks/user/README.md#getprofile) - Get the current user's profile and user-scoped onboarding state.
@@ -757,6 +784,285 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 
 </details>
 <!-- End Standalone functions [standalone-funcs] -->
+
+<!-- Start React hooks with TanStack Query [react-query] -->
+## React hooks with TanStack Query
+
+React hooks built on [TanStack Query][tanstack-query] are included in this SDK.
+These hooks and the utility functions provided alongside them can be used to
+build rich applications that pull data from the API using one of the most
+popular asynchronous state management library.
+
+[tanstack-query]: https://tanstack.com/query/v5/docs/framework/react/overview
+
+To learn about this feature and how to get started, check
+[REACT_QUERY.md](./REACT_QUERY.md).
+
+> [!WARNING]
+>
+> This feature is currently in **preview** and is subject to breaking changes
+> within the current major version of the SDK as we gather user feedback on it.
+
+<details>
+
+<summary>Available React hooks</summary>
+
+- [`useAcceptWorkspaceInvitationMutation`](docs/sdks/alien/README.md#acceptworkspaceinvitation)
+- [`useAgentSessionsEvents`](docs/sdks/agentsessions/README.md#events) - Incrementally read a session's event log (steps, tool calls, report deltas, approvals, status transitions). Pass the previous response's `latestSeq` as `after` to fetch only new events.
+- [`useAgentSessionsGet`](docs/sdks/agentsessions/README.md#get) - Retrieve one ai-agent monitor session by id.
+- [`useAgentSessionsList`](docs/sdks/agentsessions/README.md#list) - List ai-agent monitor sessions for this workspace, or for one project. Newest first, capped at 50.
+- [`useAgentSessionsStopMutation`](docs/sdks/agentsessions/README.md#stop) - Stop (cancel) a running or queued ai-agent monitor session. Proxies to the ai-agent service, minting a fresh CLI session for the caller so the ai-agent's own auth applies. Idempotent — stopping an already-terminal session is a 200 no-op.
+- [`useApiKeysCreateMutation`](docs/sdks/apikeys/README.md#create) - Create a new API key.
+- [`useApiKeysDeleteMultipleMutation`](docs/sdks/apikeys/README.md#deletemultiple) - Permanently delete multiple API keys.
+- [`useApiKeysGet`](docs/sdks/apikeys/README.md#get) - Retrieve a specific API key.
+- [`useApiKeysList`](docs/sdks/apikeys/README.md#list) - Retrieve all API keys for the current workspace.
+- [`useApiKeysRevokeMutation`](docs/sdks/apikeys/README.md#revoke) - Revoke (soft delete) an API key.
+- [`useApiKeysUpdateMutation`](docs/sdks/apikeys/README.md#update) - Update an API key (enable/disable, change description).
+- [`useAuthWhoami`](docs/sdks/auth/README.md#whoami) - Get the current authenticated principal (user or service account). Works with both session cookies and API keys.
+- [`useBillingGetEntitlements`](docs/sdks/billing/README.md#getentitlements) - Get the workspace billing entitlements used for product feature gates. Autumn is the source of truth; the response is served through the workspace billing read model with stale-cache fallback.
+- [`useBillingListAuditLog`](docs/sdks/billing/README.md#listauditlog) - List billing activity entries for the current workspace.
+- [`useCancelDeploymentCredentialRotationMutation`](docs/sdks/alien/README.md#canceldeploymentcredentialrotation)
+- [`useCloudRegionsGet`](docs/sdks/cloudregions/README.md#get) - Get cloud regions supported by this Alien environment.
+- [`useCommandsBootstrapMutation`](docs/sdks/commands/README.md#bootstrap) - Resolve a deployment's current manager and mint a five-minute command capability. Sender tokens can dispatch and observe commands only for this deployment. Receiver tokens can lease and complete commands only for the resolved Container or Daemon target.
+- [`useCommandsCompleteMutation`](docs/sdks/commands/README.md#complete) - Atomically transition a command to a terminal state (SUCCEEDED, FAILED, or EXPIRED) unless it is already terminal. Returns whether the transition was applied.
+- [`useCommandsCreateMutation`](docs/sdks/commands/README.md#create) - Create command metadata. Called by manager when processing commands. Returns project info for routing decisions.
+- [`useCommandsDispatchMutation`](docs/sdks/commands/README.md#dispatch) - Atomically mark a command DISPATCHED unless it is already terminal. Returns whether the transition was applied.
+- [`useCommandsGet`](docs/sdks/commands/README.md#get) - Retrieve a command by ID.
+- [`useCommandsIncrementAttemptMutation`](docs/sdks/commands/README.md#incrementattempt) - Atomically increment the command's attempt counter and return the new value.
+- [`useCommandsList`](docs/sdks/commands/README.md#list) - Retrieve commands. Use for dashboard analytics and command history.
+- [`useCommandsListDeployments`](docs/sdks/commands/README.md#listdeployments) - List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
+- [`useCommandsListNames`](docs/sdks/commands/README.md#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
+- [`useCommandsResolveTarget`](docs/sdks/commands/README.md#resolvetarget) - Resolve which resource a command for this deployment would be addressed to, and how it would be delivered. Fails when the deployment has no command-capable resources, or more than one and no explicit target was named.
+- [`useCommandsUpdateMutation`](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
+- [`useContainerRegistryApplyContainerRegistryManagerSnapshotMutation`](docs/sdks/containerregistry/README.md#applycontainerregistrymanagersnapshot)
+- [`useContainerRegistryCreateContainerRegistryCredentialMutation`](docs/sdks/containerregistry/README.md#createcontainerregistrycredential)
+- [`useContainerRegistryCreateContainerRegistryRepositoryMutation`](docs/sdks/containerregistry/README.md#createcontainerregistryrepository)
+- [`useContainerRegistryDeleteContainerRegistryRepositoryMutation`](docs/sdks/containerregistry/README.md#deletecontainerregistryrepository)
+- [`useContainerRegistryGetContainerRegistry`](docs/sdks/containerregistry/README.md#getcontainerregistry)
+- [`useContainerRegistryGetContainerRegistryManagerSnapshot`](docs/sdks/containerregistry/README.md#getcontainerregistrymanagersnapshot)
+- [`useContainerRegistryPutContainerRegistryMutation`](docs/sdks/containerregistry/README.md#putcontainerregistry)
+- [`useContainerRegistryRevokeContainerRegistryCredentialMutation`](docs/sdks/containerregistry/README.md#revokecontainerregistrycredential)
+- [`useContainerRegistryRevokeContainerRegistryMutation`](docs/sdks/containerregistry/README.md#revokecontainerregistry)
+- [`useContainerRegistryVerifyContainerRegistryMutation`](docs/sdks/containerregistry/README.md#verifycontainerregistry)
+- [`useContinueAwsVirtualKeyMutation`](docs/sdks/alien/README.md#continueawsvirtualkey)
+- [`useCreateAwsVirtualKeyMutation`](docs/sdks/alien/README.md#createawsvirtualkey)
+- [`useCreateWorkspaceInvitationMutation`](docs/sdks/alien/README.md#createworkspaceinvitation)
+- [`useCreateWorkspaceInviteLinkMutation`](docs/sdks/alien/README.md#createworkspaceinvitelink)
+- [`useDebugSessionsCreateMutation`](docs/sdks/debugsessions/README.md#create) - Create a debug-session audit row. Called by the manager when a pull or push debug tunnel is opened. Workspace + project derived from deployment.
+- [`useDebugSessionsGet`](docs/sdks/debugsessions/README.md#get) - Retrieve a debug session by ID.
+- [`useDebugSessionsList`](docs/sdks/debugsessions/README.md#list) - Retrieve debug sessions for dashboard audit. Filters: project, deployment, state, mode.
+- [`useDebugSessionsUpdateMutation`](docs/sdks/debugsessions/README.md#update) - Update debug-session state. Called by manager on tunnel attach, close, or deadline expiry.
+- [`useDecommissionAwsVirtualKeyMutation`](docs/sdks/alien/README.md#decommissionawsvirtualkey)
+- [`useDeploymentGetInfo`](docs/sdks/deployment/README.md#getinfo) - Get deployment information for the deployment portal. Accepts both deployment-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either deployment or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
+- [`useDeploymentGroupsCreateDeploymentGroupMutation`](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Create a new deployment group
+- [`useDeploymentGroupsCreateDeploymentGroupTokenMutation`](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
+- [`useDeploymentGroupsCreateExternalAIModelCheckMutation`](docs/sdks/deploymentgroups/README.md#createexternalaimodelcheck) - Queue an explicit external model access check
+- [`useDeploymentGroupsCreateFirstPartyDeploymentSessionMutation`](docs/sdks/deploymentgroups/README.md#createfirstpartydeploymentsession) - Create first-party deployment session
+- [`useDeploymentGroupsDeleteDeploymentGroupMutation`](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
+- [`useDeploymentGroupsDeleteExternalAIBindingMutation`](docs/sdks/deploymentgroups/README.md#deleteexternalaibinding) - Revoke the external AI connection
+- [`useDeploymentGroupsEnsureDeploymentGroupByExternalIdMutation`](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyexternalid) - Get or create a deployment group by project and external ID
+- [`useDeploymentGroupsEnsureDeploymentGroupByNameMutation`](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyname) - Get or create a deployment group by project and name
+- [`useDeploymentGroupsGetDeploymentGroup`](docs/sdks/deploymentgroups/README.md#getdeploymentgroup) - Get deployment group details
+- [`useDeploymentGroupsGetDeploymentGroupByExternalId`](docs/sdks/deploymentgroups/README.md#getdeploymentgroupbyexternalid) - Get a deployment group by project and external ID
+- [`useDeploymentGroupsGetExternalAIBinding`](docs/sdks/deploymentgroups/README.md#getexternalaibinding) - Get external AI connection state
+- [`useDeploymentGroupsGetExternalAIModelCheck`](docs/sdks/deploymentgroups/README.md#getexternalaimodelcheck) - Get an external model access check
+- [`useDeploymentGroupsListDeploymentGroups`](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
+- [`useDeploymentGroupsPutExternalAIBindingMutation`](docs/sdks/deploymentgroups/README.md#putexternalaibinding) - Connect or rotate an external AI provider key
+- [`useDeploymentGroupsSetDeploymentGroupExternalIdMutation`](docs/sdks/deploymentgroups/README.md#setdeploymentgroupexternalid) - Set or clear a deployment group's external ID
+- [`useDeploymentGroupsUpdateDeploymentGroupMutation`](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
+- [`useDeploymentPlanComputeMutation`](docs/sdks/deployment/README.md#plancompute) - Plan deployment compute for the active release before stack preparation. The response contains recommended machine and scale choices for cloud compute pools.
+- [`useDeploymentPrepareStackMutation`](docs/sdks/deployment/README.md#preparestack) - Prepare the active release stack for a deployment portal setup session. The response contains the generated stack shape plus setup compatibility metadata.
+- [`useDeploymentsCreateMutation`](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
+- [`useDeploymentsCreateSetupRegistrationOperationMutation`](docs/sdks/deployments/README.md#createsetupregistrationoperation) - Start a durable setup registration operation for CloudFormation, Terraform, or Helm.
+- [`useDeploymentsCreateTokenMutation`](docs/sdks/deployments/README.md#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
+- [`useDeploymentsDeleteMutation`](docs/sdks/deployments/README.md#delete) - Delete, detach, or forget a deployment by ID.
+- [`useDeploymentsGet`](docs/sdks/deployments/README.md#get) - Retrieve a deployment by ID.
+- [`useDeploymentsGetInfo`](docs/sdks/deployments/README.md#getinfo) - Get deployment connection information including command endpoint and resource URLs.
+- [`useDeploymentsGetInputs`](docs/sdks/deployments/README.md#getinputs) - Get the active input definitions and current non-secret values for a deployment.
+- [`useDeploymentsGetSetupRegistrationOperation`](docs/sdks/deployments/README.md#getsetupregistrationoperation) - Get setup registration operation status.
+- [`useDeploymentsGetStats`](docs/sdks/deployments/README.md#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
+- [`useDeploymentsGetUpdateOperation`](docs/sdks/deployments/README.md#getupdateoperation) - Retrieve a deployment update operation by its durable operation ID.
+- [`useDeploymentsImportMutation`](docs/sdks/deployments/README.md#import) - Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
+- [`useDeploymentsList`](docs/sdks/deployments/README.md#list) - Retrieve all deployments.
+- [`useDeploymentsListFilterDeploymentGroups`](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
+- [`useDeploymentsListFilterEnvironments`](docs/sdks/deployments/README.md#listfilterenvironments) - List distinct effective environments used by deployments. Used for filter dropdowns.
+- [`useDeploymentsListMachines`](docs/sdks/deployments/README.md#listmachines)
+- [`useDeploymentsPinReleaseMutation`](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
+- [`useDeploymentsRedeployMutation`](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
+- [`useDeploymentsRetryMutation`](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
+- [`useDeploymentsSetFirstPartyDeploymentInputsMutation`](docs/sdks/deployments/README.md#setfirstpartydeploymentinputs) - Store operator-provided input values on a first-party deployment session token so CLI/local deploys apply them.
+- [`useDeploymentsSetReleaseChannelMutation`](docs/sdks/deployments/README.md#setreleasechannel)
+- [`useDeploymentsUpdateComputeMutation`](docs/sdks/deployments/README.md#updatecompute) - Update deployment-time compute pool selections and request reconciliation by the hosted manager.
+- [`useDeploymentsUpdateEnvironmentVariablesMutation`](docs/sdks/deployments/README.md#updateenvironmentvariables) - Replace a deployment's advanced environment variables. Stack-input-backed variables are write-only through the input endpoint. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
+- [`useDeploymentsUpdateInputsMutation`](docs/sdks/deployments/README.md#updateinputs) - Update runtime stack inputs, rebuild their environment-variable mappings, and request a deployment update when runtime configuration changes.
+- [`useDomainsCreateEndpointMutation`](docs/sdks/domains/README.md#createendpoint) - Create an endpoint under a workspace domain.
+- [`useDomainsCreateMutation`](docs/sdks/domains/README.md#create) - Create a workspace domain and optional initial endpoints.
+- [`useDomainsDeleteMutation`](docs/sdks/domains/README.md#delete) - Delete a workspace domain.
+- [`useDomainsGet`](docs/sdks/domains/README.md#get) - Get domain by ID.
+- [`useDomainsList`](docs/sdks/domains/README.md#list) - List system domains and workspace domains.
+- [`useDomainsRefreshMutation`](docs/sdks/domains/README.md#refresh) - Refresh workspace domain verification.
+- [`useDynamicContainersDeleteMutation`](docs/sdks/dynamiccontainers/README.md#delete) - Remove a dynamic container from this deployment.
+- [`useDynamicContainersGet`](docs/sdks/dynamiccontainers/README.md#get) - Get one dynamic container's desired generation, status, and internal address.
+- [`useDynamicContainersList`](docs/sdks/dynamiccontainers/README.md#list) - List containers created after this deployment was installed.
+- [`useDynamicContainersLogs`](docs/sdks/dynamiccontainers/README.md#logs) - Read recent logs for one dynamic container.
+- [`useDynamicContainersPutMutation`](docs/sdks/dynamiccontainers/README.md#put) - Create or replace a dynamic container in an existing deployment.
+- [`useEventsGet`](docs/sdks/events/README.md#get) - Retrieve an event by ID.
+- [`useEventsList`](docs/sdks/events/README.md#list) - Retrieve all events.
+- [`useFinalizeAwsVirtualKeyDeletionMutation`](docs/sdks/alien/README.md#finalizeawsvirtualkeydeletion)
+- [`useGatewaysGetWorkspaceOverview`](docs/sdks/gateways/README.md#getworkspaceoverview) - Get compact cross-Project setup and customer status for a workspace Gateway.
+- [`useGetAwsVirtualKey`](docs/sdks/alien/README.md#getawsvirtualkey)
+- [`useGetDeploymentCredentialRotation`](docs/sdks/alien/README.md#getdeploymentcredentialrotation)
+- [`useGetDeploymentCredentialRotationValuesMutation`](docs/sdks/alien/README.md#getdeploymentcredentialrotationvalues)
+- [`useGetLogExportDeliveryConfig`](docs/sdks/alien/README.md#getlogexportdeliveryconfig)
+- [`useGetPendingWorkspaceInvitation`](docs/sdks/alien/README.md#getpendingworkspaceinvitation)
+- [`useGetProjectLogExport`](docs/sdks/alien/README.md#getprojectlogexport)
+- [`useGetWorkspaceInvitationPreview`](docs/sdks/alien/README.md#getworkspaceinvitationpreview)
+- [`useGetWorkspaceInviteLink`](docs/sdks/alien/README.md#getworkspaceinvitelink)
+- [`useIncidentsGet`](docs/sdks/incidents/README.md#get) - Get an authorized incident without Slack transport metadata.
+- [`useIncidentsList`](docs/sdks/incidents/README.md#list) - List authorized incidents without Slack transport metadata.
+- [`useListAwsVirtualKeys`](docs/sdks/alien/README.md#listawsvirtualkeys)
+- [`useListWorkspaceInvitations`](docs/sdks/alien/README.md#listworkspaceinvitations)
+- [`useMachinesCancelMachineDrainMutation`](docs/sdks/machines/README.md#cancelmachinedrain)
+- [`useMachinesCreateJoinTokenMutation`](docs/sdks/machines/README.md#createjointoken)
+- [`useMachinesDrainMachineMutation`](docs/sdks/machines/README.md#drainmachine)
+- [`useMachinesListJoinTokens`](docs/sdks/machines/README.md#listjointokens)
+- [`useMachinesRemoveMachineMutation`](docs/sdks/machines/README.md#removemachine)
+- [`useMachinesRevokeJoinTokenMutation`](docs/sdks/machines/README.md#revokejointoken)
+- [`useMachinesRotateJoinTokenMutation`](docs/sdks/machines/README.md#rotatejointoken)
+- [`useManagersCancelSetupMutation`](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
+- [`useManagersCreateMutation`](docs/sdks/managers/README.md#create) - Create a new manager.
+- [`useManagersDeleteMutation`](docs/sdks/managers/README.md#delete) - Delete a manager by ID.
+- [`useManagersGenerateManagerBindingTokenMutation`](docs/sdks/managers/README.md#generatemanagerbindingtoken) - Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned manager.
+- [`useManagersGenerateManagerTokenMutation`](docs/sdks/managers/README.md#generatemanagertoken) - Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
+- [`useManagersGet`](docs/sdks/managers/README.md#get) - Retrieve a manager by ID.
+- [`useManagersGetDeployment`](docs/sdks/managers/README.md#getdeployment) - Get deployment details for a private manager (internal deployment platform, status, resources).
+- [`useManagersGetDomainBinding`](docs/sdks/managers/README.md#getdomainbinding) - Get the custom domain binding for a private manager.
+- [`useManagersGetManagementConfig`](docs/sdks/managers/README.md#getmanagementconfig) - Get the management configuration for a manager.
+- [`useManagersList`](docs/sdks/managers/README.md#list) - Retrieve all managers.
+- [`useManagersListEvents`](docs/sdks/managers/README.md#listevents) - Retrieve all events of a manager.
+- [`useManagersProvisionMutation`](docs/sdks/managers/README.md#provision) - Enqueue provisioning for a manager by ID.
+- [`useManagersReportHeartbeatMutation`](docs/sdks/managers/README.md#reportheartbeat) - Report Manager health status and metrics.
+- [`useManagersResolveGcpOAuthProviderMutation`](docs/sdks/managers/README.md#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
+- [`useManagersRetryMutation`](docs/sdks/managers/README.md#retry) - Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
+- [`useManagersRetrySetupMutation`](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
+- [`useManagersUpdateDomainBindingMutation`](docs/sdks/managers/README.md#updatedomainbinding) - Create, update, or remove the custom domain binding for a private manager.
+- [`useManagersUpdateMutation`](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
+- [`useOperationsApproveAccessRequestMutation`](docs/sdks/operations/README.md#approveaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
+- [`useOperationsCreateAccessRequestMutation`](docs/sdks/operations/README.md#createaccessrequest) - Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
+- [`useOperationsCreateBundleUploadUrlMutation`](docs/sdks/operations/README.md#createbundleuploadurl) - Get a presigned S3 URL to upload a custom operations plugin bundle ZIP. Upload the ZIP with a PUT to the returned url (sending the given Content-Type), then call POST /plugins to register it.
+- [`useOperationsDenyAccessRequestMutation`](docs/sdks/operations/README.md#denyaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
+- [`useOperationsGetAccessRequest`](docs/sdks/operations/README.md#getaccessrequest) - Get an access request by id.
+- [`useOperationsGetAccessRequestActivity`](docs/sdks/operations/README.md#getaccessrequestactivity) - The operation commands and debug sessions an access request authorized, with each command's verification outcome. Authorized like getAccessRequest.
+- [`useOperationsGetAccessRequestCoordinates`](docs/sdks/operations/README.md#getaccessrequestcoordinates) - The customer's kubectl approve command for a queued access request, or null until the operator has materialized the grant CR and reported its coordinates. Polled by the Slack handler to update the access-plan card.
+- [`useOperationsGetLiveDebugGrant`](docs/sdks/operations/README.md#getlivedebuggrant) - Find an approved, unexpired access request the caller created whose debug grant matches this deployment and tool (and, when given, namespace/cloudScope). Returns the most recently approved match, or 404 when none is live. Used to reuse an existing grant instead of proposing a new access request. Only the requester's own grants match: a debug session must present a grant its caller requested, so another principal's grant is never returned here.
+- [`useOperationsGetPolicy`](docs/sdks/operations/README.md#getpolicy) - Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual.
+- [`useOperationsInvokeMutation`](docs/sdks/operations/README.md#invoke) - Invoke a plugin operation against a deployment. Honors the project's per-command approval policy.
+- [`useOperationsListAccessRequests`](docs/sdks/operations/README.md#listaccessrequests) - List a project's access requests, newest first.
+- [`useOperationsListPlugins`](docs/sdks/operations/README.md#listplugins) - List available operations plugins (builtin + custom) for a project, with their operations and risk tiers.
+- [`useOperationsPublishPluginMutation`](docs/sdks/operations/README.md#publishplugin) - Register a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Replaces any existing plugin of the same name in that project. New custom plugins are enabled by default. Returns the cloud permission delta versus the previously enabled set.
+- [`useOperationsQueueAccessRequestMutation`](docs/sdks/operations/README.md#queueaccessrequest) - Engineer gate — approve a pending access request, queuing it for the operator to materialize. Records who queued it.
+- [`useOperationsRevokeAccessRequestMutation`](docs/sdks/operations/README.md#revokeaccessrequest) - Revoke a pending, queued or customer-approved access request. The principal that created the request, or any workspace member or administrator who can read its project, may revoke it. Commands the grant authorized that have not been dispatched are failed; dispatched commands finish. Linked debug sessions are stopped and refuse their next request. Revoking an already revoked request returns it unchanged.
+- [`useOperationsSetBuiltinPluginsMutation`](docs/sdks/operations/README.md#setbuiltinplugins) - Replace the complete set of enabled built-in operations plugins for a project. Returns the cloud permission delta versus the previously enabled set.
+- [`useOperationsSetPluginEnabledMutation`](docs/sdks/operations/README.md#setpluginenabled) - Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are distributed to Operators and can be invoked. Returns the cloud permission delta versus the previously enabled set. With `dryRun`, validates the change and returns the delta without saving it.
+- [`useOperationsUpdatePolicyMutation`](docs/sdks/operations/README.md#updatepolicy) - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
+- [`useOperationsVerifyCheckMutation`](docs/sdks/operations/README.md#verifycheck) - One verification poll cycle for an original operation command. Loads that command's authoritative stored result and dispatch-time verification contract, dispatches the frozen read-only poll operation once, and evaluates its frozen success condition. Callers poll this repeatedly per the returned policy.
+- [`useOperatorManifestsCheckEcsBootstrapWriteMutation`](docs/sdks/operatormanifests/README.md#checkecsbootstrapwrite) - Checks a Remote Operator setup token and its exact AWS target before the local bootstrap command writes a registration secret. A registered stack cannot use this path.
+- [`useOperatorManifestsPrepareOperatorManifestPackageMutation`](docs/sdks/operatormanifests/README.md#prepareoperatormanifestpackage) - Prepare the white-labeled Operator image for an Operate install
+- [`useOperatorManifestsRenderOperatorEcsCloudFormationMutation`](docs/sdks/operatormanifests/README.md#renderoperatorecscloudformation) - Render a Remote Operator ECS Fargate CloudFormation installer
+- [`useOperatorManifestsRenderOperatorManifestMutation`](docs/sdks/operatormanifests/README.md#renderoperatormanifest) - Render a Kubernetes Operator manifest
+- [`usePackagesCancelMutation`](docs/sdks/packages/README.md#cancel) - Cancel a pending or building package.
+- [`usePackagesGet`](docs/sdks/packages/README.md#get) - Get details of a specific package.
+- [`usePackagesList`](docs/sdks/packages/README.md#list) - List packages with optional filters. Returns packages ordered by creation date (newest first).
+- [`usePackagesRebuildMutation`](docs/sdks/packages/README.md#rebuild) - Rebuild packages for a project. This will cancel any pending packages and create new ones with auto-incremented versions.
+- [`usePrepareDeploymentCredentialRotationMutation`](docs/sdks/alien/README.md#preparedeploymentcredentialrotation)
+- [`useProjectsAcceptRemoteOperatorImageMutation`](docs/sdks/projects/README.md#acceptremoteoperatorimage) - Accept a reported image for a Remote Operator installation
+- [`useProjectsAcceptRemoteOperatorPermissionsMutation`](docs/sdks/projects/README.md#acceptremoteoperatorpermissions) - Record that a Remote Operator installation's setup was re-applied
+- [`useProjectsConfigureAiProviderHeadersMutation`](docs/sdks/projects/README.md#configureaiproviderheaders) - Replace the static headers added to AI requests for each provider.
+- [`useProjectsConfigureBucketsMutation`](docs/sdks/projects/README.md#configurebuckets) - Enable buckets without requiring a project Release.
+- [`useProjectsConfigureDeploymentsMutation`](docs/sdks/projects/README.md#configuredeployments) - Enable deployments for a Project.
+- [`useProjectsConfigureKeysMutation`](docs/sdks/projects/README.md#configurekeys) - Enable customer-owned application encryption without requiring an application Release.
+- [`useProjectsConfigureModelsMutation`](docs/sdks/projects/README.md#configuremodels) - Configure customer-owned model providers without requiring an application Release.
+- [`useProjectsConfigureRegistryMutation`](docs/sdks/projects/README.md#configureregistry) - Enable customer-owned container registries without requiring an application Release.
+- [`useProjectsConfigureRemoteSandboxMutation`](docs/sdks/projects/README.md#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. Without a custom image it publishes to every cloud on Alien's default image, which the project then follows. A custom image publishes to AWS; a public one with a linux/amd64 variant also publishes to Azure, and to GCP once Alien has built its GCP image.
+- [`useProjectsConfigureSourceMutation`](docs/sdks/projects/README.md#configuresource) - Connect a GitHub repository or Alien template to an existing project.
+- [`useProjectsCreateFromTemplateMutation`](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace.
+- [`useProjectsCreateMutation`](docs/sdks/projects/README.md#create) - Create a new project.
+- [`useProjectsDeleteMutation`](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
+- [`useProjectsEnsureSandboxBaseImageRepositoryMutation`](docs/sdks/projects/README.md#ensuresandboxbaseimagerepository) - Ensure the project's private image repository exists and return where to push a private sandbox base image. Name the pushed image as the remote sandbox base image afterwards.
+- [`useProjectsGet`](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
+- [`useProjectsGetActiveRelease`](docs/sdks/projects/README.md#getactiverelease) - Get the production channel's current release. When deploymentId is provided, returns that deployment's effective release: its pin, or its followed channel's current release.
+- [`useProjectsGetAiProviderHeaders`](docs/sdks/projects/README.md#getaiproviderheaders) - Get static headers added to AI requests for each provider.
+- [`useProjectsGetAiUsage`](docs/sdks/projects/README.md#getaiusage)
+- [`useProjectsGetCapabilityOverview`](docs/sdks/projects/README.md#getcapabilityoverview) - Get safe, server-derived capability status for a Project.
+- [`useProjectsGetDeploymentLinkSetup`](docs/sdks/projects/README.md#getdeploymentlinksetup) - Get the active release stack and portal-visible setup availability for deployment-link configuration.
+- [`useProjectsGetDeploymentPortalDomain`](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
+- [`useProjectsGetEncryptionUsage`](docs/sdks/projects/README.md#getencryptionusage)
+- [`useProjectsGetGcpOAuthProvider`](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
+- [`useProjectsGetRemoteOperatorSummary`](docs/sdks/projects/README.md#getremoteoperatorsummary) - Get the authoritative Remote Operator project summary
+- [`useProjectsGetSandboxMetrics`](docs/sdks/projects/README.md#getsandboxmetrics)
+- [`useProjectsGetTemplateUrls`](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
+- [`useProjectsList`](docs/sdks/projects/README.md#list) - Retrieve all projects.
+- [`useProjectsPreviewModelsImpactMutation`](docs/sdks/projects/README.md#previewmodelsimpact) - Preview which customer model connections a configuration change may affect.
+- [`useProjectsSetCapabilitiesMutation`](docs/sdks/projects/README.md#setcapabilities) - Set the capabilities offered by a Project. Removing a capability prevents new setup without deleting existing customer resources.
+- [`useProjectsUpdateGcpOAuthProviderMutation`](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
+- [`useProjectsUpdateMutation`](docs/sdks/projects/README.md#update) - Update a project.
+- [`useReleaseChannelsCreateMutation`](docs/sdks/releasechannels/README.md#create) - Create a release channel
+- [`useReleaseChannelsDeleteMutation`](docs/sdks/releasechannels/README.md#delete) - Delete a release channel
+- [`useReleaseChannelsList`](docs/sdks/releasechannels/README.md#list) - List release channels
+- [`useReleasesCreateMutation`](docs/sdks/releases/README.md#create) - Create a new release.
+- [`useReleasesGet`](docs/sdks/releases/README.md#get) - Retrieve a release by ID.
+- [`useReleasesList`](docs/sdks/releases/README.md#list) - Retrieve all releases.
+- [`useReleasesListAuthors`](docs/sdks/releases/README.md#listauthors) - List distinct commit authors across releases. Used for filter dropdowns.
+- [`useReleasesListBranches`](docs/sdks/releases/README.md#listbranches) - List distinct git branches across releases. Used for filter dropdowns.
+- [`useReleasesListDeployments`](docs/sdks/releases/README.md#listdeployments) - List the project's deployments with their rollout state relative to this release.
+- [`useReleasesPromoteMutation`](docs/sdks/releases/README.md#promote)
+- [`useRemoteBindingsCreateExternalAccessMutation`](docs/sdks/remotebindings/README.md#createexternalaccess) - Create short-lived Remote Bindings access for a external resource
+- [`useReportLogExportDeliveryMutation`](docs/sdks/alien/README.md#reportlogexportdelivery)
+- [`useResendWorkspaceInvitationMutation`](docs/sdks/alien/README.md#resendworkspaceinvitation)
+- [`useResolveResolve`](docs/sdks/resolve/README.md#resolve) - Resolve manager for a project and platform
+- [`useResourcesGetDeploymentDetail`](docs/sdks/resources/README.md#getdeploymentdetail)
+- [`useResourcesListDeployments`](docs/sdks/resources/README.md#listdeployments) - List deployments where the selected resource is installed.
+- [`useResourcesListInventory`](docs/sdks/resources/README.md#listinventory)
+- [`useResourcesListOverview`](docs/sdks/resources/README.md#listoverview)
+- [`useRestoreAwsVirtualKeyMutation`](docs/sdks/alien/README.md#restoreawsvirtualkey)
+- [`useRevokeWorkspaceInvitationMutation`](docs/sdks/alien/README.md#revokeworkspaceinvitation)
+- [`useRevokeWorkspaceInviteLinkMutation`](docs/sdks/alien/README.md#revokeworkspaceinvitelink)
+- [`useRotateAwsVirtualKeyCredentialMutation`](docs/sdks/alien/README.md#rotateawsvirtualkeycredential)
+- [`useSetupLinksCreateMutation`](docs/sdks/setuplinks/README.md#create) - Create a customer setup link
+- [`useSlackIntegrationInstallUrlMutation`](docs/sdks/slackintegration/README.md#installurl) - Generate the Slack OAuth consent URL for this workspace.
+- [`useSlackIntegrationListChannels`](docs/sdks/slackintegration/README.md#listchannels) - List public Slack channels for this workspace's install. Used by the dashboard's notification-channel picker.
+- [`useSlackIntegrationSetNotificationChannelMutation`](docs/sdks/slackintegration/README.md#setnotificationchannel) - Configure which Slack channel receives ai-agent monitor reports.
+- [`useSlackIntegrationStatus`](docs/sdks/slackintegration/README.md#status) - Return the Slack install for this workspace (if any).
+- [`useSlackIntegrationUninstallMutation`](docs/sdks/slackintegration/README.md#uninstall) - Uninstall the Slack integration for this workspace. Revokes the bot token at Slack and deletes the row.
+- [`useSyncAcquireMutation`](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
+- [`useSyncContextMutation`](docs/sdks/sync/README.md#context) - Get computed deployment state and configuration for a manager-side operation without acquiring the deployment reconciliation lock.
+- [`useSyncListMutation`](docs/sdks/sync/README.md#list) - List full deployment records for manager operational loops. This endpoint is intentionally separate from the public deployments list, which returns lightweight UI rows.
+- [`useSyncReconcileMutation`](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model requests that include a session verify lock ownership. Pull model state reports are accepted as authz-gated agent progress even when they carry an agent-sync session. Accepts full DeploymentState after step() execution.
+- [`useSyncReleaseMutation`](docs/sdks/sync/README.md#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
+- [`useSyncRenewMutation`](docs/sdks/sync/README.md#renew)
+- [`useTestProjectLogExportMutation`](docs/sdks/alien/README.md#testprojectlogexport)
+- [`useUpdateProjectLogExportMutation`](docs/sdks/alien/README.md#updateprojectlogexport)
+- [`useUserCompleteProfileSetupMutation`](docs/sdks/user/README.md#completeprofilesetup) - Complete the required beta intake and profile setup dialog.
+- [`useUserCreateWorkspaceMutation`](docs/sdks/user/README.md#createworkspace) - Create a new workspace. The current user will be automatically added as an admin.
+- [`useUserGetProfile`](docs/sdks/user/README.md#getprofile) - Get the current user's profile and user-scoped onboarding state.
+- [`useUserListGitNamespaceRepositories`](docs/sdks/user/README.md#listgitnamespacerepositories) - List repositories accessible through a git namespace (GitHub installation).
+- [`useUserListGitNamespaces`](docs/sdks/user/README.md#listgitnamespaces) - List all git namespaces (GitHub installations) the current user has access to.
+- [`useUserListMemberships`](docs/sdks/user/README.md#listmemberships) - List all workspaces the current user has access to.
+- [`useUserSyncGitNamespacesMutation`](docs/sdks/user/README.md#syncgitnamespaces) - Sync git namespaces from the provider. For GitHub, this fetches all app installations accessible to the user.
+- [`useUserUpdateProfileMutation`](docs/sdks/user/README.md#updateprofile) - Update the current user's profile (display name).
+- [`useWorkspacesAddMemberMutation`](docs/sdks/workspaces/README.md#addmember) - Add a member to a workspace by email. The user must already have an account.
+- [`useWorkspacesDeleteMutation`](docs/sdks/workspaces/README.md#delete) - Delete a workspace. The workspace must have no projects.
+- [`useWorkspacesGet`](docs/sdks/workspaces/README.md#get) - Retrieve a workspace by ID.
+- [`useWorkspacesGetSettings`](docs/sdks/workspaces/README.md#getsettings) - Read the ai-agent settings for a workspace. Returns defaults (`enabled: true`) when the workspace has never customized them.
+- [`useWorkspacesList`](docs/sdks/workspaces/README.md#list) - Retrieve all workspaces.
+- [`useWorkspacesListMembers`](docs/sdks/workspaces/README.md#listmembers) - List all members of a workspace.
+- [`useWorkspacesRemoveMemberMutation`](docs/sdks/workspaces/README.md#removemember) - Remove a member from a workspace.
+- [`useWorkspacesUpdateMemberMutation`](docs/sdks/workspaces/README.md#updatemember) - Update a workspace member's role.
+- [`useWorkspacesUpdateMutation`](docs/sdks/workspaces/README.md#update) - Update a workspace.
+- [`useWorkspacesUpdateSettingsMutation`](docs/sdks/workspaces/README.md#updatesettings) - Update the ai-agent settings for a workspace. Supports `enabled` (`false` turns the ai-agent off so incoming triggers are rejected before any session runs).
+
+</details>
+<!-- End React hooks with TanStack Query [react-query] -->
 
 <!-- Start Global Parameters [global-parameters] -->
 ## Global Parameters

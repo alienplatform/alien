@@ -47,7 +47,7 @@ export const EventViaEnum7 = {
  */
 export type EventViaEnum7 = ClosedEnum<typeof EventViaEnum7>;
 
-export type EventViaUnion7 = EventViaEnum7 | any;
+export type EventViaUnion7 = EventViaEnum7 | string;
 
 /**
  * Authenticated principal that requested a deployment intent event.
@@ -65,13 +65,13 @@ export type EventActor7 = {
    * Type of authenticated principal that requested an event.
    */
   kind: EventKind7;
-  via?: EventViaEnum7 | any | null | undefined;
+  via?: EventViaEnum7 | string | null | undefined;
 };
 
-export type EventActorUnion7 = EventActor7 | any;
+export type EventActorUnion7 = EventActor7 | string;
 
 export type EventDataDeploymentEnvironmentUpdated = {
-  actor?: EventActor7 | any | null | undefined;
+  actor?: EventActor7 | string | null | undefined;
   /**
    * Names of the environment variables that changed (added, removed, or modified)
    */
@@ -106,7 +106,7 @@ export const EventViaEnum6 = {
  */
 export type EventViaEnum6 = ClosedEnum<typeof EventViaEnum6>;
 
-export type EventViaUnion6 = EventViaEnum6 | any;
+export type EventViaUnion6 = EventViaEnum6 | string;
 
 /**
  * Authenticated principal that requested a deployment intent event.
@@ -124,13 +124,13 @@ export type EventActor6 = {
    * Type of authenticated principal that requested an event.
    */
   kind: EventKind6;
-  via?: EventViaEnum6 | any | null | undefined;
+  via?: EventViaEnum6 | string | null | undefined;
 };
 
-export type EventActorUnion6 = EventActor6 | any;
+export type EventActorUnion6 = EventActor6 | string;
 
 export type EventDataDeploymentReleaseUnpinned = {
-  actor?: EventActor6 | any | null | undefined;
+  actor?: EventActor6 | string | null | undefined;
   /**
    * ID of the deployment
    */
@@ -165,7 +165,7 @@ export const EventViaEnum5 = {
  */
 export type EventViaEnum5 = ClosedEnum<typeof EventViaEnum5>;
 
-export type EventViaUnion5 = EventViaEnum5 | any;
+export type EventViaUnion5 = EventViaEnum5 | string;
 
 /**
  * Authenticated principal that requested a deployment intent event.
@@ -183,13 +183,13 @@ export type EventActor5 = {
    * Type of authenticated principal that requested an event.
    */
   kind: EventKind5;
-  via?: EventViaEnum5 | any | null | undefined;
+  via?: EventViaEnum5 | string | null | undefined;
 };
 
-export type EventActorUnion5 = EventActor5 | any;
+export type EventActorUnion5 = EventActor5 | string;
 
 export type EventDataDeploymentReleasePinned = {
-  actor?: EventActor5 | any | null | undefined;
+  actor?: EventActor5 | string | null | undefined;
   /**
    * ID of the deployment
    */
@@ -228,7 +228,7 @@ export const EventViaEnum4 = {
  */
 export type EventViaEnum4 = ClosedEnum<typeof EventViaEnum4>;
 
-export type EventViaUnion4 = EventViaEnum4 | any;
+export type EventViaUnion4 = EventViaEnum4 | string;
 
 /**
  * Authenticated principal that requested a deployment intent event.
@@ -246,13 +246,13 @@ export type EventActor4 = {
    * Type of authenticated principal that requested an event.
    */
   kind: EventKind4;
-  via?: EventViaEnum4 | any | null | undefined;
+  via?: EventViaEnum4 | string | null | undefined;
 };
 
-export type EventActorUnion4 = EventActor4 | any;
+export type EventActorUnion4 = EventActor4 | string;
 
 export type EventDataDeploymentRedeployRequested = {
-  actor?: EventActor4 | any | null | undefined;
+  actor?: EventActor4 | string | null | undefined;
   /**
    * ID of the deployment
    */
@@ -287,7 +287,7 @@ export const EventViaEnum3 = {
  */
 export type EventViaEnum3 = ClosedEnum<typeof EventViaEnum3>;
 
-export type EventViaUnion3 = EventViaEnum3 | any;
+export type EventViaUnion3 = EventViaEnum3 | string;
 
 /**
  * Authenticated principal that requested a deployment intent event.
@@ -305,10 +305,10 @@ export type EventActor3 = {
    * Type of authenticated principal that requested an event.
    */
   kind: EventKind3;
-  via?: EventViaEnum3 | any | null | undefined;
+  via?: EventViaEnum3 | string | null | undefined;
 };
 
-export type EventActorUnion3 = EventActor3 | any;
+export type EventActorUnion3 = EventActor3 | string;
 
 /**
  * Canonical error container that provides a structured way to represent errors
@@ -396,10 +396,10 @@ export type EventPreviousError = {
   source?: any | null | undefined;
 };
 
-export type EventPreviousErrorUnion = EventPreviousError | any;
+export type EventPreviousErrorUnion = EventPreviousError | string;
 
 export type EventDataDeploymentRetryRequested = {
-  actor?: EventActor3 | any | null | undefined;
+  actor?: EventActor3 | string | null | undefined;
   /**
    * ID of the release that the failed attempt was targeting, if known
    */
@@ -408,7 +408,7 @@ export type EventDataDeploymentRetryRequested = {
    * ID of the deployment
    */
   deploymentId: string;
-  previousError?: EventPreviousError | any | null | undefined;
+  previousError?: EventPreviousError | string | null | undefined;
   type: "DeploymentRetryRequested";
 };
 
@@ -435,7 +435,7 @@ export const EventViaEnum2 = {
  */
 export type EventViaEnum2 = ClosedEnum<typeof EventViaEnum2>;
 
-export type EventViaUnion2 = EventViaEnum2 | any;
+export type EventViaUnion2 = EventViaEnum2 | string;
 
 /**
  * Authenticated principal that requested a deployment intent event.
@@ -453,13 +453,13 @@ export type EventActor2 = {
    * Type of authenticated principal that requested an event.
    */
   kind: EventKind2;
-  via?: EventViaEnum2 | any | null | undefined;
+  via?: EventViaEnum2 | string | null | undefined;
 };
 
-export type EventActorUnion2 = EventActor2 | any;
+export type EventActorUnion2 = EventActor2 | string;
 
 export type EventDataDeploymentReleaseChannelChanged = {
-  actor?: EventActor2 | any | null | undefined;
+  actor?: EventActor2 | string | null | undefined;
   /**
    * Newly followed channel
    */
@@ -498,7 +498,7 @@ export const EventViaEnum1 = {
  */
 export type EventViaEnum1 = ClosedEnum<typeof EventViaEnum1>;
 
-export type EventViaUnion1 = EventViaEnum1 | any;
+export type EventViaUnion1 = EventViaEnum1 | string;
 
 /**
  * Authenticated principal that requested a deployment intent event.
@@ -516,13 +516,13 @@ export type EventActor1 = {
    * Type of authenticated principal that requested an event.
    */
   kind: EventKind1;
-  via?: EventViaEnum1 | any | null | undefined;
+  via?: EventViaEnum1 | string | null | undefined;
 };
 
-export type EventActorUnion1 = EventActor1 | any;
+export type EventActorUnion1 = EventActor1 | string;
 
 export type EventDataReleaseChannelUpdated = {
-  actor?: EventActor1 | any | null | undefined;
+  actor?: EventActor1 | string | null | undefined;
   /**
    * Name of the channel that moved
    */
@@ -1068,7 +1068,7 @@ export type EventControllerPlatformEnum = ClosedEnum<
   typeof EventControllerPlatformEnum
 >;
 
-export type EventControllerPlatformUnion = EventControllerPlatformEnum | any;
+export type EventControllerPlatformUnion = EventControllerPlatformEnum | string;
 
 /**
  * Reference to a resource by its stable id and resource type.
@@ -1167,7 +1167,7 @@ export type EventErrorNextState = {
   source?: any | null | undefined;
 };
 
-export type EventNextStateErrorUnion = EventErrorNextState | any;
+export type EventNextStateErrorUnion = EventErrorNextState | string;
 
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -1181,7 +1181,7 @@ export const EventLifecycleEnum = {
  */
 export type EventLifecycleEnum = ClosedEnum<typeof EventLifecycleEnum>;
 
-export type EventLifecycleUnion = EventLifecycleEnum | any;
+export type EventLifecycleUnion = EventLifecycleEnum | string;
 
 /**
  * Resource outputs that can hold output data for any resource type in the Alien system. All resource outputs share a common 'type' field with additional type-specific output properties.
@@ -1194,7 +1194,7 @@ export type EventOutputs = {
   additionalProperties?: { [k: string]: any | null } | undefined;
 };
 
-export type EventOutputsUnion = EventOutputs | any;
+export type EventOutputsUnion = EventOutputs | string;
 
 /**
  * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
@@ -1211,7 +1211,7 @@ export type EventPreviousConfig = {
   additionalProperties?: { [k: string]: any | null } | undefined;
 };
 
-export type EventPreviousConfigUnion = EventPreviousConfig | any;
+export type EventPreviousConfigUnion = EventPreviousConfig | string;
 
 /**
  * Represents the high-level status of a resource during its lifecycle.
@@ -1250,7 +1250,7 @@ export type EventResources = {
    * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
    */
   config: EventConfig;
-  controllerPlatform?: EventControllerPlatformEnum | any | null | undefined;
+  controllerPlatform?: EventControllerPlatformEnum | string | null | undefined;
   /**
    * Complete list of dependencies for this resource, including infrastructure dependencies.
    *
@@ -1258,7 +1258,7 @@ export type EventResources = {
    * This preserves the full dependency information from the stack definition.
    */
   dependencies?: Array<EventDependency> | undefined;
-  error?: EventErrorNextState | any | null | undefined;
+  error?: EventErrorNextState | string | null | undefined;
   /**
    * Stores the controller state that failed, used for manual retry operations.
    *
@@ -1267,9 +1267,9 @@ export type EventResources = {
    * Stored as JSON to make the struct serializable and movable to alien-core.
    */
   lastFailedState?: any | null | undefined;
-  lifecycle?: EventLifecycleEnum | any | null | undefined;
-  outputs?: EventOutputs | any | null | undefined;
-  previousConfig?: EventPreviousConfig | any | null | undefined;
+  lifecycle?: EventLifecycleEnum | string | null | undefined;
+  outputs?: EventOutputs | string | null | undefined;
+  previousConfig?: EventPreviousConfig | string | null | undefined;
   /**
    * Binding parameters for remote access.
    *
@@ -1397,14 +1397,14 @@ export type EventProgress = {
   totalLayers: number;
 };
 
-export type EventProgressUnion = EventProgress | any;
+export type EventProgressUnion = EventProgress | string;
 
 export type EventDataPushingImage = {
   /**
    * Name of the image being pushed
    */
   image: string;
-  progress?: EventProgress | any | null | undefined;
+  progress?: EventProgress | string | null | undefined;
   type: "PushingImage";
 };
 
@@ -1621,13 +1621,13 @@ export type EventStateError = {
   source?: any | null | undefined;
 };
 
-export type EventStateErrorUnion = EventStateError | any;
+export type EventStateErrorUnion = EventStateError | string;
 
 /**
  * Event failed with an error
  */
 export type EventFailed = {
-  error?: EventStateError | any | null | undefined;
+  error?: EventStateError | string | null | undefined;
 };
 
 export type EventState = {
@@ -1756,7 +1756,7 @@ export const EventViaEnum7$inboundSchema: z.ZodEnum<typeof EventViaEnum7> = z
 
 /** @internal */
 export const EventViaUnion7$inboundSchema: z.ZodType<EventViaUnion7, unknown> =
-  z.union([EventViaEnum7$inboundSchema, z.any()]);
+  z.union([EventViaEnum7$inboundSchema, z.string()]);
 
 export function eventViaUnion7FromJSON(
   jsonString: string,
@@ -1774,7 +1774,8 @@ export const EventActor7$inboundSchema: z.ZodType<EventActor7, unknown> = z
     email: z.nullable(z.string()).optional(),
     id: z.string(),
     kind: EventKind7$inboundSchema,
-    via: z.nullable(z.union([EventViaEnum7$inboundSchema, z.any()])).optional(),
+    via: z.nullable(z.union([EventViaEnum7$inboundSchema, z.string()]))
+      .optional(),
   });
 
 export function eventActor7FromJSON(
@@ -1791,7 +1792,7 @@ export function eventActor7FromJSON(
 export const EventActorUnion7$inboundSchema: z.ZodType<
   EventActorUnion7,
   unknown
-> = z.union([z.lazy(() => EventActor7$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => EventActor7$inboundSchema), z.string()]);
 
 export function eventActorUnion7FromJSON(
   jsonString: string,
@@ -1808,8 +1809,9 @@ export const EventDataDeploymentEnvironmentUpdated$inboundSchema: z.ZodType<
   EventDataDeploymentEnvironmentUpdated,
   unknown
 > = z.object({
-  actor: z.nullable(z.union([z.lazy(() => EventActor7$inboundSchema), z.any()]))
-    .optional(),
+  actor: z.nullable(
+    z.union([z.lazy(() => EventActor7$inboundSchema), z.string()]),
+  ).optional(),
   changedKeys: z.array(z.string()),
   deploymentId: z.string(),
   type: z.literal("DeploymentEnvironmentUpdated"),
@@ -1837,7 +1839,7 @@ export const EventViaEnum6$inboundSchema: z.ZodEnum<typeof EventViaEnum6> = z
 
 /** @internal */
 export const EventViaUnion6$inboundSchema: z.ZodType<EventViaUnion6, unknown> =
-  z.union([EventViaEnum6$inboundSchema, z.any()]);
+  z.union([EventViaEnum6$inboundSchema, z.string()]);
 
 export function eventViaUnion6FromJSON(
   jsonString: string,
@@ -1855,7 +1857,8 @@ export const EventActor6$inboundSchema: z.ZodType<EventActor6, unknown> = z
     email: z.nullable(z.string()).optional(),
     id: z.string(),
     kind: EventKind6$inboundSchema,
-    via: z.nullable(z.union([EventViaEnum6$inboundSchema, z.any()])).optional(),
+    via: z.nullable(z.union([EventViaEnum6$inboundSchema, z.string()]))
+      .optional(),
   });
 
 export function eventActor6FromJSON(
@@ -1872,7 +1875,7 @@ export function eventActor6FromJSON(
 export const EventActorUnion6$inboundSchema: z.ZodType<
   EventActorUnion6,
   unknown
-> = z.union([z.lazy(() => EventActor6$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => EventActor6$inboundSchema), z.string()]);
 
 export function eventActorUnion6FromJSON(
   jsonString: string,
@@ -1889,8 +1892,9 @@ export const EventDataDeploymentReleaseUnpinned$inboundSchema: z.ZodType<
   EventDataDeploymentReleaseUnpinned,
   unknown
 > = z.object({
-  actor: z.nullable(z.union([z.lazy(() => EventActor6$inboundSchema), z.any()]))
-    .optional(),
+  actor: z.nullable(
+    z.union([z.lazy(() => EventActor6$inboundSchema), z.string()]),
+  ).optional(),
   deploymentId: z.string(),
   previousPinnedReleaseId: z.string(),
   type: z.literal("DeploymentReleaseUnpinned"),
@@ -1918,7 +1922,7 @@ export const EventViaEnum5$inboundSchema: z.ZodEnum<typeof EventViaEnum5> = z
 
 /** @internal */
 export const EventViaUnion5$inboundSchema: z.ZodType<EventViaUnion5, unknown> =
-  z.union([EventViaEnum5$inboundSchema, z.any()]);
+  z.union([EventViaEnum5$inboundSchema, z.string()]);
 
 export function eventViaUnion5FromJSON(
   jsonString: string,
@@ -1936,7 +1940,8 @@ export const EventActor5$inboundSchema: z.ZodType<EventActor5, unknown> = z
     email: z.nullable(z.string()).optional(),
     id: z.string(),
     kind: EventKind5$inboundSchema,
-    via: z.nullable(z.union([EventViaEnum5$inboundSchema, z.any()])).optional(),
+    via: z.nullable(z.union([EventViaEnum5$inboundSchema, z.string()]))
+      .optional(),
   });
 
 export function eventActor5FromJSON(
@@ -1953,7 +1958,7 @@ export function eventActor5FromJSON(
 export const EventActorUnion5$inboundSchema: z.ZodType<
   EventActorUnion5,
   unknown
-> = z.union([z.lazy(() => EventActor5$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => EventActor5$inboundSchema), z.string()]);
 
 export function eventActorUnion5FromJSON(
   jsonString: string,
@@ -1970,8 +1975,9 @@ export const EventDataDeploymentReleasePinned$inboundSchema: z.ZodType<
   EventDataDeploymentReleasePinned,
   unknown
 > = z.object({
-  actor: z.nullable(z.union([z.lazy(() => EventActor5$inboundSchema), z.any()]))
-    .optional(),
+  actor: z.nullable(
+    z.union([z.lazy(() => EventActor5$inboundSchema), z.string()]),
+  ).optional(),
   deploymentId: z.string(),
   pinnedReleaseId: z.string(),
   previousPinnedReleaseId: z.nullable(z.string()).optional(),
@@ -1999,7 +2005,7 @@ export const EventViaEnum4$inboundSchema: z.ZodEnum<typeof EventViaEnum4> = z
 
 /** @internal */
 export const EventViaUnion4$inboundSchema: z.ZodType<EventViaUnion4, unknown> =
-  z.union([EventViaEnum4$inboundSchema, z.any()]);
+  z.union([EventViaEnum4$inboundSchema, z.string()]);
 
 export function eventViaUnion4FromJSON(
   jsonString: string,
@@ -2017,7 +2023,8 @@ export const EventActor4$inboundSchema: z.ZodType<EventActor4, unknown> = z
     email: z.nullable(z.string()).optional(),
     id: z.string(),
     kind: EventKind4$inboundSchema,
-    via: z.nullable(z.union([EventViaEnum4$inboundSchema, z.any()])).optional(),
+    via: z.nullable(z.union([EventViaEnum4$inboundSchema, z.string()]))
+      .optional(),
   });
 
 export function eventActor4FromJSON(
@@ -2034,7 +2041,7 @@ export function eventActor4FromJSON(
 export const EventActorUnion4$inboundSchema: z.ZodType<
   EventActorUnion4,
   unknown
-> = z.union([z.lazy(() => EventActor4$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => EventActor4$inboundSchema), z.string()]);
 
 export function eventActorUnion4FromJSON(
   jsonString: string,
@@ -2051,8 +2058,9 @@ export const EventDataDeploymentRedeployRequested$inboundSchema: z.ZodType<
   EventDataDeploymentRedeployRequested,
   unknown
 > = z.object({
-  actor: z.nullable(z.union([z.lazy(() => EventActor4$inboundSchema), z.any()]))
-    .optional(),
+  actor: z.nullable(
+    z.union([z.lazy(() => EventActor4$inboundSchema), z.string()]),
+  ).optional(),
   deploymentId: z.string(),
   releaseId: z.string(),
   type: z.literal("DeploymentRedeployRequested"),
@@ -2080,7 +2088,7 @@ export const EventViaEnum3$inboundSchema: z.ZodEnum<typeof EventViaEnum3> = z
 
 /** @internal */
 export const EventViaUnion3$inboundSchema: z.ZodType<EventViaUnion3, unknown> =
-  z.union([EventViaEnum3$inboundSchema, z.any()]);
+  z.union([EventViaEnum3$inboundSchema, z.string()]);
 
 export function eventViaUnion3FromJSON(
   jsonString: string,
@@ -2098,7 +2106,8 @@ export const EventActor3$inboundSchema: z.ZodType<EventActor3, unknown> = z
     email: z.nullable(z.string()).optional(),
     id: z.string(),
     kind: EventKind3$inboundSchema,
-    via: z.nullable(z.union([EventViaEnum3$inboundSchema, z.any()])).optional(),
+    via: z.nullable(z.union([EventViaEnum3$inboundSchema, z.string()]))
+      .optional(),
   });
 
 export function eventActor3FromJSON(
@@ -2115,7 +2124,7 @@ export function eventActor3FromJSON(
 export const EventActorUnion3$inboundSchema: z.ZodType<
   EventActorUnion3,
   unknown
-> = z.union([z.lazy(() => EventActor3$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => EventActor3$inboundSchema), z.string()]);
 
 export function eventActorUnion3FromJSON(
   jsonString: string,
@@ -2156,7 +2165,7 @@ export function eventPreviousErrorFromJSON(
 export const EventPreviousErrorUnion$inboundSchema: z.ZodType<
   EventPreviousErrorUnion,
   unknown
-> = z.union([z.lazy(() => EventPreviousError$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => EventPreviousError$inboundSchema), z.string()]);
 
 export function eventPreviousErrorUnionFromJSON(
   jsonString: string,
@@ -2173,12 +2182,13 @@ export const EventDataDeploymentRetryRequested$inboundSchema: z.ZodType<
   EventDataDeploymentRetryRequested,
   unknown
 > = z.object({
-  actor: z.nullable(z.union([z.lazy(() => EventActor3$inboundSchema), z.any()]))
-    .optional(),
+  actor: z.nullable(
+    z.union([z.lazy(() => EventActor3$inboundSchema), z.string()]),
+  ).optional(),
   attemptedReleaseId: z.nullable(z.string()).optional(),
   deploymentId: z.string(),
   previousError: z.nullable(
-    z.union([z.lazy(() => EventPreviousError$inboundSchema), z.any()]),
+    z.union([z.lazy(() => EventPreviousError$inboundSchema), z.string()]),
   ).optional(),
   type: z.literal("DeploymentRetryRequested"),
 });
@@ -2204,7 +2214,7 @@ export const EventViaEnum2$inboundSchema: z.ZodEnum<typeof EventViaEnum2> = z
 
 /** @internal */
 export const EventViaUnion2$inboundSchema: z.ZodType<EventViaUnion2, unknown> =
-  z.union([EventViaEnum2$inboundSchema, z.any()]);
+  z.union([EventViaEnum2$inboundSchema, z.string()]);
 
 export function eventViaUnion2FromJSON(
   jsonString: string,
@@ -2222,7 +2232,8 @@ export const EventActor2$inboundSchema: z.ZodType<EventActor2, unknown> = z
     email: z.nullable(z.string()).optional(),
     id: z.string(),
     kind: EventKind2$inboundSchema,
-    via: z.nullable(z.union([EventViaEnum2$inboundSchema, z.any()])).optional(),
+    via: z.nullable(z.union([EventViaEnum2$inboundSchema, z.string()]))
+      .optional(),
   });
 
 export function eventActor2FromJSON(
@@ -2239,7 +2250,7 @@ export function eventActor2FromJSON(
 export const EventActorUnion2$inboundSchema: z.ZodType<
   EventActorUnion2,
   unknown
-> = z.union([z.lazy(() => EventActor2$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => EventActor2$inboundSchema), z.string()]);
 
 export function eventActorUnion2FromJSON(
   jsonString: string,
@@ -2256,8 +2267,9 @@ export const EventDataDeploymentReleaseChannelChanged$inboundSchema: z.ZodType<
   EventDataDeploymentReleaseChannelChanged,
   unknown
 > = z.object({
-  actor: z.nullable(z.union([z.lazy(() => EventActor2$inboundSchema), z.any()]))
-    .optional(),
+  actor: z.nullable(
+    z.union([z.lazy(() => EventActor2$inboundSchema), z.string()]),
+  ).optional(),
   channel: z.string(),
   deploymentId: z.string(),
   previousChannel: z.string(),
@@ -2291,7 +2303,7 @@ export const EventViaEnum1$inboundSchema: z.ZodEnum<typeof EventViaEnum1> = z
 
 /** @internal */
 export const EventViaUnion1$inboundSchema: z.ZodType<EventViaUnion1, unknown> =
-  z.union([EventViaEnum1$inboundSchema, z.any()]);
+  z.union([EventViaEnum1$inboundSchema, z.string()]);
 
 export function eventViaUnion1FromJSON(
   jsonString: string,
@@ -2309,7 +2321,8 @@ export const EventActor1$inboundSchema: z.ZodType<EventActor1, unknown> = z
     email: z.nullable(z.string()).optional(),
     id: z.string(),
     kind: EventKind1$inboundSchema,
-    via: z.nullable(z.union([EventViaEnum1$inboundSchema, z.any()])).optional(),
+    via: z.nullable(z.union([EventViaEnum1$inboundSchema, z.string()]))
+      .optional(),
   });
 
 export function eventActor1FromJSON(
@@ -2326,7 +2339,7 @@ export function eventActor1FromJSON(
 export const EventActorUnion1$inboundSchema: z.ZodType<
   EventActorUnion1,
   unknown
-> = z.union([z.lazy(() => EventActor1$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => EventActor1$inboundSchema), z.string()]);
 
 export function eventActorUnion1FromJSON(
   jsonString: string,
@@ -2343,8 +2356,9 @@ export const EventDataReleaseChannelUpdated$inboundSchema: z.ZodType<
   EventDataReleaseChannelUpdated,
   unknown
 > = z.object({
-  actor: z.nullable(z.union([z.lazy(() => EventActor1$inboundSchema), z.any()]))
-    .optional(),
+  actor: z.nullable(
+    z.union([z.lazy(() => EventActor1$inboundSchema), z.string()]),
+  ).optional(),
   channel: z.string(),
   previousReleaseId: z.nullable(z.string()).optional(),
   releaseId: z.string(),
@@ -2936,7 +2950,7 @@ export const EventControllerPlatformEnum$inboundSchema: z.ZodEnum<
 export const EventControllerPlatformUnion$inboundSchema: z.ZodType<
   EventControllerPlatformUnion,
   unknown
-> = z.union([EventControllerPlatformEnum$inboundSchema, z.any()]);
+> = z.union([EventControllerPlatformEnum$inboundSchema, z.string()]);
 
 export function eventControllerPlatformUnionFromJSON(
   jsonString: string,
@@ -2996,7 +3010,7 @@ export function eventErrorNextStateFromJSON(
 export const EventNextStateErrorUnion$inboundSchema: z.ZodType<
   EventNextStateErrorUnion,
   unknown
-> = z.union([z.lazy(() => EventErrorNextState$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => EventErrorNextState$inboundSchema), z.string()]);
 
 export function eventNextStateErrorUnionFromJSON(
   jsonString: string,
@@ -3017,7 +3031,7 @@ export const EventLifecycleEnum$inboundSchema: z.ZodEnum<
 export const EventLifecycleUnion$inboundSchema: z.ZodType<
   EventLifecycleUnion,
   unknown
-> = z.union([EventLifecycleEnum$inboundSchema, z.any()]);
+> = z.union([EventLifecycleEnum$inboundSchema, z.string()]);
 
 export function eventLifecycleUnionFromJSON(
   jsonString: string,
@@ -3053,7 +3067,7 @@ export function eventOutputsFromJSON(
 export const EventOutputsUnion$inboundSchema: z.ZodType<
   EventOutputsUnion,
   unknown
-> = z.union([z.lazy(() => EventOutputs$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => EventOutputs$inboundSchema), z.string()]);
 
 export function eventOutputsUnionFromJSON(
   jsonString: string,
@@ -3092,7 +3106,7 @@ export function eventPreviousConfigFromJSON(
 export const EventPreviousConfigUnion$inboundSchema: z.ZodType<
   EventPreviousConfigUnion,
   unknown
-> = z.union([z.lazy(() => EventPreviousConfig$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => EventPreviousConfig$inboundSchema), z.string()]);
 
 export function eventPreviousConfigUnionFromJSON(
   jsonString: string,
@@ -3115,21 +3129,22 @@ export const EventResources$inboundSchema: z.ZodType<EventResources, unknown> =
     _internal: z.nullable(z.any()).optional(),
     config: z.lazy(() => EventConfig$inboundSchema),
     controllerPlatform: z.nullable(
-      z.union([EventControllerPlatformEnum$inboundSchema, z.any()]),
+      z.union([EventControllerPlatformEnum$inboundSchema, z.string()]),
     ).optional(),
     dependencies: z.array(z.lazy(() => EventDependency$inboundSchema))
       .optional(),
     error: z.nullable(
-      z.union([z.lazy(() => EventErrorNextState$inboundSchema), z.any()]),
+      z.union([z.lazy(() => EventErrorNextState$inboundSchema), z.string()]),
     ).optional(),
     lastFailedState: z.nullable(z.any()).optional(),
-    lifecycle: z.nullable(z.union([EventLifecycleEnum$inboundSchema, z.any()]))
-      .optional(),
+    lifecycle: z.nullable(
+      z.union([EventLifecycleEnum$inboundSchema, z.string()]),
+    ).optional(),
     outputs: z.nullable(
-      z.union([z.lazy(() => EventOutputs$inboundSchema), z.any()]),
+      z.union([z.lazy(() => EventOutputs$inboundSchema), z.string()]),
     ).optional(),
     previousConfig: z.nullable(
-      z.union([z.lazy(() => EventPreviousConfig$inboundSchema), z.any()]),
+      z.union([z.lazy(() => EventPreviousConfig$inboundSchema), z.string()]),
     ).optional(),
     remoteBindingParams: z.nullable(z.any()).optional(),
     retryAttempt: z.int().optional(),
@@ -3293,7 +3308,7 @@ export function eventProgressFromJSON(
 export const EventProgressUnion$inboundSchema: z.ZodType<
   EventProgressUnion,
   unknown
-> = z.union([z.lazy(() => EventProgress$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => EventProgress$inboundSchema), z.string()]);
 
 export function eventProgressUnionFromJSON(
   jsonString: string,
@@ -3312,7 +3327,7 @@ export const EventDataPushingImage$inboundSchema: z.ZodType<
 > = z.object({
   image: z.string(),
   progress: z.nullable(
-    z.union([z.lazy(() => EventProgress$inboundSchema), z.any()]),
+    z.union([z.lazy(() => EventProgress$inboundSchema), z.string()]),
   ).optional(),
   type: z.literal("PushingImage"),
 });
@@ -3566,7 +3581,7 @@ export function eventStateErrorFromJSON(
 export const EventStateErrorUnion$inboundSchema: z.ZodType<
   EventStateErrorUnion,
   unknown
-> = z.union([z.lazy(() => EventStateError$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => EventStateError$inboundSchema), z.string()]);
 
 export function eventStateErrorUnionFromJSON(
   jsonString: string,
@@ -3582,7 +3597,7 @@ export function eventStateErrorUnionFromJSON(
 export const EventFailed$inboundSchema: z.ZodType<EventFailed, unknown> = z
   .object({
     error: z.nullable(
-      z.union([z.lazy(() => EventStateError$inboundSchema), z.any()]),
+      z.union([z.lazy(() => EventStateError$inboundSchema), z.string()]),
     ).optional(),
   });
 

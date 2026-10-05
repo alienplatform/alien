@@ -703,7 +703,7 @@ pub async fn sync_secrets_to_vault(
 /// safe to run from a control plane that must never see the customer's secret.
 ///
 /// Returns one report per slot with where the deployer writes it. A deployment
-/// with slots but no secrets vault fails fast: the slots have nowhere to live.
+/// without a secrets vault keeps its pre-vault delivery until setup adds one.
 pub async fn check_deployer_secrets(
     stack: &Stack,
     stack_state: &StackState,
@@ -721,19 +721,22 @@ pub async fn check_deployer_secrets(
         return Ok(Vec::new());
     }
 
-    let binding = stack_state
-        .resources
-        .get(SECRETS_VAULT_ID)
-        .and_then(|vault| vault.remote_binding_params.clone())
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::MissingConfiguration {
-                message: format!(
-                    "Stack input '{}' is a deployer secret, which lives in the deployment's \
+    // A deployment installed before its stack had a `secrets` vault has
+    // nowhere to hold a slot yet. Its workloads keep the values they were
+    // installed with until setup adds the vault, so there is nothing to
+    // report, and its refreshes must not fail on that.
+    let Some(vault) = stack_state.resources.get(SECRETS_VAULT_ID) else {
+        return Ok(Vec::new());
+    };
+    let binding = vault.remote_binding_params.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::MissingConfiguration {
+            message: format!(
+                "Stack input '{}' is a deployer secret, which lives in the deployment's \
                      '{SECRETS_VAULT_ID}' vault, but that vault has no binding yet",
-                    slots[0].input.id
-                ),
-            })
-        })?;
+                slots[0].input.id
+            ),
+        })
+    })?;
     let binding: VaultBinding =
         serde_json::from_value(binding)
             .into_alien_error()
@@ -864,24 +867,24 @@ pub async fn delete_deployment_vault_secrets(
         return Ok(false);
     }
 
+    // Secrets reach the vault only through its binding, which exists once the vault is
+    // provisioned. A vault that never got that far (a deployment whose setup failed with the
+    // vault still queued) holds nothing to delete, and loading it would fail the deletion.
+    if !secrets_vault_is_addressable(stack_state) {
+        runtime_metadata.last_synced_env_vars_hash = None;
+        runtime_metadata.last_synced_secret_names.clear();
+        return Ok(false);
+    }
+
     let mut owned_names = runtime_metadata
         .last_synced_secret_names
         .iter()
         .cloned()
         .chain(desired_vault_secrets(stack, client_config.platform(), config).into_keys())
         .collect::<Vec<_>>();
-    if !has_secrets_vault(stack_state) && owned_names.is_empty() {
-        runtime_metadata.last_synced_env_vars_hash = None;
-        runtime_metadata.last_synced_secret_names.clear();
-        return Ok(false);
-    }
     owned_names.push(ENV_ALIEN_COMMANDS_TOKEN.to_string());
     owned_names.sort();
     owned_names.dedup();
-
-    if owned_names.is_empty() {
-        return Ok(false);
-    }
 
     let provider = BindingsProvider::from_stack_state(stack_state, client_config.clone()).context(
         ErrorData::InternalError {
@@ -920,6 +923,15 @@ fn has_secrets_vault(stack_state: &StackState) -> bool {
         .resources
         .get("secrets")
         .is_some_and(|resource| resource.resource_type == Vault::RESOURCE_TYPE.as_ref())
+}
+
+/// Whether the `secrets` vault exists and has the binding the bindings provider loads it by.
+fn secrets_vault_is_addressable(stack_state: &StackState) -> bool {
+    has_secrets_vault(stack_state)
+        && stack_state
+            .resources
+            .get("secrets")
+            .is_some_and(|resource| resource.remote_binding_params.is_some())
 }
 
 fn desired_vault_secrets(
@@ -1255,7 +1267,7 @@ mod tests {
         .unwrap()];
         let mut config = make_config(make_snapshot(&[], &[]));
         config.stored_secret_input_ids = vec!["apiKey".to_string()];
-        let state = StackState::new(Platform::Test);
+        let mut state = StackState::new(Platform::Test);
         let reports =
             check_deployer_secrets(&stack, &state, &ClientConfig::Test, &config, Platform::Test)
                 .await
@@ -1284,6 +1296,22 @@ mod tests {
         )
         .is_empty());
         config.stored_secret_input_ids.clear();
+        assert!(
+            check_deployer_secrets(&stack, &state, &ClientConfig::Test, &config, Platform::Test)
+                .await
+                .unwrap()
+                .is_empty(),
+            "pre-vault deployments can still refresh"
+        );
+        state.resources.insert(
+            SECRETS_VAULT_ID.to_string(),
+            StackResourceState::new_pending(
+                Vault::RESOURCE_TYPE.to_string(),
+                Resource::new(Vault::new(SECRETS_VAULT_ID.to_string()).build()),
+                Some(ResourceLifecycle::Frozen),
+                Vec::new(),
+            ),
+        );
         assert!(check_deployer_secrets(
             &stack,
             &state,
@@ -2182,6 +2210,51 @@ mod tests {
         .await
         .expect("already-clean token-only sync is idempotent"));
         assert!(vault.get_secret(ENV_ALIEN_COMMANDS_TOKEN).await.is_err());
+    }
+
+    /// A deployment whose setup failed before the vault was created still has to delete: its
+    /// `secrets` vault is queued with no binding, so nothing was ever written to it.
+    #[tokio::test]
+    async fn deployment_deletion_skips_a_secrets_vault_that_was_never_provisioned() {
+        let mut stack_state = StackState::new(Platform::Test);
+        stack_state.resources.insert(
+            "secrets".to_string(),
+            StackResourceState::new_pending(
+                Vault::RESOURCE_TYPE.to_string(),
+                Resource::new(Vault::new("secrets".to_string()).build()),
+                Some(ResourceLifecycle::Frozen),
+                Vec::new(),
+            ),
+        );
+        assert_eq!(
+            stack_state.resources["secrets"].status,
+            ResourceStatus::Pending
+        );
+        assert!(stack_state.resources["secrets"].outputs.is_none());
+
+        let config = make_config(make_snapshot(&[], &[("API_TOKEN", "secret")]));
+        let mut metadata = RuntimeMetadata {
+            last_synced_env_vars_hash: Some("previous-sync".to_string()),
+            last_synced_secret_names: vec!["API_TOKEN".to_string()],
+            ..RuntimeMetadata::default()
+        };
+
+        let deleted = delete_deployment_vault_secrets(
+            &make_single_function_stack("worker"),
+            &stack_state,
+            &ClientConfig::Test,
+            &config,
+            &mut metadata,
+        )
+        .await
+        .expect("a never-provisioned vault must not block deployment deletion");
+
+        assert!(
+            !deleted,
+            "nothing was deleted from a vault that never existed"
+        );
+        assert!(metadata.last_synced_env_vars_hash.is_none());
+        assert!(metadata.last_synced_secret_names.is_empty());
     }
 
     #[tokio::test]

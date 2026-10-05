@@ -32,10 +32,11 @@ use alien_core::{
     AwsRemoteStackManagementImportData, AwsServiceAccountImportData, AwsStorageImportData,
     AzureEnvironmentInfo, AzureManagementConfig, AzureRemoteStackManagementImportData,
     ComputePoolSelection, ComputeSettings, DeploymentState, DeploymentStatus, EnvironmentInfo,
-    GcpEnvironmentInfo, GcpManagementConfig, GcpRemoteStackManagementImportData, KubernetesCluster,
-    KubernetesClusterOwnership, KubernetesClusterProvider, ManagementConfig, Network, Platform,
-    ReleaseInfo, RemoteStackManagement, ResourceLifecycle, ResourceStatus, RuntimeMetadata,
-    ServiceAccount, Stack, StackSettings, StackState, Storage, Worker, WorkerCode,
+    GcpEnvironmentInfo, GcpManagementConfig, GcpRemoteStackManagementImportData, HeartbeatsMode,
+    KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider, ManagementConfig,
+    Network, Platform, ReleaseInfo, RemoteStackManagement, ResourceLifecycle, ResourceStatus,
+    RuntimeMetadata, ServiceAccount, Stack, StackSettings, StackState, Storage, UpdatesMode,
+    Worker, WorkerCode,
 };
 use alien_manager::auth::Authz;
 use alien_manager::config::ManagerConfig;
@@ -1650,6 +1651,116 @@ async fn a_reimport_flipping_a_frozen_gate_answer_is_refused() {
         Some("FROZEN_GATE_ANSWER_CHANGED"),
         "body = {json:#}"
     );
+}
+
+/// Moves an imported deployment to `running` on the seeded release, the state a
+/// setup rerun registers against.
+async fn mark_imported_deployment_running(fixture: &Fixture, deployment_id: &str, stack: Stack) {
+    let imported = fixture
+        .deployment_store
+        .get_deployment(&alien_manager::auth::Subject::system(), deployment_id)
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    fixture
+        .deployment_store
+        .reconcile(
+            &alien_manager::auth::Subject::system(),
+            ReconcileData {
+                deployment_id: imported.id,
+                session: "test-reconcile".to_string(),
+                execution_claim: None,
+                state: DeploymentState {
+                    status: DeploymentStatus::Running,
+                    platform: imported.platform,
+                    current_release: Some(ReleaseInfo {
+                        release_id: fixture.release_id.clone(),
+                        version: None,
+                        description: None,
+                        stack,
+                    }),
+                    target_release: None,
+                    stack_state: imported.stack_state,
+                    error: None,
+                    environment_info: imported.environment_info,
+                    runtime_metadata: imported.runtime_metadata,
+                    retry_requested: false,
+                    protocol_version: imported.deployment_protocol_version,
+                },
+                update_heartbeat: false,
+                suggested_delay_ms: None,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                capabilities: vec![],
+                operator_version: None,
+                operations_report: None,
+            },
+        )
+        .await
+        .expect("deployment should reach a stable state before re-import");
+}
+
+/// Heartbeats decide management permission sets (`storage/heartbeat` here), which setup installs
+/// and a setup rerun cannot change. The registration must refuse the change itself, so the setup
+/// run fails and rolls back, instead of recording a target the update preflight then rejects.
+/// A setting that leaves management permissions alone still re-registers.
+#[tokio::test]
+async fn a_reimport_changing_management_permissions_through_settings_is_refused() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let installed = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    assert_eq!(installed.stack_settings.heartbeats, HeartbeatsMode::On);
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &installed).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+    let deployment_id = serde_json::from_value::<StackImportResponse>(json)
+        .unwrap()
+        .deployment_id;
+    mark_imported_deployment_running(&fixture, &deployment_id, stack_with_storage("assets")).await;
+    let before = fixture
+        .deployment_store
+        .get_deployment(&alien_manager::auth::Subject::system(), &deployment_id)
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    assert_eq!(before.status, "running");
+
+    let mut heartbeats_off = installed.clone();
+    heartbeats_off.stack_settings.heartbeats = HeartbeatsMode::Off;
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &heartbeats_off).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
+    assert_eq!(json["code"], "BAD_REQUEST", "body = {json:#}");
+    let message = json["message"].as_str().expect("error message");
+    assert!(
+        message.contains("Changing heartbeats after setup")
+            && message.contains("Management permissions configuration was modified"),
+        "{message}"
+    );
+    let after_refusal = fixture
+        .deployment_store
+        .get_deployment(&alien_manager::auth::Subject::system(), &deployment_id)
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    assert_eq!(after_refusal.status, "running", "no update was scheduled");
+    assert_eq!(
+        after_refusal.stack_settings, before.stack_settings,
+        "refused settings are not recorded"
+    );
+    assert_eq!(after_refusal.runtime_metadata, before.runtime_metadata);
+    assert_eq!(after_refusal.setup_metadata, before.setup_metadata);
+
+    let mut approval_required = installed.clone();
+    approval_required.stack_settings.updates = UpdatesMode::ApprovalRequired;
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &approval_required).await;
+    assert_eq!(status, StatusCode::OK, "body = {json:#}");
+    let accepted = fixture
+        .deployment_store
+        .get_deployment(&alien_manager::auth::Subject::system(), &deployment_id)
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    let accepted_settings = accepted.stack_settings.expect("stack settings");
+    assert_eq!(accepted_settings.updates, UpdatesMode::ApprovalRequired);
+    assert_eq!(accepted_settings.heartbeats, HeartbeatsMode::On);
 }
 
 /// A release that introduces a brand-new frozen gate must not inherit a

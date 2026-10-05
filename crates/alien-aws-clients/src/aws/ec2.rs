@@ -172,6 +172,12 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
         request: DescribeAvailabilityZonesRequest,
     ) -> Result<DescribeAvailabilityZonesResponse>;
 
+    // Instance Type Operations
+    async fn describe_instance_type_offerings(
+        &self,
+        request: DescribeInstanceTypeOfferingsRequest,
+    ) -> Result<DescribeInstanceTypeOfferingsResponse>;
+
     // AMI Operations
     async fn describe_images(
         &self,
@@ -1448,6 +1454,42 @@ impl Ec2Api for Ec2Client {
 
         self.send_form(form_data, "DescribeAvailabilityZones", "AvailabilityZone")
             .await
+    }
+
+    // ---------------------------------------------------------------------------
+    // Instance Type Operations
+    // ---------------------------------------------------------------------------
+
+    async fn describe_instance_type_offerings(
+        &self,
+        request: DescribeInstanceTypeOfferingsRequest,
+    ) -> Result<DescribeInstanceTypeOfferingsResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert(
+            "Action".to_string(),
+            "DescribeInstanceTypeOfferings".to_string(),
+        );
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+
+        if let Some(location_type) = &request.location_type {
+            form_data.insert("LocationType".to_string(), location_type.clone());
+        }
+        if let Some(filters) = &request.filters {
+            Self::add_filters(&mut form_data, filters);
+        }
+        if let Some(max_results) = request.max_results {
+            form_data.insert("MaxResults".to_string(), max_results.to_string());
+        }
+        if let Some(next_token) = &request.next_token {
+            form_data.insert("NextToken".to_string(), next_token.clone());
+        }
+
+        self.send_form(
+            form_data,
+            "DescribeInstanceTypeOfferings",
+            "InstanceTypeOffering",
+        )
+        .await
     }
 
     // ---------------------------------------------------------------------------
@@ -3054,6 +3096,51 @@ pub struct AvailabilityZone {
 }
 
 // ---------------------------------------------------------------------------
+// Instance Type Offering Request/Response Types
+// ---------------------------------------------------------------------------
+
+/// Request to list where instance types are offered.
+#[derive(Debug, Clone, Serialize, Builder, Default)]
+pub struct DescribeInstanceTypeOfferingsRequest {
+    /// `region`, `availability-zone`, or `availability-zone-id`. AWS defaults to `region`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location_type: Option<String>,
+    /// Filters: `instance-type` and `location`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<Vec<Filter>>,
+    /// Page size (5-1000).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_results: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_token: Option<String>,
+}
+
+/// Response from listing instance type offerings.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DescribeInstanceTypeOfferingsResponse {
+    pub instance_type_offering_set: Option<InstanceTypeOfferingSet>,
+    pub next_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceTypeOfferingSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<InstanceTypeOffering>,
+}
+
+/// One instance type offered in one location.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceTypeOffering {
+    pub instance_type: Option<String>,
+    pub location_type: Option<String>,
+    /// Region, zone name, or zone ID, depending on `location_type`.
+    pub location: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // AMI Request/Response Types
 // ---------------------------------------------------------------------------
 
@@ -3959,6 +4046,37 @@ impl GetConsoleOutputResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Body returned by AWS for `--location-type availability-zone` filtered to t4g.micro in
+    /// us-east-1a and us-east-1e (us-east-1e does not offer the type, so it is absent).
+    #[test]
+    fn describe_instance_type_offerings_reads_zone_offerings() {
+        let response: DescribeInstanceTypeOfferingsResponse = quick_xml::de::from_str(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<DescribeInstanceTypeOfferingsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>92cf3d40-21c3-453f-8074-b44c6a3b6cf5</requestId><instanceTypeOfferingSet><item><instanceType>t4g.micro</instanceType><location>us-east-1a</location><locationType>availability-zone</locationType></item></instanceTypeOfferingSet><nextToken>page-2</nextToken></DescribeInstanceTypeOfferingsResponse>"#,
+        )
+        .expect("parses");
+        let offerings = response
+            .instance_type_offering_set
+            .expect("offering set")
+            .items;
+        assert_eq!(offerings.len(), 1);
+        assert_eq!(offerings[0].instance_type.as_deref(), Some("t4g.micro"));
+        assert_eq!(offerings[0].location.as_deref(), Some("us-east-1a"));
+        assert_eq!(
+            offerings[0].location_type.as_deref(),
+            Some("availability-zone")
+        );
+        assert_eq!(response.next_token.as_deref(), Some("page-2"));
+
+        let empty: DescribeInstanceTypeOfferingsResponse = quick_xml::de::from_str(
+            r#"<DescribeInstanceTypeOfferingsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>r</requestId><instanceTypeOfferingSet/></DescribeInstanceTypeOfferingsResponse>"#,
+        )
+        .expect("empty set parses");
+        assert!(empty
+            .instance_type_offering_set
+            .is_none_or(|set| set.items.is_empty()));
+    }
 
     /// A rule that names a prefix list carries no CIDR, so a reader that dropped the list would
     /// see an egress rule reaching nothing where one reaches a whole AWS service.

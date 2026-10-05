@@ -3,17 +3,42 @@
  */
 
 import * as z from "zod/v4";
+import { ClosedEnum } from "../types/enums.js";
+
+/**
+ * Binding kind the token resolves. Defaults to the deployment's own kind: sandbox for a sandbox deployment, data otherwise.
+ */
+export const GenerateManagerBindingTokenRequestKind = {
+  Data: "data",
+  Sandbox: "sandbox",
+} as const;
+/**
+ * Binding kind the token resolves. Defaults to the deployment's own kind: sandbox for a sandbox deployment, data otherwise.
+ */
+export type GenerateManagerBindingTokenRequestKind = ClosedEnum<
+  typeof GenerateManagerBindingTokenRequestKind
+>;
 
 export type GenerateManagerBindingTokenRequest = {
   /**
    * Unique identifier for the deployment.
    */
   deploymentId: string;
+  /**
+   * Binding kind the token resolves. Defaults to the deployment's own kind: sandbox for a sandbox deployment, data otherwise.
+   */
+  kind?: GenerateManagerBindingTokenRequestKind | undefined;
 };
+
+/** @internal */
+export const GenerateManagerBindingTokenRequestKind$outboundSchema: z.ZodEnum<
+  typeof GenerateManagerBindingTokenRequestKind
+> = z.enum(GenerateManagerBindingTokenRequestKind);
 
 /** @internal */
 export type GenerateManagerBindingTokenRequest$Outbound = {
   deploymentId: string;
+  kind?: string | undefined;
 };
 
 /** @internal */
@@ -22,6 +47,7 @@ export const GenerateManagerBindingTokenRequest$outboundSchema: z.ZodType<
   GenerateManagerBindingTokenRequest
 > = z.object({
   deploymentId: z.string(),
+  kind: GenerateManagerBindingTokenRequestKind$outboundSchema.optional(),
 });
 
 export function generateManagerBindingTokenRequestToJSON(

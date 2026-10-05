@@ -72,13 +72,19 @@ impl StackMutation for SecretsVaultMutation {
 
         // Vault-native deployer secrets live in this vault: the deployer
         // writes them there, and workloads read them from it.
-        let deployer_secrets_need_vault = !alien_core::deployer_secret_slots(
+        let deployer_secrets_need_vault = alien_core::deployer_secret_slots(
             &stack.inputs,
             &config.input_values,
             &config.stored_secret_input_ids,
             stack_state.platform,
         )
-        .is_empty();
+        .iter()
+        .any(|slot| {
+            !config
+                .input_values
+                .get(&slot.input.id)
+                .is_some_and(|value| !value.is_null())
+        });
 
         explicitly_configured
             || worker_needs_vault
@@ -327,8 +333,16 @@ fn deployer_secret_keys_by_profile(
         } else {
             continue;
         };
+        // Concrete pre-vault values retain their delivery until removed.
+        // Presence IDs alone never stand in for such a value.
         let keys: BTreeSet<String> = slots
             .iter()
+            .filter(|slot| {
+                !config
+                    .input_values
+                    .get(&slot.input.id)
+                    .is_some_and(|value| !value.is_null())
+            })
             .filter(|slot| {
                 slot.input
                     .env
@@ -586,6 +600,8 @@ fn add_vault_permissions_to_management(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compatibility::PermissionProfilesUnchangedCheck;
+    use crate::StackCompatibilityCheck;
     use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
     use alien_core::{
         Container, ContainerCode, EnvironmentVariablesSnapshot, ExternalBindings, Platform,
@@ -1071,8 +1087,30 @@ mod tests {
 
         input.platforms = None;
         input.provided_by = vec![StackInputProvider::Developer];
-        stack.inputs = vec![input];
+        stack.inputs = vec![input.clone()];
         assert!(!SecretsVaultMutation.should_run(&stack, &stack_state, &config));
+
+        // Only trusted input presence, not a coincident mapped variable, keeps
+        // a dual-provider developer answer off the vault path.
+        input.provided_by = vec![StackInputProvider::Developer, StackInputProvider::Deployer];
+        input.env = vec![StackInputEnvironmentMapping {
+            name: "DATABASE_PASSWORD".to_string(),
+            target_resources: None,
+            var_type: None,
+        }];
+        stack.inputs = vec![input];
+        assert!(SecretsVaultMutation.should_run(&stack, &stack_state, &config));
+        let mut delivered = config.clone();
+        delivered.environment_variables.variables = vec![alien_core::EnvironmentVariable {
+            name: "DATABASE_PASSWORD".to_string(),
+            value: "developer-value".to_string(),
+            var_type: alien_core::EnvironmentVariableType::Secret,
+            target_resources: None,
+        }];
+        // A mapped variable alone is not authoritative stored-input presence.
+        assert!(SecretsVaultMutation.should_run(&stack, &stack_state, &delivered));
+        delivered.stored_secret_input_ids = vec![stack.inputs[0].id.clone()];
+        assert!(!SecretsVaultMutation.should_run(&stack, &stack_state, &delivered));
     }
 
     #[test]
@@ -1174,10 +1212,29 @@ mod tests {
             .input_values
             .insert("apiKey".to_string(), serde_json::Value::Null);
         config.stored_secret_input_ids = vec!["unrelated".to_string()];
-        assert!(SecretsVaultMutation
+        config
+            .environment_variables
+            .variables
+            .push(alien_core::EnvironmentVariable {
+                name: "API_KEY".to_string(),
+                value: "generic-mapped-value".to_string(),
+                var_type: alien_core::EnvironmentVariableType::Secret,
+                target_resources: None,
+            });
+        assert!(
+            SecretsVaultMutation
+                .mutate(dual.clone(), &StackState::new(Platform::Gcp), &config)
+                .await
+                .is_err(),
+            "mapped environment names must not bypass workload identity validation"
+        );
+        config.stored_secret_input_ids = vec!["apiKey".to_string()];
+        let prepared = SecretsVaultMutation
             .mutate(dual, &StackState::new(Platform::Gcp), &config)
             .await
-            .is_err());
+            .unwrap();
+        assert!(prepared.permissions.profiles.is_empty());
+        assert_eq!(config.input_values["apiKey"], serde_json::Value::Null);
     }
 
     #[tokio::test]
@@ -1653,6 +1710,50 @@ mod tests {
             .await
             .unwrap();
         assert!(deployer_secrets_read_set(&result, "shared").is_some());
+    }
+
+    /// A deployment installed before deployer secrets were vault-native still
+    /// delivers the value it stored, so its workload's setup-owned profile
+    /// must not gain a vault read grant on the next update: the profile
+    /// compatibility check would refuse that update until setup reran. Once
+    /// the stored value is gone the slot is read from the vault and granted.
+    #[tokio::test]
+    async fn a_slot_with_a_stored_value_is_not_granted_until_it_is_vault_native() {
+        let state = StackState::new(Platform::Aws);
+        let stack = deployer_secret_stack(&[("api", "api-profile")], &["api"]);
+        let mut legacy = deployer_secret_config();
+        legacy.input_values.insert(
+            "apiKey".to_string(),
+            serde_json::json!("stored-before-slots"),
+        );
+
+        let updated = SecretsVaultMutation
+            .mutate(stack.clone(), &state, &legacy)
+            .await
+            .expect("a stored deployer secret value prepares");
+        assert!(deployer_secrets_read_set(&updated, "api-profile").is_none());
+        assert_eq!(
+            updated.permissions.profiles["api-profile"], stack.permissions.profiles["api-profile"],
+            "the profile must stay as the earlier release installed it"
+        );
+        let compatibility = PermissionProfilesUnchangedCheck
+            .check_with_config(&stack, &updated, &legacy)
+            .await
+            .expect("check runs");
+        assert!(
+            !compatibility
+                .errors
+                .iter()
+                .any(|error| error.contains("api-profile")),
+            "{:?}",
+            compatibility.errors
+        );
+
+        let vault_native = SecretsVaultMutation
+            .mutate(stack, &state, &deployer_secret_config())
+            .await
+            .expect("an empty slot prepares");
+        assert!(deployer_secrets_read_set(&vault_native, "api-profile").is_some());
     }
 
     #[tokio::test]

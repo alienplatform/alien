@@ -888,6 +888,14 @@ export type DeploymentRuntimeMetadata = {
    * touching unrelated values in the same vault.
    */
   lastSyncedSecretNames?: Array<string> | undefined;
+  /**
+   * Release `pending_prepared_stack` was prepared from. The target can move
+   *
+   * @remarks
+   * to a newer release while that stack is still being applied; this tells
+   * the update which release actually converged.
+   */
+  pendingPreparedReleaseId?: string | null | undefined;
   pendingPreparedStack?: DeploymentPendingPreparedStackUnion | null | undefined;
   /**
    * Canonical resolved answers for inputs that gate Frozen resources,
@@ -2293,6 +2301,7 @@ export const DeploymentRuntimeMetadata$inboundSchema: z.ZodType<
     .optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
   lastSyncedSecretNames: z.array(z.string()).optional(),
+  pendingPreparedReleaseId: z.nullable(z.string()).optional(),
   pendingPreparedStack: z.nullable(
     DeploymentPendingPreparedStackUnion$inboundSchema,
   ).optional(),

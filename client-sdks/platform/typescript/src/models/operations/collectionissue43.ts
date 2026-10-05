@@ -213,25 +213,25 @@ export type InvolvedObject10 = {
   uid?: string | null | undefined;
 };
 
-export type InvolvedObjectUnion10 = InvolvedObject10 | any;
+export type InvolvedObjectUnion10 = InvolvedObject10 | string;
 
 export type SourceEvent10 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion10 = SourceEvent10 | any;
+export type SourceUnion10 = SourceEvent10 | string;
 
 export type Event13 = {
   count?: number | null | undefined;
   eventTime?: Date | null | undefined;
   firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject10 | any | null | undefined;
+  involvedObject?: InvolvedObject10 | string | null | undefined;
   lastTimestamp?: Date | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent10 | any | null | undefined;
+  source?: SourceEvent10 | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -1831,7 +1831,7 @@ export function involvedObject10FromJSON(
 export const InvolvedObjectUnion10$inboundSchema: z.ZodType<
   InvolvedObjectUnion10,
   unknown
-> = z.union([z.lazy(() => InvolvedObject10$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => InvolvedObject10$inboundSchema), z.string()]);
 
 export function involvedObjectUnion10FromJSON(
   jsonString: string,
@@ -1862,7 +1862,7 @@ export function sourceEvent10FromJSON(
 
 /** @internal */
 export const SourceUnion10$inboundSchema: z.ZodType<SourceUnion10, unknown> = z
-  .union([z.lazy(() => SourceEvent10$inboundSchema), z.any()]);
+  .union([z.lazy(() => SourceEvent10$inboundSchema), z.string()]);
 
 export function sourceUnion10FromJSON(
   jsonString: string,
@@ -1884,7 +1884,7 @@ export const Event13$inboundSchema: z.ZodType<Event13, unknown> = z.object({
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),
   involvedObject: z.nullable(
-    z.union([z.lazy(() => InvolvedObject10$inboundSchema), z.any()]),
+    z.union([z.lazy(() => InvolvedObject10$inboundSchema), z.string()]),
   ).optional(),
   lastTimestamp: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
@@ -1893,7 +1893,7 @@ export const Event13$inboundSchema: z.ZodType<Event13, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([z.lazy(() => SourceEvent10$inboundSchema), z.any()]),
+    z.union([z.lazy(() => SourceEvent10$inboundSchema), z.string()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });

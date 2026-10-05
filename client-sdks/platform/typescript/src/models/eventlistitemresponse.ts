@@ -53,7 +53,7 @@ export type EventListItemResponseViaEnum7 = ClosedEnum<
 
 export type EventListItemResponseViaUnion7 =
   | EventListItemResponseViaEnum7
-  | any;
+  | string;
 
 /**
  * Authenticated principal that requested a deployment intent event.
@@ -71,15 +71,15 @@ export type EventListItemResponseActor7 = {
    * Type of authenticated principal that requested an event.
    */
   kind: EventListItemResponseKind7;
-  via?: EventListItemResponseViaEnum7 | any | null | undefined;
+  via?: EventListItemResponseViaEnum7 | string | null | undefined;
 };
 
 export type EventListItemResponseActorUnion7 =
   | EventListItemResponseActor7
-  | any;
+  | string;
 
 export type EventListItemResponseDataDeploymentEnvironmentUpdated = {
-  actor?: EventListItemResponseActor7 | any | null | undefined;
+  actor?: EventListItemResponseActor7 | string | null | undefined;
   /**
    * Names of the environment variables that changed (added, removed, or modified)
    */
@@ -120,7 +120,7 @@ export type EventListItemResponseViaEnum6 = ClosedEnum<
 
 export type EventListItemResponseViaUnion6 =
   | EventListItemResponseViaEnum6
-  | any;
+  | string;
 
 /**
  * Authenticated principal that requested a deployment intent event.
@@ -138,15 +138,15 @@ export type EventListItemResponseActor6 = {
    * Type of authenticated principal that requested an event.
    */
   kind: EventListItemResponseKind6;
-  via?: EventListItemResponseViaEnum6 | any | null | undefined;
+  via?: EventListItemResponseViaEnum6 | string | null | undefined;
 };
 
 export type EventListItemResponseActorUnion6 =
   | EventListItemResponseActor6
-  | any;
+  | string;
 
 export type EventListItemResponseDataDeploymentReleaseUnpinned = {
-  actor?: EventListItemResponseActor6 | any | null | undefined;
+  actor?: EventListItemResponseActor6 | string | null | undefined;
   /**
    * ID of the deployment
    */
@@ -187,7 +187,7 @@ export type EventListItemResponseViaEnum5 = ClosedEnum<
 
 export type EventListItemResponseViaUnion5 =
   | EventListItemResponseViaEnum5
-  | any;
+  | string;
 
 /**
  * Authenticated principal that requested a deployment intent event.
@@ -205,15 +205,15 @@ export type EventListItemResponseActor5 = {
    * Type of authenticated principal that requested an event.
    */
   kind: EventListItemResponseKind5;
-  via?: EventListItemResponseViaEnum5 | any | null | undefined;
+  via?: EventListItemResponseViaEnum5 | string | null | undefined;
 };
 
 export type EventListItemResponseActorUnion5 =
   | EventListItemResponseActor5
-  | any;
+  | string;
 
 export type EventListItemResponseDataDeploymentReleasePinned = {
-  actor?: EventListItemResponseActor5 | any | null | undefined;
+  actor?: EventListItemResponseActor5 | string | null | undefined;
   /**
    * ID of the deployment
    */
@@ -258,7 +258,7 @@ export type EventListItemResponseViaEnum4 = ClosedEnum<
 
 export type EventListItemResponseViaUnion4 =
   | EventListItemResponseViaEnum4
-  | any;
+  | string;
 
 /**
  * Authenticated principal that requested a deployment intent event.
@@ -276,15 +276,15 @@ export type EventListItemResponseActor4 = {
    * Type of authenticated principal that requested an event.
    */
   kind: EventListItemResponseKind4;
-  via?: EventListItemResponseViaEnum4 | any | null | undefined;
+  via?: EventListItemResponseViaEnum4 | string | null | undefined;
 };
 
 export type EventListItemResponseActorUnion4 =
   | EventListItemResponseActor4
-  | any;
+  | string;
 
 export type EventListItemResponseDataDeploymentRedeployRequested = {
-  actor?: EventListItemResponseActor4 | any | null | undefined;
+  actor?: EventListItemResponseActor4 | string | null | undefined;
   /**
    * ID of the deployment
    */
@@ -325,7 +325,7 @@ export type EventListItemResponseViaEnum3 = ClosedEnum<
 
 export type EventListItemResponseViaUnion3 =
   | EventListItemResponseViaEnum3
-  | any;
+  | string;
 
 /**
  * Authenticated principal that requested a deployment intent event.
@@ -343,12 +343,12 @@ export type EventListItemResponseActor3 = {
    * Type of authenticated principal that requested an event.
    */
   kind: EventListItemResponseKind3;
-  via?: EventListItemResponseViaEnum3 | any | null | undefined;
+  via?: EventListItemResponseViaEnum3 | string | null | undefined;
 };
 
 export type EventListItemResponseActorUnion3 =
   | EventListItemResponseActor3
-  | any;
+  | string;
 
 /**
  * Canonical error container that provides a structured way to represent errors
@@ -438,10 +438,10 @@ export type EventListItemResponsePreviousError = {
 
 export type EventListItemResponsePreviousErrorUnion =
   | EventListItemResponsePreviousError
-  | any;
+  | string;
 
 export type EventListItemResponseDataDeploymentRetryRequested = {
-  actor?: EventListItemResponseActor3 | any | null | undefined;
+  actor?: EventListItemResponseActor3 | string | null | undefined;
   /**
    * ID of the release that the failed attempt was targeting, if known
    */
@@ -450,7 +450,11 @@ export type EventListItemResponseDataDeploymentRetryRequested = {
    * ID of the deployment
    */
   deploymentId: string;
-  previousError?: EventListItemResponsePreviousError | any | null | undefined;
+  previousError?:
+    | EventListItemResponsePreviousError
+    | string
+    | null
+    | undefined;
   type: "DeploymentRetryRequested";
 };
 
@@ -483,7 +487,7 @@ export type EventListItemResponseViaEnum2 = ClosedEnum<
 
 export type EventListItemResponseViaUnion2 =
   | EventListItemResponseViaEnum2
-  | any;
+  | string;
 
 /**
  * Authenticated principal that requested a deployment intent event.
@@ -501,15 +505,15 @@ export type EventListItemResponseActor2 = {
    * Type of authenticated principal that requested an event.
    */
   kind: EventListItemResponseKind2;
-  via?: EventListItemResponseViaEnum2 | any | null | undefined;
+  via?: EventListItemResponseViaEnum2 | string | null | undefined;
 };
 
 export type EventListItemResponseActorUnion2 =
   | EventListItemResponseActor2
-  | any;
+  | string;
 
 export type EventListItemResponseDataDeploymentReleaseChannelChanged = {
-  actor?: EventListItemResponseActor2 | any | null | undefined;
+  actor?: EventListItemResponseActor2 | string | null | undefined;
   /**
    * Newly followed channel
    */
@@ -554,7 +558,7 @@ export type EventListItemResponseViaEnum1 = ClosedEnum<
 
 export type EventListItemResponseViaUnion1 =
   | EventListItemResponseViaEnum1
-  | any;
+  | string;
 
 /**
  * Authenticated principal that requested a deployment intent event.
@@ -572,15 +576,15 @@ export type EventListItemResponseActor1 = {
    * Type of authenticated principal that requested an event.
    */
   kind: EventListItemResponseKind1;
-  via?: EventListItemResponseViaEnum1 | any | null | undefined;
+  via?: EventListItemResponseViaEnum1 | string | null | undefined;
 };
 
 export type EventListItemResponseActorUnion1 =
   | EventListItemResponseActor1
-  | any;
+  | string;
 
 export type EventListItemResponseDataReleaseChannelUpdated = {
-  actor?: EventListItemResponseActor1 | any | null | undefined;
+  actor?: EventListItemResponseActor1 | string | null | undefined;
   /**
    * Name of the channel that moved
    */
@@ -1132,7 +1136,7 @@ export type EventListItemResponseControllerPlatformEnum = ClosedEnum<
 
 export type EventListItemResponseControllerPlatformUnion =
   | EventListItemResponseControllerPlatformEnum
-  | any;
+  | string;
 
 /**
  * Reference to a resource by its stable id and resource type.
@@ -1233,7 +1237,7 @@ export type EventListItemResponseErrorNextState = {
 
 export type EventListItemResponseNextStateErrorUnion =
   | EventListItemResponseErrorNextState
-  | any;
+  | string;
 
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -1251,7 +1255,7 @@ export type EventListItemResponseLifecycleEnum = ClosedEnum<
 
 export type EventListItemResponseLifecycleUnion =
   | EventListItemResponseLifecycleEnum
-  | any;
+  | string;
 
 /**
  * Resource outputs that can hold output data for any resource type in the Alien system. All resource outputs share a common 'type' field with additional type-specific output properties.
@@ -1266,7 +1270,7 @@ export type EventListItemResponseOutputs = {
 
 export type EventListItemResponseOutputsUnion =
   | EventListItemResponseOutputs
-  | any;
+  | string;
 
 /**
  * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
@@ -1285,7 +1289,7 @@ export type EventListItemResponsePreviousConfig = {
 
 export type EventListItemResponsePreviousConfigUnion =
   | EventListItemResponsePreviousConfig
-  | any;
+  | string;
 
 /**
  * Represents the high-level status of a resource during its lifecycle.
@@ -1328,7 +1332,7 @@ export type EventListItemResponseResources = {
   config: EventListItemResponseConfig;
   controllerPlatform?:
     | EventListItemResponseControllerPlatformEnum
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -1338,7 +1342,7 @@ export type EventListItemResponseResources = {
    * This preserves the full dependency information from the stack definition.
    */
   dependencies?: Array<EventListItemResponseDependency> | undefined;
-  error?: EventListItemResponseErrorNextState | any | null | undefined;
+  error?: EventListItemResponseErrorNextState | string | null | undefined;
   /**
    * Stores the controller state that failed, used for manual retry operations.
    *
@@ -1347,9 +1351,13 @@ export type EventListItemResponseResources = {
    * Stored as JSON to make the struct serializable and movable to alien-core.
    */
   lastFailedState?: any | null | undefined;
-  lifecycle?: EventListItemResponseLifecycleEnum | any | null | undefined;
-  outputs?: EventListItemResponseOutputs | any | null | undefined;
-  previousConfig?: EventListItemResponsePreviousConfig | any | null | undefined;
+  lifecycle?: EventListItemResponseLifecycleEnum | string | null | undefined;
+  outputs?: EventListItemResponseOutputs | string | null | undefined;
+  previousConfig?:
+    | EventListItemResponsePreviousConfig
+    | string
+    | null
+    | undefined;
   /**
    * Binding parameters for remote access.
    *
@@ -1479,14 +1487,14 @@ export type EventListItemResponseProgress = {
 
 export type EventListItemResponseProgressUnion =
   | EventListItemResponseProgress
-  | any;
+  | string;
 
 export type EventListItemResponseDataPushingImage = {
   /**
    * Name of the image being pushed
    */
   image: string;
-  progress?: EventListItemResponseProgress | any | null | undefined;
+  progress?: EventListItemResponseProgress | string | null | undefined;
   type: "PushingImage";
 };
 
@@ -1711,13 +1719,13 @@ export type EventListItemResponseStateError = {
 
 export type EventListItemResponseStateErrorUnion =
   | EventListItemResponseStateError
-  | any;
+  | string;
 
 /**
  * Event failed with an error
  */
 export type EventListItemResponseFailed = {
-  error?: EventListItemResponseStateError | any | null | undefined;
+  error?: EventListItemResponseStateError | string | null | undefined;
 };
 
 export type EventListItemResponseState = {
@@ -1861,7 +1869,7 @@ export const EventListItemResponseViaEnum7$inboundSchema: z.ZodEnum<
 export const EventListItemResponseViaUnion7$inboundSchema: z.ZodType<
   EventListItemResponseViaUnion7,
   unknown
-> = z.union([EventListItemResponseViaEnum7$inboundSchema, z.any()]);
+> = z.union([EventListItemResponseViaEnum7$inboundSchema, z.string()]);
 
 export function eventListItemResponseViaUnion7FromJSON(
   jsonString: string,
@@ -1882,7 +1890,7 @@ export const EventListItemResponseActor7$inboundSchema: z.ZodType<
   id: z.string(),
   kind: EventListItemResponseKind7$inboundSchema,
   via: z.nullable(
-    z.union([EventListItemResponseViaEnum7$inboundSchema, z.any()]),
+    z.union([EventListItemResponseViaEnum7$inboundSchema, z.string()]),
   ).optional(),
 });
 
@@ -1900,7 +1908,10 @@ export function eventListItemResponseActor7FromJSON(
 export const EventListItemResponseActorUnion7$inboundSchema: z.ZodType<
   EventListItemResponseActorUnion7,
   unknown
-> = z.union([z.lazy(() => EventListItemResponseActor7$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => EventListItemResponseActor7$inboundSchema),
+  z.string(),
+]);
 
 export function eventListItemResponseActorUnion7FromJSON(
   jsonString: string,
@@ -1919,7 +1930,7 @@ export const EventListItemResponseDataDeploymentEnvironmentUpdated$inboundSchema
       actor: z.nullable(
         z.union([
           z.lazy(() => EventListItemResponseActor7$inboundSchema),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
       changedKeys: z.array(z.string()),
@@ -1957,7 +1968,7 @@ export const EventListItemResponseViaEnum6$inboundSchema: z.ZodEnum<
 export const EventListItemResponseViaUnion6$inboundSchema: z.ZodType<
   EventListItemResponseViaUnion6,
   unknown
-> = z.union([EventListItemResponseViaEnum6$inboundSchema, z.any()]);
+> = z.union([EventListItemResponseViaEnum6$inboundSchema, z.string()]);
 
 export function eventListItemResponseViaUnion6FromJSON(
   jsonString: string,
@@ -1978,7 +1989,7 @@ export const EventListItemResponseActor6$inboundSchema: z.ZodType<
   id: z.string(),
   kind: EventListItemResponseKind6$inboundSchema,
   via: z.nullable(
-    z.union([EventListItemResponseViaEnum6$inboundSchema, z.any()]),
+    z.union([EventListItemResponseViaEnum6$inboundSchema, z.string()]),
   ).optional(),
 });
 
@@ -1996,7 +2007,10 @@ export function eventListItemResponseActor6FromJSON(
 export const EventListItemResponseActorUnion6$inboundSchema: z.ZodType<
   EventListItemResponseActorUnion6,
   unknown
-> = z.union([z.lazy(() => EventListItemResponseActor6$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => EventListItemResponseActor6$inboundSchema),
+  z.string(),
+]);
 
 export function eventListItemResponseActorUnion6FromJSON(
   jsonString: string,
@@ -2015,7 +2029,7 @@ export const EventListItemResponseDataDeploymentReleaseUnpinned$inboundSchema:
       actor: z.nullable(
         z.union([
           z.lazy(() => EventListItemResponseActor6$inboundSchema),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
       deploymentId: z.string(),
@@ -2053,7 +2067,7 @@ export const EventListItemResponseViaEnum5$inboundSchema: z.ZodEnum<
 export const EventListItemResponseViaUnion5$inboundSchema: z.ZodType<
   EventListItemResponseViaUnion5,
   unknown
-> = z.union([EventListItemResponseViaEnum5$inboundSchema, z.any()]);
+> = z.union([EventListItemResponseViaEnum5$inboundSchema, z.string()]);
 
 export function eventListItemResponseViaUnion5FromJSON(
   jsonString: string,
@@ -2074,7 +2088,7 @@ export const EventListItemResponseActor5$inboundSchema: z.ZodType<
   id: z.string(),
   kind: EventListItemResponseKind5$inboundSchema,
   via: z.nullable(
-    z.union([EventListItemResponseViaEnum5$inboundSchema, z.any()]),
+    z.union([EventListItemResponseViaEnum5$inboundSchema, z.string()]),
   ).optional(),
 });
 
@@ -2092,7 +2106,10 @@ export function eventListItemResponseActor5FromJSON(
 export const EventListItemResponseActorUnion5$inboundSchema: z.ZodType<
   EventListItemResponseActorUnion5,
   unknown
-> = z.union([z.lazy(() => EventListItemResponseActor5$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => EventListItemResponseActor5$inboundSchema),
+  z.string(),
+]);
 
 export function eventListItemResponseActorUnion5FromJSON(
   jsonString: string,
@@ -2111,7 +2128,7 @@ export const EventListItemResponseDataDeploymentReleasePinned$inboundSchema:
       actor: z.nullable(
         z.union([
           z.lazy(() => EventListItemResponseActor5$inboundSchema),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
       deploymentId: z.string(),
@@ -2150,7 +2167,7 @@ export const EventListItemResponseViaEnum4$inboundSchema: z.ZodEnum<
 export const EventListItemResponseViaUnion4$inboundSchema: z.ZodType<
   EventListItemResponseViaUnion4,
   unknown
-> = z.union([EventListItemResponseViaEnum4$inboundSchema, z.any()]);
+> = z.union([EventListItemResponseViaEnum4$inboundSchema, z.string()]);
 
 export function eventListItemResponseViaUnion4FromJSON(
   jsonString: string,
@@ -2171,7 +2188,7 @@ export const EventListItemResponseActor4$inboundSchema: z.ZodType<
   id: z.string(),
   kind: EventListItemResponseKind4$inboundSchema,
   via: z.nullable(
-    z.union([EventListItemResponseViaEnum4$inboundSchema, z.any()]),
+    z.union([EventListItemResponseViaEnum4$inboundSchema, z.string()]),
   ).optional(),
 });
 
@@ -2189,7 +2206,10 @@ export function eventListItemResponseActor4FromJSON(
 export const EventListItemResponseActorUnion4$inboundSchema: z.ZodType<
   EventListItemResponseActorUnion4,
   unknown
-> = z.union([z.lazy(() => EventListItemResponseActor4$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => EventListItemResponseActor4$inboundSchema),
+  z.string(),
+]);
 
 export function eventListItemResponseActorUnion4FromJSON(
   jsonString: string,
@@ -2208,7 +2228,7 @@ export const EventListItemResponseDataDeploymentRedeployRequested$inboundSchema:
       actor: z.nullable(
         z.union([
           z.lazy(() => EventListItemResponseActor4$inboundSchema),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
       deploymentId: z.string(),
@@ -2246,7 +2266,7 @@ export const EventListItemResponseViaEnum3$inboundSchema: z.ZodEnum<
 export const EventListItemResponseViaUnion3$inboundSchema: z.ZodType<
   EventListItemResponseViaUnion3,
   unknown
-> = z.union([EventListItemResponseViaEnum3$inboundSchema, z.any()]);
+> = z.union([EventListItemResponseViaEnum3$inboundSchema, z.string()]);
 
 export function eventListItemResponseViaUnion3FromJSON(
   jsonString: string,
@@ -2267,7 +2287,7 @@ export const EventListItemResponseActor3$inboundSchema: z.ZodType<
   id: z.string(),
   kind: EventListItemResponseKind3$inboundSchema,
   via: z.nullable(
-    z.union([EventListItemResponseViaEnum3$inboundSchema, z.any()]),
+    z.union([EventListItemResponseViaEnum3$inboundSchema, z.string()]),
   ).optional(),
 });
 
@@ -2285,7 +2305,10 @@ export function eventListItemResponseActor3FromJSON(
 export const EventListItemResponseActorUnion3$inboundSchema: z.ZodType<
   EventListItemResponseActorUnion3,
   unknown
-> = z.union([z.lazy(() => EventListItemResponseActor3$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => EventListItemResponseActor3$inboundSchema),
+  z.string(),
+]);
 
 export function eventListItemResponseActorUnion3FromJSON(
   jsonString: string,
@@ -2329,7 +2352,7 @@ export const EventListItemResponsePreviousErrorUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => EventListItemResponsePreviousError$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function eventListItemResponsePreviousErrorUnionFromJSON(
@@ -2355,7 +2378,7 @@ export const EventListItemResponseDataDeploymentRetryRequested$inboundSchema:
       actor: z.nullable(
         z.union([
           z.lazy(() => EventListItemResponseActor3$inboundSchema),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
       attemptedReleaseId: z.nullable(z.string()).optional(),
@@ -2363,7 +2386,7 @@ export const EventListItemResponseDataDeploymentRetryRequested$inboundSchema:
       previousError: z.nullable(
         z.union([
           z.lazy(() => EventListItemResponsePreviousError$inboundSchema),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
       type: z.literal("DeploymentRetryRequested"),
@@ -2399,7 +2422,7 @@ export const EventListItemResponseViaEnum2$inboundSchema: z.ZodEnum<
 export const EventListItemResponseViaUnion2$inboundSchema: z.ZodType<
   EventListItemResponseViaUnion2,
   unknown
-> = z.union([EventListItemResponseViaEnum2$inboundSchema, z.any()]);
+> = z.union([EventListItemResponseViaEnum2$inboundSchema, z.string()]);
 
 export function eventListItemResponseViaUnion2FromJSON(
   jsonString: string,
@@ -2420,7 +2443,7 @@ export const EventListItemResponseActor2$inboundSchema: z.ZodType<
   id: z.string(),
   kind: EventListItemResponseKind2$inboundSchema,
   via: z.nullable(
-    z.union([EventListItemResponseViaEnum2$inboundSchema, z.any()]),
+    z.union([EventListItemResponseViaEnum2$inboundSchema, z.string()]),
   ).optional(),
 });
 
@@ -2438,7 +2461,10 @@ export function eventListItemResponseActor2FromJSON(
 export const EventListItemResponseActorUnion2$inboundSchema: z.ZodType<
   EventListItemResponseActorUnion2,
   unknown
-> = z.union([z.lazy(() => EventListItemResponseActor2$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => EventListItemResponseActor2$inboundSchema),
+  z.string(),
+]);
 
 export function eventListItemResponseActorUnion2FromJSON(
   jsonString: string,
@@ -2457,7 +2483,7 @@ export const EventListItemResponseDataDeploymentReleaseChannelChanged$inboundSch
       actor: z.nullable(
         z.union([
           z.lazy(() => EventListItemResponseActor2$inboundSchema),
-          z.any(),
+          z.string(),
         ]),
       ).optional(),
       channel: z.string(),
@@ -2495,7 +2521,7 @@ export const EventListItemResponseViaEnum1$inboundSchema: z.ZodEnum<
 export const EventListItemResponseViaUnion1$inboundSchema: z.ZodType<
   EventListItemResponseViaUnion1,
   unknown
-> = z.union([EventListItemResponseViaEnum1$inboundSchema, z.any()]);
+> = z.union([EventListItemResponseViaEnum1$inboundSchema, z.string()]);
 
 export function eventListItemResponseViaUnion1FromJSON(
   jsonString: string,
@@ -2516,7 +2542,7 @@ export const EventListItemResponseActor1$inboundSchema: z.ZodType<
   id: z.string(),
   kind: EventListItemResponseKind1$inboundSchema,
   via: z.nullable(
-    z.union([EventListItemResponseViaEnum1$inboundSchema, z.any()]),
+    z.union([EventListItemResponseViaEnum1$inboundSchema, z.string()]),
   ).optional(),
 });
 
@@ -2534,7 +2560,10 @@ export function eventListItemResponseActor1FromJSON(
 export const EventListItemResponseActorUnion1$inboundSchema: z.ZodType<
   EventListItemResponseActorUnion1,
   unknown
-> = z.union([z.lazy(() => EventListItemResponseActor1$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => EventListItemResponseActor1$inboundSchema),
+  z.string(),
+]);
 
 export function eventListItemResponseActorUnion1FromJSON(
   jsonString: string,
@@ -2552,7 +2581,7 @@ export const EventListItemResponseDataReleaseChannelUpdated$inboundSchema:
     {
       actor: z.nullable(z.union([
         z.lazy(() => EventListItemResponseActor1$inboundSchema),
-        z.any(),
+        z.string(),
       ])).optional(),
       channel: z.string(),
       previousReleaseId: z.nullable(z.string()).optional(),
@@ -3249,7 +3278,7 @@ export const EventListItemResponseControllerPlatformEnum$inboundSchema:
 export const EventListItemResponseControllerPlatformUnion$inboundSchema:
   z.ZodType<EventListItemResponseControllerPlatformUnion, unknown> = z.union([
     EventListItemResponseControllerPlatformEnum$inboundSchema,
-    z.any(),
+    z.string(),
   ]);
 
 export function eventListItemResponseControllerPlatformUnionFromJSON(
@@ -3319,7 +3348,7 @@ export const EventListItemResponseNextStateErrorUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => EventListItemResponseErrorNextState$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function eventListItemResponseNextStateErrorUnionFromJSON(
@@ -3347,7 +3376,7 @@ export const EventListItemResponseLifecycleEnum$inboundSchema: z.ZodEnum<
 export const EventListItemResponseLifecycleUnion$inboundSchema: z.ZodType<
   EventListItemResponseLifecycleUnion,
   unknown
-> = z.union([EventListItemResponseLifecycleEnum$inboundSchema, z.any()]);
+> = z.union([EventListItemResponseLifecycleEnum$inboundSchema, z.string()]);
 
 export function eventListItemResponseLifecycleUnionFromJSON(
   jsonString: string,
@@ -3388,7 +3417,7 @@ export const EventListItemResponseOutputsUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => EventListItemResponseOutputs$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function eventListItemResponseOutputsUnionFromJSON(
@@ -3431,7 +3460,7 @@ export const EventListItemResponsePreviousConfigUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => EventListItemResponsePreviousConfig$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function eventListItemResponsePreviousConfigUnionFromJSON(
@@ -3465,7 +3494,7 @@ export const EventListItemResponseResources$inboundSchema: z.ZodType<
   controllerPlatform: z.nullable(
     z.union([
       EventListItemResponseControllerPlatformEnum$inboundSchema,
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   dependencies: z.array(
@@ -3474,23 +3503,23 @@ export const EventListItemResponseResources$inboundSchema: z.ZodType<
   error: z.nullable(
     z.union([
       z.lazy(() => EventListItemResponseErrorNextState$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   lastFailedState: z.nullable(z.any()).optional(),
   lifecycle: z.nullable(
-    z.union([EventListItemResponseLifecycleEnum$inboundSchema, z.any()]),
+    z.union([EventListItemResponseLifecycleEnum$inboundSchema, z.string()]),
   ).optional(),
   outputs: z.nullable(
     z.union([
       z.lazy(() => EventListItemResponseOutputs$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   previousConfig: z.nullable(
     z.union([
       z.lazy(() => EventListItemResponsePreviousConfig$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   remoteBindingParams: z.nullable(z.any()).optional(),
@@ -3679,7 +3708,7 @@ export const EventListItemResponseProgressUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => EventListItemResponseProgress$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function eventListItemResponseProgressUnionFromJSON(
@@ -3702,7 +3731,7 @@ export const EventListItemResponseDataPushingImage$inboundSchema: z.ZodType<
   progress: z.nullable(
     z.union([
       z.lazy(() => EventListItemResponseProgress$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   type: z.literal("PushingImage"),
@@ -4002,7 +4031,7 @@ export const EventListItemResponseStateErrorUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => EventListItemResponseStateError$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function eventListItemResponseStateErrorUnionFromJSON(
@@ -4024,7 +4053,7 @@ export const EventListItemResponseFailed$inboundSchema: z.ZodType<
   error: z.nullable(
     z.union([
       z.lazy(() => EventListItemResponseStateError$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });

@@ -10,6 +10,19 @@ describe("explicit node and workload permissions", () => {
     expect(cluster.config).not.toHaveProperty("permissions")
   })
 
+  it("serializes an optional node platform selector without changing cluster identity or profile", () => {
+    const permissions: PermissionProfile = { objects: ["storage/data-read"] }
+    const cluster = new ComputeCluster("compute").nodePermissions(permissions, { platforms: ["aws"] })
+    const selected = JSON.parse(JSON.stringify(cluster.build().config))
+    expect(selected.id).toBe("compute")
+    expect(selected.nodePermissions).toEqual(permissions)
+    expect(selected.nodePermissionsPlatforms).toEqual(["aws"])
+    const unselected = JSON.parse(JSON.stringify(cluster.nodePermissions(permissions).build().config))
+    expect(unselected.id).toBe("compute")
+    expect(unselected.nodePermissions).toEqual(permissions)
+    expect(unselected).not.toHaveProperty("nodePermissionsPlatforms")
+  })
+
   it("preserves daemon links without inventing a permission profile", () => {
     const storage = new Storage("objects").build()
     const daemon = new Daemon("observer")

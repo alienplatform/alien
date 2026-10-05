@@ -1366,6 +1366,71 @@ async fn test_describe_availability_zones(ctx: &mut Ec2TestContext) {
     }
 }
 
+/// Zone-level offerings must name real zones of the region, and filtering by zone must only
+/// return zones that were asked for. Compute placement relies on both to keep Auto Scaling
+/// Groups out of zones that cannot launch the machine type.
+#[test_context(Ec2TestContext)]
+#[tokio::test]
+async fn test_describe_instance_type_offerings_by_zone(ctx: &mut Ec2TestContext) {
+    let zones: HashSet<String> = ctx
+        .client
+        .describe_availability_zones(DescribeAvailabilityZonesRequest::builder().build())
+        .await
+        .expect("Failed to describe availability zones")
+        .availability_zone_info
+        .expect("Should have availability zones")
+        .items
+        .into_iter()
+        .filter_map(|zone| zone.zone_name)
+        .collect();
+
+    let offered = |filters: Vec<Filter>| {
+        let client = &ctx.client;
+        async move {
+            client
+                .describe_instance_type_offerings(
+                    DescribeInstanceTypeOfferingsRequest::builder()
+                        .location_type("availability-zone".to_string())
+                        .filters(filters)
+                        .build(),
+                )
+                .await
+                .expect("Failed to describe instance type offerings")
+                .instance_type_offering_set
+                .map(|set| set.items)
+                .unwrap_or_default()
+        }
+    };
+
+    let all = offered(vec![Filter::builder()
+        .name("instance-type".to_string())
+        .values(vec!["t4g.micro".to_string()])
+        .build()])
+    .await;
+    assert!(!all.is_empty(), "t4g.micro should be offered in us-west-2");
+    for offering in &all {
+        assert_eq!(offering.instance_type.as_deref(), Some("t4g.micro"));
+        assert_eq!(offering.location_type.as_deref(), Some("availability-zone"));
+        let location = offering.location.as_deref().expect("offering location");
+        assert!(zones.contains(location), "unknown zone {location}");
+    }
+
+    let first_zone = all[0].location.clone().expect("offering location");
+    let narrowed = offered(vec![
+        Filter::builder()
+            .name("instance-type".to_string())
+            .values(vec!["t4g.micro".to_string()])
+            .build(),
+        Filter::builder()
+            .name("location".to_string())
+            .values(vec![first_zone.clone()])
+            .build(),
+    ])
+    .await;
+    assert_eq!(narrowed.len(), 1);
+    assert_eq!(narrowed[0].location.as_deref(), Some(first_zone.as_str()));
+}
+
 /// Test error handling with invalid credentials.
 #[test_context(Ec2TestContext)]
 #[tokio::test]

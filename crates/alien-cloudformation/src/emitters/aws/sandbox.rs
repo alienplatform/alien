@@ -8,7 +8,8 @@ use crate::{
     emitter::CfEmitter,
     emitters::aws::helpers::{
         cf_from_json, private_subnet_ids_expr, required_logical_id, resource_config,
-        service_trust_policy, subnet_refs, tags, vpc_id_expr, CONDITION_NETWORK_MODE_CREATE,
+        resource_permission_owners, service_trust_policy, subnet_refs, tags,
+        uniquify_iam_statement_sids, vpc_id_expr, CONDITION_NETWORK_MODE_CREATE,
         PARAM_PRIVATE_SUBNET_IDS,
     },
     emitters::aws::service_account::permission_context,
@@ -30,6 +31,9 @@ const ARCHITECTURE: &str = "ARM_64";
 
 /// Port the in-sandbox agent serves, both its own protocol and the lifecycle hooks.
 const AGENT_PORT: i64 = AWS_MICROVM.port as i64;
+
+/// Permission-set id prefix for this resource type.
+const PERMISSION_SET_PREFIX: &str = "sandbox/";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsSandboxEmitter;
@@ -247,6 +251,7 @@ impl CfEmitter for AwsSandboxEmitter {
         if let Some(policy) = remote_access_policy(ctx)? {
             resources.push(policy);
         }
+        resources.extend(profile_policies(ctx, sandbox)?);
         Ok(resources)
     }
 
@@ -397,6 +402,96 @@ fn remote_access_policy(ctx: &EmitContext<'_>) -> Result<Option<CfResource>> {
         .properties
         .insert("PolicyDocument".to_string(), document);
     Ok(Some(policy))
+}
+
+/// IAM policies attaching each profile's granted `sandbox/*` sets to that profile's role, scoped
+/// to this sandbox's image.
+///
+/// Emitted for both lifecycles: a Live image is built after the stack completes, but under the
+/// same `${AWS::StackName}-<id>` name, so a name-scoped grant written now covers it. Without these
+/// a Worker holding `sandbox/management` on the sandbox is denied its first `RunMicrovm`.
+fn profile_policies(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Vec<CfResource>> {
+    let image_id = required_logical_id(ctx)?;
+    let generator = AwsCloudFormationPermissionsGenerator::new();
+    // The bare resource id, as in `remote_access_policy`: the sets name the image
+    // `${stackPrefix}-${resourceName}`, and the generator renders the prefix as the stack name.
+    let context = permission_context().with_resource_name(sandbox.id().to_string());
+
+    let mut resources = Vec::new();
+    for (owner_index, (role_id, permission_refs)) in
+        resource_permission_owners(ctx, PERMISSION_SET_PREFIX)
+            .into_iter()
+            .enumerate()
+    {
+        for (permission_index, permission_ref) in permission_refs.iter().enumerate() {
+            let permission_set = permission_ref
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::GenericError {
+                        message: format!(
+                            "permission set '{}' granted on sandbox '{}' is not registered",
+                            permission_ref.id(),
+                            sandbox.id()
+                        ),
+                    })
+                })?;
+
+            let policy = generator
+                .generate_policy(&permission_set, BindingTarget::Resource, &context)
+                .context(ErrorData::GenericError {
+                    message: format!(
+                        "failed to generate the '{}' IAM policy for sandbox '{}'",
+                        permission_set.id,
+                        sandbox.id()
+                    ),
+                })?;
+            let policy_value = serde_json::to_value(policy).into_alien_error().context(
+                ErrorData::TemplateSerializationFailed {
+                    format: "CloudFormation IAM policy".to_string(),
+                    reason: "Failed to serialize the sandbox IAM policy".to_string(),
+                },
+            )?;
+            let CfExpression::Object(mut policy_object) = cf_from_json(policy_value)? else {
+                return Err(AlienError::new(ErrorData::TemplateSerializationFailed {
+                    format: "CloudFormation IAM policy".to_string(),
+                    reason: "policy did not serialize to a JSON object".to_string(),
+                }));
+            };
+            let Some(CfExpression::List(statements)) = policy_object.shift_remove("Statement")
+            else {
+                continue;
+            };
+
+            let mut policy_resource = CfResource::new(
+                format!("{image_id}{role_id}SandboxPermission{owner_index}{permission_index}"),
+                "AWS::IAM::Policy".to_string(),
+            );
+            policy_resource.properties.insert(
+                "PolicyName".to_string(),
+                CfExpression::sub(format!(
+                    "${{AWS::StackName}}-{}-sandbox-{owner_index}-{permission_index}",
+                    sandbox.id()
+                )),
+            );
+            policy_resource.properties.insert(
+                "PolicyDocument".to_string(),
+                CfExpression::object([
+                    ("Version", CfExpression::from("2012-10-17")),
+                    (
+                        "Statement",
+                        CfExpression::list(uniquify_iam_statement_sids(statements)),
+                    ),
+                ]),
+            );
+            policy_resource.properties.insert(
+                "Roles".to_string(),
+                CfExpression::list([CfExpression::ref_(&role_id)]),
+            );
+            policy_resource.depends_on.push(role_id.clone());
+            resources.push(policy_resource);
+        }
+    }
+    Ok(resources)
 }
 
 /// Whether this sandbox's image is built by the runtime controller rather than by stack creation.

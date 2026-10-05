@@ -1659,3 +1659,135 @@ fn the_emitted_deny_group_matches_the_direct_rule_set() {
         }
     }
 }
+
+/// A Worker creates sessions under its profile's role, so a profile granted `sandbox/management`
+/// and `sandbox/execute` on the sandbox must leave that role able to start, address and enter
+/// sessions of this image, and of no other. A Live image is built after apply, but under the same
+/// name, so the module grants it either way.
+#[test]
+fn a_profile_granted_the_sandbox_reaches_its_image_and_nothing_wider() {
+    let image = format!(
+        "arn:aws:lambda:{PARITY_REGION}:{PARITY_ACCOUNT}:microvm-image:{PARITY_PREFIX}-agents"
+    );
+    for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+        let module = granted_sandbox_module(lifecycle, &["sandbox/management", "sandbox/execute"]);
+        if lifecycle == ResourceLifecycle::Live {
+            assert_terraform_valid(&module, "live sandbox with profile grants");
+        }
+        let granted = granted_actions(&module, "execution_sa");
+        for action in [
+            "lambda:RunMicrovm",
+            "lambda:TerminateMicrovm",
+            "lambda:SuspendMicrovm",
+            "lambda:ResumeMicrovm",
+            "lambda:CreateMicrovmAuthToken",
+            "lambda:GetMicrovm",
+        ] {
+            assert_eq!(
+                granted.get(action),
+                Some(&vec![image.clone()]),
+                "{lifecycle:?}: {action} must be granted on this sandbox's image alone: {granted:#?}"
+            );
+        }
+        // AWS authorizes the connector pass against an id it assigns, so no name can scope it.
+        assert_eq!(
+            granted.get("lambda:PassNetworkConnector"),
+            Some(&vec!["*".to_string()]),
+            "{lifecycle:?}: {granted:#?}"
+        );
+        assert!(
+            !granted.contains_key("lambda:CreateMicrovmShellAuthToken")
+                && !granted.contains_key("iam:PassRole"),
+            "{lifecycle:?}: neither set reaches a shell or a role: {granted:#?}"
+        );
+    }
+}
+
+/// A link alone grants `sandbox/execute`; the module must not quietly widen it into session
+/// lifecycle control.
+#[test]
+fn an_execute_only_profile_cannot_start_sessions() {
+    let module = granted_sandbox_module(ResourceLifecycle::Frozen, &["sandbox/execute"]);
+    let granted = granted_actions(&module, "execution_sa");
+    assert_eq!(
+        granted.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec!["lambda:CreateMicrovmAuthToken", "lambda:GetMicrovm"],
+    );
+}
+
+/// A deny sandbox whose `execution` profile is granted `sets` on it, next to that profile's role.
+fn granted_sandbox_module(
+    lifecycle: ResourceLifecycle,
+    sets: &[&str],
+) -> alien_terraform::ModuleFiles {
+    let settings = StackSettings {
+        network: Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        }),
+        ..StackSettings::default()
+    };
+    let stack = Stack::new("acme-sandbox-grants".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().resource("agents", sets.iter().copied()),
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Network::new("default-network".to_string())
+                .settings(settings.network.clone().expect("network"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            match lifecycle {
+                ResourceLifecycle::Live => sandbox_fixture_with(SandboxEgress::Deny, LIVE_BUNDLE),
+                _ => sandbox_fixture(SandboxEgress::Deny),
+            },
+            lifecycle,
+        )
+        .build();
+    render(&stack, TerraformTarget::Aws, settings)
+}
+
+/// Every action the `aws_iam_role_policy` blocks attached to `role_label` grant, across the whole
+/// module, mapped to the resources it is granted on.
+fn granted_actions(
+    module: &alien_terraform::ModuleFiles,
+    role_label: &str,
+) -> std::collections::BTreeMap<String, Vec<String>> {
+    let role_id = format!("aws_iam_role.{role_label}.id");
+    let as_list = |value: &Value| match value {
+        Value::Array(items) => items.clone(),
+        other => vec![other.clone()],
+    };
+    let mut granted = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for (file, contents) in module.iter().filter(|(file, _)| file.ends_with(".tf")) {
+        let body: hcl::Body =
+            hcl::parse(contents).unwrap_or_else(|error| panic!("{file} parses: {error}"));
+        for policy in resource_blocks(&body, "aws_iam_role_policy") {
+            if block_attribute(policy, "role").expr().to_string() != role_id {
+                continue;
+            }
+            let document =
+                evaluate_policy_expression(jsonencoded(block_attribute(policy, "policy")));
+            for statement in document["Statement"].as_array().expect("statements") {
+                assert_eq!(statement["Effect"], "Allow", "{statement:#}");
+                let resources: Vec<String> = as_list(&statement["Resource"])
+                    .iter()
+                    .map(|resource| resource.as_str().expect("string").to_string())
+                    .collect();
+                for action in as_list(&statement["Action"]) {
+                    granted
+                        .entry(action.as_str().expect("string").to_string())
+                        .or_default()
+                        .extend(resources.iter().cloned());
+                }
+            }
+        }
+    }
+    granted
+}

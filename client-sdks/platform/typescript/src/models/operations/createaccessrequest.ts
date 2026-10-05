@@ -73,6 +73,41 @@ export type CreateAccessRequestMaxRisk = ClosedEnum<
 >;
 
 /**
+ * How and when the customer gate was passed. Null until approved.
+ */
+export type CreateAccessRequestApprovedBy = {
+  /**
+   * `kubectl` for the in-cluster path, else the direct caller's method such as `slack`.
+   */
+  method: string | null;
+  /**
+   * The approving user. Null for the kubectl path: the approver is only in the customer's cluster audit log.
+   */
+  actorId: string | null;
+  at: string;
+};
+
+export type CreateAccessRequestDeniedBy = {
+  actorId: string | null;
+  at: string;
+};
+
+export const CreateAccessRequestActorKind = {
+  User: "user",
+  ServiceAccount: "serviceAccount",
+} as const;
+export type CreateAccessRequestActorKind = ClosedEnum<
+  typeof CreateAccessRequestActorKind
+>;
+
+export type CreateAccessRequestRevokedBy = {
+  actorKind: CreateAccessRequestActorKind;
+  actorId: string;
+  at: string;
+  reason: string | null;
+};
+
+/**
  * The created access request.
  */
 export type CreateAccessRequestResponse = {
@@ -83,6 +118,10 @@ export type CreateAccessRequestResponse = {
   deploymentId: string;
   deployment?: CreateAccessRequestDeployment | undefined;
   remediationPlanId: string | null;
+  /**
+   * The investigation whose remediation plan proposed this request, if a plan did.
+   */
+  agentSessionId: string | null;
   title: string;
   reason: string | null;
   commands: Array<CreateAccessRequestCommand>;
@@ -94,6 +133,18 @@ export type CreateAccessRequestResponse = {
   debugGrant: models.AccessRequestDebugGrant | null;
   status: models.AccessRequestStatus;
   approvedUntil: string | null;
+  createdAt: string;
+  /**
+   * Who passed the engineer gate; the requester for a plan-less request.
+   */
+  queuedBy: string | null;
+  queuedAt: string | null;
+  /**
+   * How and when the customer gate was passed. Null until approved.
+   */
+  approvedBy: CreateAccessRequestApprovedBy | null;
+  deniedBy: CreateAccessRequestDeniedBy | null;
+  revokedBy: CreateAccessRequestRevokedBy | null;
 };
 
 /** @internal */
@@ -155,6 +206,71 @@ export const CreateAccessRequestMaxRisk$inboundSchema: z.ZodEnum<
 > = z.enum(CreateAccessRequestMaxRisk);
 
 /** @internal */
+export const CreateAccessRequestApprovedBy$inboundSchema: z.ZodType<
+  CreateAccessRequestApprovedBy,
+  unknown
+> = z.object({
+  method: z.nullable(z.string()),
+  actorId: z.nullable(z.string()),
+  at: z.string(),
+});
+
+export function createAccessRequestApprovedByFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateAccessRequestApprovedBy, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateAccessRequestApprovedBy$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateAccessRequestApprovedBy' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateAccessRequestDeniedBy$inboundSchema: z.ZodType<
+  CreateAccessRequestDeniedBy,
+  unknown
+> = z.object({
+  actorId: z.nullable(z.string()),
+  at: z.string(),
+});
+
+export function createAccessRequestDeniedByFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateAccessRequestDeniedBy, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateAccessRequestDeniedBy$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateAccessRequestDeniedBy' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateAccessRequestActorKind$inboundSchema: z.ZodEnum<
+  typeof CreateAccessRequestActorKind
+> = z.enum(CreateAccessRequestActorKind);
+
+/** @internal */
+export const CreateAccessRequestRevokedBy$inboundSchema: z.ZodType<
+  CreateAccessRequestRevokedBy,
+  unknown
+> = z.object({
+  actorKind: CreateAccessRequestActorKind$inboundSchema,
+  actorId: z.string(),
+  at: z.string(),
+  reason: z.nullable(z.string()),
+});
+
+export function createAccessRequestRevokedByFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateAccessRequestRevokedBy, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateAccessRequestRevokedBy$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateAccessRequestRevokedBy' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateAccessRequestResponse$inboundSchema: z.ZodType<
   CreateAccessRequestResponse,
   unknown
@@ -167,6 +283,7 @@ export const CreateAccessRequestResponse$inboundSchema: z.ZodType<
   deployment: z.lazy(() => CreateAccessRequestDeployment$inboundSchema)
     .optional(),
   remediationPlanId: z.nullable(z.string()),
+  agentSessionId: z.nullable(z.string()),
   title: z.string(),
   reason: z.nullable(z.string()),
   commands: z.array(z.lazy(() => CreateAccessRequestCommand$inboundSchema)),
@@ -175,6 +292,16 @@ export const CreateAccessRequestResponse$inboundSchema: z.ZodType<
   debugGrant: z.nullable(models.AccessRequestDebugGrant$inboundSchema),
   status: models.AccessRequestStatus$inboundSchema,
   approvedUntil: z.nullable(z.string()),
+  createdAt: z.string(),
+  queuedBy: z.nullable(z.string()),
+  queuedAt: z.nullable(z.string()),
+  approvedBy: z.nullable(
+    z.lazy(() => CreateAccessRequestApprovedBy$inboundSchema),
+  ),
+  deniedBy: z.nullable(z.lazy(() => CreateAccessRequestDeniedBy$inboundSchema)),
+  revokedBy: z.nullable(
+    z.lazy(() => CreateAccessRequestRevokedBy$inboundSchema),
+  ),
 });
 
 export function createAccessRequestResponseFromJSON(

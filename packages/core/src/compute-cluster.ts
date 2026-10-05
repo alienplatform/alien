@@ -3,6 +3,7 @@ import {
   ComputeClusterSchema,
   type MachineProfile,
   type PermissionProfile,
+  type Platform,
   type ResourceType,
 } from "./generated/index.js"
 import { Resource } from "./resource.js"
@@ -109,8 +110,9 @@ export class ComputeCluster {
   }
 
   /** Grants the node identity access to explicitly named resources only. */
-  public nodePermissions(permissions: PermissionProfile): this {
+  public nodePermissions(permissions: PermissionProfile, options?: { platforms: Platform[] }): this {
     this._config.nodePermissions = permissions
+    this._config.nodePermissionsPlatforms = options?.platforms
     return this
   }
 

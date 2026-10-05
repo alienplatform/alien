@@ -20,15 +20,15 @@ let value: DataAzure2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "api-unavailable",
         severity: "warning",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "running",
+    health: "healthy",
+    lifecycle: "deleting",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "azure",
 };
@@ -36,15 +36,15 @@ let value: DataAzure2 = {
 
 ## Fields
 
-| Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      |
-| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `backendClusterId`                                                               | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `capacityGroups`                                                                 | [models.CapacityGroup3](../models/capacitygroup3.md)[]                           | :heavy_check_mark:                                                               | N/A                                                                              |
-| `cpu`                                                                            | *models.CpuUnion9*                                                               | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `memory`                                                                         | *models.MemoryUnion9*                                                            | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `name`                                                                           | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `nodes`                                                                          | [models.Nodes3](../models/nodes3.md)                                             | :heavy_check_mark:                                                               | N/A                                                                              |
-| `providerFleets`                                                                 | [models.ProviderFleet3](../models/providerfleet3.md)[]                           | :heavy_check_mark:                                                               | N/A                                                                              |
-| `region`                                                                         | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `status`                                                                         | [models.SyncReconcileRequestStatus21](../models/syncreconcilerequeststatus21.md) | :heavy_check_mark:                                                               | N/A                                                                              |
-| `backend`                                                                        | *"azure"*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |
+| Field                                                                      | Type                                                                       | Required                                                                   | Description                                                                |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `backendClusterId`                                                         | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
+| `capacityGroups`                                                           | [models.CapacityGroup3](../models/capacitygroup3.md)[]                     | :heavy_check_mark:                                                         | N/A                                                                        |
+| `cpu`                                                                      | *models.CpuUnion9*                                                         | :heavy_minus_sign:                                                         | N/A                                                                        |
+| `memory`                                                                   | *models.MemoryUnion9*                                                      | :heavy_minus_sign:                                                         | N/A                                                                        |
+| `name`                                                                     | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `nodes`                                                                    | [models.Nodes3](../models/nodes3.md)                                       | :heavy_check_mark:                                                         | N/A                                                                        |
+| `providerFleets`                                                           | [models.ProviderFleet3](../models/providerfleet3.md)[]                     | :heavy_check_mark:                                                         | N/A                                                                        |
+| `region`                                                                   | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus21](../models/resourceheartbeatstatus21.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `backend`                                                                  | *"azure"*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |

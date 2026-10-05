@@ -10,7 +10,7 @@
 use crate::error::{ErrorData, Result};
 use crate::instance_catalog::{is_same_architecture_aws_machine, Architecture};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef};
-use crate::{PermissionProfile, ResourceType};
+use crate::{PermissionProfile, Platform, ResourceType};
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -230,6 +230,10 @@ pub struct ComputeCluster {
     /// Independent of workload permission profiles; absent grants no data access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_permissions: Option<PermissionProfile>,
+
+    /// Cloud platforms on which the explicit node grants apply; absent applies everywhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_permissions_platforms: Option<Vec<Platform>>,
 
     /// Pool reserved for containers created after a deployment is installed.
     /// If absent, the runtime uses the `general` pool when it exists.

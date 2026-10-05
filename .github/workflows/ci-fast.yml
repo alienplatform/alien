@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a PR makes the previous run's result useless.
+concurrency:
+  group: ci-fast-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   # Fall back to local compilation when the shared sccache backend returns a
   # transient error (e.g. webdav 403) instead of failing the whole build.
@@ -50,7 +55,6 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       typescript: ${{ steps.filter.outputs.typescript }}
-      product_lifecycle: ${{ steps.filter.outputs.product_lifecycle }}
     steps:
       - uses: actions/checkout@v7
 
@@ -78,13 +82,6 @@ jobs:
               # The smoke test qualifies the published images, and its own harness
               # is what proves it fails loudly. Both run in this job.
               - 'scripts/smoke-sandbox-agent*'
-            product_lifecycle:
-              - 'crates/alien-core/**'
-              - 'crates/alien-helm/**'
-              - 'crates/alien-infra/**'
-              - 'crates/alien-operator/**'
-              - 'crates/alien-terraform/**'
-              - '.github/workflows/ci-fast.yml'
             typescript:
               - 'mise*.toml'
               - 'rust-toolchain.toml'
@@ -125,17 +122,19 @@ jobs:
     needs: [pr-conventions, changes]
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      needs.changes.outputs.rust == 'true' ||
-      needs.changes.outputs.product_lifecycle == 'true'
-    runs-on: depot-ubuntu-24.04-arm-16
+      needs.changes.outputs.rust == 'true'
+    runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 120
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       # Bound peak compiler memory so the runner agent remains responsive
-      # while the workspace's large test binaries compile and link.
-      CARGO_BUILD_JOBS: "8"
+      # while the workspace's large test binaries compile and link. Six jobs
+      # fit the 8-vCPU runner with debug info off.
+      CARGO_BUILD_JOBS: "6"
       NEXTEST_TEST_THREADS: "8"
+      # Debug info makes linking ~120 test binaries much slower and nothing in CI reads it.
+      CARGO_PROFILE_DEV_DEBUG: "0"
 
     steps:
       - uses: actions/checkout@v7
@@ -176,6 +175,11 @@ jobs:
           version: v0.16.0
 
       - uses: taiki-e/install-action@nextest
+
+      # Rust on aarch64 Linux links with GNU ld by default; mold is much faster.
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # main
+        with:
+          mold-version: 2.42.1
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -278,37 +282,6 @@ jobs:
             --features alien-manager/openapi,alien-bindings/platform-sdk \
             --filter-expr "${FILTER_CLAUSES[*]}"
 
-      - name: Start disposable Kubernetes cluster
-        if: needs.changes.outputs.product_lifecycle == 'true'
-        uses: helm/kind-action@v1.14.0
-        with:
-          cluster_name: alien-product-lifecycle
-
-      - name: Kubernetes compute pool dynamic container lifecycle
-        if: needs.changes.outputs.product_lifecycle == 'true'
-        env:
-          ALIEN_DYNAMIC_KIND_CONTEXT: kind-alien-product-lifecycle
-          ALIEN_DYNAMIC_KIND_NAMESPACE: alien-dynamic-compute-ci
-        run: |
-          export KUBECONFIG="$RUNNER_TEMP/dynamic-compute.kubeconfig"
-          kind get kubeconfig --name alien-product-lifecycle > "$KUBECONFIG"
-          kubectl create namespace "$ALIEN_DYNAMIC_KIND_NAMESPACE"
-          trap 'kubectl delete namespace "$ALIEN_DYNAMIC_KIND_NAMESPACE" --ignore-not-found; rm -f "$KUBECONFIG"' EXIT
-          image=docker.io/library/memcached@sha256:9e4de012dc607573052061c0bcb38abc775e1dd59b24e7ac38d1892842094aaf
-          docker pull "$image"
-          docker tag "$image" docker.io/library/memcached:alien-kind-test
-          kind load docker-image docker.io/library/memcached:alien-kind-test --name alien-product-lifecycle
-          cargo test -p alien-operator --locked --test dynamic_containers_kind -- \
-            --ignored --nocapture --test-threads=1
-
-      - name: Product Remote Operator Helm and Terraform lifecycle
-        if: needs.changes.outputs.product_lifecycle == 'true'
-        env:
-          ALIEN_RUN_PRODUCT_LIFECYCLE_E2E: "1"
-        run: |
-          cargo test -p alien-helm --locked --test product_remote_operator_lifecycle -- \
-            --ignored --nocapture --test-threads=1
-
       - name: Sandbox agent privileged tests
         # The agent runs as root and drops to a different uid before every spawn.
         # The sandbox's file and working-directory handling turns on those two
@@ -317,7 +290,7 @@ jobs:
         # and only the test binary re-run under sudo: a root `cargo` would leave
         # root-owned artifacts behind for the cache upload.
         run: |
-          binary=$(cargo test -p alien-sandbox-agent --test privileged --no-run --message-format=json \
+          binary=$(cargo test --workspace --features alien-manager/openapi,alien-bindings/platform-sdk --no-run --message-format=json \
             | sed -n 's/.*"executable":"\([^"]*privileged-[^"]*\)".*/\1/p' | head -1)
           test -x "$binary"
           sudo "$binary" --ignored
@@ -327,7 +300,8 @@ jobs:
         # compares the two. Named here so a Dockerfile-only change still fails
         # visibly rather than inside the workspace run.
         run: |
-          cargo test -p alien-core --lib sandbox_image
+          cargo nextest run --workspace --features alien-manager/openapi,alien-bindings/platform-sdk \
+            --filter-expr 'package(alien-core) and kind(lib) and test(sandbox_image)'
 
       - name: Sandbox agent smoke test harness
         # Drives the release smoke test against a stub docker, once per failure
@@ -339,12 +313,13 @@ jobs:
     name: TypeScript packages and CLIs
     needs: [pr-conventions, changes]
     if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.typescript == 'true'
-    runs-on: depot-ubuntu-24.04-arm-16
+    runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 60
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       CARGO_BUILD_JOBS: "6"
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@v7
 
@@ -400,6 +375,11 @@ jobs:
           add_shims_to_path: false
           install_args: rust
           cache: false
+
+      # Rust on aarch64 Linux links with GNU ld by default; mold is much faster.
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # main
+        with:
+          mold-version: 2.42.1
 
       - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true

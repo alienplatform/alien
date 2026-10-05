@@ -12,9 +12,9 @@ const value: models.CurrentReleaseExtendCondition = {
 };
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

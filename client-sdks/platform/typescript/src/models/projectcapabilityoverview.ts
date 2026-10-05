@@ -90,6 +90,22 @@ export const ModelsState = {
 } as const;
 export type ModelsState = ClosedEnum<typeof ModelsState>;
 
+export const ModelsSource = {
+  Capability: "capability",
+  App: "app",
+} as const;
+export type ModelsSource = ClosedEnum<typeof ModelsSource>;
+
+export const ModelsSandboxUpdate = {
+  UpToDate: "up-to-date",
+  Behind: "behind",
+  Blocked: "blocked",
+  UpdateFailed: "update-failed",
+  BundleFailed: "bundle-failed",
+  PlatformRemoved: "platform-removed",
+} as const;
+export type ModelsSandboxUpdate = ClosedEnum<typeof ModelsSandboxUpdate>;
+
 export const ModelsPlatform = {
   Aws: "aws",
   Gcp: "gcp",
@@ -205,6 +221,8 @@ export type GroupModels = {
    * Unique identifier for the deployment.
    */
   deploymentId: string | null;
+  source?: ModelsSource | undefined;
+  sandboxUpdate?: ModelsSandboxUpdate | undefined;
   observation: ModelsObservation | null;
   modelCoverage?: Array<ModelsModelCoverage> | undefined;
   directProvider?: ModelsDirectProvider | undefined;
@@ -229,6 +247,22 @@ export const KeysState = {
   Revoked: "revoked",
 } as const;
 export type KeysState = ClosedEnum<typeof KeysState>;
+
+export const KeysSource = {
+  Capability: "capability",
+  App: "app",
+} as const;
+export type KeysSource = ClosedEnum<typeof KeysSource>;
+
+export const KeysSandboxUpdate = {
+  UpToDate: "up-to-date",
+  Behind: "behind",
+  Blocked: "blocked",
+  UpdateFailed: "update-failed",
+  BundleFailed: "bundle-failed",
+  PlatformRemoved: "platform-removed",
+} as const;
+export type KeysSandboxUpdate = ClosedEnum<typeof KeysSandboxUpdate>;
 
 export const KeysPlatform = {
   Aws: "aws",
@@ -345,6 +379,8 @@ export type GroupKeys = {
    * Unique identifier for the deployment.
    */
   deploymentId: string | null;
+  source?: KeysSource | undefined;
+  sandboxUpdate?: KeysSandboxUpdate | undefined;
   observation: KeysObservation | null;
   modelCoverage?: Array<KeysModelCoverage> | undefined;
   directProvider?: KeysDirectProvider | undefined;
@@ -369,6 +405,22 @@ export const BucketsState = {
   Revoked: "revoked",
 } as const;
 export type BucketsState = ClosedEnum<typeof BucketsState>;
+
+export const BucketsSource = {
+  Capability: "capability",
+  App: "app",
+} as const;
+export type BucketsSource = ClosedEnum<typeof BucketsSource>;
+
+export const BucketsSandboxUpdate = {
+  UpToDate: "up-to-date",
+  Behind: "behind",
+  Blocked: "blocked",
+  UpdateFailed: "update-failed",
+  BundleFailed: "bundle-failed",
+  PlatformRemoved: "platform-removed",
+} as const;
+export type BucketsSandboxUpdate = ClosedEnum<typeof BucketsSandboxUpdate>;
 
 export const BucketsPlatform = {
   Aws: "aws",
@@ -489,6 +541,8 @@ export type GroupBuckets = {
    * Unique identifier for the deployment.
    */
   deploymentId: string | null;
+  source?: BucketsSource | undefined;
+  sandboxUpdate?: BucketsSandboxUpdate | undefined;
   observation: BucketsObservation | null;
   modelCoverage?: Array<BucketsModelCoverage> | undefined;
   directProvider?: BucketsDirectProvider | undefined;
@@ -513,6 +567,22 @@ export const RegistryState = {
   Revoked: "revoked",
 } as const;
 export type RegistryState = ClosedEnum<typeof RegistryState>;
+
+export const RegistrySource = {
+  Capability: "capability",
+  App: "app",
+} as const;
+export type RegistrySource = ClosedEnum<typeof RegistrySource>;
+
+export const RegistrySandboxUpdate = {
+  UpToDate: "up-to-date",
+  Behind: "behind",
+  Blocked: "blocked",
+  UpdateFailed: "update-failed",
+  BundleFailed: "bundle-failed",
+  PlatformRemoved: "platform-removed",
+} as const;
+export type RegistrySandboxUpdate = ClosedEnum<typeof RegistrySandboxUpdate>;
 
 export const RegistryPlatform = {
   Aws: "aws",
@@ -633,6 +703,8 @@ export type GroupRegistry = {
    * Unique identifier for the deployment.
    */
   deploymentId: string | null;
+  source?: RegistrySource | undefined;
+  sandboxUpdate?: RegistrySandboxUpdate | undefined;
   observation: RegistryObservation | null;
   modelCoverage?: Array<RegistryModelCoverage> | undefined;
   directProvider?: RegistryDirectProvider | undefined;
@@ -659,6 +731,24 @@ export const RemoteSandboxState = {
   Revoked: "revoked",
 } as const;
 export type RemoteSandboxState = ClosedEnum<typeof RemoteSandboxState>;
+
+export const RemoteSandboxSource = {
+  Capability: "capability",
+  App: "app",
+} as const;
+export type RemoteSandboxSource = ClosedEnum<typeof RemoteSandboxSource>;
+
+export const RemoteSandboxSandboxUpdate = {
+  UpToDate: "up-to-date",
+  Behind: "behind",
+  Blocked: "blocked",
+  UpdateFailed: "update-failed",
+  BundleFailed: "bundle-failed",
+  PlatformRemoved: "platform-removed",
+} as const;
+export type RemoteSandboxSandboxUpdate = ClosedEnum<
+  typeof RemoteSandboxSandboxUpdate
+>;
 
 export const RemoteSandboxPlatform = {
   Aws: "aws",
@@ -783,6 +873,8 @@ export type GroupRemoteSandbox = {
    * Unique identifier for the deployment.
    */
   deploymentId: string | null;
+  source?: RemoteSandboxSource | undefined;
+  sandboxUpdate?: RemoteSandboxSandboxUpdate | undefined;
   observation: RemoteSandboxObservation | null;
   modelCoverage?: Array<RemoteSandboxModelCoverage> | undefined;
   directProvider?: RemoteSandboxDirectProvider | undefined;
@@ -812,6 +904,7 @@ export type Group = {
 export type ProjectCapabilityOverview = {
   generatedAt: Date;
   configurationStatus: ConfigurationStatus;
+  hasAppRemoteSandbox: boolean;
   summary: ProjectCapabilityOverviewSummary;
   groups: Array<Group>;
 };
@@ -982,6 +1075,15 @@ export const ModelsState$inboundSchema: z.ZodEnum<typeof ModelsState> = z.enum(
 );
 
 /** @internal */
+export const ModelsSource$inboundSchema: z.ZodEnum<typeof ModelsSource> = z
+  .enum(ModelsSource);
+
+/** @internal */
+export const ModelsSandboxUpdate$inboundSchema: z.ZodEnum<
+  typeof ModelsSandboxUpdate
+> = z.enum(ModelsSandboxUpdate);
+
+/** @internal */
 export const ModelsPlatform$inboundSchema: z.ZodEnum<typeof ModelsPlatform> = z
   .enum(ModelsPlatform);
 
@@ -1146,6 +1248,8 @@ export const GroupModels$inboundSchema: z.ZodType<GroupModels, unknown> = z
     enabled: z.boolean(),
     state: ModelsState$inboundSchema,
     deploymentId: z.nullable(z.string()),
+    source: ModelsSource$inboundSchema.optional(),
+    sandboxUpdate: ModelsSandboxUpdate$inboundSchema.optional(),
     observation: z.nullable(z.lazy(() => ModelsObservation$inboundSchema)),
     modelCoverage: z.array(z.lazy(() => ModelsModelCoverage$inboundSchema))
       .optional(),
@@ -1172,6 +1276,16 @@ export const KeysCapability$inboundSchema: z.ZodEnum<typeof KeysCapability> = z
 export const KeysState$inboundSchema: z.ZodEnum<typeof KeysState> = z.enum(
   KeysState,
 );
+
+/** @internal */
+export const KeysSource$inboundSchema: z.ZodEnum<typeof KeysSource> = z.enum(
+  KeysSource,
+);
+
+/** @internal */
+export const KeysSandboxUpdate$inboundSchema: z.ZodEnum<
+  typeof KeysSandboxUpdate
+> = z.enum(KeysSandboxUpdate);
 
 /** @internal */
 export const KeysPlatform$inboundSchema: z.ZodEnum<typeof KeysPlatform> = z
@@ -1336,6 +1450,8 @@ export const GroupKeys$inboundSchema: z.ZodType<GroupKeys, unknown> = z.object({
   enabled: z.boolean(),
   state: KeysState$inboundSchema,
   deploymentId: z.nullable(z.string()),
+  source: KeysSource$inboundSchema.optional(),
+  sandboxUpdate: KeysSandboxUpdate$inboundSchema.optional(),
   observation: z.nullable(z.lazy(() => KeysObservation$inboundSchema)),
   modelCoverage: z.array(z.lazy(() => KeysModelCoverage$inboundSchema))
     .optional(),
@@ -1362,6 +1478,15 @@ export const BucketsCapability$inboundSchema: z.ZodEnum<
 /** @internal */
 export const BucketsState$inboundSchema: z.ZodEnum<typeof BucketsState> = z
   .enum(BucketsState);
+
+/** @internal */
+export const BucketsSource$inboundSchema: z.ZodEnum<typeof BucketsSource> = z
+  .enum(BucketsSource);
+
+/** @internal */
+export const BucketsSandboxUpdate$inboundSchema: z.ZodEnum<
+  typeof BucketsSandboxUpdate
+> = z.enum(BucketsSandboxUpdate);
 
 /** @internal */
 export const BucketsPlatform$inboundSchema: z.ZodEnum<typeof BucketsPlatform> =
@@ -1531,6 +1656,8 @@ export const GroupBuckets$inboundSchema: z.ZodType<GroupBuckets, unknown> = z
     enabled: z.boolean(),
     state: BucketsState$inboundSchema,
     deploymentId: z.nullable(z.string()),
+    source: BucketsSource$inboundSchema.optional(),
+    sandboxUpdate: BucketsSandboxUpdate$inboundSchema.optional(),
     observation: z.nullable(z.lazy(() => BucketsObservation$inboundSchema)),
     modelCoverage: z.array(z.lazy(() => BucketsModelCoverage$inboundSchema))
       .optional(),
@@ -1558,6 +1685,15 @@ export const RegistryCapability$inboundSchema: z.ZodEnum<
 /** @internal */
 export const RegistryState$inboundSchema: z.ZodEnum<typeof RegistryState> = z
   .enum(RegistryState);
+
+/** @internal */
+export const RegistrySource$inboundSchema: z.ZodEnum<typeof RegistrySource> = z
+  .enum(RegistrySource);
+
+/** @internal */
+export const RegistrySandboxUpdate$inboundSchema: z.ZodEnum<
+  typeof RegistrySandboxUpdate
+> = z.enum(RegistrySandboxUpdate);
 
 /** @internal */
 export const RegistryPlatform$inboundSchema: z.ZodEnum<
@@ -1729,6 +1865,8 @@ export const GroupRegistry$inboundSchema: z.ZodType<GroupRegistry, unknown> = z
     enabled: z.boolean(),
     state: RegistryState$inboundSchema,
     deploymentId: z.nullable(z.string()),
+    source: RegistrySource$inboundSchema.optional(),
+    sandboxUpdate: RegistrySandboxUpdate$inboundSchema.optional(),
     observation: z.nullable(z.lazy(() => RegistryObservation$inboundSchema)),
     modelCoverage: z.array(z.lazy(() => RegistryModelCoverage$inboundSchema))
       .optional(),
@@ -1757,6 +1895,16 @@ export const RemoteSandboxCapability$inboundSchema: z.ZodEnum<
 export const RemoteSandboxState$inboundSchema: z.ZodEnum<
   typeof RemoteSandboxState
 > = z.enum(RemoteSandboxState);
+
+/** @internal */
+export const RemoteSandboxSource$inboundSchema: z.ZodEnum<
+  typeof RemoteSandboxSource
+> = z.enum(RemoteSandboxSource);
+
+/** @internal */
+export const RemoteSandboxSandboxUpdate$inboundSchema: z.ZodEnum<
+  typeof RemoteSandboxSandboxUpdate
+> = z.enum(RemoteSandboxSandboxUpdate);
 
 /** @internal */
 export const RemoteSandboxPlatform$inboundSchema: z.ZodEnum<
@@ -1933,6 +2081,8 @@ export const GroupRemoteSandbox$inboundSchema: z.ZodType<
   enabled: z.boolean(),
   state: RemoteSandboxState$inboundSchema,
   deploymentId: z.nullable(z.string()),
+  source: RemoteSandboxSource$inboundSchema.optional(),
+  sandboxUpdate: RemoteSandboxSandboxUpdate$inboundSchema.optional(),
   observation: z.nullable(z.lazy(() => RemoteSandboxObservation$inboundSchema)),
   modelCoverage: z.array(z.lazy(() => RemoteSandboxModelCoverage$inboundSchema))
     .optional(),
@@ -2000,6 +2150,7 @@ export const ProjectCapabilityOverview$inboundSchema: z.ZodType<
 > = z.object({
   generatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   configurationStatus: ConfigurationStatus$inboundSchema,
+  hasAppRemoteSandbox: z.boolean(),
   summary: z.lazy(() => ProjectCapabilityOverviewSummary$inboundSchema),
   groups: z.array(z.lazy(() => Group$inboundSchema)),
 });

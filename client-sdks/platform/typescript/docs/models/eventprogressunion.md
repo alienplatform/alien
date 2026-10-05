@@ -15,9 +15,9 @@ const value: models.EventProgress = {
 };
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

@@ -10,7 +10,7 @@ use alien_core::{
     Kv, KvBinding, Platform, Queue, QueueBinding, ResourceLifecycle, ResourceStatus, Sandbox,
     SandboxBinding, Storage, StorageBinding,
 };
-use alien_error::{Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use axum::{
     extract::{Json, State},
     http::{header::CACHE_CONTROL, header::PRAGMA, HeaderMap},
@@ -1437,20 +1437,39 @@ async fn sandbox_may_share_the_identity(
     if deployment.current_release_id.as_deref() == Some(desired_id) {
         return Ok(false);
     }
-    let desired = release_store
+    // An unreadable desired release refuses the binding (it may add a sandbox to the identity),
+    // but as a retryable 503 the caller can see: a failed update leaves the deployment here until
+    // the next one. The store error is logged rather than chained so its details stay server-side.
+    let unavailable = |reason: &str| {
+        AlienError::new(ErrorData::RemoteBindingDesiredReleaseUnavailable {
+            deployment_id: deployment.id.clone(),
+            release_id: desired_id.to_string(),
+            reason: reason.to_string(),
+        })
+    };
+    let desired = match release_store
         .get_release(&crate::auth::Subject::system(), desired_id)
         .await
-        .context(ErrorData::InternalError {
-            message: format!(
-                "Failed to load desired release '{desired_id}' for remote binding resolution"
-            ),
-        })?
-        .ok_or_else(|| {
-            ErrorData::internal(format!(
-                "Desired release '{desired_id}' for deployment '{}' does not exist",
-                deployment.id
-            ))
-        })?;
+    {
+        Ok(Some(release)) => release,
+        Ok(None) => {
+            tracing::warn!(
+                deployment_id = %deployment.id,
+                release_id = %desired_id,
+                "Desired release not found while resolving a remote binding"
+            );
+            return Err(unavailable("the release was not found"));
+        }
+        Err(error) => {
+            tracing::warn!(
+                deployment_id = %deployment.id,
+                release_id = %desired_id,
+                error = %error,
+                "Failed to load desired release while resolving a remote binding"
+            );
+            return Err(unavailable("the release store request failed"));
+        }
+    };
     Ok(desired
         .stacks
         .get(&deployment.platform)

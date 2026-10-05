@@ -590,6 +590,14 @@ export type DeploymentStateRuntimeMetadata = {
    * touching unrelated values in the same vault.
    */
   lastSyncedSecretNames?: Array<string> | undefined;
+  /**
+   * Release `pending_prepared_stack` was prepared from. The target can move
+   *
+   * @remarks
+   * to a newer release while that stack is still being applied; this tells
+   * the update which release actually converged.
+   */
+  pendingPreparedReleaseId?: string | null | undefined;
   pendingPreparedStack?:
     | DeploymentStatePendingPreparedStackUnion
     | null
@@ -4047,6 +4055,7 @@ export const DeploymentStateRuntimeMetadata$inboundSchema: z.ZodType<
     .optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
   lastSyncedSecretNames: z.array(z.string()).optional(),
+  pendingPreparedReleaseId: z.nullable(z.string()).optional(),
   pendingPreparedStack: z.nullable(
     DeploymentStatePendingPreparedStackUnion$inboundSchema,
   ).optional(),
@@ -4082,6 +4091,7 @@ export type DeploymentStateRuntimeMetadata$Outbound = {
   initialSetupAuthority?: string | undefined;
   lastSyncedEnvVarsHash?: string | null | undefined;
   lastSyncedSecretNames?: Array<string> | undefined;
+  pendingPreparedReleaseId?: string | null | undefined;
   pendingPreparedStack?:
     | DeploymentStatePendingPreparedStackUnion$Outbound
     | null
@@ -4120,6 +4130,7 @@ export const DeploymentStateRuntimeMetadata$outboundSchema: z.ZodType<
     .optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
   lastSyncedSecretNames: z.array(z.string()).optional(),
+  pendingPreparedReleaseId: z.nullable(z.string()).optional(),
   pendingPreparedStack: z.nullable(
     DeploymentStatePendingPreparedStackUnion$outboundSchema,
   ).optional(),

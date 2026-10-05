@@ -1,6 +1,26 @@
-use alien_core::{PermissionSetReference, Platform, Stack};
+use alien_core::{ComputeCluster, PermissionSetReference, Platform, Stack};
 
 use crate::{error::Result, CheckResult, CompileTimeCheck};
+
+/// Validate the declaration selector before deciding whether node grants apply.
+pub(crate) fn node_permissions_apply(
+    cluster: &ComputeCluster,
+    platform: Platform,
+) -> std::result::Result<bool, String> {
+    let Some(platforms) = &cluster.node_permissions_platforms else {
+        return Ok(cluster.node_permissions.is_some());
+    };
+    if cluster.node_permissions.is_none()
+        || platforms.is_empty()
+        || platforms.iter().enumerate().any(|(index, selected)| {
+            !matches!(selected, Platform::Aws | Platform::Gcp | Platform::Azure)
+                || platforms[..index].contains(selected)
+        })
+    {
+        return Err(format!("ComputeCluster '{}' nodePermissionsPlatforms requires a nodePermissions profile and a nonempty, distinct list containing only aws, gcp, or azure.", cluster.id));
+    }
+    Ok(platforms.contains(&platform))
+}
 
 /// Reject typos before permission generation can silently omit an access grant.
 pub struct PermissionSetsExistCheck;
@@ -45,6 +65,14 @@ impl CompileTimeCheck for PermissionSetsExistCheck {
             let Some(cluster) = entry.config.downcast_ref::<alien_core::ComputeCluster>() else {
                 continue;
             };
+            match node_permissions_apply(cluster, platform) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(message) => {
+                    errors.push(message);
+                    continue;
+                }
+            }
             let Some(profile) = &cluster.node_permissions else {
                 continue;
             };

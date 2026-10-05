@@ -11,6 +11,7 @@ import { deploymentsGetInfo } from "../funcs/deploymentsGetInfo.js";
 import { deploymentsGetInputs } from "../funcs/deploymentsGetInputs.js";
 import { deploymentsGetSetupRegistrationOperation } from "../funcs/deploymentsGetSetupRegistrationOperation.js";
 import { deploymentsGetStats } from "../funcs/deploymentsGetStats.js";
+import { deploymentsGetUpdateOperation } from "../funcs/deploymentsGetUpdateOperation.js";
 import { deploymentsImport } from "../funcs/deploymentsImport.js";
 import { deploymentsList } from "../funcs/deploymentsList.js";
 import { deploymentsListFilterDeploymentGroups } from "../funcs/deploymentsListFilterDeploymentGroups.js";
@@ -110,6 +111,20 @@ export class Deployments extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.DeploymentDetailResponse> {
     return unwrapAsync(deploymentsGet(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Retrieve a deployment update operation by its durable operation ID.
+   */
+  async getUpdateOperation(
+    request: operations.GetDeploymentUpdateOperationRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentUpdateOperationSummary> {
+    return unwrapAsync(deploymentsGetUpdateOperation(
       this,
       request,
       options,
