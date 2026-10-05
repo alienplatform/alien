@@ -323,6 +323,8 @@ pub struct SingleControllerExecutor {
     monitoring: Option<alien_core::OtlpConfig>,
     // Domain metadata for public resources (certificates, DNS)
     domain_metadata: Option<DomainMetadata>,
+    // Volume restore requests carried in the deployment config
+    volume_restores: Vec<alien_core::VolumeRestoreRequest>,
     // Public endpoint URL overrides for testing.
     public_endpoints: Option<alien_core::PublicEndpointUrls>,
     // Stack and state
@@ -388,6 +390,7 @@ impl SingleControllerExecutor {
                 .allow_frozen_changes(false)
                 .maybe_domain_metadata(self.domain_metadata.clone())
                 .maybe_public_endpoints(self.public_endpoints.clone())
+                .volume_restores(self.volume_restores.clone())
                 .manager_url("https://test-manager.alien.dev".to_string())
                 .deployment_token("test-deployment-token".to_string())
                 .build(),
@@ -592,6 +595,11 @@ impl SingleControllerExecutor {
     }
 
     /// Gets the current status of the controller.
+    /// Replaces the volume restore requests the next steps see in the deployment config.
+    pub fn set_volume_restores(&mut self, requests: Vec<alien_core::VolumeRestoreRequest>) {
+        self.volume_restores = requests;
+    }
+
     pub fn status(&self) -> ResourceStatus {
         self.controller.get_status()
     }
@@ -631,6 +639,8 @@ pub struct SingleControllerExecutorBuilder {
     external_bindings: ExternalBindings,
     monitoring: Option<alien_core::OtlpConfig>,
     domain_metadata: Option<DomainMetadata>,
+    // Volume restore requests carried in the deployment config
+    volume_restores: Vec<alien_core::VolumeRestoreRequest>,
     public_endpoints: Option<alien_core::PublicEndpointUrls>,
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
     stack_resources: Vec<(Resource, ResourceLifecycle)>,
@@ -659,6 +669,7 @@ impl SingleControllerExecutorBuilder {
             external_bindings: ExternalBindings::default(),
             monitoring: None,
             domain_metadata: None,
+            volume_restores: Vec::new(),
             public_endpoints: None,
             dependencies: Vec::new(),
             stack_resources: Vec::new(),
@@ -740,6 +751,12 @@ impl SingleControllerExecutorBuilder {
     /// Sets the domain metadata for public resources (certificates, DNS).
     pub fn domain_metadata(mut self, metadata: DomainMetadata) -> Self {
         self.domain_metadata = Some(metadata);
+        self
+    }
+
+    /// Sets the volume restore requests in the deployment config.
+    pub fn volume_restores(mut self, requests: Vec<alien_core::VolumeRestoreRequest>) -> Self {
+        self.volume_restores = requests;
         self
     }
 
@@ -1238,6 +1255,7 @@ impl SingleControllerExecutorBuilder {
             external_bindings: self.external_bindings,
             monitoring: self.monitoring,
             domain_metadata: self.domain_metadata,
+            volume_restores: self.volume_restores,
             public_endpoints: self.public_endpoints,
             desired_stack: stack,
             stack_state,

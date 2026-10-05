@@ -730,6 +730,7 @@ fn action_requires_tag_condition(action: &str) -> bool {
             | "apigateway:PUT"
             | "apigateway:TagResource"
             | "autoscaling:CreateAutoScalingGroup"
+            | "dlm:CreateLifecyclePolicy"
             | "autoscaling:DeleteAutoScalingGroup"
             | "autoscaling:SetDesiredCapacity"
             | "autoscaling:StartInstanceRefresh"
