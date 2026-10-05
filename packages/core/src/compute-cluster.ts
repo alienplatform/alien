@@ -2,6 +2,7 @@ import {
   type ComputeCluster as ComputeClusterConfig,
   ComputeClusterSchema,
   type MachineProfile,
+  type PermissionProfile,
   type ResourceType,
 } from "./generated/index.js"
 import { Resource } from "./resource.js"
@@ -12,6 +13,7 @@ export type {
   ComputeChoiceRange as GeneratedComputeChoiceRange,
   ComputeCluster as ComputeClusterConfig,
   MachineProfile,
+  PermissionProfile,
 } from "./generated/index.js"
 export {
   CapacityGroupScalePolicySchema,
@@ -104,6 +106,12 @@ export class ComputeCluster {
    */
   public static any(): ResourceType {
     return "compute-cluster"
+  }
+
+  /** Grants the node identity access to explicitly named resources only. */
+  public nodePermissions(permissions: PermissionProfile): this {
+    this._config.nodePermissions = permissions
+    return this
   }
 
   public pool(groupId: string, config: ComputePoolInput): this {

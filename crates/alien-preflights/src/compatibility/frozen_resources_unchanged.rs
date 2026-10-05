@@ -594,6 +594,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn node_grant_content_changes_require_setup() {
+        let mut old = compute_cluster(2);
+        old.node_permissions =
+            Some(alien_core::PermissionProfile::new().resource("objects", ["storage/data-read"]));
+        let mut changed = old.clone();
+        changed.node_permissions =
+            Some(alien_core::PermissionProfile::new().resource("objects", ["storage/data-write"]));
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let result = FrozenResourcesUnchangedCheck { platform }
+                .check(&compute_stack(old.clone()), &compute_stack(changed.clone()))
+                .await
+                .unwrap();
+            assert!(!result.success);
+            assert!(!result.errors.is_empty());
+        }
+    }
+
+    #[tokio::test]
     async fn compute_capacity_is_runtime_manageable() {
         let result = FrozenResourcesUnchangedCheck {
             platform: Platform::Aws,

@@ -10,7 +10,7 @@
 use crate::error::{ErrorData, Result};
 use crate::instance_catalog::{is_same_architecture_aws_machine, Architecture};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef};
-use crate::ResourceType;
+use crate::{PermissionProfile, ResourceType};
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -220,6 +220,11 @@ pub struct ComputeCluster {
     /// Must contain only alphanumeric characters, hyphens, and underscores.
     #[builder(start_fn)]
     pub id: String,
+
+    /// Explicit grants for the node identity, keyed by concrete resource ID.
+    /// Independent of workload permission profiles; absent grants no data access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_permissions: Option<PermissionProfile>,
 
     /// Capacity groups defining the machine pools for this cluster.
     /// Each group becomes a separate ASG/MIG/VMSS.
@@ -598,6 +603,29 @@ mod tests {
                 .expect_err("needs setup");
             assert_eq!(error.code, "INVALID_RESOURCE_UPDATE", "{old} -> {new}");
         }
+    }
+
+    #[test]
+    fn node_permissions_are_inline_optional_and_roundtrip_exactly() {
+        let mut cluster = ComputeCluster::new("compute".to_string()).build();
+        let absent = serde_json::to_value(&cluster).unwrap();
+        assert!(absent.get("nodePermissions").is_none());
+        assert_eq!(
+            serde_json::from_value::<ComputeCluster>(absent).unwrap(),
+            cluster
+        );
+        cluster.node_permissions =
+            Some(PermissionProfile::new().resource("objects", ["storage/data-read"]));
+        let json = serde_json::to_value(&cluster).unwrap();
+        assert_eq!(
+            json["nodePermissions"],
+            serde_json::json!({"objects": ["storage/data-read"]})
+        );
+        assert_eq!(
+            serde_json::from_value::<ComputeCluster>(json).unwrap(),
+            cluster
+        );
+        assert_eq!(ResourceDefinition::get_permissions(&cluster), None);
     }
 
     #[test]
