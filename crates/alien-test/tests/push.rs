@@ -66,9 +66,30 @@ async fn push_aws_comprehensive_ts(ctx: &mut AwsPushTypeScript) {
     )
     .await
     .expect("binding checks failed");
+    common::remote_bindings::check_remote_kv_ts(&ctx.ctx.deployment, ctx.ctx.platform)
+        .await
+        .expect("remote TypeScript KV checks failed");
     common::commands::check_commands(&ctx.ctx.deployment)
         .await
         .expect("command checks failed");
+}
+
+/// Focused live-cloud proof without unrelated binding and command checks.
+#[test_context(AwsPushTypeScript)]
+#[tokio::test]
+async fn push_aws_remote_kv(ctx: &mut AwsPushTypeScript) {
+    common::remote_bindings::check_remote_kv_ts(&ctx.ctx.deployment, ctx.ctx.platform)
+        .await
+        .expect("remote TypeScript KV checks failed");
+}
+
+/// Focused live-cloud proof without unrelated binding and command checks.
+#[test_context(AwsPushTypeScript)]
+#[tokio::test]
+async fn push_aws_remote_queue(ctx: &mut AwsPushTypeScript) {
+    common::remote_bindings::check_remote_queue_ts(&ctx.ctx.deployment, ctx.ctx.platform)
+        .await
+        .expect("remote TypeScript Queue checks failed");
 }
 
 // ---------------------------------------------------------------------------

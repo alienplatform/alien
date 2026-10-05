@@ -2,8 +2,8 @@ use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
 use alien_core::{
-    ComputeClusterOutputs, InitialSetupAuthority, Platform, ResourceLifecycle, ResourceStatus,
-    SetupScaffolding, Stack, StackState, StackStatus,
+    ComputeClusterOutputs, InitialSetupAuthority, Platform, ReleaseInfo, ResourceLifecycle,
+    ResourceStatus, SetupScaffolding, Stack, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_infra::{RunningResourcePolicy, StackExecutor};
@@ -221,8 +221,10 @@ pub async fn handle_update_pending(
     }
 
     // Store the mutated stack in runtime_metadata for future compatibility checks
+    let pending_prepared_release_id = target_release_id.map(str::to_string);
     let mut runtime_metadata = current.runtime_metadata.unwrap_or_default();
     runtime_metadata.pending_prepared_stack = Some(mutated_stack);
+    runtime_metadata.pending_prepared_release_id = pending_prepared_release_id;
     runtime_metadata.persisted_gate_answers = persisted_gate_answers;
 
     // Transition to Updating
@@ -324,7 +326,8 @@ pub async fn handle_updating(
     // not be deleted by an ordinary update. Keep their installed definitions
     // in the execution target while allowing explicitly runtime-managed frozen
     // resources (ComputeCluster capacity and, on AWS, a same-architecture machine
-    // type) to reconcile changed configuration through their management controller.
+    // type) to reconcile changed configuration through their management
+    // controller.
     if let Some(installed_stack) = runtime_metadata.prepared_stack.as_ref() {
         for (resource_id, entry) in installed_stack.resources() {
             if entry.lifecycle == ResourceLifecycle::Frozen
@@ -340,8 +343,24 @@ pub async fn handle_updating(
     // executor-only environment injection so a second release that also omits
     // a setup-owned resource cannot lose ownership information and delete it.
     runtime_metadata.pending_prepared_stack = Some(target_stack.clone());
+    // Check the deployer secret slots first: which are filled decides how
+    // workloads read them (see inject_environment_variables).
+    runtime_metadata.deployer_secrets = crate::helpers::check_deployer_secrets(
+        &target_stack,
+        &stack_state,
+        &client_config,
+        &config,
+        current.platform,
+    )
+    .await?;
+
     // Inject environment variables into the prepared stack
-    crate::helpers::inject_environment_variables(&mut target_stack, &config, current.platform)?;
+    crate::helpers::inject_environment_variables(
+        &mut target_stack,
+        &config,
+        current.platform,
+        &runtime_metadata.deployer_secrets,
+    )?;
 
     // Inject OTLP monitoring env vars if monitoring is configured
     if let Some(monitoring) = &config.monitoring {
@@ -369,6 +388,36 @@ pub async fn handle_updating(
         info!("Secrets synced successfully");
     } else {
         debug!("Secrets already synced, continuing with update");
+    }
+
+    // A required deployer secret the customer has not written blocks every
+    // workload start. Nothing is deployed until it is; the reports above say
+    // what is missing and where it goes.
+    let blocking = crate::helpers::deployer_secrets_blocking_start(
+        &target_stack,
+        &config,
+        current.platform,
+        &runtime_metadata.deployer_secrets,
+    );
+    if !blocking.is_empty() {
+        let summary = blocking
+            .iter()
+            .map(|report| report.summary())
+            .collect::<Vec<_>>()
+            .join(", ");
+        info!(%summary, "Waiting for deployer secrets before starting workloads");
+
+        next.status = DeploymentStatus::WaitingForSecrets;
+        next.error =
+            Some(AlienError::new(ErrorData::DeployerSecretsMissing { summary }).into_generic());
+        next.runtime_metadata = Some(runtime_metadata);
+        return Ok(DeploymentStepResult {
+            state: next,
+            suggested_delay_ms: Some(30_000),
+            update_heartbeat: false,
+            heartbeats: vec![],
+            observed_inventory_batches: vec![],
+        });
     }
 
     let executor = StackExecutor::builder(&target_stack, client_config)
@@ -437,17 +486,49 @@ pub async fn handle_updating(
             observed_inventory_batches: vec![],
         }
     } else if stack_status == StackStatus::Running {
-        info!("Update completed successfully, transitioning to Running");
-
-        next.status = DeploymentStatus::Running;
         next.stack_state = Some(step_result.next_state);
         next.error = None;
+        // The converged stack is the installed baseline either way.
         runtime_metadata.prepared_stack = runtime_metadata.pending_prepared_stack.take();
-        runtime_metadata.setup_update_authorization = None;
-        next.runtime_metadata = Some(runtime_metadata);
-        // Promote target to current: update successful
-        next.current_release = next.target_release.clone();
-        next.target_release = None;
+        let converged_release_id = runtime_metadata.pending_prepared_release_id.take();
+        let target_release_id = next
+            .target_release
+            .as_ref()
+            .and_then(|release| release.release_id.clone());
+
+        // A state prepared before the release was recorded has no id and keeps
+        // the old behavior.
+        if converged_release_id.is_some() && converged_release_id != target_release_id {
+            info!(
+                converged_release_id = ?converged_release_id,
+                target_release_id = ?target_release_id,
+                "Update converged on a superseded release; preparing the newer target"
+            );
+            // The converged release is what is installed now, even if the newer
+            // target later fails. Its prepared stack stands in for the release
+            // stack, which this state no longer holds.
+            next.current_release = Some(ReleaseInfo {
+                release_id: converged_release_id,
+                version: None,
+                description: None,
+                stack: runtime_metadata.prepared_stack.clone().ok_or_else(|| {
+                    AlienError::new(ErrorData::MissingConfiguration {
+                        message: "Pending prepared stack not found in runtime metadata".to_string(),
+                    })
+                })?,
+            });
+            next.status = DeploymentStatus::UpdatePending;
+            next.runtime_metadata = Some(runtime_metadata);
+        } else {
+            info!("Update completed successfully, transitioning to Running");
+
+            next.status = DeploymentStatus::Running;
+            runtime_metadata.setup_update_authorization = None;
+            next.runtime_metadata = Some(runtime_metadata);
+            // Promote target to current: update successful
+            next.current_release = next.target_release.clone();
+            next.target_release = None;
+        }
 
         DeploymentStepResult {
             state: next,

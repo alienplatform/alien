@@ -61,6 +61,8 @@ pub trait SecretManagerApi: Send + Sync + Debug {
         secret_version_name: String,
     ) -> Result<AccessSecretVersionResponse>;
 
+    async fn get_secret_version(&self, secret_version_name: String) -> Result<SecretVersion>;
+
     async fn get_secret_iam_policy(&self, secret_name: String) -> Result<IamPolicy>;
 
     async fn set_secret_iam_policy(
@@ -184,6 +186,27 @@ impl SecretManagerApi for SecretManagerClient {
     ) -> Result<AccessSecretVersionResponse> {
         let path = format!(
             "projects/{}/secrets/{}:access",
+            self.project_id, secret_version_name
+        );
+
+        self.base
+            .execute_request(
+                Method::GET,
+                &path,
+                None,
+                Option::<()>::None,
+                &secret_version_name,
+            )
+            .await
+    }
+
+    /// Gets a secret version's metadata (state, times), never its data.
+    /// `secret_version_name` is `{secret}/versions/{version}`; `latest` names
+    /// the newest version.
+    /// See: https://cloud.google.com/secret-manager/docs/reference/rest/v1/projects.secrets.versions/get
+    async fn get_secret_version(&self, secret_version_name: String) -> Result<SecretVersion> {
+        let path = format!(
+            "projects/{}/secrets/{}",
             self.project_id, secret_version_name
         );
 

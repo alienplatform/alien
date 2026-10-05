@@ -8,8 +8,10 @@ use crate::{
 };
 use alien_core::{GcpBindingSpec, PermissionGrant, PermissionSet};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 const GCP_CUSTOM_ROLE_ID_MAX_LEN: usize = 64;
+const CUSTOM_ROLE_NAMESPACE_MAX_LEN: usize = 18;
 const ROLE_ID_HASH_LEN: usize = 8;
 
 /// GCP IAM binding condition.
@@ -509,7 +511,10 @@ fn generate_role_id(
     }
 }
 
-/// Return the project custom-role prefix for all roles owned by this stack.
+/// Return the project custom-role ID prefix of this stack's roles.
+///
+/// Another deployment's namespace can extend this one (`acme` and
+/// `acme_prod`), so the prefix never proves which deployment owns a role.
 pub fn custom_role_prefix(context: &PermissionContext) -> String {
     format!("role_{}_", custom_role_namespace(context))
 }
@@ -524,7 +529,43 @@ pub fn custom_role_permission_set_prefix(
 }
 
 fn custom_role_namespace(context: &PermissionContext) -> String {
-    sanitize_role_segment(context.stack_prefix.as_deref().unwrap_or("stack"), 18)
+    match &context.gcp_custom_role_namespace {
+        Some(namespace) => namespace.clone(),
+        None => {
+            custom_role_namespace_for_prefix(context.stack_prefix.as_deref().unwrap_or("stack"))
+        }
+    }
+}
+
+/// Return the custom-role namespace for a resource prefix.
+///
+/// A prefix of up to 18 characters is used as is. A longer one keeps its first
+/// 9 characters and appends the first 8 hex characters of its SHA-256, so
+/// prefixes that share a beginning still get distinct role IDs. This is the
+/// `gcp_custom_role_prefix` local of the generated Terraform module, so both
+/// setup paths name a deployment's roles identically.
+pub fn custom_role_namespace_for_prefix(resource_prefix: &str) -> String {
+    let segment = sanitize_role_segment(resource_prefix, usize::MAX);
+    if segment.len() <= CUSTOM_ROLE_NAMESPACE_MAX_LEN {
+        return segment;
+    }
+    let digest = Sha256::digest(resource_prefix.as_bytes());
+    let hash: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
+    format!("{}_{hash}", &segment[..9])
+}
+
+/// Return the namespace runtime setup used before long prefixes were hashed:
+/// the prefix cut to 18 characters, which two long prefixes can share.
+pub fn legacy_custom_role_namespace_for_prefix(resource_prefix: &str) -> String {
+    sanitize_role_segment(resource_prefix, CUSTOM_ROLE_NAMESPACE_MAX_LEN)
+}
+
+/// Whether a custom role's description names `resource_prefix` as its owner.
+///
+/// Every role generated for a deployment ends its description with
+/// `Resource prefix: <prefix>.`, both at runtime and from Terraform.
+pub fn custom_role_description_names_prefix(description: &str, resource_prefix: &str) -> bool {
+    description.ends_with(&format!("Resource prefix: {resource_prefix}."))
 }
 
 fn custom_role_title(

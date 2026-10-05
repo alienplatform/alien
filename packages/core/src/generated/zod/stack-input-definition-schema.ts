@@ -7,6 +7,7 @@ import * as z from "zod";
 import { PlatformSchema } from "./platform-schema.js";
 import { StackInputDefaultValueSchema } from "./stack-input-default-value-schema.js";
 import { StackInputEnvironmentMappingSchema } from "./stack-input-environment-mapping-schema.js";
+import { StackInputGenerateSchema } from "./stack-input-generate-schema.js";
 import { StackInputKindSchema } from "./stack-input-kind-schema.js";
 import { StackInputProviderSchema } from "./stack-input-provider-schema.js";
 import { StackInputValidationSchema } from "./stack-input-validation-schema.js";
@@ -21,6 +22,9 @@ export const StackInputDefinitionSchema = z.object({
 "description": z.string().describe("Human-facing helper text."),
 get "env"(){
                 return z.array(StackInputEnvironmentMappingSchema.describe("How a resolved stack input is injected into runtime environment variables.")).describe("Runtime env-var mappings for v1 input resolution.").optional()
+              },
+get "generate"(){
+                return z.union([StackInputGenerateSchema, z.null()]).optional()
               },
 "id": z.string().describe("Stable input ID used by CLI/API calls."),
 get "kind"(){

@@ -1,0 +1,10 @@
+min_version = "2026.10.1"
+
+[settings]
+# Versions are exact; do not generate local lockfiles from inherited settings.
+lockfile = false
+idiomatic_version_file_enable_tools = ["pnpm", "rust"]
+
+[tools]
+node = "24.21.0"
+bun = "1.4.2"

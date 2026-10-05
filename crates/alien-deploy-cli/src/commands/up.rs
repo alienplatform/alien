@@ -11,8 +11,9 @@ use crate::output;
 use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
 use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{
-    parse_public_endpoint_assignment, validate_public_endpoint_urls, ClientConfig, ComputeSettings,
-    Container, Daemon, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
+    deployer_secret_value_refusal, is_deployer_secret_input, parse_public_endpoint_assignment,
+    validate_public_endpoint_urls, ClientConfig, ComputeSettings, Container, Daemon,
+    DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EndpointAccess,
     EnvironmentInfo, KubernetesClusterOwnership, KubernetesClusterSettings,
     KubernetesExposureSettings, KubernetesSettings, ManagementConfig, NetworkSettings, Platform,
     PublicEndpointUrls, ReleaseInfo, ResourceLifecycle, Stack, StackInputDefinition,
@@ -174,8 +175,9 @@ pub struct UpArgs {
     #[arg(long = "input")]
     pub input_values: Vec<String>,
 
-    /// Secret stack input value for setup (id=value).
-    #[arg(long = "secret-input")]
+    /// Refused: deployer secrets are written into your own secret store, never
+    /// passed to Alien. Kept so an old invocation fails with what to do instead.
+    #[arg(long = "secret-input", hide = true)]
     pub secret_input_values: Vec<String>,
 
     /// Public URL for an exposed endpoint in <resource-id>.<endpoint-name>=<absolute-url> form.
@@ -210,7 +212,7 @@ struct DeployConfigFile {
     public_endpoints: Option<PublicEndpointUrls>,
     /// Deployer-provided stack inputs.
     inputs: Option<HashMap<String, String>>,
-    /// Secret deployer-provided stack inputs.
+    /// Refused: deployer secrets are written into your own secret store.
     secret_inputs: Option<HashMap<String, String>>,
 }
 
@@ -416,6 +418,7 @@ mod tests {
             "initial-setup-failed",
             "provisioning",
             "waiting-for-machines",
+            "waiting-for-secrets",
             "provisioning-failed",
         ] {
             assert!(supports_hosted_compute_update(status), "{status}");
@@ -440,6 +443,7 @@ mod tests {
             "initial-setup-failed",
             "provisioning",
             "waiting-for-machines",
+            "waiting-for-secrets",
             "provisioning-failed",
         ] {
             assert!(hosted_compute_update_required(status, false), "{status}");
@@ -548,6 +552,86 @@ mod tests {
             .await
             .expect_err("untracked update must fail before contacting a manager");
         assert!(error.to_string().contains("No tracked deployment named"));
+    }
+
+    #[test]
+    fn endpoint_access_can_be_selected_during_initial_setup() {
+        for status in [
+            DeploymentStatus::Pending,
+            DeploymentStatus::PreflightsFailed,
+            DeploymentStatus::InitialSetup,
+            DeploymentStatus::InitialSetupFailed,
+        ] {
+            let mut settings = StackSettings::default();
+            apply_endpoint_access_override(
+                &mut settings,
+                Some(EndpointAccess::Private),
+                status,
+                false,
+            )
+            .expect("initial setup can select private access");
+            assert_eq!(settings.endpoint_access, EndpointAccess::Private);
+        }
+    }
+
+    #[test]
+    fn endpoint_access_is_fixed_before_the_first_release_finishes_provisioning() {
+        let mut settings = StackSettings {
+            endpoint_access: EndpointAccess::Private,
+            ..Default::default()
+        };
+        for status in [
+            DeploymentStatus::Provisioning,
+            DeploymentStatus::ProvisioningFailed,
+        ] {
+            apply_endpoint_access_override(
+                &mut settings,
+                Some(EndpointAccess::Internet),
+                status,
+                false,
+            )
+            .expect_err("completed setup is fixed even without a running release");
+            assert_eq!(settings.endpoint_access, EndpointAccess::Private);
+        }
+    }
+
+    #[test]
+    fn endpoint_access_refresh_preserves_the_stored_choice() {
+        for status in [
+            DeploymentStatus::InitialSetup,
+            DeploymentStatus::InitialSetupFailed,
+            DeploymentStatus::Provisioning,
+            DeploymentStatus::ProvisioningFailed,
+            DeploymentStatus::WaitingForMachines,
+            DeploymentStatus::WaitingForSecrets,
+            DeploymentStatus::Running,
+            DeploymentStatus::RefreshFailed,
+            DeploymentStatus::UpdatePending,
+            DeploymentStatus::Updating,
+            DeploymentStatus::UpdateFailed,
+        ] {
+            for (stored, requested) in [
+                (EndpointAccess::Private, EndpointAccess::Internet),
+                (EndpointAccess::Internet, EndpointAccess::Private),
+            ] {
+                let mut settings = StackSettings {
+                    endpoint_access: stored,
+                    ..Default::default()
+                };
+                let error =
+                    apply_endpoint_access_override(&mut settings, Some(requested), status, true)
+                        .expect_err("completed setup cannot change endpoint access");
+                assert!(error
+                    .to_string()
+                    .contains("Endpoint access cannot change after setup"));
+                assert_eq!(settings.endpoint_access, stored);
+                apply_endpoint_access_override(&mut settings, Some(stored), status, true)
+                    .expect("refresh accepts the stored choice");
+                apply_endpoint_access_override(&mut settings, None, status, true)
+                    .expect("refresh can omit the choice");
+                assert_eq!(settings.endpoint_access, stored);
+            }
+        }
     }
 
     #[test]
@@ -1483,6 +1567,7 @@ machine = "m8i.xlarge"
             default: None,
             platforms: None,
             validation: None,
+            generate: None,
             env: vec![],
         }
     }
@@ -1512,21 +1597,57 @@ apiKey = "secret-value"
         let config = load_deploy_config(&args)
             .expect("config should load")
             .expect("config should exist");
-        let values = collect_deployer_input_values(
-            &[
-                stack_input("region", StackInputKind::String, true),
-                stack_input("apiKey", StackInputKind::Secret, true),
-            ],
-            &[],
-            &[],
-            Some(&config),
-        )
-        .expect("input values should parse");
+        let inputs = [
+            stack_input("region", StackInputKind::String, true),
+            stack_input("apiKey", StackInputKind::Secret, true),
+        ];
+        let error = collect_deployer_input_values(&inputs, &[], &[], Some(&config))
+            .expect_err("a deployer secret value in the config is refused");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(
+            error.message.contains("'apiKey' is a deployer secret"),
+            "{}",
+            error.message
+        );
 
-        assert_eq!(values.get("region"), Some(&serde_json::json!("us-east-1")));
+        // Without the secret, a required deployer secret is neither asked for
+        // nor sent: only the plain input reaches the platform.
+        let config = DeployConfigFile {
+            secret_inputs: None,
+            ..config
+        };
+        let values = collect_deployer_input_values(&inputs, &[], &[], Some(&config))
+            .expect("input values should parse");
         assert_eq!(
-            values.get("apiKey"),
-            Some(&serde_json::json!("secret-value"))
+            values,
+            HashMap::from([("region".to_string(), serde_json::json!("us-east-1"))])
+        );
+    }
+
+    #[test]
+    fn deployer_secret_values_are_refused_on_every_flag() {
+        let inputs = [stack_input("apiKey", StackInputKind::Secret, true)];
+        for (input_values, secret_input_values) in [
+            (vec!["apiKey=secret-value".to_string()], vec![]),
+            (vec![], vec!["apiKey=secret-value".to_string()]),
+        ] {
+            let error =
+                collect_deployer_input_values(&inputs, &input_values, &secret_input_values, None)
+                    .expect_err("a deployer secret value is refused");
+            assert!(
+                error.message.contains("'apiKey' is a deployer secret"),
+                "{}",
+                error.message
+            );
+        }
+        // Even without stack metadata to recognise the input.
+        let error =
+            collect_deployer_input_values(&[], &[], &["apiKey=secret-value".to_string()], None)
+                .expect_err("a secret value is refused without metadata");
+        assert!(
+            error.message.contains("deployer secret"),
+            "{}",
+            error.message
         );
     }
 
@@ -1568,7 +1689,7 @@ region = "old"
     #[test]
     fn required_stack_inputs_fail_non_interactively() {
         let error = collect_deployer_input_values(
-            &[stack_input("apiKey", StackInputKind::Secret, true)],
+            &[stack_input("region", StackInputKind::String, true)],
             &[],
             &[],
             None,
@@ -2910,6 +3031,10 @@ fn load_stack_settings(
         }
     }
 
+    if let Some(access) = args.network.endpoint_access {
+        settings.endpoint_access = access;
+    }
+
     if args.network.network_mode != NetworkMode::Auto {
         let network_override =
             network::parse_network_settings(&args.network, network_platform.as_str()).map_err(
@@ -3095,24 +3220,28 @@ fn collect_deployer_input_values(
     secret_input_values: &[String],
     deploy_config: Option<&DeployConfigFile>,
 ) -> Result<HashMap<String, serde_json::Value>> {
-    let mut raw_values = HashMap::<String, String>::new();
-
-    if let Some(config_inputs) = deploy_config.and_then(|config| config.inputs.as_ref()) {
-        for (id, value) in config_inputs {
-            raw_values.insert(id.clone(), value.clone());
-        }
+    // No deployer secret value may reach the platform, so refuse every way of
+    // passing one before reading anything else.
+    let config_secret_ids = deploy_config
+        .and_then(|config| config.secret_inputs.as_ref())
+        .into_iter()
+        .flat_map(|secret_inputs| secret_inputs.keys().cloned());
+    let flag_secret_ids = secret_input_values
+        .iter()
+        .map(|input| parse_stack_input_arg(input, "--secret-input").map(|(id, _)| id))
+        .collect::<Result<Vec<_>>>()?;
+    if let Some(id) = config_secret_ids.chain(flag_secret_ids).next() {
+        return Err(deployer_secret_value_error(inputs, &id));
     }
-    if let Some(config_inputs) = deploy_config.and_then(|config| config.secret_inputs.as_ref()) {
+
+    let mut raw_values = HashMap::<String, String>::new();
+    if let Some(config_inputs) = deploy_config.and_then(|config| config.inputs.as_ref()) {
         for (id, value) in config_inputs {
             raw_values.insert(id.clone(), value.clone());
         }
     }
     for input in input_values {
         let (id, value) = parse_stack_input_arg(input, "--input")?;
-        raw_values.insert(id, value);
-    }
-    for input in secret_input_values {
-        let (id, value) = parse_stack_input_arg(input, "--secret-input")?;
         raw_values.insert(id, value);
     }
 
@@ -3124,15 +3253,26 @@ fn collect_deployer_input_values(
     }
 
     for id in raw_values.keys() {
-        if !inputs.iter().any(|input| input.id == *id) {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "input".to_string(),
-                message: format!("Unknown or unavailable deployer stack input '{id}'."),
-            }));
+        match inputs.iter().find(|input| input.id == *id) {
+            None => {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "input".to_string(),
+                    message: format!("Unknown or unavailable deployer stack input '{id}'."),
+                }));
+            }
+            Some(input) if is_deployer_secret_input(input) => {
+                return Err(deployer_secret_value_error(inputs, id));
+            }
+            Some(_) => {}
         }
     }
 
-    for input in inputs.iter().filter(|input| input.required) {
+    // Deployer secrets are never asked for: the deployment reports them
+    // missing until they are written into the secret store.
+    for input in inputs
+        .iter()
+        .filter(|input| input.required && !is_deployer_secret_input(input))
+    {
         if raw_values.contains_key(&input.id) {
             continue;
         }
@@ -3140,19 +3280,8 @@ fn collect_deployer_input_values(
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "input".to_string(),
                 message: format!(
-                    "Missing deployer input: {}. Pass {} {}=... or add [{}] to deployment.toml.",
-                    input.label,
-                    if matches!(input.kind, StackInputKind::Secret) {
-                        "--secret-input"
-                    } else {
-                        "--input"
-                    },
-                    input.id,
-                    if matches!(input.kind, StackInputKind::Secret) {
-                        "secretInputs"
-                    } else {
-                        "inputs"
-                    }
+                    "Missing deployer input: {}. Pass --input {}=... or add [inputs] to deployment.toml.",
+                    input.label, input.id,
                 ),
             }));
         }
@@ -3168,6 +3297,17 @@ fn collect_deployer_input_values(
         values.insert(input.id.clone(), parse_stack_input_value(input, raw_value)?);
     }
     Ok(values)
+}
+
+fn deployer_secret_value_error(inputs: &[StackInputDefinition], id: &str) -> AlienError<ErrorData> {
+    let name = inputs
+        .iter()
+        .find(|input| input.id == id)
+        .map_or(id, |input| input.label.as_str());
+    AlienError::new(ErrorData::ValidationError {
+        field: "input".to_string(),
+        message: deployer_secret_value_refusal(name),
+    })
 }
 
 fn parse_stack_input_arg(input: &str, flag: &str) -> Result<(String, String)> {
@@ -3513,6 +3653,7 @@ fn supports_hosted_compute_update(status: &str) -> bool {
             | "initial-setup-failed"
             | "provisioning"
             | "waiting-for-machines"
+            | "waiting-for-secrets"
             | "provisioning-failed"
     )
 }
@@ -3693,6 +3834,7 @@ fn parse_deployment_status(raw_status: &str) -> Result<DeploymentStatus> {
         "initial-setup-failed" => Ok(DeploymentStatus::InitialSetupFailed),
         "provisioning" => Ok(DeploymentStatus::Provisioning),
         "waiting-for-machines" => Ok(DeploymentStatus::WaitingForMachines),
+        "waiting-for-secrets" => Ok(DeploymentStatus::WaitingForSecrets),
         "provisioning-failed" => Ok(DeploymentStatus::ProvisioningFailed),
         "running" => Ok(DeploymentStatus::Running),
         "refresh-failed" => Ok(DeploymentStatus::RefreshFailed),
@@ -3720,6 +3862,7 @@ fn deployment_status_str(status: DeploymentStatus) -> &'static str {
         DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
         DeploymentStatus::Provisioning => "provisioning",
         DeploymentStatus::WaitingForMachines => "waiting-for-machines",
+        DeploymentStatus::WaitingForSecrets => "waiting-for-secrets",
         DeploymentStatus::ProvisioningFailed => "provisioning-failed",
         DeploymentStatus::Running => "running",
         DeploymentStatus::RefreshFailed => "refresh-failed",
@@ -4899,6 +5042,15 @@ pub async fn push_initial_setup(
 
         let status = parse_deployment_status(&deployment.status)?;
 
+        // Apply the choice only after acquiring the lock and refreshing status,
+        // so a setup that completed while we waited cannot change reachability.
+        apply_endpoint_access_override(
+            &mut config.stack_settings,
+            network_args.and_then(|args| args.endpoint_access),
+            status,
+            deployment.current_release_id.is_some(),
+        )?;
+
         // Reconstruct release identity from the state protected by the acquired
         // lock. Setup refreshes of an existing deployment must preserve the
         // current release while using desired-or-current as their setup target;
@@ -5084,6 +5236,33 @@ pub async fn push_initial_setup(
             Ok(())
         }
     }
+}
+
+fn apply_endpoint_access_override(
+    settings: &mut StackSettings,
+    requested: Option<EndpointAccess>,
+    status: DeploymentStatus,
+    has_current_release: bool,
+) -> Result<()> {
+    let Some(access) = requested else {
+        return Ok(());
+    };
+    let initial_setup = !has_current_release
+        && matches!(
+            status,
+            DeploymentStatus::Pending
+                | DeploymentStatus::PreflightsFailed
+                | DeploymentStatus::InitialSetup
+                | DeploymentStatus::InitialSetupFailed
+        );
+    if access != settings.endpoint_access && !initial_setup {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "endpoint-access".to_string(),
+            message: "Endpoint access cannot change after setup. Create a new deployment to change endpoint access.".to_string(),
+        }));
+    }
+    settings.endpoint_access = access;
+    Ok(())
 }
 
 fn requires_direct_setup_preparation(status: &DeploymentStatus) -> bool {

@@ -37,17 +37,33 @@ jobs:
 
       - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
+      - name: Install development tools
+        id: mise
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
         with:
-          node-version: 24
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: node pnpm
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
+
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
+        with:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
         with:
-          components: rustfmt, clippy
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: rust
+          cache: false
 
       - uses: Swatinem/rust-cache@v2
 
@@ -97,11 +113,15 @@ jobs:
             --exclude alien-test-server \
             --filter-expr 'not (package(alien-aws-clients) and kind(test)) and not (package(alien-gcp-clients) and kind(test)) and not (package(alien-azure-clients) and kind(test)) and not (package(alien-bindings) and kind(test)) and not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::image_shape_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-worker-runtime::cloudrun) and not binary_id(alien-worker-runtime::lambda) and not binary_id(alien-test::distribution) and not binary_id(alien-test::pull) and not binary_id(alien-test::push) and not binary_id(alien-manager::registry_proxy_cloud_test)'
 
+      - name: Platform SDK full-api tests
+        # Workspace builds use the filtered client; these tests need every operation.
+        run: cargo test --locked -p alien-platform-api --features full-api
+
       - name: Install operation compiler generation tools
         run: |
-          rustup toolchain install 1.97.1 --profile minimal --target wasm32-unknown-unknown
+          MISE_DATA_DIR="$RUNNER_TEMP/mise-rust" mise -E release-prepare install rust
           VERSION=$(node -e 'const fs = require("node:fs"); console.log(fs.readFileSync("Cargo.lock", "utf8").match(/name = "wasm-bindgen"\nversion = "([^"]+)"/)[1])')
-          cargo +1.97.1 install --locked --version "$VERSION" wasm-bindgen-cli
+          MISE_DATA_DIR="$RUNNER_TEMP/mise-rust" mise -E release-prepare exec -- cargo install --locked --version "$VERSION" wasm-bindgen-cli
 
       - name: Regenerate local TypeScript APIs
         run: pnpm generate

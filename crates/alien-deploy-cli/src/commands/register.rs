@@ -8,10 +8,11 @@
 //! land alongside under the same subcommand surface keyed on
 //! `--import <kind>`.
 
-use std::{collections::HashMap, path::PathBuf};
+use std::collections::HashMap;
 
 use crate::error::{ErrorData, Result};
 use alien_core::{
+    deployer_secret_value_refusal,
     embedded_config::DeployCliConfig,
     import::{ImportSourceKind, ImportedResource, StackImportRequest},
     ManagementConfig, Platform, ResourceType, StackSettings,
@@ -35,8 +36,7 @@ use super::up::resolve_base_url_option;
         --base-url https://api.alien.dev \\
         --token dg_... \\
         --input region=us-east-1 \\
-        --input-json replicas=3 \\
-        --secret-input-file apiKey=/run/secrets/api-key"
+        --input-json replicas=3"
 )]
 pub struct RegisterArgs {
     /// Source the resolved import payload comes from.
@@ -59,7 +59,6 @@ pub struct RegisterArgs {
     pub region: String,
 
     /// Standalone manager URL. Omit for hosted registration through Platform.
-    /// Direct manager registration cannot accept secret inputs.
     #[arg(long, env = "ALIEN_MANAGER_URL")]
     pub manager_url: Option<String>,
 
@@ -80,13 +79,12 @@ pub struct RegisterArgs {
     #[arg(long = "input-json")]
     pub json_input_values: Vec<String>,
 
-    /// Secret stack input read from a file (id=path). Repeat for multiple inputs.
-    /// A single trailing newline is removed from the file contents.
-    #[arg(long = "secret-input-file")]
+    /// Refused: deployer secrets are written into your own secret store, never
+    /// passed to Alien. Kept so an old invocation fails with what to do instead.
+    #[arg(long = "secret-input-file", hide = true)]
     pub secret_input_files: Vec<String>,
 
     /// Print a diagnostic payload to stdout instead of POSTing it.
-    /// File-backed secret values are redacted, so the output is not reusable.
     #[arg(long)]
     pub dry_run: bool,
 }
@@ -117,7 +115,7 @@ async fn register_cloudformation(
 
     let deployment_name = args.name.clone().unwrap_or_else(|| stack_name.clone());
 
-    let registration_inputs = collect_registration_inputs(
+    let input_values = collect_registration_inputs(
         &args.input_values,
         &args.json_input_values,
         &args.secret_input_files,
@@ -126,21 +124,14 @@ async fn register_cloudformation(
         args.manager_url.as_deref(),
         args.base_url.as_ref(),
         embedded_config,
-        !registration_inputs.secret_ids.is_empty(),
     )?;
 
     let outputs = fetch_cloudformation_outputs(&args.region, &stack_name).await?;
-    let request = build_import_request(
-        &outputs,
-        &deployment_name,
-        &stack_name,
-        registration_inputs.values,
-    )?;
+    let request = build_import_request(&outputs, &deployment_name, &stack_name, input_values)?;
 
     if args.dry_run {
-        let redacted_request = redact_secret_inputs(&request, &registration_inputs.secret_ids);
-        let redacted_body = serialize_registration_request(&target, &redacted_request)?;
-        let json = serde_json::to_string_pretty(&redacted_body)
+        let body = serialize_registration_request(&target, &request)?;
+        let json = serde_json::to_string_pretty(&body)
             .into_alien_error()
             .context(ErrorData::JsonError {
                 operation: "serialize stack registration request".to_string(),
@@ -210,13 +201,8 @@ fn resolve_registration_target(
     manager_url: Option<&str>,
     base_url: Option<&String>,
     embedded_config: Option<&DeployCliConfig>,
-    has_secret_inputs: bool,
 ) -> Result<RegistrationTarget> {
     match (manager_url, base_url) {
-        (Some(_), _) if has_secret_inputs => Err(AlienError::new(ErrorData::ValidationError {
-            field: "secret-input-file".to_string(),
-            message: "Secret stack inputs require hosted registration through Platform; remove --manager-url and optionally pass --base-url".to_string(),
-        })),
         (Some(manager_url), _) => Ok(RegistrationTarget::StandaloneManager(
             manager_url.trim_end_matches('/').to_string(),
         )),
@@ -299,29 +285,22 @@ fn serialize_registration_request(
     })
 }
 
-struct RegistrationInputs {
-    values: HashMap<String, JsonValue>,
-    secret_ids: Vec<String>,
-}
-
-fn redact_secret_inputs(request: &StackImportRequest, secret_ids: &[String]) -> StackImportRequest {
-    let mut redacted = request.clone();
-    for input_id in secret_ids {
-        if let Some(value) = redacted.input_values.get_mut(input_id) {
-            *value = JsonValue::String("[REDACTED]".to_string());
-        }
-    }
-    redacted
-}
-
 fn collect_registration_inputs(
     input_values: &[String],
     json_input_values: &[String],
     secret_input_files: &[String],
-) -> Result<RegistrationInputs> {
-    let mut values = HashMap::new();
-    let mut secret_ids = Vec::new();
+) -> Result<HashMap<String, JsonValue>> {
+    // No deployer secret value may reach the platform: refuse before any
+    // secret file is read.
+    if let Some(input) = secret_input_files.first() {
+        let (id, _) = parse_input_assignment(input, "--secret-input-file")?;
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "secret-input-file".to_string(),
+            message: deployer_secret_value_refusal(&id),
+        }));
+    }
 
+    let mut values = HashMap::new();
     for input in input_values {
         let (id, value) = parse_input_assignment(input, "--input")?;
         insert_registration_input(&mut values, id, JsonValue::String(value))?;
@@ -344,26 +323,8 @@ fn collect_registration_inputs(
         }
         insert_registration_input(&mut values, id, value)?;
     }
-    for input in secret_input_files {
-        let (id, path) = parse_input_assignment(input, "--secret-input-file")?;
-        let mut value = std::fs::read_to_string(PathBuf::from(&path))
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "read secret input file".to_string(),
-                file_path: path,
-                reason: format!("Could not load value for stack input '{id}'"),
-            })?;
-        if value.ends_with('\n') {
-            value.pop();
-            if value.ends_with('\r') {
-                value.pop();
-            }
-        }
-        insert_registration_input(&mut values, id.clone(), JsonValue::String(value))?;
-        secret_ids.push(id);
-    }
 
-    Ok(RegistrationInputs { values, secret_ids })
+    Ok(values)
 }
 
 fn is_supported_stack_input_value(value: &JsonValue) -> bool {
@@ -855,13 +816,7 @@ mod tests {
     }
 
     #[test]
-    fn registration_inputs_preserve_explicit_types_and_secret_file_contents() {
-        let secret = "secret-that-must-not-appear-in-argv";
-        let mut file = tempfile::NamedTempFile::new().expect("secret fixture");
-        writeln!(file, "{secret}").expect("write secret fixture");
-
-        let secret_arg = format!("apiKey={}", file.path().display());
-        assert!(!secret_arg.contains(secret));
+    fn registration_inputs_preserve_explicit_types() {
         let collected = collect_registration_inputs(
             &["region=us-east-1".to_string()],
             &[
@@ -869,16 +824,45 @@ mod tests {
                 "enabled=true".to_string(),
                 "zones=[\"a\",\"b\"]".to_string(),
             ],
-            &[secret_arg],
+            &[],
         )
         .expect("typed inputs should be collected");
 
-        assert_eq!(collected.values["region"], serde_json::json!("us-east-1"));
-        assert_eq!(collected.values["replicas"], serde_json::json!(3));
-        assert_eq!(collected.values["enabled"], serde_json::json!(true));
-        assert_eq!(collected.values["zones"], serde_json::json!(["a", "b"]));
-        assert_eq!(collected.values["apiKey"], serde_json::json!(secret));
-        assert_eq!(collected.secret_ids, vec!["apiKey"]);
+        assert_eq!(collected["region"], serde_json::json!("us-east-1"));
+        assert_eq!(collected["replicas"], serde_json::json!(3));
+        assert_eq!(collected["enabled"], serde_json::json!(true));
+        assert_eq!(collected["zones"], serde_json::json!(["a", "b"]));
+    }
+
+    #[test]
+    fn secret_input_files_are_refused_before_they_are_read() {
+        let secret = "secret-that-must-not-leave-the-host";
+        let mut file = tempfile::NamedTempFile::new().expect("secret fixture");
+        writeln!(file, "{secret}").expect("write secret fixture");
+
+        let error = collect_registration_inputs(
+            &["region=us-east-1".to_string()],
+            &[],
+            &[format!("apiKey={}", file.path().display())],
+        )
+        .expect_err("a secret input file is refused");
+
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(
+            error.message.contains("'apiKey' is a deployer secret"),
+            "{}",
+            error.message
+        );
+        assert!(!format!("{error:?}").contains(secret));
+
+        // Refused without touching the file system at all.
+        let error = collect_registration_inputs(&[], &[], &["apiKey=/does/not/exist".to_string()])
+            .expect_err("refused before the path is opened");
+        assert!(
+            error.message.contains("deployer secret"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]
@@ -907,57 +891,12 @@ mod tests {
     }
 
     #[test]
-    fn hosted_dry_run_redacts_secret_inputs_without_changing_the_request() {
-        let secret = "private-value";
-        let inputs = HashMap::from([
-            ("region".to_string(), serde_json::json!("us-east-1")),
-            ("apiKey".to_string(), serde_json::json!(secret)),
-        ]);
-        let request =
-            build_import_request(&base_outputs(), "app", "stack", inputs).expect("request");
-
-        let redacted = redact_secret_inputs(&request, &["apiKey".to_string()]);
-        let body = serialize_registration_request(
-            &RegistrationTarget::Platform("https://api.example.test".to_string()),
-            &redacted,
-        )
-        .expect("serialize redacted Platform request");
-        let output = serde_json::to_string(&body).expect("serialize dry run");
-
-        assert!(!output.contains(secret));
-        assert!(output.contains("[REDACTED]"));
-        assert_eq!(request.input_values["apiKey"], serde_json::json!(secret));
-        assert_eq!(
-            redacted.input_values["region"],
-            serde_json::json!("us-east-1")
-        );
-        assert!(redacted.deployment_group_token.is_empty());
-    }
-
-    #[test]
-    fn standalone_manager_rejects_secret_inputs_before_registration() {
-        let base_url = "https://api.example.test".to_string();
-        let error = resolve_registration_target(
-            Some("https://manager.example.test"),
-            Some(&base_url),
-            None,
-            true,
-        )
-        .err()
-        .expect("direct manager import must reject secret inputs");
-
-        assert_eq!(error.code, "VALIDATION_ERROR");
-        assert!(error.message.contains("hosted registration"));
-    }
-
-    #[test]
     fn manager_url_wins_over_a_base_url() {
         let base_url = "https://api.example.test".to_string();
         let target = resolve_registration_target(
             Some("https://manager.example.test"),
             Some(&base_url),
             None,
-            false,
         )
         .expect("manager selection should remain explicit");
 

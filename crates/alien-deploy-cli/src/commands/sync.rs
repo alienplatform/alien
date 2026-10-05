@@ -259,11 +259,13 @@ pub async fn sync_command(args: SyncArgs) -> Result<()> {
         }));
     }
 
+    // Reports that couldn't be sent. They stay in the folder, and sync fails
+    // once the rest of its work is done.
+    let mut unsent_reports = None;
     if online {
         let token = token.as_ref().expect("online implies a stored token");
-        send_reports(&folder, &mut site, token, args.dry_run).await?;
-        download_update(&folder, &mut site, token, args.full, args.dry_run).await?;
-        save_site(&folder, &site)?;
+        unsent_reports =
+            exchange_online(&folder, &mut site, token, args.full, args.dry_run).await?;
     }
     if let Some(settings) = &site_side {
         install_pending(&folder, &mut site, settings, &args).await?;
@@ -273,7 +275,8 @@ pub async fn sync_command(args: SyncArgs) -> Result<()> {
         save_site(&folder, &site)?;
         if online {
             let token = token.as_ref().expect("online implies a stored token");
-            send_reports(&folder, &mut site, token, false).await?;
+            // Sends every waiting report, including any the first try left.
+            unsent_reports = send_reports(&folder, &mut site, token, false).await.err();
             save_site(&folder, &site)?;
         } else if !args.dry_run {
             println!("Copy {} back out.", folder.display());
@@ -281,7 +284,39 @@ pub async fn sync_command(args: SyncArgs) -> Result<()> {
     } else if !args.dry_run {
         println!("Copy {} to the site.", folder.display());
     }
-    Ok(())
+    match unsent_reports {
+        Some(e) => Err(e).context(ErrorData::ManagerRequestFailed {
+            message: format!(
+                "the site's reports weren't sent; they stay in {} for the next sync",
+                folder.join(FROM_SITE).display()
+            ),
+        }),
+        None => Ok(()),
+    }
+}
+
+/// The online side: send back the site's reports, then download the next
+/// update.
+///
+/// A report that can't be sent doesn't hold the update back: the site would
+/// otherwise get no more updates for as long as one report fails, including
+/// an update that fixes what makes it fail. The report stays in the folder
+/// and its error comes back once the update is in the folder, for the
+/// caller to fail with.
+async fn exchange_online(
+    folder: &Path,
+    site: &mut SiteState,
+    token: &ManagerAccess,
+    full: bool,
+    dry_run: bool,
+) -> Result<Option<AlienError<ErrorData>>> {
+    let unsent_reports = send_reports(folder, site, token, dry_run).await.err();
+    if let Some(e) = &unsent_reports {
+        eprintln!("Couldn't send the site's reports ({e}); downloading the update anyway.");
+    }
+    download_update(folder, site, token, full, dry_run).await?;
+    save_site(folder, site)?;
+    Ok(unsent_reports)
 }
 
 pub async fn rollback_command(args: RollbackArgs) -> Result<()> {
@@ -719,40 +754,21 @@ async fn send_reports(
                 message: format!("{} is for another deployment", path.display()),
             }));
         }
-        let fresh: Vec<&ReportedBatch> = report
+        let fresh_batches = report
             .telemetry
             .iter()
             .filter(|batch| batch.id > site.uploaded_through)
-            .collect();
+            .count();
         if dry_run {
             println!(
-                "Would send report from {}: {} running {}, {} telemetry batches",
+                "Would send report from {}: {} running {}, {fresh_batches} telemetry batches",
                 report.written_at,
                 site.name,
                 report.installed_release.as_deref().unwrap_or("nothing yet"),
-                fresh.len()
             );
             continue;
         }
-        let body = serde_json::json!({
-            "state": report.state,
-            "telemetry": fresh
-                .iter()
-                .map(|batch| {
-                    serde_json::json!({ "id": batch.id, "signal": batch.signal, "data": batch.data })
-                })
-                .collect::<Vec<_>>(),
-        });
-        let _: serde_json::Value = manager_post(
-            &token.url,
-            &token.token,
-            &format!("/v1/deployments/{}/status-report", site.deployment_id),
-            &body,
-        )
-        .await?;
-        if let Some(through) = report.telemetry.iter().map(|batch| batch.id).max() {
-            site.uploaded_through = site.uploaded_through.max(through);
-        }
+        send_report(folder, site, token, &report).await?;
         site.site_has = report.inventory;
         site.site_release = report.installed_release.clone();
         // Saved before the report is removed, so progress is never lost.
@@ -766,17 +782,79 @@ async fn send_reports(
             String::new()
         };
         println!(
-            "Sent report from {}: {} running {}, {} telemetry batches{dropped}.",
+            "Sent report from {}: {} running {}, {fresh_batches} telemetry batches{dropped}.",
             report.written_at,
             site.name,
             report.installed_release.as_deref().unwrap_or("nothing yet"),
-            fresh.len()
         );
         std::fs::remove_file(&path)
             .into_alien_error()
             .context(config_error(format!("removing sent {}", path.display())))?;
     }
     Ok(())
+}
+
+/// What the manager answers a status report with.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StatusReportResponse {
+    /// Highest telemetry batch the manager has received.
+    telemetry_through: Option<i64>,
+}
+
+/// Send one report. The manager may take only part of a large telemetry
+/// backlog per request (it answers before a gateway would time the request
+/// out), so the rest goes in further requests for as long as each one makes
+/// progress. `site.uploaded_through` follows what the manager confirmed.
+async fn send_report(
+    folder: &Path,
+    site: &mut SiteState,
+    token: &ManagerAccess,
+    report: &SiteReport,
+) -> Result<()> {
+    let last = report.telemetry.iter().map(|batch| batch.id).max();
+    loop {
+        let fresh: Vec<serde_json::Value> = report
+            .telemetry
+            .iter()
+            .filter(|batch| batch.id > site.uploaded_through)
+            .map(|batch| {
+                serde_json::json!({ "id": batch.id, "signal": batch.signal, "data": batch.data })
+            })
+            .collect();
+        let sending = !fresh.is_empty();
+        let body = serde_json::json!({ "state": report.state, "telemetry": fresh });
+        let response: StatusReportResponse = manager_post(
+            &token.url,
+            &token.token,
+            &format!("/v1/deployments/{}/status-report", site.deployment_id),
+            &body,
+        )
+        .await?;
+        if !sending {
+            return Ok(());
+        }
+        let confirmed = response.telemetry_through.ok_or_else(|| {
+            AlienError::new(ErrorData::ManagerRequestFailed {
+                message: "the manager didn't say which telemetry it received".to_string(),
+            })
+        })?;
+        if confirmed <= site.uploaded_through {
+            return Err(AlienError::new(ErrorData::ManagerRequestFailed {
+                message: format!(
+                    "the manager took none of the telemetry after batch {}",
+                    site.uploaded_through
+                ),
+            }));
+        }
+        site.uploaded_through = confirmed;
+        // Saved after every request, so progress is never lost.
+        save_site(folder, site)?;
+        if last.is_some_and(|last| confirmed >= last) {
+            return Ok(());
+        }
+        println!("The manager took telemetry through batch {confirmed}; sending the rest.");
+    }
 }
 
 /// Download the release the site should run, unless the site already runs it
@@ -2146,7 +2224,166 @@ fn api_failed(message: impl Into<String>) -> ErrorData {
 
 #[cfg(test)]
 mod tests {
+    use httpmock::prelude::*;
+
     use super::*;
+
+    /// A transfer folder for `deployment` with one report from the site
+    /// carrying telemetry batches 1 to 4.
+    fn folder_with_report() -> (tempfile::TempDir, SiteState) {
+        let dir = tempfile::tempdir().unwrap();
+        let site = SiteState {
+            deployment_id: "dep_1".to_string(),
+            name: "site".to_string(),
+            site_release: Some("rel_old".to_string()),
+            ..SiteState::default()
+        };
+        save_site(dir.path(), &site).unwrap();
+        std::fs::create_dir_all(dir.path().join(FROM_SITE)).unwrap();
+        let report = SiteReport {
+            deployment_id: "dep_1".to_string(),
+            written_at: "2026-01-01T00:00:00Z".to_string(),
+            installed_release: Some("rel_old".to_string()),
+            state: serde_json::json!({ "status": "running" }),
+            telemetry: (1..=4)
+                .map(|id| ReportedBatch {
+                    id,
+                    signal: "logs".to_string(),
+                    data: "b3RscA==".to_string(),
+                })
+                .collect(),
+            dropped: 0,
+            inventory: BTreeSet::new(),
+        };
+        std::fs::write(
+            report_path(dir.path()),
+            serde_json::to_vec(&report).unwrap(),
+        )
+        .unwrap();
+        (dir, site)
+    }
+
+    fn report_path(folder: &Path) -> PathBuf {
+        folder.join(FROM_SITE).join("1-report.report")
+    }
+
+    fn access(server: &MockServer) -> ManagerAccess {
+        ManagerAccess {
+            url: server.base_url(),
+            token: "ax_deploy_test".to_string(),
+        }
+    }
+
+    /// The first telemetry batch id in a status report.
+    fn first_batch(request: &HttpMockRequest) -> Option<i64> {
+        let body: serde_json::Value = serde_json::from_slice(request.body.as_deref()?).ok()?;
+        body["telemetry"][0]["id"].as_i64()
+    }
+
+    #[tokio::test]
+    async fn a_report_that_fails_to_send_does_not_hold_back_the_update() {
+        let server = MockServer::start_async().await;
+        let reports = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/deployments/dep_1/status-report");
+                then.status(504).body("gateway timeout");
+            })
+            .await;
+        let target = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployments/dep_1/target");
+                then.status(200).json_body(serde_json::json!({
+                    "releaseInfo": { "releaseId": "rel_new", "stack": { "id": "app" } }
+                }));
+            })
+            .await;
+        let (dir, mut site) = folder_with_report();
+        // The update is already in the folder, so the download step stops
+        // there instead of pulling images.
+        std::fs::create_dir_all(dir.path().join(TO_SITE)).unwrap();
+        std::fs::write(dir.path().join(TO_SITE).join("2-rel_new.bundle"), b"x").unwrap();
+
+        let unsent = exchange_online(dir.path(), &mut site, &access(&server), false, false)
+            .await
+            .expect("the update step runs");
+
+        let error = unsent.expect("the report error comes back");
+        assert_eq!(error.code, "MANAGER_REQUEST_FAILED");
+        assert!(error.message.contains("504"), "{}", error.message);
+        reports.assert_hits_async(1).await;
+        target.assert_hits_async(1).await;
+        assert!(
+            report_path(dir.path()).exists(),
+            "the report stays for the next sync"
+        );
+        assert_eq!(load_site(dir.path()).unwrap().uploaded_through, 0);
+    }
+
+    #[tokio::test]
+    async fn a_report_the_manager_takes_in_parts_is_sent_in_full() {
+        let server = MockServer::start_async().await;
+        // The manager takes batches 1 and 2 of the first request, then the
+        // rest.
+        let first = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/deployments/dep_1/status-report")
+                    .matches(|request| first_batch(request) == Some(1));
+                then.status(200).json_body(serde_json::json!({
+                    "status": "running", "telemetryAccepted": 2, "telemetryThrough": 2
+                }));
+            })
+            .await;
+        let rest = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/deployments/dep_1/status-report")
+                    .matches(|request| first_batch(request) == Some(3));
+                then.status(200).json_body(serde_json::json!({
+                    "status": "running", "telemetryAccepted": 2, "telemetryThrough": 4
+                }));
+            })
+            .await;
+        let (dir, mut site) = folder_with_report();
+
+        send_reports(dir.path(), &mut site, &access(&server), false)
+            .await
+            .expect("the report is sent");
+
+        first.assert_hits_async(1).await;
+        rest.assert_hits_async(1).await;
+        assert_eq!(site.uploaded_through, 4);
+        assert_eq!(load_site(dir.path()).unwrap().uploaded_through, 4);
+        assert!(
+            !report_path(dir.path()).exists(),
+            "a sent report is removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_report_the_manager_makes_no_progress_on_is_kept() {
+        let server = MockServer::start_async().await;
+        let reports = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/deployments/dep_1/status-report");
+                then.status(200).json_body(serde_json::json!({
+                    "status": "running", "telemetryAccepted": 0
+                }));
+            })
+            .await;
+        let (dir, mut site) = folder_with_report();
+
+        let error = send_reports(dir.path(), &mut site, &access(&server), false)
+            .await
+            .expect_err("telemetry the manager doesn't confirm isn't treated as sent");
+
+        assert_eq!(error.code, "MANAGER_REQUEST_FAILED");
+        reports.assert_hits_async(1).await;
+        assert_eq!(site.uploaded_through, 0);
+        assert!(report_path(dir.path()).exists());
+    }
 
     #[test]
     fn resources_are_keyed_by_kind_and_name() {

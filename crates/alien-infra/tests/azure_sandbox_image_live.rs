@@ -67,6 +67,7 @@ fn adopted(disk_image: Option<&str>) -> AzureSandboxController {
 
 async fn executor(image: &str, controller: AzureSandboxController) -> SingleControllerExecutor {
     SingleControllerExecutor::builder()
+        .real_delays()
         .resource(sandbox(image))
         .controller(controller)
         .platform(Platform::Azure)

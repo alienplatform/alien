@@ -1,4 +1,5 @@
 use crate::error::{ErrorData, Result};
+use crate::traits::SecretPresence;
 use alien_error::{Context, ContextError, IntoAlienError};
 use alien_k8s_clients::secrets::SecretsApi;
 use async_trait::async_trait;
@@ -42,22 +43,7 @@ impl KubernetesSecretVault {
     /// Format: {vault_prefix}-{secret_name}
     /// Example: "acme-monitoring-secrets-api-key"
     fn secret_resource_name(&self, secret_name: &str) -> String {
-        let combined = format!("{}-{}", self.vault_prefix, secret_name);
-
-        // Kubernetes names must be lowercase and follow DNS-1123 label requirements
-        let clean = combined
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-            .collect::<String>()
-            .to_lowercase()
-            .replace('_', "-");
-
-        // Truncate to 253 characters (Kubernetes Secret name limit)
-        if clean.len() > 253 {
-            clean[..253].to_string()
-        } else {
-            clean
-        }
+        alien_core::vault_naming::kubernetes_secret_name(&self.vault_prefix, secret_name)
     }
 }
 
@@ -66,6 +52,36 @@ impl crate::traits::Binding for KubernetesSecretVault {}
 
 #[async_trait]
 impl crate::traits::Vault for KubernetesSecretVault {
+    /// Reads the Secret's object metadata only. The metadata cannot show
+    /// whether the `value` key is set; a pod that references a missing key
+    /// fails to start with the key named, so that case still surfaces.
+    async fn secret_presence(&self, secret_name: &str) -> Result<SecretPresence> {
+        let secret_resource_name = self.secret_resource_name(secret_name);
+
+        match self
+            .client
+            .get_secret_metadata(&self.namespace, &secret_resource_name)
+            .await
+        {
+            Ok(_) => Ok(SecretPresence::Present),
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                Ok(SecretPresence::Missing)
+            }
+            Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to read Secret '{}' in namespace '{}'",
+                    secret_resource_name, self.namespace
+                ),
+                resource_id: None,
+            })),
+        }
+    }
+
     /// Get a secret value by name
     async fn get_secret(&self, secret_name: &str) -> Result<String> {
         let secret_resource_name = self.secret_resource_name(secret_name);
@@ -75,9 +91,13 @@ impl crate::traits::Vault for KubernetesSecretVault {
             .client
             .get_secret(&self.namespace, &secret_resource_name)
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to get secret '{}'", secret_name),
-                resource_id: None,
+            .map_err(|error| {
+                super::secret_read_error(
+                    error,
+                    &self.vault_prefix,
+                    secret_name,
+                    format!("Failed to get secret '{}'", secret_name),
+                )
             })?;
 
         // Extract the secret value from the "value" key in secret data
@@ -214,53 +234,5 @@ impl crate::traits::Vault for KubernetesSecretVault {
             .collect();
 
         Ok(names)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_secret_resource_name_generation() {
-        // Test basic generation
-        let vault_prefix = "acme-monitoring-secrets";
-        let secret_name = "API_KEY";
-        let combined = format!("{}-{}", vault_prefix, secret_name);
-        let result = combined
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-            .collect::<String>()
-            .to_lowercase()
-            .replace('_', "-");
-
-        assert_eq!(result, "acme-monitoring-secrets-api-key");
-
-        // Test character filtering (underscores become hyphens)
-        let secret_name2 = "MY_SECRET_KEY";
-        let combined2 = format!("{}-{}", vault_prefix, secret_name2);
-        let result2 = combined2
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-            .collect::<String>()
-            .to_lowercase()
-            .replace('_', "-");
-
-        assert_eq!(result2, "acme-monitoring-secrets-my-secret-key");
-
-        // Test length truncation
-        let long_name = "A".repeat(300);
-        let combined3 = format!("{}-{}", vault_prefix, long_name);
-        let result3 = combined3
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-            .collect::<String>()
-            .to_lowercase();
-        let truncated = if result3.len() > 253 {
-            result3[..253].to_string()
-        } else {
-            result3
-        };
-        assert!(truncated.len() <= 253);
     }
 }

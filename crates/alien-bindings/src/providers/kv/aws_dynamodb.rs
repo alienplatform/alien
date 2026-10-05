@@ -10,7 +10,10 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use uuid::Uuid;
 
-use super::{decode_version, encode_version, validate_key, validate_value};
+use super::{
+    decode_version, encode_version, validate_key, validate_value_with_limit,
+    DYNAMODB_MAX_VALUE_BYTES,
+};
 
 const HASH_BUCKET_COUNT: u8 = 16;
 
@@ -196,7 +199,7 @@ impl Kv for AwsDynamodbKv {
 
     async fn put(&self, key: &str, value: Vec<u8>, options: Option<PutOptions>) -> Result<bool> {
         validate_key(key)?;
-        validate_value(&value)?;
+        validate_value_with_limit(&value, DYNAMODB_MAX_VALUE_BYTES)?;
 
         let bucket = self.hash_bucket(key);
         let options = options.unwrap_or_default();

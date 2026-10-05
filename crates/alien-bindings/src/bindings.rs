@@ -69,7 +69,7 @@ impl std::fmt::Debug for BoundQueue {
 }
 
 impl BoundQueue {
-    fn new(inner: Arc<dyn Queue>, name: impl Into<Arc<str>>) -> Self {
+    pub(crate) fn new(inner: Arc<dyn Queue>, name: impl Into<Arc<str>>) -> Self {
         Self {
             inner,
             name: name.into(),
@@ -79,6 +79,14 @@ impl BoundQueue {
     /// Send a message to this queue.
     pub async fn send(&self, message: MessagePayload) -> Result<()> {
         self.inner.send(&self.name, message).await
+    }
+
+    /// Send messages and return their individual outcomes in input order.
+    pub async fn send_batch(
+        &self,
+        messages: Vec<MessagePayload>,
+    ) -> Result<Vec<crate::traits::QueueSendResult>> {
+        self.inner.send_batch(&self.name, messages).await
     }
 
     /// Receive up to `max_messages` messages from this queue.

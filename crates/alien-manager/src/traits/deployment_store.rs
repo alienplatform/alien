@@ -573,6 +573,21 @@ pub trait DeploymentStore: Send + Sync {
         execution_claim: Option<ExecutionClaim>,
     ) -> Result<(), AlienError>;
 
+    /// Acknowledge an exact completed pull execution without applying its report.
+    /// Returns false when completion cannot be established. Implementations must
+    /// preserve any newer attempt and its lease, including within the same session.
+    /// Stores that do not issue execution claims cannot establish completion and
+    /// deliberately decline recovery. Claim-capable embedders implement this hook.
+    async fn acknowledge_completed_execution(
+        &self,
+        _caller: &crate::auth::Subject,
+        _deployment_id: &str,
+        _session: &str,
+        _execution_claim: &ExecutionClaim,
+    ) -> Result<bool, AlienError> {
+        Ok(false)
+    }
+
     /// Release lock on a deployment.
     async fn release(
         &self,

@@ -490,6 +490,7 @@ fn accept_target_release(
         deployment_state.status = alien_core::DeploymentStatus::UpdatePending;
         if let Some(metadata) = deployment_state.runtime_metadata.as_mut() {
             metadata.pending_prepared_stack = None;
+            metadata.pending_prepared_release_id = None;
         }
         deployment_state.retry_requested = false;
     }
@@ -790,6 +791,13 @@ mod tests {
     async fn captured_sync_request(
         config: impl FnOnce(String, SyncConfig) -> SyncFixture,
     ) -> Value {
+        captured_sync_request_with_receipt(config, None).await
+    }
+
+    async fn captured_sync_request_with_receipt(
+        config: impl FnOnce(String, SyncConfig) -> SyncFixture,
+        receipt: Option<alien_core::sync::SyncExecutionClaim>,
+    ) -> Value {
         type Captured = Arc<Mutex<Option<Value>>>;
         async fn capture_sync(
             State(captured): State<Captured>,
@@ -836,6 +844,11 @@ mod tests {
         })
         .await
         .unwrap();
+        if let Some(claim) = &receipt {
+            db.set_sync_execution("receipt-session", Some(claim), None)
+                .await
+                .unwrap();
+        }
         db.set_pending_observed_inventory_batches(&fixture.pending_inventory)
             .await
             .unwrap();
@@ -851,10 +864,30 @@ mod tests {
         sync_with_manager(&state, &client, sync_config.url.as_str(), false, None)
             .await
             .expect("sync with stub manager");
+        let body = captured
+            .lock()
+            .unwrap()
+            .take()
+            .expect("stub manager received a sync request");
+        if receipt.is_some() {
+            // Reopen SQLite to prove the acknowledgment cleared the durable
+            // receipt, then verify the next sync carries no execution claim.
+            let reopened = OperatorDb::new(&state.config.data_dir, TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap();
+            let persisted = reopened.get_sync_execution().await.unwrap().unwrap();
+            assert_eq!(persisted.session, "receipt-session");
+            assert!(persisted.claim.is_none());
+            assert!(persisted.target.is_none());
+            sync_with_manager(&state, &client, sync_config.url.as_str(), false, None)
+                .await
+                .unwrap();
+            let next = captured.lock().unwrap().take().unwrap();
+            assert!(next.get("executionClaim").is_none());
+            assert_eq!(next["session"], "receipt-session");
+        }
         server.abort();
-
-        let body = captured.lock().unwrap().take();
-        body.expect("stub manager received a sync request")
+        body
     }
 
     /// Serves the Kubernetes list calls the observe pass makes for one
@@ -1011,6 +1044,31 @@ mod tests {
                 }],
             }],
         }]
+    }
+
+    #[tokio::test]
+    async fn empty_sync_acknowledgment_clears_the_durable_completed_receipt() {
+        let body = captured_sync_request_with_receipt(
+            |data_dir, sync| SyncFixture {
+                config: OperatorConfig::builder()
+                    .platform(Platform::Aws)
+                    .operator_permission("diagnostics")
+                    .sync(sync)
+                    .data_dir(data_dir)
+                    .encryption_key(TEST_ENCRYPTION_KEY)
+                    .build(),
+                status: DeploymentStatus::Running,
+                pending_inventory: vec![],
+                service_provider: None,
+            },
+            Some(alien_core::sync::SyncExecutionClaim {
+                operation_id: "duop_receipt".into(),
+                attempt_id: "duat_receipt".into(),
+            }),
+        )
+        .await;
+        assert_eq!(body["executionClaim"]["operationId"], "duop_receipt");
+        assert_eq!(body["executionClaim"]["attemptId"], "duat_receipt");
     }
 
     #[tokio::test]

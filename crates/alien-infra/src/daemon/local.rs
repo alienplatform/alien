@@ -150,6 +150,10 @@ impl LocalDaemonController {
             env_vars.insert(var.name.clone(), var.value.clone());
             runtime_only_env_names.push(var.name.clone());
         }
+        runtime_only_env_names.extend(
+            crate::core::environment_variables::resolve_local_deployer_secrets(ctx, &mut env_vars)
+                .await?,
+        );
         // Monitoring credentials are controller-owned. Apply them after user
         // secrets so a same-name snapshot value cannot replace the credential
         // selected by DeploymentConfig.monitoring.

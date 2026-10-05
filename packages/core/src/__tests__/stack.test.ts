@@ -194,6 +194,65 @@ describe("Stack builder validation", () => {
     })
   })
 
+  it("declares a secret input whose value Alien generates", () => {
+    const stackInputs = alien.inputs({
+      databasePassword: alien.secret({
+        providedBy: "developer",
+        required: true,
+        label: "Database password",
+        description: "Password the app uses for its database.",
+        generate: { length: 64 },
+        env: "DATABASE_PASSWORD",
+      }),
+    })
+
+    expect(alien.getStackInputDefinitions(stackInputs)).toEqual([
+      expect.objectContaining({
+        id: "databasePassword",
+        kind: "secret",
+        providedBy: ["developer"],
+        required: true,
+        generate: { length: 64 },
+      }),
+    ])
+  })
+
+  it("rejects generate options Alien cannot honor", () => {
+    const generated = {
+      providedBy: "developer" as const,
+      required: true,
+      label: "Database password",
+      description: "Password the app uses for its database.",
+      generate: { length: 64 },
+    }
+
+    expect(() =>
+      alien.inputs({ databasePassword: alien.secret({ ...generated, providedBy: "deployer" }) }),
+    ).toThrow(
+      `Stack input 'databasePassword' generated inputs must be providedBy "developer" only; Alien supplies the value, so the deployer is never asked for it`,
+    )
+    expect(() =>
+      alien.inputs({ databasePassword: alien.secret({ ...generated, generate: { length: 8 } }) }),
+    ).toThrow(
+      "Stack input 'databasePassword' generate.length must be an integer between 16 and 256",
+    )
+    expect(() =>
+      alien.inputs({ databasePassword: alien.secret({ ...generated, generate: { length: 300 } }) }),
+    ).toThrow(
+      "Stack input 'databasePassword' generate.length must be an integer between 16 and 256",
+    )
+    expect(() =>
+      alien.inputs({ databasePassword: alien.secret({ ...generated, pattern: "[a-f0-9]+" }) }),
+    ).toThrow(
+      "Stack input 'databasePassword' generate cannot be combined with pattern or format; generated values are alphanumeric",
+    )
+    expect(() =>
+      alien.inputs({ databasePassword: alien.secret({ ...generated, maxLength: 32 }) }),
+    ).toThrow(
+      "Stack input 'databasePassword' generate.length 64 is outside the input's minLength/maxLength",
+    )
+  })
+
   it("rejects non-portable stack input regex patterns", () => {
     expect(() =>
       alien.inputs({

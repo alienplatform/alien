@@ -424,6 +424,7 @@ fn setup_run_acquire_statuses() -> Vec<String> {
         "initial-setup",
         "initial-setup-failed",
         "waiting-for-machines",
+        "waiting-for-secrets",
         "running",
         "update-failed",
         "refresh-failed",

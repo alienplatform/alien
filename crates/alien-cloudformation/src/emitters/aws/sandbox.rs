@@ -8,7 +8,8 @@ use crate::{
     emitter::CfEmitter,
     emitters::aws::helpers::{
         cf_from_json, private_subnet_ids_expr, required_logical_id, resource_config,
-        service_trust_policy, subnet_refs, tags, vpc_id_expr, CONDITION_NETWORK_MODE_CREATE,
+        resource_permission_owners, service_trust_policy, subnet_refs, tags,
+        uniquify_iam_statement_sids, vpc_id_expr, CONDITION_NETWORK_MODE_CREATE,
         PARAM_PRIVATE_SUBNET_IDS,
     },
     emitters::aws::service_account::permission_context,
@@ -30,6 +31,9 @@ const ARCHITECTURE: &str = "ARM_64";
 
 /// Port the in-sandbox agent serves, both its own protocol and the lifecycle hooks.
 const AGENT_PORT: i64 = AWS_MICROVM.port as i64;
+
+/// Permission-set id prefix for this resource type.
+const PERMISSION_SET_PREFIX: &str = "sandbox/";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsSandboxEmitter;
@@ -220,14 +224,20 @@ impl CfEmitter for AwsSandboxEmitter {
                 CfExpression::Integer(tier.baseline_memory_mib),
             )])]),
         );
-        // The enum has exactly one member, `ALL`, which grants mount, netns and eBPF. There is
-        // no subset to request, so the answer is none.
+        // AWS exposes only ALL; the agent reduces it before running image code or commands.
         properties.insert(
             "AdditionalOsCapabilities".to_string(),
-            CfExpression::list([]),
+            CfExpression::list(if sandbox.privileged_supervisor.is_some() {
+                vec![CfExpression::from("ALL")]
+            } else {
+                vec![]
+            }),
         );
         properties.insert("Hooks".to_string(), hooks());
-        properties.insert("EnvironmentVariables".to_string(), environment_variables());
+        properties.insert(
+            "EnvironmentVariables".to_string(),
+            environment_variables(sandbox),
+        );
         properties.insert("Tags".to_string(), tags(ctx));
 
         let mut resources = vec![role];
@@ -241,6 +251,7 @@ impl CfEmitter for AwsSandboxEmitter {
         if let Some(policy) = remote_access_policy(ctx)? {
             resources.push(policy);
         }
+        resources.extend(profile_policies(ctx, sandbox)?);
         Ok(resources)
     }
 
@@ -258,7 +269,7 @@ impl CfEmitter for AwsSandboxEmitter {
             ),
             (
                 "allowEgress",
-                CfExpression::from(matches!(sandbox.egress, SandboxEgress::Allow)),
+                CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
             ),
             // Both `GetMicrovmImage` and `RunMicrovm` require the ARN — measured against the
             // live API, where a bare name is refused with "Malformed ARN - doesn't start with
@@ -297,7 +308,7 @@ impl CfEmitter for AwsSandboxEmitter {
             ),
             (
                 "allowEgress".to_string(),
-                CfExpression::from(matches!(sandbox.egress, SandboxEgress::Allow)),
+                CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
             ),
             (
                 "imageArn".to_string(),
@@ -393,6 +404,96 @@ fn remote_access_policy(ctx: &EmitContext<'_>) -> Result<Option<CfResource>> {
     Ok(Some(policy))
 }
 
+/// IAM policies attaching each profile's granted `sandbox/*` sets to that profile's role, scoped
+/// to this sandbox's image.
+///
+/// Emitted for both lifecycles: a Live image is built after the stack completes, but under the
+/// same `${AWS::StackName}-<id>` name, so a name-scoped grant written now covers it. Without these
+/// a Worker holding `sandbox/management` on the sandbox is denied its first `RunMicrovm`.
+fn profile_policies(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Vec<CfResource>> {
+    let image_id = required_logical_id(ctx)?;
+    let generator = AwsCloudFormationPermissionsGenerator::new();
+    // The bare resource id, as in `remote_access_policy`: the sets name the image
+    // `${stackPrefix}-${resourceName}`, and the generator renders the prefix as the stack name.
+    let context = permission_context().with_resource_name(sandbox.id().to_string());
+
+    let mut resources = Vec::new();
+    for (owner_index, (role_id, permission_refs)) in
+        resource_permission_owners(ctx, PERMISSION_SET_PREFIX)
+            .into_iter()
+            .enumerate()
+    {
+        for (permission_index, permission_ref) in permission_refs.iter().enumerate() {
+            let permission_set = permission_ref
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::GenericError {
+                        message: format!(
+                            "permission set '{}' granted on sandbox '{}' is not registered",
+                            permission_ref.id(),
+                            sandbox.id()
+                        ),
+                    })
+                })?;
+
+            let policy = generator
+                .generate_policy(&permission_set, BindingTarget::Resource, &context)
+                .context(ErrorData::GenericError {
+                    message: format!(
+                        "failed to generate the '{}' IAM policy for sandbox '{}'",
+                        permission_set.id,
+                        sandbox.id()
+                    ),
+                })?;
+            let policy_value = serde_json::to_value(policy).into_alien_error().context(
+                ErrorData::TemplateSerializationFailed {
+                    format: "CloudFormation IAM policy".to_string(),
+                    reason: "Failed to serialize the sandbox IAM policy".to_string(),
+                },
+            )?;
+            let CfExpression::Object(mut policy_object) = cf_from_json(policy_value)? else {
+                return Err(AlienError::new(ErrorData::TemplateSerializationFailed {
+                    format: "CloudFormation IAM policy".to_string(),
+                    reason: "policy did not serialize to a JSON object".to_string(),
+                }));
+            };
+            let Some(CfExpression::List(statements)) = policy_object.shift_remove("Statement")
+            else {
+                continue;
+            };
+
+            let mut policy_resource = CfResource::new(
+                format!("{image_id}{role_id}SandboxPermission{owner_index}{permission_index}"),
+                "AWS::IAM::Policy".to_string(),
+            );
+            policy_resource.properties.insert(
+                "PolicyName".to_string(),
+                CfExpression::sub(format!(
+                    "${{AWS::StackName}}-{}-sandbox-{owner_index}-{permission_index}",
+                    sandbox.id()
+                )),
+            );
+            policy_resource.properties.insert(
+                "PolicyDocument".to_string(),
+                CfExpression::object([
+                    ("Version", CfExpression::from("2012-10-17")),
+                    (
+                        "Statement",
+                        CfExpression::list(uniquify_iam_statement_sids(statements)),
+                    ),
+                ]),
+            );
+            policy_resource.properties.insert(
+                "Roles".to_string(),
+                CfExpression::list([CfExpression::ref_(&role_id)]),
+            );
+            policy_resource.depends_on.push(role_id.clone());
+            resources.push(policy_resource);
+        }
+    }
+    Ok(resources)
+}
+
 /// Whether this sandbox's image is built by the runtime controller rather than by stack creation.
 fn provisioned_at_runtime(ctx: &EmitContext<'_>) -> bool {
     ctx.resource.lifecycle == ResourceLifecycle::Live
@@ -415,7 +516,7 @@ fn runtime_import_ref(sandbox: &Sandbox, image_id: &str) -> Result<CfExpression>
         ),
         (
             "allowEgress",
-            CfExpression::from(matches!(sandbox.egress, SandboxEgress::Allow)),
+            CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
         ),
         ("buildRoleArn", CfExpression::get_att(&role_id, "Arn")),
         ("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)),
@@ -594,7 +695,7 @@ fn hooks() -> CfExpression {
 ///
 /// `transport` authorization on AWS: the proxy validates a token scoped to one MicroVM before a
 /// request arrives, and one MicroVM is one session.
-fn environment_variables() -> CfExpression {
+fn environment_variables(sandbox: &Sandbox) -> CfExpression {
     let pairs = [
         ("ALIEN_SANDBOX_ROOT", AWS_MICROVM.session_root.to_string()),
         ("ALIEN_SANDBOX_PORT", AWS_MICROVM.port.to_string()),
@@ -606,9 +707,20 @@ fn environment_variables() -> CfExpression {
         ("ALIEN_SANDBOX_EXEC_GID", AWS_MICROVM.exec_uid.to_string()),
     ];
 
+    let mut pairs: Vec<(String, String)> = pairs
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value))
+        .collect();
+    let mut overrides = sandbox.supervisor_environment();
+    for (key, value) in &mut pairs {
+        if let Some(replacement) = overrides.remove(key) {
+            *value = replacement;
+        }
+    }
+    pairs.extend(overrides);
     CfExpression::list(pairs.into_iter().map(|(key, value)| {
         CfExpression::object([
-            ("Key", CfExpression::from(key)),
+            ("Key", CfExpression::from(key.as_str())),
             ("Value", CfExpression::from(value.as_str())),
         ])
     }))
@@ -693,7 +805,7 @@ fn egress_network(
             reason,
         })
     };
-    let Some(network) = sandbox_egress_network(ctx.stack, &sandbox.egress)
+    let Some(network) = sandbox_egress_network(ctx.stack, sandbox.cloud_egress())
         .map_err(|refusal| refuse(refusal.to_string()))?
     else {
         return Ok(None);
@@ -732,7 +844,7 @@ fn egress_network(
 /// Empty is not a missing value here: it is how `allow` is expressed on the wire, and the
 /// binding carries `allowEgress` alongside so the two cannot be confused.
 fn egress_connector_arns(sandbox: &Sandbox, image_id: &str) -> CfExpression {
-    match sandbox.egress {
+    match sandbox.cloud_egress() {
         SandboxEgress::Allow => CfExpression::list([]),
         _ => CfExpression::list([CfExpression::get_att(
             format!("{image_id}EgressConnector"),

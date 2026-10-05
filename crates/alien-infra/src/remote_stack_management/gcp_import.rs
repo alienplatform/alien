@@ -5,6 +5,7 @@ use alien_core::{
     Result, StackResourceState,
 };
 
+use crate::core::GcpCustomRoleNaming;
 use crate::import::ResourceImporter;
 use crate::import_helpers::make_imported_state;
 use crate::remote_stack_management::{
@@ -30,6 +31,7 @@ impl ResourceImporter for GcpRemoteStackManagementImporter {
             service_account_unique_id: Some(data.service_account_unique_id),
             role_bound: data.management_permissions_applied,
             impersonation_granted: data.management_permissions_applied,
+            custom_role_naming: Some(GcpCustomRoleNaming::HashedLongPrefix),
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

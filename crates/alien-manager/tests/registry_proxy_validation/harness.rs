@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::net::{SocketAddr, TcpListener};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -261,14 +260,6 @@ pub struct Manager {
     _state_dir: tempfile::TempDir,
 }
 
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
 /// A manager whose only artifact registry is the local binding at `registry_url`.
 pub async fn start_manager(registry_url: String) -> Manager {
     start_manager_with_binding(registry_url, "ALIEN_ARTIFACT_REGISTRY_BINDING").await
@@ -290,7 +281,8 @@ pub async fn start_manager_with_binding(registry_url: String, binding_env: &str)
             .unwrap(),
     );
     let state_dir = tempfile::tempdir().unwrap();
-    let port = free_port();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
     let url = format!("http://127.0.0.1:{port}");
     let config = ManagerConfig {
         port,
@@ -322,8 +314,7 @@ pub async fn start_manager_with_binding(registry_url: String, binding_env: &str)
         .build()
         .await
         .unwrap();
-    let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
-    let server = tokio::spawn(async move { manager.start(addr).await.unwrap() });
+    let server = tokio::spawn(async move { manager.start_with_listener(listener).await.unwrap() });
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(1))
         .build()

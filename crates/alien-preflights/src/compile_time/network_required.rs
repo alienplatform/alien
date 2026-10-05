@@ -45,7 +45,7 @@ fn sandbox_denies_egress(entry: &ResourceEntry) -> bool {
     entry
         .config
         .downcast_ref::<Sandbox>()
-        .is_some_and(|sandbox| !matches!(sandbox.egress, SandboxEgress::Allow))
+        .is_some_and(|sandbox| !matches!(sandbox.cloud_egress(), SandboxEgress::Allow))
 }
 
 /// Ensures public subnets are configured when resources need public ingress.

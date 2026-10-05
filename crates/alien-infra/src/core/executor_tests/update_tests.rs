@@ -4,11 +4,13 @@ use super::helpers::*;
 use crate::core::{MockPlatformServiceProvider, StackExecutor, StackStateExt};
 use crate::error::Result;
 use alien_core::{
-    ClientConfig, ComputeCluster, KubernetesClientConfig, Platform, Resource, ResourceLifecycle,
-    ResourceRef, ResourceStatus, Stack, StackResourceState, StackState,
+    ClientConfig, ComputeCluster, ComputePoolSelection, ComputeSettings, Container, ContainerCode,
+    DeploymentConfig, KubernetesClientConfig, Platform, Resource, ResourceLifecycle, ResourceRef,
+    ResourceSpec, ResourceStatus, Stack, StackResourceState, StackState,
 };
 use alien_error::AlienError;
 use alien_k8s_clients::kubernetes::deployments::MockDeploymentApi;
+use alien_preflights::{mutations::ComputeClusterMutation, runner::PreflightRunner, StackMutation};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -415,55 +417,135 @@ async fn imported_kubernetes_compute_retries_namespace_verification() -> Result<
     Ok(())
 }
 
-fn machine_cluster(instance_type: &str) -> ComputeCluster {
-    ComputeCluster::new("compute".to_string())
-        .capacity_group(alien_core::CapacityGroup {
-            group_id: "general".to_string(),
-            instance_type: Some(instance_type.to_string()),
-            profile: None,
-            min_size: 1,
-            max_size: 1,
-            scale_policy: None,
-            nested_virtualization: None,
-        })
-        .build()
-}
-
-/// Planning runs `validate_update`, which ignores the platform; this executor's only fixture is
-/// Kubernetes, so it stands in for AWS here (the AWS-only rule lives in the Frozen preflight).
+/// Exercise derived workload profiles through compatibility and the executor's real planner.
 #[tokio::test]
-async fn a_same_architecture_machine_change_plans_an_update() -> Result<()> {
+async fn mutated_machine_change_passes_compatibility_and_plans_update() {
+    let workload = Container::new("api".to_string())
+        .code(ContainerCode::Image {
+            image: "test:latest".to_string(),
+        })
+        .cpu(ResourceSpec {
+            min: "0.25".to_string(),
+            desired: "0.25".to_string(),
+        })
+        .memory(ResourceSpec {
+            min: "256Mi".to_string(),
+            desired: "256Mi".to_string(),
+        })
+        .ephemeral_storage("40Gi".to_string())
+        .port(8080)
+        .permissions("execution".to_string())
+        .build();
+    let release = Stack::new("machine-change".to_string())
+        .add(workload, ResourceLifecycle::Live)
+        .build();
+    let installed = materialize_machine(release.clone(), "t4g.micro").await;
+    let resized = materialize_machine(release.clone(), "t4g.small").await;
+    let config = default_deployment_config();
+    assert!(!config.allow_frozen_changes);
+    let compatibility = PreflightRunner::new()
+        .run_compatibility_checks(&installed, &resized, &config, Platform::Aws)
+        .await
+        .expect("compatibility checks should run");
+    assert!(compatibility.success, "{compatibility:?}");
+
+    let cluster = |stack: &Stack| {
+        stack
+            .resources
+            .values()
+            .find_map(|entry| entry.config.downcast_ref::<ComputeCluster>().cloned())
+            .expect("mutation should produce a compute cluster")
+    };
+    let old_cluster = cluster(&installed);
+    let new_cluster = cluster(&resized);
+    assert_eq!(
+        old_cluster.capacity_groups[0].instance_type.as_deref(),
+        Some("t4g.micro")
+    );
+    assert_eq!(
+        new_cluster.capacity_groups[0].instance_type.as_deref(),
+        Some("t4g.small")
+    );
+    assert_eq!(
+        new_cluster.capacity_groups[0]
+            .profile
+            .as_ref()
+            .unwrap()
+            .ephemeral_storage_bytes,
+        40 * 1024 * 1024 * 1024
+    );
+
+    // The planner invokes ComputeCluster::validate_update independently of its controller.
+    // Use the built-in Kubernetes controller for planning only; no provider is contacted.
     let mut state = StackState::new(Platform::Kubernetes);
-    let mut installed = StackResourceState::new_pending(
+    let mut resource = StackResourceState::new_pending(
         ComputeCluster::RESOURCE_TYPE.to_string(),
-        Resource::new(machine_cluster("c7g.xlarge")),
+        Resource::new(old_cluster.clone()),
         Some(ResourceLifecycle::Frozen),
         vec![],
     );
-    installed.status = ResourceStatus::Running;
-    state.resources.insert("compute".to_string(), installed);
-    let executor = |machine| {
-        let stack = Stack::new("machine-change".to_string())
-            .add(machine_cluster(machine), ResourceLifecycle::Frozen)
-            .build();
-        StackExecutor::builder(
-            &stack,
-            ClientConfig::Kubernetes(Box::new(KubernetesClientConfig::InCluster {
-                namespace: Some("application".to_string()),
-                additional_headers: None,
-            })),
-        )
-        .deployment_config(&default_deployment_config())
-        .service_provider(Arc::new(MockPlatformServiceProvider::new()))
-        .build()
-    };
+    resource.status = ResourceStatus::Running;
+    state.resources.insert(old_cluster.id.clone(), resource);
+    let plan = plan_machine_cluster(new_cluster, &state, &config)
+        .expect("same-architecture machine should plan");
+    assert_eq!(plan.updates.len(), 1);
+    assert!(plan.updates.contains_key(&old_cluster.id));
+    assert!(plan.creates.is_empty());
+    assert!(plan.deletes.is_empty());
 
-    let plan = executor("c7g.2xlarge")?.plan(&state)?;
-    assert!(plan.updates.contains_key("compute"));
-
-    let error = executor("m7i.large")?
-        .plan(&state)
-        .expect_err("a cross-architecture machine change cannot be updated");
+    let cross_arch = materialize_machine(release, "m7i.large").await;
+    let compatibility = PreflightRunner::new()
+        .run_compatibility_checks(&installed, &cross_arch, &config, Platform::Aws)
+        .await
+        .expect("compatibility checks should run");
+    assert!(!compatibility.success);
+    assert!(compatibility
+        .results
+        .iter()
+        .flat_map(|result| &result.errors)
+        .any(|error| error.contains("same CPU architecture")));
+    let error = plan_machine_cluster(cluster(&cross_arch), &state, &config)
+        .expect_err("planner must also refuse a cross-architecture machine");
     assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
-    Ok(())
+}
+
+async fn materialize_machine(stack: Stack, machine: &str) -> Stack {
+    let mut config = default_deployment_config();
+    config.stack_settings.compute = Some(ComputeSettings {
+        pools: [(
+            "general".to_string(),
+            ComputePoolSelection::Fixed {
+                machines: 1,
+                machine: Some(machine.to_string()),
+                failure_domains: None,
+            },
+        )]
+        .into_iter()
+        .collect(),
+    });
+    ComputeClusterMutation
+        .mutate(stack, &StackState::new(Platform::Aws), &config)
+        .await
+        .expect("compute selection should materialize")
+}
+
+fn plan_machine_cluster(
+    cluster: ComputeCluster,
+    state: &StackState,
+    config: &DeploymentConfig,
+) -> Result<crate::core::PlanResult> {
+    let stack = Stack::new("machine-change".to_string())
+        .add(cluster, ResourceLifecycle::Frozen)
+        .build();
+    StackExecutor::builder(
+        &stack,
+        ClientConfig::Kubernetes(Box::new(KubernetesClientConfig::InCluster {
+            namespace: Some("application".to_string()),
+            additional_headers: None,
+        })),
+    )
+    .deployment_config(config)
+    .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+    .build()?
+    .plan(state)
 }

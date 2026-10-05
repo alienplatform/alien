@@ -109,17 +109,27 @@ impl crate::traits::Binding for LocalVault {}
 
 #[async_trait]
 impl crate::traits::Vault for LocalVault {
+    /// The local vault is the developer's own file, so presence is whether
+    /// the key is set to a non-empty value.
+    async fn secret_presence(&self, secret_name: &str) -> Result<crate::traits::SecretPresence> {
+        let secrets = self.load_secrets().await?;
+        Ok(match secrets.get(secret_name) {
+            None => crate::traits::SecretPresence::Missing,
+            Some(value) if value.is_empty() => crate::traits::SecretPresence::Invalid {
+                reason: format!("'{secret_name}' is set to an empty value"),
+            },
+            Some(_) => crate::traits::SecretPresence::Present,
+        })
+    }
+
     /// Get a secret value by name
     async fn get_secret(&self, secret_name: &str) -> Result<String> {
         let secrets = self.load_secrets().await?;
 
         secrets.get(secret_name).cloned().ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Secret '{}' not found in vault '{}'",
-                    secret_name, self.vault_name
-                ),
-                resource_id: None,
+            AlienError::new(ErrorData::VaultSecretNotFound {
+                vault: self.vault_name.clone(),
+                secret_name: secret_name.to_string(),
             })
         })
     }

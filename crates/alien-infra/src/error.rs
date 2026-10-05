@@ -36,6 +36,21 @@ pub enum ErrorData {
         resource_id: Option<String>,
     },
 
+    /// A required vault-native deployer secret is not in the deployment's
+    /// secrets vault, so the workload does not start.
+    #[error(
+        code = "DEPLOYER_SECRET_MISSING",
+        message = "missing: {label} (no value at '{secret_name}' in the deployment's secrets vault)",
+        retryable = "true",
+        internal = "false"
+    )]
+    DeployerSecretMissing {
+        /// The stack input's label
+        label: String,
+        /// Name the deployer writes the value under
+        secret_name: String,
+    },
+
     /// Resource state serialization or deserialization failed.
     #[error(
         code = "RESOURCE_STATE_SERIALIZATION_FAILED",

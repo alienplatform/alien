@@ -354,7 +354,16 @@ impl DockerToolchain {
             "{}.oci.tar",
             context.build_target.runtime_platform_id()
         )))?;
-        let output = format!("type=oci,dest={}", output_tarball.display());
+        let lambda_worker = context.runtime_platform_name == "aws"
+            && context.workload == super::WorkloadKind::Worker;
+        let output = if lambda_worker {
+            format!(
+                "type=oci,dest={},compression=gzip,force-compression=true",
+                output_tarball.display()
+            )
+        } else {
+            format!("type=oci,dest={}", output_tarball.display())
+        };
         let arch_str = match context.build_target.to_dockdash_arch() {
             dockdash::Arch::Amd64 => "amd64",
             dockdash::Arch::ARM64 => "arm64",
@@ -384,6 +393,12 @@ impl DockerToolchain {
             "-f".to_string(),
             dockerfile_name.to_string(),
         ];
+
+        if lambda_worker {
+            // Lambda accepts a single architecture and no attestation manifest.
+            args.push("--provenance=false".to_string());
+            args.push("--sbom=false".to_string());
+        }
 
         // Add build args if provided
         let build_arg_strings: Vec<String> = self

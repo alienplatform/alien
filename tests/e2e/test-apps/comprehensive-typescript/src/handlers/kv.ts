@@ -72,4 +72,14 @@ app.post("/kv-test/:bindingName", async c => {
   }
 })
 
+app.get("/kv-remote/:key", async c => {
+  try {
+    const entry = await kv("alien-kv").getJson(c.req.param("key"))
+    return c.json({ value: entry?.value ?? null })
+  } catch (error: unknown) {
+    const alienError = await toExternalOperationError(error, "kv-remote")
+    return c.json({ error: alienError.message, code: alienError.code }, 500)
+  }
+})
+
 export default app

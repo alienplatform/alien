@@ -87,7 +87,7 @@ importers:
         specifier: link:../core
         version: link:../core
       zod:
-        specifier: 4.5.2
+        specifier: ^4.5.2
         version: 4.5.2
     devDependencies:
       '@alienplatform/typescript-config':
@@ -111,8 +111,6 @@ importers:
       vitest:
         specifier: ^4.0.0
         version: 4.1.11(@types/node@24.13.6)(msw@2.12.7(@types/node@24.13.6)(typescript@5.9.3))(vite@7.3.0(@types/node@24.13.6)(jiti@2.7.0)(lightningcss@1.31.1)(tsx@4.21.0))
-
-  packages/alien-cli-npm: {}
 
   packages/bindings:
     dependencies:
@@ -184,7 +182,7 @@ importers:
         specifier: ^12.0.0
         version: 12.0.0
       zod:
-        specifier: 4.5.2
+        specifier: ^4.5.2
         version: 4.5.2
     devDependencies:
       '@alienplatform/typescript-config':
@@ -255,7 +253,7 @@ importers:
         specifier: ^2.0.2
         version: 2.0.4
       zod:
-        specifier: 4.5.2
+        specifier: ^4.5.2
         version: 4.5.2
     devDependencies:
       '@alienplatform/typescript-config':
@@ -292,7 +290,7 @@ importers:
         specifier: ^7.1.0
         version: 7.2.0
       zod:
-        specifier: 4.5.2
+        specifier: ^4.5.2
         version: 4.5.2
     devDependencies:
       '@alienplatform/typescript-config':

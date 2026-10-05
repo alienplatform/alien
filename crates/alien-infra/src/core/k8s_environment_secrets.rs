@@ -2,8 +2,11 @@ use std::collections::{BTreeMap, HashMap};
 
 #[cfg(test)]
 use alien_core::EnvironmentVariableType;
-use alien_core::{EnvironmentVariable, ENV_ALIEN_SECRETS};
-use alien_error::{Context, ContextError};
+use alien_core::{
+    vault_naming::KUBERNETES_SECRET_VALUE_KEY, DeployerSecretEnv, EnvironmentVariable,
+    ENV_ALIEN_DEPLOYER_SECRETS, ENV_ALIEN_SECRETS,
+};
+use alien_error::{Context, ContextError, IntoAlienError};
 use k8s_openapi::api::core::v1::{EnvVar, EnvVarSource, Secret, SecretKeySelector};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use k8s_openapi::ByteString;
@@ -371,6 +374,17 @@ pub async fn reconcile_environment_secret_with_additional_secrets(
 
 /// Builds an `EnvVar` that resolves from a Kubernetes Secret key at pod start.
 fn secret_key_ref_env_var(name: &str, secret_name: &str, secret_key: &str) -> EnvVar {
+    optional_secret_key_ref_env_var(name, secret_name, secret_key, false)
+}
+
+/// Like [`secret_key_ref_env_var`]; an optional reference lets the pod start
+/// without the Secret, leaving the variable unset.
+fn optional_secret_key_ref_env_var(
+    name: &str,
+    secret_name: &str,
+    secret_key: &str,
+    optional: bool,
+) -> EnvVar {
     EnvVar {
         name: name.to_string(),
         value: None,
@@ -378,7 +392,7 @@ fn secret_key_ref_env_var(name: &str, secret_name: &str, secret_key: &str) -> En
             secret_key_ref: Some(SecretKeySelector {
                 name: secret_name.to_string(),
                 key: secret_key.to_string(),
-                optional: Some(false),
+                optional: Some(optional),
             }),
             ..Default::default()
         }),
@@ -406,12 +420,35 @@ fn secret_key_ref_env_var(name: &str, secret_name: &str, secret_key: &str) -> En
 pub fn projected_env_vars(
     plan: Option<&KubernetesEnvSecretPlan>,
     bindings: Vec<(String, serde_json::Value)>,
-    env_map: HashMap<String, String>,
+    mut env_map: HashMap<String, String>,
 ) -> Result<Vec<EnvVar>> {
     let mut env_vars = Vec::new();
 
+    // Vault-native deployer secrets are Secrets the deployer created in the
+    // namespace; reference them directly. The kubelet then holds a pod whose
+    // required Secret is missing, so the workload does not start without it.
+    if let Some(deployer_secrets) = env_map.remove(ENV_ALIEN_DEPLOYER_SECRETS) {
+        let deployer_secrets: Vec<DeployerSecretEnv> = serde_json::from_str(&deployer_secrets)
+            .into_alien_error()
+            .context(ErrorData::ResourceConfigInvalid {
+                message: format!("{ENV_ALIEN_DEPLOYER_SECRETS} is not a deployer secret list"),
+                resource_id: None,
+            })?;
+        for secret in deployer_secrets {
+            env_vars.push(optional_secret_key_ref_env_var(
+                &secret.name,
+                &secret.secret_name,
+                KUBERNETES_SECRET_VALUE_KEY,
+                !secret.required,
+            ));
+        }
+    }
+
     if let Some(plan) = plan {
         for key in &plan.keys {
+            if env_vars.iter().any(|ev| ev.name == *key) {
+                continue;
+            }
             env_vars.push(secret_key_ref_env_var(key, &plan.secret_name, key));
         }
     }
@@ -524,6 +561,63 @@ mod tests {
     use alien_core::{OtlpConfig, Resource, Vault, ENV_ALIEN_COMMANDS_TOKEN};
     use alien_k8s_clients::secrets::{MockSecretsApi, SecretsApi};
     use std::sync::Arc;
+
+    #[test]
+    fn deployer_secrets_reference_the_secret_the_deployer_created() {
+        let deployer_secrets = serde_json::json!([
+            {
+                "name": "DATABASE_PASSWORD",
+                "vaultKey": "input-database-password",
+                "secretName": "stack-secrets-input-database-password",
+                "label": "Database password",
+                "required": true,
+            },
+            {
+                "name": "LICENSE_KEY",
+                "vaultKey": "input-license-key",
+                "secretName": "stack-secrets-input-license-key",
+                "label": "License key",
+                "required": false,
+            },
+        ]);
+        let variables = vec![EnvironmentVariable {
+            name: "DATABASE_PASSWORD".to_string(),
+            value: "stored-before-vault-native".to_string(),
+            var_type: EnvironmentVariableType::Secret,
+            target_resources: None,
+        }];
+        let plan = environment_secret_plan("web", "web", &variables).expect("plan");
+        let env_map = HashMap::from([
+            (
+                ENV_ALIEN_DEPLOYER_SECRETS.to_string(),
+                deployer_secrets.to_string(),
+            ),
+            ("PLAIN".to_string(), "value".to_string()),
+        ]);
+
+        let env_vars = projected_env_vars(Some(&plan), Vec::new(), env_map).unwrap();
+
+        let reference = |name: &str| {
+            let matching: Vec<_> = env_vars.iter().filter(|ev| ev.name == name).collect();
+            assert_eq!(matching.len(), 1, "{name} is projected once");
+            matching[0]
+                .value_from
+                .as_ref()
+                .and_then(|source| source.secret_key_ref.clone())
+                .expect("a secretKeyRef")
+        };
+        let password = reference("DATABASE_PASSWORD");
+        assert_eq!(password.name, "stack-secrets-input-database-password");
+        assert_eq!(password.key, "value");
+        assert_eq!(password.optional, Some(false));
+        let license = reference("LICENSE_KEY");
+        assert_eq!(license.name, "stack-secrets-input-license-key");
+        assert_eq!(license.optional, Some(true));
+        assert!(env_vars
+            .iter()
+            .all(|ev| ev.name != ENV_ALIEN_DEPLOYER_SECRETS));
+        assert!(env_vars.iter().any(|ev| ev.name == "PLAIN"));
+    }
 
     fn secret_var(name: &str, value: &str, targets: Option<Vec<&str>>) -> EnvironmentVariable {
         EnvironmentVariable {

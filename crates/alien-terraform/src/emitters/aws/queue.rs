@@ -3,10 +3,17 @@
 use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::aws::helpers::{downcast, required_label, resource_prefix_template, tags},
+    emitters::aws::helpers::{
+        aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
+        required_label, resource_prefix_template, tags,
+    },
     expr,
 };
-use alien_core::{import::EmitContext, Queue, Result, Worker, WorkerTrigger};
+use alien_core::{
+    import::EmitContext, ErrorData, Queue, RemoteBindings, Result, Worker, WorkerTrigger,
+};
+use alien_error::AlienError;
+use alien_permissions::BindingTarget;
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -35,7 +42,40 @@ impl TfEmitter for AwsQueueEmitter {
             ],
         );
 
-        Ok(TfFragment::default().with_resource(q))
+        let mut fragment = TfFragment::default().with_resource(q);
+        if let Some(definition) =
+            alien_core::remote_bindings::remote_binding_for_entry(ctx.resource)
+        {
+            if let Some(access_label) = ctx.stack.resources().find_map(|(id, entry)| {
+                (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
+                    .then(|| ctx.name_for(id))
+                    .flatten()
+            }) {
+                let permission_set = alien_permissions::get_permission_set(
+                    definition.permission_set,
+                )
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::GenericError {
+                        message: format!(
+                            "Remote Queue permission set {} is not registered",
+                            definition.permission_set
+                        ),
+                    })
+                })?;
+                let context = aws_terraform_permission_context()
+                    .with_resource_name(format!("${{aws_sqs_queue.{label}.name}}"));
+                emit_iam_role_policy_for_target_with_label(
+                    &mut fragment,
+                    access_label,
+                    permission_set,
+                    &format!("{label}_remote_access"),
+                    &format!("access-{}", queue.id()),
+                    &context,
+                    BindingTarget::Resource,
+                )?;
+            }
+        }
+        Ok(fragment)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {

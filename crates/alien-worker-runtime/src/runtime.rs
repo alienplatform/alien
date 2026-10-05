@@ -26,6 +26,7 @@ use tokio::{
     sync::{broadcast, OnceCell},
     task::JoinHandle,
 };
+use tokio_util::task::AbortOnDropHandle;
 use tracing::{debug, error, info, warn};
 
 #[cfg(feature = "gcp")]
@@ -60,17 +61,9 @@ struct CommandPushConfig {
 /// Global state for WaitUntilGrpcServer
 static WAIT_UNTIL_SERVER: OnceCell<Arc<WaitUntilGrpcServer>> = OnceCell::const_new();
 
-/// Global state for ControlGrpcServer
-static CONTROL_SERVER: OnceCell<Arc<ControlGrpcServer>> = OnceCell::const_new();
-
 /// Get the global WaitUntilGrpcServer handle
 pub fn get_wait_until_server() -> Option<Arc<WaitUntilGrpcServer>> {
     WAIT_UNTIL_SERVER.get().cloned()
-}
-
-/// Get the global ControlGrpcServer handle
-pub fn get_control_server() -> Option<Arc<ControlGrpcServer>> {
-    CONTROL_SERVER.get().cloned()
 }
 
 /// Dependencies used to start the Worker runtime.
@@ -81,7 +74,10 @@ pub enum RuntimeDependencies {
 
     /// Use a custom direct provider for Worker secret projection and start the
     /// Worker app protocol server (local platform).
-    Provider(Arc<dyn alien_bindings::BindingsProviderApi>),
+    Provider {
+        provider: Arc<dyn alien_bindings::BindingsProviderApi>,
+        control_server_tx: tokio::sync::oneshot::Sender<Arc<ControlGrpcServer>>,
+    },
 
     /// Use externally provided Worker app protocol handles (testing).
     ExternalWorkerProtocol {
@@ -152,20 +148,29 @@ pub async fn run(
     );
 
     // 1. Start the Worker app protocol server (or use external handles for testing).
-    let (wait_until_server, control_server, bindings_provider) = match dependencies {
+    let (wait_until_server, control_server, bindings_provider, _protocol_task) = match dependencies
+    {
         RuntimeDependencies::ExternalWorkerProtocol {
             wait_until_server,
             control_server,
         } => {
             info!("Using externally provided Worker app protocol handles (testing mode)");
             // No provider available in test mode
-            (wait_until_server, control_server, None)
+            (wait_until_server, control_server, None, None)
         }
-        RuntimeDependencies::Provider(provider) => {
+        RuntimeDependencies::Provider {
+            provider,
+            control_server_tx,
+        } => {
             info!("Using custom provider for Worker secret projection (local platform)");
-            let (wait, control, prov) =
+            let (wait, control, prov, task) =
                 start_worker_protocol_server(&config.worker_grpc_address, provider).await?;
-            (wait, control, Some(prov))
+            control_server_tx.send(control.clone()).map_err(|_| {
+                AlienError::new(ErrorData::Other {
+                    message: "Local Worker owner dropped its protocol receiver".to_string(),
+                })
+            })?;
+            (wait, control, Some(prov), Some(task))
         }
         RuntimeDependencies::FromEnvironment => {
             info!("Creating lazy provider for Worker secret projection (cloud platform)");
@@ -176,15 +181,14 @@ pub async fn run(
                     },
                 )?,
             );
-            let (wait, control, prov) =
+            let (wait, control, prov, task) =
                 start_worker_protocol_server(&config.worker_grpc_address, provider).await?;
-            (wait, control, Some(prov))
+            (wait, control, Some(prov), Some(task))
         }
     };
 
     // Store in global state
     let _ = WAIT_UNTIL_SERVER.set(wait_until_server.clone());
-    let _ = CONTROL_SERVER.set(control_server.clone());
 
     // Lambda must register its extension and begin Runtime API polling before
     // secret loading and application startup. AWS gives on-demand functions
@@ -548,6 +552,7 @@ async fn start_worker_protocol_server(
     Arc<WaitUntilGrpcServer>,
     Arc<ControlGrpcServer>,
     Arc<dyn alien_bindings::BindingsProviderApi>,
+    AbortOnDropHandle<alien_worker_protocol::error::Result<()>>,
 )> {
     info!(address = %address, "Starting Worker app protocol server");
 
@@ -557,6 +562,8 @@ async fn start_worker_protocol_server(
             message: format!("Failed to start Worker app protocol server at {address}"),
             handler_type: Some("worker-app-protocol".to_string()),
         })?;
+
+    let protocol_task = AbortOnDropHandle::new(handles.server_task);
 
     // A closed readiness channel means the protocol server did not start.
     if handles.readiness_receiver.await.is_err() {
@@ -569,25 +576,12 @@ async fn start_worker_protocol_server(
     }
     info!(address = %address, "Worker app protocol server ready");
 
-    // Spawn server task
-    let addr = address.to_string();
-    tokio::spawn(async move {
-        match handles.server_task.await {
-            Ok(Ok(_)) => info!(address = %addr, "Worker app protocol server exited"),
-            Ok(Err(e)) => {
-                error!(error = %e, address = %addr, "Worker app protocol server error")
-            }
-            Err(e) => {
-                error!(error = %e, address = %addr, "Worker app protocol server panicked")
-            }
-        }
-    });
-
     info!(address = %address, "Worker app protocol server started");
     Ok((
         handles.wait_until_server,
         handles.control_server,
         secret_provider,
+        protocol_task,
     ))
 }
 
@@ -668,6 +662,7 @@ async fn start_application(
     configure_application_runtime_env(&mut cmd, config);
 
     // Always pipe stdout/stderr for telemetry capture
+    cmd.kill_on_drop(true);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 

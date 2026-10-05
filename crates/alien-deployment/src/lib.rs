@@ -220,7 +220,7 @@ pub async fn step(
             provisioning::handle_provisioning(current, config, client_config, service_provider)
                 .await?
         }
-        DeploymentStatus::WaitingForMachines => {
+        DeploymentStatus::WaitingForMachines | DeploymentStatus::WaitingForSecrets => {
             if current.current_release.is_some() && current.target_release.is_some() {
                 updating::handle_updating(current, config, client_config, service_provider).await?
             } else {

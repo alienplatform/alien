@@ -18,6 +18,9 @@ export type SyncReleaseGlobals = {
  * Lock released successfully.
  */
 export type SyncReleaseResponse = {
+  /**
+   * True when released or the exact terminal receipt was acknowledged. False when completion could not be established.
+   */
   success: boolean;
 };
 

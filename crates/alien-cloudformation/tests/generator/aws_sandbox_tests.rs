@@ -11,10 +11,12 @@ use alien_core::{
         sandbox_egress_operator_policy, sandbox_egress_operator_trust_policy,
         SandboxEgressConnector, LOOPBACK_ONLY_CIDR, SANDBOX_EGRESS_POLICY_NAME,
     },
-    Network, NetworkSettings, RemoteBindings, ResourceLifecycle, Sandbox, SandboxCode,
-    SandboxEgress, SandboxLifecyclePolicy, Stack, StackSettings, Worker, WorkerCode,
+    Network, NetworkSettings, PermissionProfile, RemoteBindings, ResourceLifecycle, Sandbox,
+    SandboxCode, SandboxEgress, SandboxLifecyclePolicy, SandboxPrivilegedSupervisor,
+    ServiceAccount, Stack, StackSettings, Worker, WorkerCode,
 };
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 /// A bundle key a runtime rebuild can be granted: the version segment moves, the prefix does not.
 /// A Frozen sandbox is built once and needs no such shape, so it keeps the flat key its snapshots
@@ -1864,19 +1866,33 @@ fn the_emitted_registration_matches_the_direct_seed() {
         cidr: None,
         availability_zones: 2,
     };
-    for (egress, bundle_uri) in [
+    let supervised = Some(SandboxPrivilegedSupervisor { command_uid: 60001 });
+    for (egress, privileged_supervisor, bundle_uri) in [
         (
             SandboxEgress::Allow,
+            None,
             "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
         ),
-        (SandboxEgress::Deny, LIVE_BUNDLE),
+        (SandboxEgress::Deny, None, LIVE_BUNDLE),
         (
             SandboxEgress::Deny,
+            None,
             "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
         ),
+        // The agent enforces these in the guest, so the cloud side sees open egress. A registration
+        // that read the declared egress instead refused this sandbox on direct deployments only.
+        (
+            SandboxEgress::AllowDomains {
+                domains: vec!["example.com".to_string()],
+            },
+            supervised.clone(),
+            LIVE_BUNDLE,
+        ),
+        (SandboxEgress::Deny, supervised.clone(), LIVE_BUNDLE),
     ] {
         let sandbox = Sandbox {
             preview_ports: vec![8080, 3000],
+            privileged_supervisor,
             ..sandbox_fixture_with(egress.clone(), bundle_uri)
         };
         let stack = Stack::new("acme-sandbox-registration-parity".to_string())
@@ -1888,7 +1904,10 @@ fn the_emitted_registration_matches_the_direct_seed() {
             )
             .add(sandbox.clone(), ResourceLifecycle::Live)
             .build();
-        let case = format!("{egress:?} sandbox built from {bundle_uri}");
+        let case = format!(
+            "{egress:?} sandbox (supervisor {:?}) built from {bundle_uri}",
+            sandbox.privileged_supervisor
+        );
         let (template, _yaml) = render_built_ins_template(
             &stack,
             StackSettings {
@@ -1921,4 +1940,159 @@ fn the_emitted_registration_matches_the_direct_seed() {
 
         assert_eq!(emitted, direct, "{case}");
     }
+}
+
+/// A deny sandbox whose `execution` profile is granted `sets` on it, next to that profile's role.
+fn granted_sandbox_stack(lifecycle: ResourceLifecycle, sets: &[&str]) -> (Stack, StackSettings) {
+    let settings = StackSettings {
+        network: Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        }),
+        ..StackSettings::default()
+    };
+    let stack = Stack::new("acme-sandbox-grants".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().resource("agents", sets.iter().copied()),
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Network::new("default-network".to_string())
+                .settings(settings.network.clone().expect("network"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            match lifecycle {
+                ResourceLifecycle::Live => sandbox_fixture_with(SandboxEgress::Deny, LIVE_BUNDLE),
+                _ => sandbox_fixture(SandboxEgress::Deny),
+            },
+            lifecycle,
+        )
+        .build();
+    (stack, settings)
+}
+
+/// Every action the standalone policies attached to `role_id` grant, mapped to the resources it is granted
+/// on, with `Fn::Sub` resources read as their template text.
+fn granted_actions(
+    template: &alien_cloudformation::CfTemplate,
+    role_id: &str,
+) -> BTreeMap<String, Vec<String>> {
+    let as_list = |value: &Value| match value {
+        Value::Array(items) => items.clone(),
+        other => vec![other.clone()],
+    };
+    let mut granted: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for resource in template.resources.values() {
+        // The generator may fold the inline policies into managed ones; both grant the role.
+        if !matches!(
+            resource.resource_type.as_str(),
+            "AWS::IAM::Policy" | "AWS::IAM::ManagedPolicy"
+        ) {
+            continue;
+        }
+        let resource = serde_json::to_value(resource).expect("serializes");
+        if resource["Properties"]["Roles"] != serde_json::json!([{ "Ref": role_id }]) {
+            continue;
+        }
+        for statement in resource["Properties"]["PolicyDocument"]["Statement"]
+            .as_array()
+            .expect("policy statements")
+        {
+            assert_eq!(statement["Effect"], "Allow", "{statement:#}");
+            let resources: Vec<String> = as_list(&statement["Resource"])
+                .iter()
+                .map(|item| match item {
+                    Value::String(text) => text.clone(),
+                    Value::Object(map) if map.len() == 1 && map["Fn::Sub"].is_string() => {
+                        map["Fn::Sub"].as_str().expect("string").to_string()
+                    }
+                    other => panic!("unexpected Resource entry {other}"),
+                })
+                .collect();
+            for action in as_list(&statement["Action"]) {
+                let action = action.as_str().expect("action is a string").to_string();
+                granted
+                    .entry(action)
+                    .or_default()
+                    .extend(resources.iter().cloned());
+            }
+        }
+    }
+    granted
+}
+
+/// A Worker creates sessions under its profile's role, so a profile granted `sandbox/management`
+/// and `sandbox/execute` on the sandbox must leave that role able to start, address and enter
+/// sessions of this image — and of no other. A Live image is built after the stack completes, but
+/// under the same name, so the template grants it either way.
+#[test]
+fn a_profile_granted_the_sandbox_reaches_its_image_and_nothing_wider() {
+    const IMAGE: &str =
+        "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${AWS::StackName}-agents";
+    for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+        let (stack, settings) =
+            granted_sandbox_stack(lifecycle, &["sandbox/management", "sandbox/execute"]);
+        let (template, _yaml) = render_built_ins_template(
+            &stack,
+            settings,
+            custom_resource_registration(),
+            CloudFormationTarget::Aws,
+            "aws",
+            "sandbox profile grants",
+        );
+
+        let granted = granted_actions(&template, "ExecutionSaRole");
+        for action in [
+            "lambda:RunMicrovm",
+            "lambda:TerminateMicrovm",
+            "lambda:SuspendMicrovm",
+            "lambda:ResumeMicrovm",
+            "lambda:CreateMicrovmAuthToken",
+            "lambda:GetMicrovm",
+        ] {
+            assert_eq!(
+                granted.get(action),
+                Some(&vec![IMAGE.to_string()]),
+                "{lifecycle:?}: {action} must be granted on this sandbox's image alone: {granted:#?}"
+            );
+        }
+        // AWS authorizes the connector pass against an id it assigns, so no name can scope it.
+        assert_eq!(
+            granted.get("lambda:PassNetworkConnector"),
+            Some(&vec!["*".to_string()]),
+            "{lifecycle:?}: {granted:#?}"
+        );
+        assert!(
+            !granted.contains_key("lambda:CreateMicrovmShellAuthToken")
+                && !granted.contains_key("iam:PassRole"),
+            "{lifecycle:?}: neither set reaches a shell or a role: {granted:#?}"
+        );
+    }
+}
+
+/// A link alone grants `sandbox/execute`; the template must not quietly widen it into session
+/// lifecycle control.
+#[test]
+fn an_execute_only_profile_cannot_start_sessions() {
+    let (stack, settings) = granted_sandbox_stack(ResourceLifecycle::Frozen, &["sandbox/execute"]);
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "sandbox execute-only grant",
+    );
+
+    let granted = granted_actions(&template, "ExecutionSaRole");
+    assert_eq!(
+        granted.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec!["lambda:CreateMicrovmAuthToken", "lambda:GetMicrovm"],
+    );
 }

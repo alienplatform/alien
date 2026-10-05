@@ -4280,18 +4280,8 @@ impl GcpWorkerController {
             .collect();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let mut permission_context = alien_permissions::PermissionContext::new()
-            .with_project_name(gcp_config.project_id.clone())
-            .with_region(gcp_config.region.clone())
-            .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_resource_name(topic_name.to_string());
-        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
-            permission_context =
-                permission_context.with_deployment_name(deployment_name.to_string());
-        }
-        if let Some(ref project_number) = gcp_config.project_number {
-            permission_context = permission_context.with_project_number(project_number.clone());
-        }
+        let permission_context =
+            ResourcePermissionsHelper::build_gcp_permission_context(ctx, topic_name)?;
 
         let generator = alien_permissions::generators::GcpRuntimePermissionsGenerator::new();
         let mut all_bindings = Vec::new();
@@ -4801,24 +4791,11 @@ impl GcpWorkerController {
         service_name: &str,
         all_bindings: &mut Vec<alien_gcp_clients::iam::Binding>,
     ) -> Result<()> {
-        use alien_permissions::{generators::GcpRuntimePermissionsGenerator, PermissionContext};
+        use alien_permissions::generators::GcpRuntimePermissionsGenerator;
 
         let config = ctx.desired_resource_config::<Worker>()?;
-        let gcp_config = ctx.get_gcp_config()?;
-
-        // Build permission context for this specific worker resource
-        let mut permission_context = PermissionContext::new()
-            .with_project_name(gcp_config.project_id.clone())
-            .with_region(gcp_config.region.clone())
-            .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_resource_name(service_name.to_string());
-        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
-            permission_context =
-                permission_context.with_deployment_name(deployment_name.to_string());
-        }
-        if let Some(ref project_number) = gcp_config.project_number {
-            permission_context = permission_context.with_project_number(project_number.clone());
-        }
+        let permission_context =
+            ResourcePermissionsHelper::build_gcp_permission_context(ctx, service_name)?;
 
         let generator = GcpRuntimePermissionsGenerator::new();
         let type_prefix = "worker/";
@@ -6359,6 +6336,17 @@ mod tests {
         // Run create flow
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
+        let delays = executor.take_suggested_delays();
+        // Cloud Run and its networking are long-running operations, so create polls.
+        assert!(
+            !delays.is_empty(),
+            "GCP worker create should poll at least once"
+        );
+        crate::core::controller_test::assert_polling_delays(
+            &delays,
+            std::time::Duration::from_secs(1),
+            "GCP worker create",
+        );
 
         // Verify outputs are available
         let outputs = executor.outputs().unwrap();
@@ -6387,6 +6375,17 @@ mod tests {
         // Run delete flow
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Deleted);
+        let delays = executor.take_suggested_delays();
+        // Deleting the service and its networking also waits on operations.
+        assert!(
+            !delays.is_empty(),
+            "GCP worker delete should poll at least once"
+        );
+        crate::core::controller_test::assert_polling_delays(
+            &delays,
+            std::time::Duration::from_secs(1),
+            "GCP worker delete",
+        );
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());

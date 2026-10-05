@@ -807,15 +807,39 @@ where
 {
     let client = local_dev_client(port);
 
-    for _ in 0..180 {
-        if let Ok(list_response) = client.list_deployments().send().await {
+    let timeout_seconds = std::env::var("ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS")
+        .map(|value| value.parse::<u64>())
+        .unwrap_or(Ok(300))
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS must be a positive integer".to_string(),
+        })?;
+    if timeout_seconds == 0 {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS must be greater than zero".to_string(),
+        }));
+    }
+    let deadline = tokio::time::Instant::now()
+        .checked_add(Duration::from_secs(timeout_seconds))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: "ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS is too large".to_string(),
+            })
+        })?;
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(Ok(list_response)) =
+            tokio::time::timeout_at(deadline, client.list_deployments().send()).await
+        {
             if let Some(deployment) = list_response
                 .items
                 .iter()
                 .find(|d| d.name == deployment_name)
             {
-                if let Ok(info_response) =
-                    client.get_deployment_info().id(&deployment.id).send().await
+                if let Ok(Ok(info_response)) = tokio::time::timeout_at(
+                    deadline,
+                    client.get_deployment_info().id(&deployment.id).send(),
+                )
+                .await
                 {
                     let info = info_response.into_inner();
                     let snapshot = snapshot_from_info(&info, deployment_name)?;
@@ -856,7 +880,7 @@ where
     }
 
     Err(AlienError::new(ErrorData::ConfigurationError {
-        message: "Timed out waiting for local deployment to become ready".to_string(),
+        message: format!("Stopped waiting after {}s; the local deployment may still be progressing. Inspect it with `alien dev deployments ls` or increase ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS.", timeout_seconds),
     }))
 }
 
@@ -1043,6 +1067,7 @@ fn parse_deployment_status(status: &str) -> Result<DeploymentStatus> {
         "initial-setup-failed" => Ok(DeploymentStatus::InitialSetupFailed),
         "provisioning" => Ok(DeploymentStatus::Provisioning),
         "waiting-for-machines" => Ok(DeploymentStatus::WaitingForMachines),
+        "waiting-for-secrets" => Ok(DeploymentStatus::WaitingForSecrets),
         "provisioning-failed" => Ok(DeploymentStatus::ProvisioningFailed),
         "running" => Ok(DeploymentStatus::Running),
         "refresh-failed" => Ok(DeploymentStatus::RefreshFailed),
