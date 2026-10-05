@@ -63,7 +63,9 @@ impl crate::traits::Vault for KubernetesSecretVault {
             .get_secret_metadata(&self.namespace, &secret_resource_name)
             .await
         {
-            Ok(_) => Ok(SecretPresence::Present),
+            Ok(metadata) => Ok(SecretPresence::Present {
+                version: metadata.resource_version,
+            }),
             Err(error)
                 if matches!(
                     error.error,

@@ -724,6 +724,7 @@ mod tests {
                 vault_name: None,
                 label: label.to_string(),
                 required,
+                version: None,
             }
         }
 

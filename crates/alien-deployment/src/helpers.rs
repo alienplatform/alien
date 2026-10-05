@@ -777,10 +777,12 @@ pub async fn check_deployer_secrets(
                     vault_name: SECRETS_VAULT_ID.to_string(),
                     reason: format!("Failed to check deployer secret '{}'", location.name),
                 })?;
-        let (status, message) = match presence {
-            SecretPresence::Present => (DeployerSecretStatus::Present, None),
-            SecretPresence::Missing => (DeployerSecretStatus::Missing, None),
-            SecretPresence::Invalid { reason } => (DeployerSecretStatus::Invalid, Some(reason)),
+        let (status, message, version) = match presence {
+            SecretPresence::Present { version } => (DeployerSecretStatus::Present, None, version),
+            SecretPresence::Missing => (DeployerSecretStatus::Missing, None, None),
+            SecretPresence::Invalid { reason } => {
+                (DeployerSecretStatus::Invalid, Some(reason), None)
+            }
         };
         reports.push(DeployerSecretReport {
             input_id: slot.input.id.clone(),
@@ -788,6 +790,7 @@ pub async fn check_deployer_secrets(
             required: slot.input.required,
             status,
             message,
+            version,
             location,
         });
     }

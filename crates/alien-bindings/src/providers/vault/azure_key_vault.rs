@@ -68,9 +68,9 @@ impl crate::traits::Vault for AzureKeyVault {
         let newest = versions
             .value
             .iter()
-            .filter_map(|item| item.attributes.as_ref())
-            .max_by_key(|attributes| attributes.created.unwrap_or_default());
-        let Some(attributes) = newest else {
+            .filter_map(|item| Some((item, item.attributes.as_ref()?)))
+            .max_by_key(|(_, attributes)| attributes.created.unwrap_or_default());
+        let Some((item, attributes)) = newest else {
             return Ok(SecretPresence::Missing);
         };
         let now = chrono::Utc::now().timestamp();
@@ -87,7 +87,15 @@ impl crate::traits::Vault for AzureKeyVault {
             Some(reason) => SecretPresence::Invalid {
                 reason: format!("the newest version of secret '{sanitized}' {reason}"),
             },
-            None => SecretPresence::Present,
+            // The item id is `{vault}/secrets/{name}/{version}`; the last
+            // segment is the version id, new for every write.
+            None => SecretPresence::Present {
+                version: item
+                    .id
+                    .as_deref()
+                    .and_then(|id| id.rsplit('/').next())
+                    .map(str::to_string),
+            },
         })
     }
 

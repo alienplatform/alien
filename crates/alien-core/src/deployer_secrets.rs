@@ -363,6 +363,10 @@ impl DeployerSecretReport {
                 Some(message) => format!("invalid: {} ({message})", self.label),
                 None => format!("invalid: {}", self.label),
             },
+    /// The secret store's version of the present value (never the value or a
+    /// hash of it). A new version reaches workloads with the next update.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
         }
     }
 }
@@ -418,6 +422,11 @@ pub fn deployer_secret_environment(
         })
         .flat_map(|(slot, report)| {
             slot.input.env.iter().map(move |mapping| {
+    /// The secret store's version of the value when the workload was
+    /// configured. Overwriting the secret changes it, so the next update
+    /// restarts the workload, which then reads the new value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
                 (
                     DeployerSecretEnv {
                         name: mapping.name.clone(),
@@ -452,6 +461,7 @@ mod tests {
             platforms: None,
             validation: None,
             generate: None,
+                        version: report.version.clone(),
             env: vec![StackInputEnvironmentMapping {
                 name: "DATABASE_PASSWORD".to_string(),
                 target_resources: None,
@@ -685,6 +695,7 @@ mod tests {
         assert_eq!(env.len(), 1);
         let (variable, targets) = &env[0];
         assert_eq!(variable.name, "DATABASE_PASSWORD");
+            version: None,
         assert_eq!(variable.vault_key, "input-database-password");
         assert_eq!(
             variable.secret_name,
@@ -705,6 +716,7 @@ mod tests {
             &VaultBinding::key_vault("stacksecrets7f3a"),
             "input-database-password",
             &DeployerSecretLocationContext::default(),
+            version: None,
         )
         .unwrap();
         let mut azure_report = report("databasePassword", DeployerSecretStatus::Present);
