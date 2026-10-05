@@ -1,11 +1,11 @@
 //! State sync endpoints for deployment loop coordination.
 
 use axum::{
+    Router,
     extract::{Json, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::post,
-    Router,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -15,13 +15,13 @@ fn deserialize_bool_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Resul
 }
 
 use alien_core::{
+    DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
+    EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform, ReleaseInfo, ResourceHeartbeat,
+    StackState,
     sync::{
         ObservedApplicationReport, OperationsReport, OperatorCapabilityReport, OperatorImageReport,
         TargetDeployment, TargetOperationsBundleSet,
     },
-    DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
-    EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform, ReleaseInfo, ResourceHeartbeat,
-    StackState,
 };
 use alien_error::AlienError;
 
@@ -32,7 +32,7 @@ use crate::traits::{
     DeploymentRecord, ReconcileData, ReconcileInput, ReleaseRecord, TokenType,
 };
 
-use super::{auth, AppState};
+use super::{AppState, auth};
 
 // --- Request / Response types ---
 
@@ -661,13 +661,13 @@ async fn release(
 #[cfg(test)]
 mod tests {
     use alien_core::{
+        CURRENT_DEPLOYMENT_PROTOCOL_VERSION, DeploymentConfig, DeploymentState, DeploymentStatus,
+        EnvironmentVariablesSnapshot, ExternalBindings, Platform, ReleaseInfo,
+        ResourceHeartbeatData, RuntimeMetadata, Stack, StackSettings, StackState,
         sync::{
             ObservedApplicationImage, ObservedApplicationReport, ObservedApplicationSource,
             SyncInput, SyncRequest,
         },
-        DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariablesSnapshot,
-        ExternalBindings, Platform, ReleaseInfo, ResourceHeartbeatData, RuntimeMetadata, Stack,
-        StackSettings, StackState, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
     use chrono::Utc;
     use serde_json::json;
@@ -676,13 +676,12 @@ mod tests {
     use crate::traits::DeploymentRecord;
 
     use super::{
-        agent_needs_initial_state_hydration, agent_report_completes_claim,
+        AgentSyncRequest, AgentSyncWireRequest, InitialDesiredRelease, InitializeRequest,
+        ReconcileRequest, agent_needs_initial_state_hydration, agent_report_completes_claim,
         build_target_deployment_config, deployment_needs_target, deployment_state_from_record,
         deployment_target_release_id, management_platform, may_deliver_agent_target,
         preserve_recorded_gate_answers, release_stack_platform, should_ignore_agent_state_report,
         should_return_current_state_for_agent_sync, validate_initialize_base_platform,
-        AgentSyncRequest, AgentSyncWireRequest, InitialDesiredRelease, InitializeRequest,
-        ReconcileRequest,
     };
 
     #[tokio::test]
@@ -734,24 +733,28 @@ mod tests {
             "executionClaim": { "operationId": "operation_test", "attemptId": "attempt_test" },
         }))
         .expect("valid request");
-        assert!(super::acknowledge_completed_claim(
-            &store,
-            &crate::auth::Subject::system(),
-            &request,
-            "SYNC_FAILED"
-        )
-        .await
-        .expect("unrelated error")
-        .is_none());
-        assert!(super::acknowledge_completed_claim(
-            &store,
-            &crate::auth::Subject::system(),
-            &request,
-            "DEPLOYMENT_UPDATE_CLAIM_LOST"
-        )
-        .await
-        .expect("live claim is not recovered")
-        .is_none());
+        assert!(
+            super::acknowledge_completed_claim(
+                &store,
+                &crate::auth::Subject::system(),
+                &request,
+                "SYNC_FAILED"
+            )
+            .await
+            .expect("unrelated error")
+            .is_none()
+        );
+        assert!(
+            super::acknowledge_completed_claim(
+                &store,
+                &crate::auth::Subject::system(),
+                &request,
+                "DEPLOYMENT_UPDATE_CLAIM_LOST"
+            )
+            .await
+            .expect("live claim is not recovered")
+            .is_none()
+        );
     }
 
     #[test]
@@ -1577,7 +1580,7 @@ async fn reconcile_agent_report(
 /// A completed receipt grants no authority to replay a report or take new work.
 async fn acknowledge_completed_claim(
     store: &dyn crate::traits::DeploymentStore,
-    subject: &auth::Subject,
+    subject: &crate::auth::Subject,
     request: &AgentSyncRequest,
     error_code: &str,
 ) -> Result<Option<AgentSyncResponse>, alien_error::AlienError> {
@@ -2683,7 +2686,7 @@ async fn initialize(
                     return AlienError::new(ErrorData::DeploymentGroupNotFound {
                         deployment_group_id: dg_id.clone(),
                     })
-                    .into_response()
+                    .into_response();
                 }
                 Err(e) => return e.into_response(),
             };
