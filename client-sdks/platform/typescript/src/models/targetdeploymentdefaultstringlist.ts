@@ -2036,6 +2036,13 @@ export type TargetDeploymentConfig = {
    * is platform-derived (from the Manager's ServiceAccount).
    */
   stackSettings?: TargetDeploymentStackSettings | undefined;
+  /**
+   * IDs of applicable secret inputs stored for this exact deployment target.
+   *
+   * @remarks
+   * Trusted presence metadata only: never values, gate answers, or authority.
+   */
+  storedSecretInputIds?: Array<string> | undefined;
 };
 
 export const ReleaseInfoTypeStringList = {
@@ -4755,6 +4762,7 @@ export const TargetDeploymentConfig$inboundSchema: z.ZodType<
   ).optional(),
   stackSettings: z.lazy(() => TargetDeploymentStackSettings$inboundSchema)
     .optional(),
+  storedSecretInputIds: z.array(z.string()).optional(),
 });
 
 export function targetDeploymentConfigFromJSON(
