@@ -3632,6 +3632,26 @@ mod tests {
         );
     }
 
+    fn container_config(id: &str) -> serde_json::Value {
+        let container = alien_core::Container::new(id.to_string())
+            .cluster("compute".to_string())
+            .code(alien_core::ContainerCode::Image {
+                image: "postgres:16".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+        serde_json::to_value(alien_core::Resource::new(container))
+            .expect("container config should serialize")
+    }
+
     #[test]
     fn volume_summaries_list_every_container_volume_in_order() {
         let stack_state: alien_core::StackState = serde_json::from_value(serde_json::json!({
@@ -3641,7 +3661,7 @@ mod tests {
                 "web": {
                     "type": "container",
                     "status": "running",
-                    "config": { "type": "container", "id": "web" },
+                    "config": container_config("web"),
                     "outputs": {
                         "type": "container",
                         "name": "web",
@@ -3655,7 +3675,7 @@ mod tests {
                 "db": {
                     "type": "container",
                     "status": "running",
-                    "config": { "type": "container", "id": "db" },
+                    "config": container_config("db"),
                     "outputs": {
                         "type": "container",
                         "name": "db",
