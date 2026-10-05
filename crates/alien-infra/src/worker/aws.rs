@@ -2296,6 +2296,17 @@ impl AwsWorkerController {
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
+        // A worker created while the management role could not manage its
+        // log group gets the retention period once setup grants it.
+        let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
+        Self::ensure_log_group(
+            ctx,
+            ctx.get_aws_config()?,
+            &aws_worker_name,
+            &worker_config.id,
+        )
+        .await?;
+
         if worker_config.public_endpoints.is_empty() || self.uses_custom_domain {
             return Ok(HandlerAction::Continue {
                 state: UpdateCodeStart,
@@ -4594,7 +4605,8 @@ impl AwsWorkerController {
     /// The management role's permissions are fixed at setup, and a setup that
     /// predates these log permissions lacks them. Access denied therefore only
     /// warns: the worker is still created, and Lambda creates the group on
-    /// first invoke without a retention period. Re-running setup grants them.
+    /// first invoke without a retention period. Re-running setup grants them,
+    /// and the worker's next update sets the retention period.
     ///
     /// To verify against AWS: deploy an AWS worker with the push model, run
     /// `aws logs describe-log-groups --log-group-name-prefix /aws/lambda/<prefix>-<worker>`
@@ -5560,6 +5572,76 @@ mod tests {
     }
 
     // ─────────────── UPDATE FLOW TESTS ────────────────────────────────
+
+    /// A worker created while the management role could not set its log
+    /// group's retention gets it on the next update.
+    #[tokio::test]
+    async fn test_update_sets_log_retention_on_the_existing_group() {
+        let worker_id = "test-update-worker".to_string();
+        let mut from_function = basic_function();
+        from_function.id = worker_id.clone();
+        let mut to_function = function_with_env_vars();
+        to_function.id = worker_id.clone();
+        let worker_name = format!("test-{worker_id}");
+        let calls = Arc::new(Mutex::new(Vec::new()));
+
+        let mut mock_logs = MockCloudWatchLogsApi::new();
+        let create_calls = calls.clone();
+        mock_logs
+            .expect_create_log_group()
+            .times(1)
+            .returning(move |request| {
+                create_calls
+                    .lock()
+                    .unwrap()
+                    .push(format!("CreateLogGroup {}", request.log_group_name));
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "CloudWatch Logs log group".to_string(),
+                        resource_name: request.log_group_name,
+                        message: "The specified log group already exists".to_string(),
+                    },
+                ))
+            });
+        let retention_calls = calls.clone();
+        mock_logs
+            .expect_put_retention_policy()
+            .times(1)
+            .returning(move |request| {
+                retention_calls.lock().unwrap().push(format!(
+                    "PutRetentionPolicy {} {}",
+                    request.log_group_name, request.retention_in_days
+                ));
+                Ok(())
+            });
+        let mock_provider = setup_mock_service_provider_with_logs(
+            setup_mock_client_for_creation_and_update(&worker_name, false),
+            None,
+            None,
+            Arc::new(mock_logs),
+        );
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(from_function)
+            .controller(AwsWorkerController::mock_ready(&worker_name))
+            .platform(Platform::Aws)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.update(to_function).unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                format!("CreateLogGroup /aws/lambda/{worker_name}"),
+                format!("PutRetentionPolicy /aws/lambda/{worker_name} 30"),
+            ]
+        );
+    }
 
     #[rstest]
     #[case::basic_to_env(basic_function(), function_with_env_vars())]
