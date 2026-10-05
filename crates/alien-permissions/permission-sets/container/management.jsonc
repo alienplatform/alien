@@ -138,19 +138,12 @@
           }
         }
       },
-      // Volume backups: keep each disk's snapshot schedule in line with the
-      // configured interval and retention, and report the latest snapshot.
+      // Volume backups: report each volume's latest snapshot (status only; schedule
+      // changes, snapshots and restores use container/provision).
       {
         "grant": {
           "permissions": [
-            "compute.resourcePolicies.create",
-            "compute.resourcePolicies.delete",
-            "compute.resourcePolicies.get",
-            "compute.resourcePolicies.use",
-            "compute.disks.addResourcePolicies",
-            "compute.disks.removeResourcePolicies",
-            "compute.snapshots.list",
-            "compute.zoneOperations.get"
+            "compute.snapshots.list"
           ]
         },
         "binding": {
