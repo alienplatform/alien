@@ -138,6 +138,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejects_retention_longer_than_a_year() {
+        // Daily for 450 days is 450 snapshots, but Azure keeps snapshots for a year at most.
+        assert!(errors_for(VolumeBackups {
+            enabled: true,
+            interval_hours: 24,
+            retention_days: 365,
+        })
+        .await
+        .is_empty());
+        let errors = errors_for(VolumeBackups {
+            enabled: true,
+            interval_hours: 24,
+            retention_days: 450,
+        })
+        .await;
+        assert_eq!(
+            errors,
+            vec!["Container 'db': backup retentionDays must be at most 365, got 450".to_string()]
+        );
+    }
+
+    #[tokio::test]
     async fn rejects_zero_retention() {
         let errors = errors_for(VolumeBackups {
             enabled: true,

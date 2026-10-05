@@ -73,8 +73,8 @@ export interface VolumeBackupOptions {
   /** Hours between snapshots: 1, 2, 4, 6, 8, 12 or 24. Defaults to 24. */
   intervalHours?: 1 | 2 | 4 | 6 | 8 | 12 | 24
   /**
-   * Days each snapshot is kept. Defaults to 7. A volume holds at most 450
-   * snapshots, so hourly snapshots can be kept for up to 18 days.
+   * Days each snapshot is kept: at most 365. Defaults to 7. A volume holds at
+   * most 450 snapshots, so hourly snapshots can be kept for up to 18 days.
    */
   retentionDays?: number
 }
