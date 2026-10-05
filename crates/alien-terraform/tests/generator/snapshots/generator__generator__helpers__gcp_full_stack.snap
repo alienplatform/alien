@@ -412,10 +412,10 @@ resource "google_project_iam_member" "gcp_role_read_cloud_storage_objects_execut
   member  = "serviceAccount:${google_service_account.execution_sa.email}"
 }
 
-resource "google_project_iam_member" "gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_1" {
-  project = var.gcp_project
-  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_sign_cloud_storage_download_urls[0].name : format("projects/%s/roles/role_%s_sign_cloud_storage_download_urls", var.gcp_project, local.gcp_custom_role_prefix)
-  member  = "serviceAccount:${google_service_account.execution_sa.email}"
+resource "google_service_account_iam_member" "gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_1" {
+  service_account_id = "projects/${var.gcp_project}/serviceAccounts/${google_service_account.execution_sa.account_id}@${var.gcp_project}.iam.gserviceaccount.com"
+  role               = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_sign_cloud_storage_download_urls[0].name : format("projects/%s/roles/role_%s_sign_cloud_storage_download_urls", var.gcp_project, local.gcp_custom_role_prefix)
+  member             = "serviceAccount:${google_service_account.execution_sa.email}"
 }
 
 resource "google_project_iam_member" "pubsub_publisher_execution_sa_binding_0" {
@@ -787,7 +787,7 @@ resource "time_sleep" "gcp_iam_propagation" {
   create_duration = "120s"
   depends_on = [
     google_project_iam_member.gcp_role_read_cloud_storage_objects_execution_sa_binding_0,
-    google_project_iam_member.gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_1,
+    google_service_account_iam_member.gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_1,
     google_project_iam_member.pubsub_publisher_execution_sa_binding_0,
     google_project_iam_member.pubsub_subscriber_execution_sa_binding_1,
     google_project_iam_member.pubsub_viewer_execution_sa_binding_2,
@@ -830,7 +830,7 @@ resource "terraform_data" "deployment_registration" {
     google_project_iam_custom_role.gcp_role_read_cloud_storage_objects,
     google_project_iam_custom_role.gcp_role_sign_cloud_storage_download_urls,
     google_project_iam_member.gcp_role_read_cloud_storage_objects_execution_sa_binding_0,
-    google_project_iam_member.gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_1,
+    google_service_account_iam_member.gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_1,
     google_project_iam_member.pubsub_publisher_execution_sa_binding_0,
     google_project_iam_member.pubsub_subscriber_execution_sa_binding_1,
     google_project_iam_member.pubsub_viewer_execution_sa_binding_2,
