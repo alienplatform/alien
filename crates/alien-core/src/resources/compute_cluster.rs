@@ -221,15 +221,15 @@ pub struct ComputeCluster {
     #[builder(start_fn)]
     pub id: String,
 
-    /// Explicit grants for the node identity, keyed by concrete resource ID.
-    /// Independent of workload permission profiles; absent grants no data access.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub node_permissions: Option<PermissionProfile>,
-
     /// Capacity groups defining the machine pools for this cluster.
     /// Each group becomes a separate ASG/MIG/VMSS.
     #[builder(field)]
     pub capacity_groups: Vec<CapacityGroup>,
+
+    /// Explicit grants for the node identity, keyed by concrete resource ID.
+    /// Independent of workload permission profiles; absent grants no data access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_permissions: Option<PermissionProfile>,
 
     /// Pool reserved for containers created after a deployment is installed.
     /// If absent, the runtime uses the `general` pool when it exists.
