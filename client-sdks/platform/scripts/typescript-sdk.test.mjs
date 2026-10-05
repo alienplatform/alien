@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { APIError } from "../typescript/esm/models/errors/apierror.js";
 import { HTTPClient } from "../typescript/esm/lib/http.js";
@@ -76,6 +77,55 @@ function client(fetcher) {
     httpClient: new HTTPClient({ fetcher }),
   });
 }
+
+test("command retry keys survive configured transport retries and separate method calls", async () => {
+  const request = {
+    deploymentId,
+    target: "api",
+    name: "reindex",
+    params: { full: true },
+    idempotencyKey: randomUUID(),
+  };
+  const sent = [];
+  const command = {
+    id: `cmd_${"a".repeat(28)}`,
+    projectId: `prj_${"a".repeat(28)}`,
+    deploymentModel: "pull",
+    target: { resourceId: "api", resourceType: "worker" },
+    deliveryMode: "pull",
+    operationResultContractPersisted: false,
+  };
+  const sdk = client(async outgoing => {
+    assert.equal(outgoing.method, "POST");
+    assert.equal(new URL(outgoing.url).pathname, "/v1/commands");
+    sent.push(await outgoing.json());
+    if (sent.length === 1) {
+      return new Response("temporarily unavailable", {
+        status: 503,
+        headers: { "retry-after-ms": "1" },
+      });
+    }
+    return Response.json(command, { status: 201 });
+  });
+
+  assert.deepEqual(await sdk.commands.create(request, {
+    retries: {
+      strategy: "backoff",
+      backoff: {
+        initialInterval: 1,
+        maxInterval: 5,
+        exponent: 1,
+        maxElapsedTime: 1_000,
+      },
+    },
+  }), command);
+  assert.deepEqual(sent, [request, request]);
+
+  await sdk.commands.create(request);
+  const next = { ...request, idempotencyKey: randomUUID() };
+  await sdk.commands.create(next);
+  assert.deepEqual(sent, [request, request, request, next]);
+});
 
 test("legacy publish-plugin deep imports preserve Kubernetes permission exports", () => {
   const rule = {
