@@ -129,6 +129,17 @@ fn build_alien_test_app_impl() -> anyhow::Result<PathBuf> {
 ///
 /// Returns the absolute path to the alien-test-app binary.
 pub fn get_test_app_path() -> anyhow::Result<PathBuf> {
+    // CI builds the binary once, before the tests (ALIEN_TEST_APP_BIN). Otherwise each test
+    // process runs its own `cargo build -p alien-test-app`.
+    if let Ok(path) = std::env::var("ALIEN_TEST_APP_BIN") {
+        let path = PathBuf::from(path);
+        anyhow::ensure!(
+            path.is_file(),
+            "ALIEN_TEST_APP_BIN points at {}, which is not a file",
+            path.display()
+        );
+        return Ok(path);
+    }
     ensure_alien_test_app_built()
 }
 
