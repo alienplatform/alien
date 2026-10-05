@@ -8,7 +8,10 @@
 use crate::error::Result;
 use crate::StackMutation;
 use alien_core::{
-    compute_planner::{capacity_group_requirements, validate_compute_pool_selection},
+    compute_planner::{
+        capacity_group_requirements, default_persistent_failure_domains,
+        validate_compute_pool_selection,
+    },
     instance_catalog::{self, WorkloadRequirements},
     CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Container,
     Daemon, DeploymentConfig, MachineProfile, Network, Platform, ResourceEntry, ResourceLifecycle,
@@ -277,29 +280,39 @@ impl ComputeClusterMutation {
             };
             for group in cluster.capacity_groups.iter_mut() {
                 materialize_group(group, stack_state.platform, config)?;
-                let Some(selection) = config
+                let explicit_selection = config
                     .stack_settings
                     .compute
                     .as_ref()
                     .and_then(|settings| settings.pools.get(&group.group_id))
                     .and_then(|selection| selection.failure_domains())
-                else {
-                    continue;
-                };
-                let existing_group_is_aggregate = stack_state
+                    .cloned();
+                let existing_group = stack_state
                     .resources
                     .get(cluster_id)
                     .and_then(|state| state.config.downcast_ref::<ComputeCluster>())
-                    .is_some_and(|existing| {
+                    .filter(|existing| {
                         existing
                             .capacity_groups
                             .iter()
                             .any(|existing_group| existing_group.group_id == group.group_id)
-                            && !existing.failure_domain_spread.contains_key(&group.group_id)
-                            && !existing
-                                .selected_failure_domains
-                                .contains_key(&group.group_id)
                     });
+                // Without an explicit choice, a persistent pool that does not exist yet gets
+                // the planner's default. Leaving it aggregate would spread its machines over
+                // every zone while its volumes are created in one. A pool that already exists
+                // keeps the topology it was created with.
+                let Some(selection) = explicit_selection.or_else(|| {
+                    (existing_group.is_none() && fresh_persistent_pools.contains(&group.group_id))
+                        .then(default_persistent_failure_domains)
+                }) else {
+                    continue;
+                };
+                let existing_group_is_aggregate = existing_group.is_some_and(|existing| {
+                    !existing.failure_domain_spread.contains_key(&group.group_id)
+                        && !existing
+                            .selected_failure_domains
+                            .contains_key(&group.group_id)
+                });
                 let is_implicit_single_domain_default = selection.spread == 1
                     && selection.selected_failure_domains.is_empty()
                     && !fresh_persistent_pools.contains(&group.group_id);
@@ -1350,6 +1363,83 @@ mod tests {
         assert_eq!(cluster.capacity_groups.len(), 1);
         assert_eq!(cluster.capacity_groups[0].group_id, "general");
         assert!(!mutation.should_run(&result, &stack_state, &config));
+    }
+
+    /// A deploy config that picks a machine for the stateful pool but says nothing about
+    /// failure domains must still get one failure domain.
+    /// Otherwise the AWS pool spans every zone while its EBS volume is created in one zone, and
+    /// the replica can only be scheduled when the machine happens to land in that zone.
+    #[tokio::test]
+    async fn fresh_persistent_pool_without_failure_domain_choice_gets_single_domain() {
+        let container = Container::new("database".to_string())
+            .code(ContainerCode::Image {
+                image: "database:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .persistent_storage(PersistentStorage {
+                size: "20Gi".to_string(),
+                mount_path: "/data".to_string(),
+            })
+            .stateful(true)
+            .replicas(1)
+            .port(8080)
+            .permissions("database".to_string())
+            .build();
+        let stack = Stack::new("test-stack".to_string())
+            .add(container, ResourceLifecycle::Live)
+            .build();
+        let stack_state = StackState {
+            platform: Platform::Aws,
+            resources: Default::default(),
+            resource_prefix: "test".to_string(),
+        };
+        let machine_without_domains = ComputeSettings {
+            pools: [(
+                "stateful".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 1,
+                    machine: Some("t4g.medium".to_string()),
+                    failure_domains: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings {
+                compute: Some(machine_without_domains),
+                ..StackSettings::default()
+            })
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let result = ComputeClusterMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .expect("persistent container should be planned");
+        let container = result.resources["database"]
+            .config
+            .downcast_ref::<Container>()
+            .expect("container should remain present");
+        assert_eq!(container.pool.as_deref(), Some("stateful"));
+        let cluster = result.resources[container.cluster.as_deref().unwrap()]
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .expect("assigned cluster should exist");
+        assert_eq!(cluster.failure_domain_spread.get("stateful"), Some(&1));
+        assert!(
+            !cluster.selected_failure_domains.contains_key("stateful"),
+            "the provider picks the concrete zone"
+        );
     }
 
     #[test]

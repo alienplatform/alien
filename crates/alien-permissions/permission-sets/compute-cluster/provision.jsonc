@@ -288,10 +288,13 @@
         }
       },
       // Describe actions — AWS requires Resource: "*" for these read-only APIs.
+      // DescribeInstanceTypeOfferings keeps Auto Scaling Groups out of zones that
+      // do not offer the worker machine type.
       {
         "grant": {
           "actions": [
             "ec2:DescribeImages",
+            "ec2:DescribeInstanceTypeOfferings",
             "ec2:DescribeInstances",
             "ec2:DescribeInstanceStatus",
             "ec2:DescribeTags",

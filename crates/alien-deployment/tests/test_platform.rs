@@ -862,6 +862,104 @@ async fn test_update_flow_happy_path_promotes_release() {
     );
 }
 
+fn worker_image_release(image: &str, release_id: &str) -> ReleaseInfo {
+    let mut stack = create_test_stack("test-stack", "test-function");
+    stack.resources.get_mut("test-function").unwrap().config = alien_core::Resource::new(
+        Worker::new("test-function".to_string())
+            .code(WorkerCode::Image {
+                image: image.to_string(),
+            })
+            .permissions("default".to_string())
+            .build(),
+    );
+    release_of(release_id, stack)
+}
+
+fn deployed_worker_image(state: &DeploymentState, worker_id: &str) -> String {
+    match &state.stack_state.as_ref().unwrap().resources[worker_id]
+        .config
+        .downcast_ref::<Worker>()
+        .unwrap()
+        .code
+    {
+        WorkerCode::Image { image } => image.clone(),
+        other => panic!("expected an image worker, got {other:?}"),
+    }
+}
+
+/// A newer release can become the target while an update is still applying the
+/// stack prepared for an older one. When that older stack converges, the newer
+/// release has not been applied and must not be recorded as deployed.
+#[tokio::test]
+async fn a_release_that_supersedes_an_in_flight_update_is_applied_before_it_is_recorded() {
+    let _vault = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let mut state = run_to_completion(
+        create_initial_state(create_test_stack("test-stack", "test-function")),
+        config.clone(),
+    )
+    .await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    start_update(&mut state, worker_image_release("test:v2", "rel_v2"));
+    state = run_until_status(state, config.clone(), &[DeploymentStatus::Updating]).await;
+    assert_eq!(
+        deployed_worker_image(&state, "test-function"),
+        "test:latest",
+        "the v2 stack is prepared but not applied yet"
+    );
+
+    // The manager rebuilds the target from the deployment record on every
+    // pass, so a superseding release replaces it mid-update.
+    let release_v3 = worker_image_release("test:v3", "rel_v3");
+    state.target_release = Some(release_v3.clone());
+
+    // v2 converges first. It is installed and must be reported as current
+    // while v3 is prepared, in case v3 never succeeds.
+    state = run_until_status(state, config.clone(), &[DeploymentStatus::UpdatePending]).await;
+    assert_eq!(deployed_worker_image(&state, "test-function"), "test:v2");
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("rel_v2")
+    );
+    assert_eq!(
+        state.target_release.as_ref().unwrap().release_id,
+        release_v3.release_id
+    );
+
+    state = run_to_completion(state, config).await;
+
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert_eq!(
+        state.current_release.as_ref().unwrap().release_id,
+        release_v3.release_id
+    );
+    assert_eq!(deployed_worker_image(&state, "test-function"), "test:v3");
+    assert_eq!(
+        state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .prepared_stack
+            .as_ref()
+            .unwrap()
+            .resources["test-function"]
+            .config
+            .downcast_ref::<Worker>()
+            .unwrap()
+            .code,
+        WorkerCode::Image {
+            image: "test:v3".to_string()
+        },
+        "the installed baseline must be the v3 stack"
+    );
+}
+
 #[tokio::test]
 async fn setup_authorized_update_clears_authority_only_on_success() {
     let config = create_test_config("hash_v1", false);
