@@ -1,11 +1,11 @@
 //! State sync endpoints for deployment loop coordination.
 
 use axum::{
-    Router,
     extract::{Json, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::post,
+    Router,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -15,13 +15,13 @@ fn deserialize_bool_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Resul
 }
 
 use alien_core::{
-    DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
-    EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform, ReleaseInfo, ResourceHeartbeat,
-    StackState,
     sync::{
         ObservedApplicationReport, OperationsReport, OperatorCapabilityReport, OperatorImageReport,
         TargetDeployment, TargetOperationsBundleSet,
     },
+    DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
+    EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform, ReleaseInfo, ResourceHeartbeat,
+    StackState,
 };
 use alien_error::AlienError;
 
@@ -32,7 +32,7 @@ use crate::traits::{
     DeploymentRecord, ReconcileData, ReconcileInput, ReleaseRecord, TokenType,
 };
 
-use super::{AppState, auth};
+use super::{auth, AppState};
 
 // --- Request / Response types ---
 
@@ -661,13 +661,13 @@ async fn release(
 #[cfg(test)]
 mod tests {
     use alien_core::{
-        CURRENT_DEPLOYMENT_PROTOCOL_VERSION, DeploymentConfig, DeploymentState, DeploymentStatus,
-        EnvironmentVariablesSnapshot, ExternalBindings, Platform, ReleaseInfo,
-        ResourceHeartbeatData, RuntimeMetadata, Stack, StackSettings, StackState,
         sync::{
             ObservedApplicationImage, ObservedApplicationReport, ObservedApplicationSource,
             SyncInput, SyncRequest,
         },
+        DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariablesSnapshot,
+        ExternalBindings, Platform, ReleaseInfo, ResourceHeartbeatData, RuntimeMetadata, Stack,
+        StackSettings, StackState, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
     use chrono::Utc;
     use serde_json::json;
@@ -676,12 +676,13 @@ mod tests {
     use crate::traits::DeploymentRecord;
 
     use super::{
-        AgentSyncRequest, AgentSyncWireRequest, InitialDesiredRelease, InitializeRequest,
-        ReconcileRequest, agent_needs_initial_state_hydration, agent_report_completes_claim,
+        agent_needs_initial_state_hydration, agent_report_completes_claim,
         build_target_deployment_config, deployment_needs_target, deployment_state_from_record,
         deployment_target_release_id, management_platform, may_deliver_agent_target,
         preserve_recorded_gate_answers, release_stack_platform, should_ignore_agent_state_report,
         should_return_current_state_for_agent_sync, validate_initialize_base_platform,
+        AgentSyncRequest, AgentSyncWireRequest, InitialDesiredRelease, InitializeRequest,
+        ReconcileRequest,
     };
 
     #[tokio::test]
@@ -710,13 +711,14 @@ mod tests {
                 &crate::auth::Subject::system(),
                 &request,
                 error,
+                Some("https://manager.example.test".into()),
             )
             .await
             .expect("acknowledge completed receipt")
             .expect("successful recovery");
             assert_eq!(
                 serde_json::to_value(response).expect("serialize acknowledgment"),
-                json!({})
+                json!({"tunnelUrl": "https://manager.example.test"})
             );
         }
     }
@@ -733,28 +735,26 @@ mod tests {
             "executionClaim": { "operationId": "operation_test", "attemptId": "attempt_test" },
         }))
         .expect("valid request");
-        assert!(
-            super::acknowledge_completed_claim(
-                &store,
-                &crate::auth::Subject::system(),
-                &request,
-                "SYNC_FAILED"
-            )
-            .await
-            .expect("unrelated error")
-            .is_none()
-        );
-        assert!(
-            super::acknowledge_completed_claim(
-                &store,
-                &crate::auth::Subject::system(),
-                &request,
-                "DEPLOYMENT_UPDATE_CLAIM_LOST"
-            )
-            .await
-            .expect("live claim is not recovered")
-            .is_none()
-        );
+        assert!(super::acknowledge_completed_claim(
+            &store,
+            &crate::auth::Subject::system(),
+            &request,
+            "SYNC_FAILED",
+            None,
+        )
+        .await
+        .expect("unrelated error")
+        .is_none());
+        assert!(super::acknowledge_completed_claim(
+            &store,
+            &crate::auth::Subject::system(),
+            &request,
+            "DEPLOYMENT_UPDATE_CLAIM_LOST",
+            None,
+        )
+        .await
+        .expect("live claim is not recovered")
+        .is_none());
     }
 
     #[test]
@@ -1562,27 +1562,13 @@ async fn reconcile_agent_report(
     store.reconcile_request(subject, request.build()).await
 }
 
-/// `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
-/// path; `caller: &Subject` is threaded into the store so embedders see
-/// the agent's own scope.
-#[cfg_attr(feature = "openapi", utoipa::path(
-    post,
-    path = "/v1/sync",
-    tag = "sync",
-    request_body = AgentSyncWireRequest,
-    responses(
-        (status = 200, description = "Agent sync response with optional target state", body = AgentSyncResponse)
-    ),
-    security(
-        ("bearer" = [])
-    )
-))]
 /// A completed receipt grants no authority to replay a report or take new work.
 async fn acknowledge_completed_claim(
     store: &dyn crate::traits::DeploymentStore,
     subject: &crate::auth::Subject,
     request: &AgentSyncRequest,
     error_code: &str,
+    tunnel_url: Option<String>,
 ) -> Result<Option<AgentSyncResponse>, alien_error::AlienError> {
     if !matches!(
         error_code,
@@ -1606,10 +1592,26 @@ async fn acknowledge_completed_claim(
         commands_url: None,
         target_operations_bundle_set: None,
         target_dynamic_containers: None,
-        tunnel_url: None,
+        tunnel_url,
         target_operator_image: None,
     }))
 }
+
+/// `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
+/// path; `caller: &Subject` is threaded into the store so embedders see
+/// the agent's own scope.
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/v1/sync",
+    tag = "sync",
+    request_body = AgentSyncWireRequest,
+    responses(
+        (status = 200, description = "Agent sync response with optional target state", body = AgentSyncResponse)
+    ),
+    security(
+        ("bearer" = [])
+    )
+))]
 
 async fn agent_sync(
     State(state): State<AppState>,
@@ -1669,6 +1671,7 @@ async fn agent_sync(
                 &subject,
                 &req,
                 &error.code,
+                state.tunnels.as_ref().map(|_| state.config.base_url()),
             )
             .await
             {
@@ -1743,6 +1746,19 @@ async fn agent_sync(
                     match reconcile_result {
                         Err(e) => {
                             if report_has_claim {
+                                match acknowledge_completed_claim(
+                                    state.deployment_store.as_ref(),
+                                    &subject,
+                                    &req,
+                                    &e.code,
+                                    state.tunnels.as_ref().map(|_| state.config.base_url()),
+                                )
+                                .await
+                                {
+                                    Ok(Some(response)) => return Json(response).into_response(),
+                                    Ok(None) => {}
+                                    Err(ack_error) => return ack_error.into_response(),
+                                }
                                 return e.into_response();
                             }
                             tracing::warn!(deployment_id = %req.deployment_id, error = %e, "Failed to reconcile agent-reported state");
