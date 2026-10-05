@@ -13,6 +13,9 @@
 //!   buffered telemetry the site carried back, reconciled the same way a sync
 //!   is, with telemetry passed to the telemetry backend.
 
+use std::{future::ready, sync::Arc, time::Duration};
+
+use alien_bindings::traits::Kv;
 use alien_core::{sync::TargetDeployment, DeploymentState, Platform};
 use axum::{
     extract::{Path, Query, State},
@@ -22,13 +25,18 @@ use axum::{
     Json, Router,
 };
 use base64::Engine as _;
+use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
+use tokio::time::Instant;
 
 use super::{auth, AppState};
 use crate::{
     auth::{Scope, Subject},
     error::ErrorData,
-    traits::{DeploymentRecord, ReconcileData, ReleaseRecord, TelemetryCaller, TelemetrySignal},
+    traits::{
+        DeploymentRecord, ReconcileData, ReleaseRecord, TelemetryBackend, TelemetryCaller,
+        TelemetrySignal,
+    },
 };
 
 pub fn router() -> Router<AppState> {
@@ -377,56 +385,120 @@ async fn status_report(
         workspace_id: Some(deployment.workspace_id.clone()),
         gateway_log_source: None,
     };
-    // Batches the manager already passed on (a report sent again after a
-    // lost response, or overlapping reports) are skipped. The mark advances
-    // after each batch, so a failure part-way keeps what went through.
-    //
-    // A single mark is enough because a site exports everything its
-    // Operator holds after the last acknowledgement, and the Operator frees
-    // only what an acknowledgement covers (at most this mark). Any later
-    // report therefore contains every batch an earlier one had that the
-    // manager hasn't confirmed, so a batch below the mark has been received.
-    let mark_key = telemetry_mark_key(&deployment.id);
-    let mut through = match read_telemetry_mark(&state, &mark_key).await {
-        Ok(mark) => mark,
-        Err(e) => return e.into_response(),
+    // In its own task, so a client that disconnects (a load balancer timing
+    // the request out, say) can't cancel it after the backend took a batch
+    // but before the mark covers it, which would duplicate that batch on
+    // the next report. The budget bounds how long the task outlives the
+    // request.
+    let forwarding = tokio::spawn(forward_telemetry(
+        state.telemetry_backend.clone(),
+        state.kv.clone(),
+        caller,
+        telemetry_mark_key(&deployment.id),
+        batches,
+        TELEMETRY_BUDGET,
+    ));
+    let forwarded = match forwarding.await {
+        Ok(Ok(forwarded)) => forwarded,
+        Ok(Err(response)) => return response,
+        Err(e) => return ErrorData::internal(format!("forwarding telemetry: {e}")).into_response(),
     };
-    let mut telemetry_accepted = 0;
-    batches.sort_by_key(|(id, _, _)| *id);
-    for (id, signal, data) in batches {
-        if id.is_some_and(|id| through.is_some_and(|through| id <= through)) {
-            continue;
-        }
-        if let Err(e) = state
-            .telemetry_backend
-            .ingest(signal, &caller, data.into())
-            .await
-        {
-            return e.into_response();
-        }
-        telemetry_accepted += 1;
-        if let Some(id) = id {
-            through = Some(id);
-            if let Err(e) = state
-                .kv
-                .put(&mark_key, id.to_string().into_bytes(), None)
-                .await
-            {
-                return ErrorData::internal(format!("recording received telemetry: {e}"))
-                    .into_response();
-            }
-        }
-    }
 
     (
         StatusCode::OK,
         Json(StatusReportResponse {
             status,
-            telemetry_accepted,
-            telemetry_through: through,
+            telemetry_accepted: forwarded.accepted,
+            telemetry_through: forwarded.through,
         }),
     )
         .into_response()
+}
+
+/// How long a status report spends forwarding telemetry before it answers.
+/// It stays under the 60 second idle timeout load balancers commonly put in
+/// front of the manager: a site with a backlog gets partial progress in
+/// `telemetryThrough` and sends the rest in its next request, instead of a
+/// gateway timeout that makes no progress.
+const TELEMETRY_BUDGET: Duration = Duration::from_secs(45);
+
+/// Batches written to the telemetry backend at once. Backends that
+/// acknowledge a write only once it is flushed take seconds per batch.
+const TELEMETRY_CONCURRENCY: usize = 8;
+
+/// One decoded batch from a report: its id, signal and OTLP bytes.
+type DecodedBatch = (Option<i64>, TelemetrySignal, Vec<u8>);
+
+/// What forwarding a report's telemetry got through.
+#[derive(Debug)]
+struct Forwarded {
+    /// Batches the telemetry backend accepted.
+    accepted: usize,
+    /// The mark after forwarding: every batch up to it has been received.
+    through: Option<i64>,
+}
+
+/// Write a report's telemetry to the backend, skipping batches below the
+/// deployment's mark and advancing the mark as batches go through.
+///
+/// A single mark is enough because a site exports everything its Operator
+/// holds after the last acknowledgement, and the Operator frees only what
+/// an acknowledgement covers (at most this mark). Any later report therefore
+/// contains every batch an earlier one had that the manager hasn't
+/// confirmed, so a batch below the mark has been received.
+///
+/// Batches are written [`TELEMETRY_CONCURRENCY`] at a time, but the mark
+/// only moves over the batches that completed in order, so it never covers
+/// a batch that didn't go through. No new batch starts once `budget` has
+/// passed; the ones in flight finish and the rest wait for the next report.
+/// A failure keeps what went through before it; batches after it that
+/// completed are sent again with the next report.
+async fn forward_telemetry(
+    backend: Arc<dyn TelemetryBackend>,
+    kv: Arc<dyn Kv>,
+    caller: TelemetryCaller,
+    mark_key: String,
+    mut batches: Vec<DecodedBatch>,
+    budget: Duration,
+) -> Result<Forwarded, Response> {
+    let deadline = Instant::now() + budget;
+    let mut through = read_telemetry_mark(kv.as_ref(), &mark_key)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    let mark = through;
+    batches.retain(|(id, _, _)| !id.is_some_and(|id| mark.is_some_and(|mark| id <= mark)));
+    batches.sort_by_key(|(id, _, _)| *id);
+
+    let backend = backend.as_ref();
+    let caller = &caller;
+    let mut written = stream::iter(batches)
+        // A batch without an id (from an older site) can't be picked up by
+        // the next report, so the budget never holds one back. They sort
+        // first.
+        .take_while(|(id, _, _)| ready(id.is_none() || Instant::now() < deadline))
+        .map(|(id, signal, data)| async move {
+            backend
+                .ingest(signal, caller, data.into())
+                .await
+                .map(|()| id)
+        })
+        .buffered(TELEMETRY_CONCURRENCY);
+
+    let mut accepted = 0;
+    while let Some(written_batch) = written.next().await {
+        let id = written_batch.map_err(IntoResponse::into_response)?;
+        accepted += 1;
+        if let Some(id) = id {
+            through = Some(id);
+            kv.put(&mark_key, id.to_string().into_bytes(), None)
+                .await
+                .map_err(|e| {
+                    ErrorData::internal(format!("recording received telemetry: {e}"))
+                        .into_response()
+                })?;
+        }
+    }
+    Ok(Forwarded { accepted, through })
 }
 
 fn telemetry_mark_key(deployment_id: &str) -> String {
@@ -435,11 +507,10 @@ fn telemetry_mark_key(deployment_id: &str) -> String {
 
 /// Highest telemetry batch already passed on for a deployment.
 async fn read_telemetry_mark(
-    state: &AppState,
+    kv: &dyn Kv,
     key: &str,
 ) -> Result<Option<i64>, alien_error::AlienError<ErrorData>> {
-    let Some(entry) = state
-        .kv
+    let Some(entry) = kv
         .get(key)
         .await
         .map_err(|e| ErrorData::internal(format!("reading received telemetry: {e}")))?
@@ -455,4 +526,123 @@ async fn read_telemetry_mark(
                 "the received-telemetry mark at {key} is not a number"
             ))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use alien_bindings::providers::kv::local::LocalKv;
+    use alien_error::AlienError;
+    use async_trait::async_trait;
+
+    use super::*;
+
+    /// A backend that, like one acknowledging a write only once it is
+    /// flushed, takes a while per batch. Records the id each batch carries
+    /// in its payload.
+    struct SlowBackend {
+        delay: Duration,
+        received: Mutex<Vec<i64>>,
+    }
+
+    #[async_trait]
+    impl TelemetryBackend for SlowBackend {
+        async fn ingest(
+            &self,
+            _signal: TelemetrySignal,
+            _caller: &TelemetryCaller,
+            data: bytes::Bytes,
+        ) -> Result<(), AlienError> {
+            tokio::time::sleep(self.delay).await;
+            let id = std::str::from_utf8(&data).unwrap().parse().unwrap();
+            self.received.lock().unwrap().push(id);
+            Ok(())
+        }
+    }
+
+    fn batches(ids: impl IntoIterator<Item = i64>) -> Vec<DecodedBatch> {
+        ids.into_iter()
+            .map(|id| (Some(id), TelemetrySignal::Logs, id.to_string().into_bytes()))
+            .collect()
+    }
+
+    fn caller() -> TelemetryCaller {
+        TelemetryCaller {
+            deployment_id: Some("dep".to_string()),
+            project_id: None,
+            workspace_id: None,
+            gateway_log_source: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_backlog_is_forwarded_across_reports_within_the_budget_without_duplicates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let kv: Arc<dyn Kv> = Arc::new(LocalKv::new(tmp.path().join("kv")).await.unwrap());
+        let backend = Arc::new(SlowBackend {
+            delay: Duration::from_millis(200),
+            received: Mutex::new(Vec::new()),
+        });
+        let budget = Duration::from_millis(500);
+        let backlog = 1..=100;
+
+        // Serially, 200ms per batch would fit 2-3 batches in the budget.
+        let started = Instant::now();
+        let first = forward_telemetry(
+            backend.clone(),
+            kv.clone(),
+            caller(),
+            "mark".to_string(),
+            batches(backlog.clone()),
+            budget,
+        )
+        .await
+        .unwrap();
+        let took = started.elapsed();
+
+        assert!(
+            took < budget + Duration::from_millis(400),
+            "answers within the budget plus one batch in flight, took {took:?}"
+        );
+        assert!(
+            first.accepted >= 2 * TELEMETRY_CONCURRENCY && first.accepted < 100,
+            "batches are written concurrently but the backlog doesn't fit: {first:?}"
+        );
+        let through = first.through.expect("progress was made");
+        assert_eq!(
+            through, first.accepted as i64,
+            "the mark covers exactly the batches that went through"
+        );
+        assert_eq!(
+            read_telemetry_mark(kv.as_ref(), "mark").await.unwrap(),
+            Some(through)
+        );
+
+        // The site sends its whole backlog again, as it does until the
+        // acknowledgement reaches it; each report picks up after the mark.
+        let mut last = first;
+        while last.through != Some(100) {
+            let next = forward_telemetry(
+                backend.clone(),
+                kv.clone(),
+                caller(),
+                "mark".to_string(),
+                batches(backlog.clone()),
+                budget,
+            )
+            .await
+            .unwrap();
+            assert!(next.through > last.through, "every report makes progress");
+            last = next;
+        }
+
+        let mut received = backend.received.lock().unwrap().clone();
+        received.sort();
+        assert_eq!(
+            received,
+            backlog.collect::<Vec<_>>(),
+            "every batch reached the backend exactly once"
+        );
+    }
 }

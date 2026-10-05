@@ -9,6 +9,7 @@
         "grant": {
           "actions": [
             "s3:GetBucketLocation",
+            "s3:GetBucketAbac",
             "s3:GetBucketVersioning",
             "s3:GetLifecycleConfiguration",
             "s3:GetBucketPolicy",

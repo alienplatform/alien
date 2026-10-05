@@ -72,6 +72,17 @@ variable "advanced_settings_overlay_json" {
   sensitive   = true
 }
 
+variable "endpoint_access" {
+  type        = string
+  description = "Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup."
+  default     = "internet"
+
+  validation {
+    condition     = contains(["internet", "private"], var.endpoint_access)
+    error_message = "endpoint_access must be one of: internet, private."
+  }
+}
+
 variable "updates_mode" {
   type        = string
   description = "How application updates are delivered after setup."
@@ -200,7 +211,7 @@ locals {
   deployment_region            = data.aws_region.current.region
   deployment_management_config = var.deployment_model == "push" ? { platform = "aws", managingRoleArn = var.managing_role_arn } : null
   advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
-  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })) })
+  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })) })
   deployment_resources = [
     {
       id   = "default-network"
@@ -518,7 +529,7 @@ resource "aws_iam_role_policy_attachment" "management_managed_policy_0_attachmen
 
 resource "aws_iam_policy" "management_managed_policy_1" {
   name   = length(format("%s-%s", local.resource_prefix, "deployment-management-1")) <= 128 ? format("%s-%s", local.resource_prefix, "deployment-management-1") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "deployment-management-1"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "deployment-management-1")), 0, 8))
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "CreateEventbridgeSchedules", Effect = "Allow", Action = ["events:PutRule", "events:TagResource"], Resource = ["arn:aws:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/${local.resource_prefix}-*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } } }, { Sid = "ManageEventbridgeSchedules", Effect = "Allow", Action = ["events:DeleteRule", "events:DescribeRule", "events:PutTargets", "events:RemoveTargets"], Resource = ["arn:aws:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/${local.resource_prefix}-*"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } } }, { Sid = "CheckS3BucketHealth", Effect = "Allow", Action = ["s3:GetBucketLocation", "s3:GetBucketVersioning", "s3:GetLifecycleConfiguration", "s3:GetBucketPolicy", "s3:GetBucketAcl", "s3:GetEncryptionConfiguration", "s3:GetBucketPublicAccessBlock"], Resource = ["arn:aws:s3:::${local.resource_prefix}-*"] }, { Sid = "CheckSqsQueueHealth", Effect = "Allow", Action = ["sqs:GetQueueAttributes", "sqs:ListQueueTags"], Resource = ["arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${local.resource_prefix}-*"] }, { Sid = "CheckDynamodbTableHealth", Effect = "Allow", Action = ["dynamodb:DescribeTable", "dynamodb:ListTables", "dynamodb:DescribeTimeToLive", "dynamodb:ListTagsOfResource", "dynamodb:DescribeContinuousBackups"], Resource = ["arn:aws:dynamodb:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:table/${local.resource_prefix}-*"] }] })
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "CreateEventbridgeSchedules", Effect = "Allow", Action = ["events:PutRule", "events:TagResource"], Resource = ["arn:aws:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/${local.resource_prefix}-*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } } }, { Sid = "ManageEventbridgeSchedules", Effect = "Allow", Action = ["events:DeleteRule", "events:DescribeRule", "events:PutTargets", "events:RemoveTargets"], Resource = ["arn:aws:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/${local.resource_prefix}-*"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } } }, { Sid = "CheckS3BucketHealth", Effect = "Allow", Action = ["s3:GetBucketLocation", "s3:GetBucketAbac", "s3:GetBucketVersioning", "s3:GetLifecycleConfiguration", "s3:GetBucketPolicy", "s3:GetBucketAcl", "s3:GetEncryptionConfiguration", "s3:GetBucketPublicAccessBlock"], Resource = ["arn:aws:s3:::${local.resource_prefix}-*"] }, { Sid = "CheckSqsQueueHealth", Effect = "Allow", Action = ["sqs:GetQueueAttributes", "sqs:ListQueueTags"], Resource = ["arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${local.resource_prefix}-*"] }, { Sid = "CheckDynamodbTableHealth", Effect = "Allow", Action = ["dynamodb:DescribeTable", "dynamodb:ListTables", "dynamodb:DescribeTimeToLive", "dynamodb:ListTagsOfResource", "dynamodb:DescribeContinuousBackups"], Resource = ["arn:aws:dynamodb:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:table/${local.resource_prefix}-*"] }] })
 }
 
 resource "aws_iam_role_policy_attachment" "management_managed_policy_1_attachment" {
@@ -594,7 +605,7 @@ resource "aws_s3_bucket_versioning" "assets" {
 resource "aws_iam_role_policy" "assets_management_storage-heartbeat_0" {
   name   = "assets-storage-heartbeat-0"
   role   = aws_iam_role.management.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "CheckS3BucketHealth", Effect = "Allow", Action = ["s3:GetBucketLocation", "s3:GetBucketVersioning", "s3:GetLifecycleConfiguration", "s3:GetBucketPolicy", "s3:GetBucketAcl", "s3:GetEncryptionConfiguration", "s3:GetBucketPublicAccessBlock"], Resource = ["arn:aws:s3:::${aws_s3_bucket.assets.bucket}"] }] })
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "CheckS3BucketHealth", Effect = "Allow", Action = ["s3:GetBucketLocation", "s3:GetBucketAbac", "s3:GetBucketVersioning", "s3:GetLifecycleConfiguration", "s3:GetBucketPolicy", "s3:GetBucketAcl", "s3:GetEncryptionConfiguration", "s3:GetBucketPublicAccessBlock"], Resource = ["arn:aws:s3:::${aws_s3_bucket.assets.bucket}"] }] })
 }
 
 === jobs.tf ===

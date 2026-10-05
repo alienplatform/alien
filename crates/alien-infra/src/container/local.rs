@@ -40,20 +40,6 @@ fn strip_vault_secret_pointers(env_vars: &mut std::collections::HashMap<String, 
     env_vars.remove(alien_core::ENV_ALIEN_RUNTIME_SECRETS);
 }
 
-fn matches_environment_target(resource_id: &str, target_resources: &Option<Vec<String>>) -> bool {
-    match target_resources {
-        None => true,
-        Some(patterns) if patterns.is_empty() => false,
-        Some(patterns) => patterns.iter().any(|pattern| {
-            if let Some(prefix) = pattern.strip_suffix('*') {
-                resource_id.starts_with(prefix)
-            } else {
-                resource_id == pattern
-            }
-        }),
-    }
-}
-
 fn applicable_secret_environment_variables<'a>(
     resource_id: &str,
     variables: &'a [EnvironmentVariable],
@@ -61,7 +47,7 @@ fn applicable_secret_environment_variables<'a>(
     variables
         .iter()
         .filter(|var| var.var_type == EnvironmentVariableType::Secret)
-        .filter(|var| matches_environment_target(resource_id, &var.target_resources))
+        .filter(|var| alien_core::targets_resource(&var.target_resources, resource_id))
         .collect()
 }
 

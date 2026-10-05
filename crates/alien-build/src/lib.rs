@@ -1557,6 +1557,7 @@ pub async fn push_stack(
             let resource_name = target.resource_name().to_string();
             let display_resource_name = target.display_resource_name();
             let resource_names = target.resource_names.clone();
+            let platform = platform.clone();
             let repository = push_settings.repository.clone();
             let push_opts = push_settings.options.clone();
             let bus = current_bus.clone();
@@ -1593,6 +1594,7 @@ pub async fn push_stack(
                             &resource_name,
                             target.resource_type,
                             &target.local_image_dir,
+                            &platform,
                             &repository,
                             &push_opts,
                         ) => result,
@@ -1714,6 +1716,7 @@ async fn push_resource_images(
     resource_name: &str,
     resource_type: &str,
     images_dir: &Path,
+    platform: &Platform,
     repository: &str,
     push_options: &dockdash::PushOptions,
 ) -> Result<String> {
@@ -1807,12 +1810,29 @@ async fn push_resource_images(
         resource_name: resource_name.to_string(),
     }));
 
-    // Container images are linux; darwin/windows tarballs (produced for `local` host
-    // binaries) are not registry container images, so they're excluded from the push.
-    let linux_tarballs = select_linux_tarballs(&oci_files);
+    // Local Workers/Daemons execute native binaries; containers and cloud runtimes use Linux.
+    let selected_tarballs =
+        if *platform == Platform::Local && matches!(resource_type, "worker" | "daemon") {
+            let host = BinaryTarget::current_os();
+            let archive = oci_files
+                .iter()
+                .find(|path| oci_tarball_target(path) == Some(host))
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::InvalidResourceConfig {
+                        resource_id: resource_name.to_string(),
+                        reason: format!(
+                            "No OCI archive for local host target '{}'",
+                            host.runtime_platform_id()
+                        ),
+                    })
+                })?;
+            vec![(host, archive.clone())]
+        } else {
+            select_linux_tarballs(&oci_files)
+        };
 
     // No linux image (unusual) — push whatever tarballs are present.
-    if linux_tarballs.is_empty() {
+    if selected_tarballs.is_empty() {
         for oci_file in &oci_files {
             let image = DockDashImage::from_tarball(oci_file).map_dockdash_err()?;
             push_image_with_retry(&image, &image_uri, &push_opts_with_progress).await?;
@@ -1827,7 +1847,7 @@ async fn push_resource_images(
     }
 
     // Single arch: push the image straight to the tag — no index needed.
-    if let [(_, only)] = linux_tarballs.as_slice() {
+    if let [(_, only)] = selected_tarballs.as_slice() {
         info!("Pushing {} to {}", only.display(), image_uri);
         let image = DockDashImage::from_tarball(only).map_dockdash_err()?;
         push_image_with_retry(&image, &image_uri, &push_opts_with_progress).await?;
@@ -1847,7 +1867,7 @@ async fn push_resource_images(
         ..Default::default()
     });
     let mut entries = Vec::new();
-    for (target, oci_file) in &linux_tarballs {
+    for (target, oci_file) in &selected_tarballs {
         let child_uri = format!("{}-{}", image_uri, target.runtime_platform_id());
         info!("Pushing {} as {}", oci_file.display(), child_uri);
         let image = DockDashImage::from_tarball(oci_file).map_dockdash_err()?;
@@ -1901,7 +1921,7 @@ async fn push_resource_images(
     info!(
         "Pushed multi-arch image {} ({} arches)",
         image_uri,
-        linux_tarballs.len()
+        selected_tarballs.len()
     );
 
     info!(

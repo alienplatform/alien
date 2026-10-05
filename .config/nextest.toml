@@ -8,6 +8,9 @@ lambda-tests = { max-threads = 1 }
 # E2E tests deploy to real cloud infrastructure and must run serially to avoid
 # resource conflicts and credential race conditions (env vars are process-global).
 e2e-tests = { max-threads = 1 }
+# Worker tests share one cold release build (bindings addon, AI gateway). Keep them
+# from holding every test thread while it runs.
+worker-build-tests = { max-threads = 1 }
 
 [[profile.default.overrides]]
 # Apply this rule to tests in the 'build_push_tests.rs' file
@@ -30,3 +33,9 @@ test-group = 'lambda-tests'
 # resource conflicts and credential race conditions (env vars are process-global).
 filter = 'package(alien-test) and test(push_|pull_)'
 test-group = 'e2e-tests'
+
+[[profile.default.overrides]]
+filter = 'binary_id(alien-local::worker_integration)'
+test-group = 'worker-build-tests'
+# Start them first so their cold build overlaps the rest of the run.
+priority = 100

@@ -22,12 +22,11 @@ pub trait S3Api: Send + Sync + std::fmt::Debug {
     /// API, which works whether or not the bucket has ABAC enabled. `PutBucketTagging` is
     /// rejected once ABAC is enabled.
     async fn tag_bucket(&self, bucket: &str, tags: &HashMap<String, String>) -> Result<()>;
-    /// Replaces a bucket's tags with `PutBucketTagging`. S3 rejects this call once the bucket
-    /// has ABAC enabled; use [`S3Api::tag_bucket`] there.
-    async fn put_bucket_tagging(&self, bucket: &str, tags: &HashMap<String, String>) -> Result<()>;
     /// Enables attribute-based access control, so IAM evaluates `aws:ResourceTag` conditions
     /// against the bucket's tags for bucket and object requests.
     async fn enable_bucket_abac(&self, bucket: &str) -> Result<()>;
+    /// Reads the current bucket ABAC status without changing its configuration.
+    async fn get_bucket_abac(&self, bucket: &str) -> Result<AbacStatus>;
     async fn head_bucket(&self, bucket: &str) -> Result<()>;
     async fn get_bucket_versioning(&self, bucket: &str) -> Result<GetBucketVersioningOutput>;
     async fn get_bucket_lifecycle_configuration(
@@ -142,7 +141,7 @@ impl S3Client {
             .replace('\'', "&apos;")
     }
 
-    /// `<Tag>` elements in key order, shared by the `PutBucketTagging` and `TagResource` bodies.
+    /// `<Tag>` elements in key order for the `TagResource` body.
     fn tag_list_xml(tags: &HashMap<String, String>) -> String {
         let mut sorted_tags = tags.iter().collect::<Vec<_>>();
         sorted_tags.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
@@ -555,28 +554,6 @@ impl S3Api for S3Client {
         Self::map_result(result, "TagResource", bucket, Some(&body))
     }
 
-    async fn put_bucket_tagging(&self, bucket: &str, tags: &HashMap<String, String>) -> Result<()> {
-        self.credentials.ensure_fresh().await?;
-        let body = format!(
-            "<Tagging><TagSet>{}</TagSet></Tagging>",
-            Self::tag_list_xml(tags)
-        );
-        let content_md5 = STANDARD.encode(md5::compute(body.as_bytes()).0);
-        let builder = self
-            .client
-            .request(Method::PUT, self.url(bucket, "?tagging"))
-            .content_type_xml()
-            .header("content-md5", &content_md5)
-            .content_sha256(&body)
-            .body(body.clone());
-
-        let result =
-            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
-                .await;
-
-        Self::map_result(result, "PutBucketTagging", bucket, Some(&body))
-    }
-
     async fn enable_bucket_abac(&self, bucket: &str) -> Result<()> {
         self.credentials.ensure_fresh().await?;
         let body = "<AbacStatus xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Status>Enabled</Status></AbacStatus>".to_string();
@@ -594,6 +571,26 @@ impl S3Api for S3Client {
                 .await;
 
         Self::map_result(result, "PutBucketAbac", bucket, Some(&body))
+    }
+
+    async fn get_bucket_abac(&self, bucket: &str) -> Result<AbacStatus> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct GetBucketAbacOutput {
+            status: AbacStatus,
+        }
+
+        let output: GetBucketAbacOutput = self
+            .request_xml(
+                Method::GET,
+                self.url(bucket, "?abac"),
+                self.host(bucket),
+                String::new(),
+                "GetBucketAbac",
+                bucket,
+            )
+            .await?;
+        Ok(output.status)
     }
 
     async fn head_bucket(&self, bucket: &str) -> Result<()> {
@@ -1670,6 +1667,12 @@ impl GetBucketLocationOutput {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum AbacStatus {
+    Enabled,
+    Disabled,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GetBucketVersioningOutput {
@@ -2078,56 +2081,86 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bucket_configuration_calls_sign_query_xml_and_md5_at_override_authority() {
-        for (query, body) in [
-            (
-                "abac",
-                "<AbacStatus xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Status>Enabled</Status></AbacStatus>",
-            ),
-            (
-                "tagging",
-                "<Tagging><TagSet><Tag><Key>deployment</Key><Value>acme</Value></Tag></TagSet></Tagging>",
-            ),
+    async fn enabling_bucket_abac_signs_query_xml_and_md5_at_override_authority() {
+        let server = MockServer::start_async().await;
+        let body = "<AbacStatus xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Status>Enabled</Status></AbacStatus>";
+        let request = server
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path("/proxy/acme-bucket")
+                    .query_param("abac", "")
+                    .header("host", server.address().to_string())
+                    .header("content-type", "application/xml")
+                    .header(
+                        "content-md5",
+                        STANDARD.encode(md5::compute(body.as_bytes()).0),
+                    )
+                    .header(
+                        "x-amz-content-sha256",
+                        hex::encode(sha2::Sha256::digest(body.as_bytes())),
+                    )
+                    .body(body)
+                    .matches(signature_matches);
+                then.status(200);
+            })
+            .await;
+        client(
+            "us-east-1",
+            HashMap::from([("s3".to_string(), format!("{}/proxy", server.base_url()))]),
+        )
+        .enable_bucket_abac("acme-bucket")
+        .await
+        .unwrap();
+        request.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn reading_bucket_abac_signs_the_request_and_parses_current_status() {
+        for (status, expected) in [
+            ("Enabled", AbacStatus::Enabled),
+            ("Disabled", AbacStatus::Disabled),
+        ] {
+            let server = MockServer::start_async().await;
+            let request = server.mock_async(|when, then| {
+                when.method(GET).path("/proxy/acme-bucket").query_param("abac", "")
+                    .header("host", server.address().to_string()).matches(signature_matches);
+                then.status(200).body(format!("<AbacStatus xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Status>{status}</Status></AbacStatus>"));
+            }).await;
+            let observed = client(
+                "us-east-1",
+                HashMap::from([("s3".to_string(), format!("{}/proxy", server.base_url()))]),
+            )
+            .get_bucket_abac("acme-bucket")
+            .await
+            .unwrap();
+            assert_eq!(observed, expected);
+            request.assert_async().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn reading_bucket_abac_rejects_missing_or_unknown_status() {
+        for body in [
+            "<AbacStatus/>",
+            "<AbacStatus><Status>Unknown</Status></AbacStatus>",
         ] {
             let server = MockServer::start_async().await;
             let request = server
                 .mock_async(|when, then| {
-                    when.method(PUT)
-                        .path("/proxy/acme-bucket")
-                        .query_param(query, "")
-                        .header("host", server.address().to_string())
-                        .header("content-type", "application/xml")
-                        .header(
-                            "content-md5",
-                            STANDARD.encode(md5::compute(body.as_bytes()).0),
-                        )
-                        .header(
-                            "x-amz-content-sha256",
-                            hex::encode(sha2::Sha256::digest(body.as_bytes())),
-                        )
-                        .body(body)
-                        .matches(signature_matches);
-                    then.status(200);
+                    when.method(GET)
+                        .path("/acme-bucket")
+                        .query_param("abac", "");
+                    then.status(200).body(body);
                 })
                 .await;
-            let client = client(
+            client(
                 "us-east-1",
-                HashMap::from([("s3".to_string(), format!("{}/proxy", server.base_url()))]),
-            );
-            match query {
-                "abac" => client.enable_bucket_abac("acme-bucket").await,
-                "tagging" => {
-                    client
-                        .put_bucket_tagging(
-                            "acme-bucket",
-                            &HashMap::from([("deployment".to_string(), "acme".to_string())]),
-                        )
-                        .await
-                }
-                _ => unreachable!(),
-            }
-            .unwrap();
-            request.assert_async().await;
+                HashMap::from([("s3".to_string(), server.base_url())]),
+            )
+            .get_bucket_abac("acme-bucket")
+            .await
+            .expect_err("invalid ABAC status must remain unknown");
+            assert!(request.hits_async().await > 0);
         }
     }
 
@@ -2153,6 +2186,15 @@ mod tests {
                     .body("<Error><Code>NoSuchBucket</Code><Message>Missing</Message></Error>");
             })
             .await;
+        let read_abac = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/acme-bucket")
+                    .query_param("abac", "");
+                then.status(403)
+                    .body("<Error><Code>AccessDenied</Code><Message>Denied</Message></Error>");
+            })
+            .await;
         let client = client(
             "us-east-1",
             HashMap::from([("s3".to_string(), server.base_url())]),
@@ -2173,6 +2215,15 @@ mod tests {
                 .code,
             "REMOTE_RESOURCE_NOT_FOUND"
         );
+        assert_eq!(
+            client
+                .get_bucket_abac("acme-bucket")
+                .await
+                .unwrap_err()
+                .code,
+            "REMOTE_ACCESS_DENIED"
+        );
+        assert!(read_abac.hits_async().await > 0);
         assert!(tag.hits_async().await > 0);
         assert!(abac.hits_async().await > 0);
     }

@@ -8811,6 +8811,14 @@
           "stopped"
         ]
       },
+      "EndpointAccess": {
+        "type": "string",
+        "description": "Reachability of the deployment's public endpoints, fixed at setup.",
+        "enum": [
+          "internet",
+          "private"
+        ]
+      },
       "Envelope": {
         "type": "object",
         "description": "Commands envelope sent to deployments",
@@ -18586,6 +18594,10 @@
                 "description": "Domain configuration (future)."
               }
             ]
+          },
+          "endpointAccess": {
+            "$ref": "#/components/schemas/EndpointAccess",
+            "description": "Who can reach public endpoints. Private access requires AWS managed containers.\nThis choice cannot change after setup; create a new deployment to change it."
           },
           "externalBindings": {
             "type": [

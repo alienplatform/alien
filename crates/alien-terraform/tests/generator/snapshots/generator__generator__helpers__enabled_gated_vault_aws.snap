@@ -72,6 +72,17 @@ variable "advanced_settings_overlay_json" {
   sensitive   = true
 }
 
+variable "endpoint_access" {
+  type        = string
+  description = "Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup."
+  default     = "internet"
+
+  validation {
+    condition     = contains(["internet", "private"], var.endpoint_access)
+    error_message = "endpoint_access must be one of: internet, private."
+  }
+}
+
 variable "updates_mode" {
   type        = string
   description = "How application updates are delivered after setup."
@@ -154,7 +165,7 @@ locals {
   deployment_region            = data.aws_region.current.region
   deployment_management_config = null
   advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
-  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode })
+  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access })
   deployment_resources         = concat(var.input_fixture_enabled ? [{ id = "fixture", type = "vault", importData = { accountId = data.aws_caller_identity.current.account_id, region = data.aws_region.current.region, parameterPrefix = "${local.resource_prefix}-fixture" } }] : [])
 }
 

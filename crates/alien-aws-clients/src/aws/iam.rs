@@ -1101,6 +1101,9 @@ pub struct TrustPolicyStatement {
     pub principal: TrustPolicyPrincipal,
     /// Action being permitted (usually sts:AssumeRole)
     pub action: String,
+    /// Conditions restricting which principals may assume the role.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub condition: Option<serde_json::Value>,
 }
 
 /// Complete trust policy document

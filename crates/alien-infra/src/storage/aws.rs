@@ -1,5 +1,4 @@
 use alien_error::{AlienError, ContextError};
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -7,26 +6,20 @@ use tracing::{debug, info, warn};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::s3::{
-    GetBucketEncryptionOutput, LifecycleConfiguration, LifecycleExpiration, LifecycleRule,
-    LifecycleRuleFilter, LifecycleRuleStatus, PublicAccessBlockConfiguration, S3Api,
+    AbacStatus, GetBucketEncryptionOutput, LifecycleConfiguration, LifecycleExpiration,
+    LifecycleRule, LifecycleRuleFilter, LifecycleRuleStatus, PublicAccessBlockConfiguration,
     VersioningStatus,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     standard_resource_tags, AwsS3StorageHeartbeatData, HeartbeatBackend, HeartbeatCollectionIssue,
-    HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, InitialSetupAuthority, ObservedHealth,
-    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceLifecycle,
-    ResourceOutputs, ResourceStatus, Storage, StorageHeartbeatData, StorageHeartbeatStatus,
-    StorageOutputs,
+    HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
 };
 use alien_error::{Context, IntoAlienError};
 use alien_macros::controller;
-use chrono::{DateTime, Utc};
-
-/// Backoff before later update planning may retry a denied `PutBucketAbac` request for an
-/// unchanged bucket. Periodic observation does not run planning or schedule this retry.
-/// An explicit bucket configuration update retries immediately, regardless of this backoff.
-const ABAC_RETRY_INTERVAL_HOURS: i64 = 24;
+use chrono::Utc;
 
 fn is_access_denied(error: &AlienError<CloudClientErrorData>) -> bool {
     matches!(
@@ -63,14 +56,6 @@ pub struct AwsStorageController {
     /// The actual bucket name (includes stack name prefix).
     /// This is None until the bucket is created.
     pub(crate) bucket_name: Option<String>,
-    /// Whether this controller has enabled ABAC on the bucket. State saved before it did reads
-    /// as `false`, which schedules one update that enables it.
-    #[serde(default)]
-    pub(crate) abac_enabled: bool,
-    /// When `PutBucketAbac` was last denied. Set while the deployment's setup lacks the ABAC
-    /// permissions; the bucket keeps working without ABAC and reports a warning.
-    #[serde(default)]
-    pub(crate) abac_denied_at: Option<DateTime<Utc>>,
 }
 
 #[controller]
@@ -113,15 +98,26 @@ impl AwsStorageController {
             }
         }
 
-        self.tag_bucket(
-            client.as_ref(),
-            &bucket_name,
-            &standard_resource_tags(ctx.resource_prefix, &config.id),
-            &config.id,
-        )
-        .await?;
-        self.enable_abac(client.as_ref(), &bucket_name, &config.id)
-            .await?;
+        client
+            .tag_bucket(
+                &bucket_name,
+                &standard_resource_tags(ctx.resource_prefix, &config.id),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to tag S3 bucket '{}'", bucket_name),
+                resource_id: Some(config.id.clone()),
+            })?;
+        client
+            .enable_bucket_abac(&bucket_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to enable ABAC on S3 bucket '{}'; refresh setup permissions before retrying",
+                    bucket_name
+                ),
+                resource_id: Some(config.id.clone()),
+            })?;
 
         info!(bucket=%bucket_name, "S3 bucket created successfully");
 
@@ -480,6 +476,29 @@ impl AwsStorageController {
                 }
             };
 
+            let abac_issue = match client.get_bucket_abac(bucket_name).await {
+                Ok(AbacStatus::Enabled) => None,
+                Ok(AbacStatus::Disabled) => Some(HeartbeatCollectionIssue {
+                    source: "abac".to_string(),
+                    reason: HeartbeatCollectionIssueReason::NotInstalled,
+                    severity: HeartbeatIssueSeverity::Warning,
+                    message: "Bucket ABAC is disabled. The setup owner must audit existing tag policies and tagging clients before explicitly enabling it.".to_string(),
+                }),
+                Err(error) => Some(HeartbeatCollectionIssue {
+                    source: "abac".to_string(),
+                    reason: if is_access_denied(&error) {
+                        HeartbeatCollectionIssueReason::Forbidden
+                    } else {
+                        HeartbeatCollectionIssueReason::CollectionFailed
+                    },
+                    severity: HeartbeatIssueSeverity::Warning,
+                    message: format!(
+                        "Bucket ABAC status is unknown: {}. Refresh setup permissions or check the AWS response.",
+                        error.message
+                    ),
+                }),
+            };
+
             emit_aws_s3_storage_heartbeat(
                 ctx,
                 &config.id,
@@ -491,7 +510,7 @@ impl AwsStorageController {
                 public_access_block,
                 bucket_policy_present,
                 bucket_acl_present,
-                self.abac_issue(),
+                abac_issue,
             );
 
             debug!(name = %config.id, bucket = %bucket_name, "S3 bucket exists and is accessible");
@@ -518,17 +537,6 @@ impl AwsStorageController {
         let prev_config = ctx.previous_resource_config::<Storage>()?;
 
         info!(name=%config.id, "Starting bucket configuration update");
-
-        if self.abac_pending(ctx, &config.id) {
-            let bucket_name = self.bucket_name.clone().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "Bucket name not set in state during ABAC update".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })
-            })?;
-            self.enable_abac(client.as_ref(), &bucket_name, &config.id)
-                .await?;
-        }
 
         // Check if versioning needs to be updated
         if config.versioning != prev_config.versioning {
@@ -956,16 +964,6 @@ impl AwsStorageController {
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
-    /// During update planning, buckets without ABAC get one migration attempt, or another
-    /// attempt after the denial backoff. Periodic observation does not call this method.
-    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
-        let config = ctx.desired_resource_config::<Storage>()?;
-        let retry_due = self.abac_denied_at.is_none_or(|denied_at| {
-            Utc::now() - denied_at >= chrono::Duration::hours(ABAC_RETRY_INTERVAL_HOURS)
-        });
-        Ok(self.abac_pending(ctx, &config.id) && retry_due)
-    }
-
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         // Only return outputs when the bucket has been successfully created
         self.bucket_name.as_ref().map(|bucket_name| {
@@ -1037,7 +1035,7 @@ fn emit_aws_s3_storage_heartbeat(
                     lifecycle: ProviderLifecycleState::Running,
                     message: Some(format!("S3 bucket '{}' metadata is reachable", bucket_name)),
                     stale: false,
-                    partial: false,
+                    partial: abac_issue.is_some(),
                     collection_issues: abac_issue.into_iter().collect(),
                 },
                 name: bucket_name.to_string(),
@@ -1078,106 +1076,12 @@ fn versioning_status_label(status: VersioningStatus) -> String {
 }
 
 impl AwsStorageController {
-    /// Tags the bucket with `TagResource`, which works with ABAC on or off. A setup that predates
-    /// the ABAC permissions grants only `PutBucketTagging`; that call is used only while this
-    /// controller has not enabled ABAC, because S3 rejects it on an ABAC bucket.
-    async fn tag_bucket(
-        &self,
-        client: &dyn S3Api,
-        bucket_name: &str,
-        tags: &HashMap<String, String>,
-        resource_id: &str,
-    ) -> Result<()> {
-        let result = match client.tag_bucket(bucket_name, tags).await {
-            Err(error) if is_access_denied(&error) && !self.abac_enabled => {
-                warn!(
-                    bucket = %bucket_name,
-                    "s3:TagResource was denied; tagging with PutBucketTagging until the deployment's setup is updated"
-                );
-                client.put_bucket_tagging(bucket_name, tags).await
-            }
-            result => result,
-        };
-        result.context(ErrorData::CloudPlatformError {
-            message: format!("Failed to tag S3 bucket '{}'", bucket_name),
-            resource_id: Some(resource_id.to_string()),
-        })
-    }
-
-    /// Enables ABAC so the `aws:ResourceTag/deployment` conditions in the deployment's grants
-    /// are evaluated against this bucket's tags. On access denied, the bucket keeps working,
-    /// the denial is recorded and reported in the heartbeat. A later explicit update or
-    /// update-planning pass can retry; periodic observation does not initiate mutations.
-    /// Review the setup permissions or applicable access policy before retrying.
-    async fn enable_abac(
-        &mut self,
-        client: &dyn S3Api,
-        bucket_name: &str,
-        resource_id: &str,
-    ) -> Result<()> {
-        match client.enable_bucket_abac(bucket_name).await {
-            Ok(()) => {
-                self.abac_enabled = true;
-                self.abac_denied_at = None;
-                Ok(())
-            }
-            Err(error) if is_access_denied(&error) => {
-                warn!(
-                    bucket = %bucket_name,
-                    "s3:PutBucketAbac was denied; review the setup permissions or applicable access policy"
-                );
-                self.abac_denied_at = Some(Utc::now());
-                Ok(())
-            }
-            Err(error) => Err(error.context(ErrorData::CloudPlatformError {
-                message: format!("Failed to enable ABAC on S3 bucket '{}'", bucket_name),
-                resource_id: Some(resource_id.to_string()),
-            })),
-        }
-    }
-
-    /// The heartbeat warning for a bucket whose ABAC enable was denied.
-    fn abac_issue(&self) -> Option<HeartbeatCollectionIssue> {
-        (!self.abac_enabled && self.abac_denied_at.is_some()).then(|| HeartbeatCollectionIssue {
-            source: "abac".to_string(),
-            reason: HeartbeatCollectionIssueReason::Forbidden,
-            severity: HeartbeatIssueSeverity::Warning,
-            message: "ABAC is not enabled on this bucket: s3:PutBucketAbac was denied. \
-                      Review or update the setup permissions or applicable access policy."
-                .to_string(),
-        })
-    }
-
-    /// Whether the bucket still needs ABAC and this controller may change it. A Live bucket is
-    /// the runtime's, managed with `storage/provision`. A Frozen bucket belongs to setup: only a
-    /// direct setup run, which holds the deployer's credentials, changes it, while templates
-    /// enable ABAC themselves.
-    fn abac_pending(&self, ctx: &ResourceControllerContext<'_>, resource_id: &str) -> bool {
-        if self.bucket_name.is_none() || self.abac_enabled {
-            return false;
-        }
-        match ctx
-            .state
-            .resources
-            .get(resource_id)
-            .and_then(|resource| resource.lifecycle)
-        {
-            Some(ResourceLifecycle::Live) => true,
-            Some(ResourceLifecycle::Frozen) => {
-                ctx.initial_setup_authority == InitialSetupAuthority::DirectSetup
-            }
-            None => false,
-        }
-    }
-
     /// Creates a controller in a ready state with mock values for testing purposes.
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(storage_name: &str) -> Self {
         Self {
             state: AwsStorageState::Ready,
             bucket_name: Some(get_aws_bucket_name("test-stack", storage_name)),
-            abac_enabled: true,
-            abac_denied_at: None,
             _internal_stay_count: None,
         }
     }
@@ -1192,25 +1096,23 @@ mod tests {
     use std::sync::Arc;
 
     use alien_aws_clients::s3::{
-        AccessControlList, DeleteObjectsOutput, GetBucketAclOutput, GetBucketLocationOutput,
-        GetBucketPolicyOutput, GetBucketVersioningOutput, LifecycleConfiguration,
-        LifecycleExpiration, LifecycleRule, LifecycleRuleFilter, LifecycleRuleStatus,
-        ListObjectsV2Output, ListVersionsOutput, MockS3Api, PublicAccessBlockConfiguration,
-        VersioningStatus,
+        AbacStatus, AccessControlList, DeleteObjectsOutput, GetBucketAclOutput,
+        GetBucketLocationOutput, GetBucketPolicyOutput, GetBucketVersioningOutput,
+        LifecycleConfiguration, LifecycleExpiration, LifecycleRule, LifecycleRuleFilter,
+        LifecycleRuleStatus, ListObjectsV2Output, ListVersionsOutput, MockS3Api,
+        PublicAccessBlockConfiguration, VersioningStatus,
     };
     use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
     use alien_core::{
-        HeartbeatIssueSeverity, InitialSetupAuthority, LifecycleRule as AlienLifecycleRule,
-        Platform, ResourceHeartbeatData, ResourceLifecycle, ResourceStatus, Storage,
-        StorageHeartbeatData, StorageOutputs,
+        HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, InitialSetupAuthority,
+        LifecycleRule as AlienLifecycleRule, Platform, ResourceHeartbeatData, ResourceLifecycle,
+        ResourceStatus, Storage, StorageHeartbeatData, StorageOutputs,
     };
     use alien_error::AlienError;
-    use chrono::Utc;
     use mockall::Sequence;
     use rstest::{fixture, rstest};
     use std::collections::HashMap;
 
-    use super::ABAC_RETRY_INTERVAL_HOURS;
     use crate::core::{
         controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
         MockPlatformServiceProvider, PlatformServiceProvider,
@@ -1382,6 +1284,9 @@ mod tests {
                 policy: String::new(),
             })
         });
+        mock_s3
+            .expect_get_bucket_abac()
+            .returning(|_| Ok(AbacStatus::Enabled));
         mock_s3.expect_get_bucket_acl().returning(|_| {
             Ok(GetBucketAclOutput {
                 owner: None,
@@ -1832,8 +1737,6 @@ mod tests {
         let controller = AwsStorageController {
             state: AwsStorageState::CreateFailed,
             bucket_name: None, // This is the key - no bucket name set
-            abac_enabled: false,
-            abac_denied_at: None,
             _internal_stay_count: None,
         };
 
@@ -1865,20 +1768,6 @@ mod tests {
     }
 
     // ─────────────── ABAC TESTS ────────────────────────────────
-
-    /// A ready controller as saved before it enabled ABAC: the stored state has no
-    /// `abacEnabled` field.
-    fn ready_controller_saved_before_abac(storage_id: &str) -> AwsStorageController {
-        let mut saved = serde_json::to_value(AwsStorageController::mock_ready(storage_id))
-            .expect("controller serializes");
-        saved
-            .as_object_mut()
-            .expect("controller state is an object")
-            .remove("abacEnabled")
-            .expect("controller state has abacEnabled");
-        saved.as_object_mut().unwrap().remove("abacDeniedAt");
-        serde_json::from_value(saved).expect("state without abacEnabled deserializes")
-    }
 
     #[tokio::test]
     async fn create_tags_the_bucket_then_enables_abac() {
@@ -2002,34 +1891,16 @@ mod tests {
             .collect()
     }
 
-    /// A deployment whose setup predates the ABAC permissions: `TagResource` and
-    /// `PutBucketAbac` are denied, `PutBucketTagging` is allowed.
     #[tokio::test]
-    async fn create_on_a_setup_without_abac_permissions_keeps_the_bucket_working() {
+    async fn create_fails_when_enabling_abac_is_denied() {
         let storage = basic_storage();
         let mut mock_s3 = MockS3Api::new();
         mock_s3.expect_create_bucket().returning(|_| Ok(()));
-        mock_s3
-            .expect_tag_bucket()
-            .times(1)
-            .returning(|bucket, _| Err(access_denied(bucket)));
-        mock_s3
-            .expect_put_bucket_tagging()
-            .withf(|_, tags| tags.get("deployment").map(String::as_str) == Some("test"))
-            .times(1)
-            .returning(|_, _| Ok(()));
+        mock_s3.expect_tag_bucket().returning(|_, _| Ok(()));
         mock_s3
             .expect_enable_bucket_abac()
             .times(1)
             .returning(|bucket| Err(access_denied(bucket)));
-        mock_s3
-            .expect_put_public_access_block()
-            .returning(|_, _| Ok(()));
-        mock_s3.expect_put_bucket_policy().returning(|_, _| Ok(()));
-        mock_s3
-            .expect_put_bucket_lifecycle_configuration()
-            .returning(|_, _| Ok(()));
-        expect_ready_heartbeat_reads(&mut mock_s3);
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(storage)
@@ -2041,47 +1912,13 @@ mod tests {
             .await
             .unwrap();
 
-        executor.run_until_terminal().await.unwrap();
-        assert_eq!(executor.status(), ResourceStatus::Running);
-
-        // Reconcile several times: each Ready step reports the warning, and nothing schedules
-        // another attempt. The mock's `times(1)` fails the test on a second ABAC or tag call.
-        for _ in 0..3 {
-            assert!(!executor.needs_update().unwrap());
-            executor.step().await.unwrap();
-            assert_eq!(executor.status(), ResourceStatus::Running);
-            assert_eq!(heartbeat_issue_sources(&executor), vec!["abac".to_string()]);
-        }
-    }
-
-    #[tokio::test]
-    async fn create_never_falls_back_to_put_bucket_tagging_once_abac_is_enabled() {
-        let storage = basic_storage();
-        let mut controller = AwsStorageController::default();
-        controller.abac_enabled = true;
-
-        let mut mock_s3 = MockS3Api::new();
-        mock_s3.expect_create_bucket().returning(|_| Ok(()));
-        mock_s3
-            .expect_tag_bucket()
-            .returning(|bucket, _| Err(access_denied(bucket)));
-        mock_s3.expect_put_bucket_tagging().never();
-
-        let mut executor = SingleControllerExecutor::builder()
-            .resource(storage)
-            .controller(controller)
-            .platform(Platform::Aws)
-            .service_provider(setup_mock_service_provider(Arc::new(mock_s3)))
-            .with_test_dependencies()
-            .build()
-            .await
-            .unwrap();
-
         let error = executor
             .run_until_terminal()
             .await
-            .expect_err("a denied TagResource on an ABAC bucket must fail");
-        assert!(error.message.contains("Failed to tag S3 bucket"));
+            .expect_err("ABAC is required during creation");
+        assert!(error.message.contains("refresh setup permissions"));
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+        assert_ne!(executor.status(), ResourceStatus::Running);
     }
 
     #[tokio::test]
@@ -2117,208 +1954,103 @@ mod tests {
         assert_ne!(executor.status(), ResourceStatus::Running);
     }
 
+    fn previously_saved_controller(storage_id: &str) -> AwsStorageController {
+        let mut saved = serde_json::to_value(AwsStorageController::mock_ready(storage_id)).unwrap();
+        saved["abacEnabled"] = serde_json::json!(true);
+        saved["abacDeniedAt"] = serde_json::json!("2026-10-01T00:00:00Z");
+        serde_json::from_value(saved).expect("previous controller fields remain readable")
+    }
+
     #[rstest]
-    #[case::retry_interval_elapsed(ABAC_RETRY_INTERVAL_HOURS + 1, true)]
-    #[case::within_retry_interval(1, false)]
+    #[case::live(ResourceLifecycle::Live, InitialSetupAuthority::ImportedHandoff)]
+    #[case::direct_setup(ResourceLifecycle::Frozen, InitialSetupAuthority::DirectSetup)]
     #[tokio::test]
-    async fn denied_abac_is_retried_by_the_next_update(
-        #[case] hours_since_denial: i64,
-        #[case] update_scheduled: bool,
+    async fn existing_bucket_updates_preserve_abac(
+        #[case] lifecycle: ResourceLifecycle,
+        #[case] authority: InitialSetupAuthority,
     ) {
         let storage = basic_storage();
-        let mut controller = AwsStorageController::mock_ready(&storage.id);
-        controller.abac_enabled = false;
-        controller.abac_denied_at = Some(Utc::now() - chrono::Duration::hours(hours_since_denial));
-
         let mut mock_s3 = MockS3Api::new();
+        mock_s3.expect_enable_bucket_abac().never();
+        mock_s3.expect_tag_bucket().never();
         mock_s3
-            .expect_enable_bucket_abac()
+            .expect_put_bucket_versioning()
+            .withf(|_, status| matches!(status, VersioningStatus::Enabled))
             .times(1)
-            .returning(|_| Ok(()));
-        expect_ready_heartbeat_reads(&mut mock_s3);
-
+            .returning(|_, _| Ok(()));
         let mut executor = SingleControllerExecutor::builder()
             .resource(storage.clone())
-            .controller(controller)
+            .controller(previously_saved_controller(&storage.id))
             .platform(Platform::Aws)
+            .resource_lifecycle(lifecycle)
+            .initial_setup_authority(authority)
             .service_provider(setup_mock_service_provider(Arc::new(mock_s3)))
             .with_test_dependencies()
             .build()
             .await
             .unwrap();
 
-        assert_eq!(executor.needs_update().unwrap(), update_scheduled);
-
-        // Any update of the bucket retries, whether the interval scheduled it or not.
-        executor.update(storage).unwrap();
+        assert!(!executor.needs_update().unwrap());
+        let mut updated = storage;
+        updated.versioning = true;
+        executor.update(updated).unwrap();
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
         assert!(!executor.needs_update().unwrap());
+    }
+
+    #[rstest]
+    #[case::disabled(
+        Ok(AbacStatus::Disabled),
+        Some(HeartbeatCollectionIssueReason::NotInstalled)
+    )]
+    #[case::enabled(Ok(AbacStatus::Enabled), None)]
+    #[case::denied(
+        Err(access_denied("test-bucket")),
+        Some(HeartbeatCollectionIssueReason::Forbidden)
+    )]
+    #[case::unavailable(Err(AlienError::new(CloudClientErrorData::RemoteServiceUnavailable { message: "unavailable".to_string() })), Some(HeartbeatCollectionIssueReason::CollectionFailed))]
+    #[tokio::test]
+    async fn heartbeat_observes_abac_without_migrating(
+        #[case] observed: CloudClientResult<AbacStatus>,
+        #[case] issue_reason: Option<HeartbeatCollectionIssueReason>,
+        #[values(ResourceLifecycle::Live, ResourceLifecycle::Frozen)] lifecycle: ResourceLifecycle,
+    ) {
+        let storage = basic_storage();
+        let mut mock_s3 = MockS3Api::new();
+        mock_s3.expect_enable_bucket_abac().never();
+        mock_s3
+            .expect_get_bucket_abac()
+            .times(1)
+            .return_once(move |_| observed);
+        expect_ready_heartbeat_reads(&mut mock_s3);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage.clone())
+            .controller(previously_saved_controller(&storage.id))
+            .platform(Platform::Aws)
+            .resource_lifecycle(lifecycle)
+            .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
+            .service_provider(setup_mock_service_provider(Arc::new(mock_s3)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
 
         executor.step().await.unwrap();
-        assert!(heartbeat_issue_sources(&executor).is_empty());
-    }
-
-    #[rstest]
-    #[case::backoff_elapsed(ABAC_RETRY_INTERVAL_HOURS + 1, true)]
-    #[case::within_backoff(1, false)]
-    #[tokio::test]
-    async fn denied_abac_retries_during_planning_and_not_periodic_refresh(
-        #[case] hours_since_denial: i64,
-        #[case] retry_due: bool,
-    ) {
-        use crate::core::{serialize_controller, StackExecutor};
-        use alien_aws_clients::AwsClientConfigExt;
-        use alien_core::{
-            AwsClientConfig, ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot,
-            ExternalBindings, Resource, Stack, StackResourceState, StackSettings, StackState,
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert!(!executor.needs_update().unwrap());
+        assert_eq!(
+            heartbeat_issue_sources(&executor).len(),
+            usize::from(issue_reason.is_some())
+        );
+        let ResourceHeartbeatData::Storage(StorageHeartbeatData::AwsS3(data)) =
+            &executor.last_heartbeats()[0].data
+        else {
+            panic!("expected S3 heartbeat")
         };
-
-        let storage = basic_storage();
-        let stack = Stack::new("abac-retry".to_string())
-            .add(storage.clone(), ResourceLifecycle::Live)
-            .build();
-        let mut controller = AwsStorageController::mock_ready(&storage.id);
-        controller.abac_enabled = false;
-        controller.abac_denied_at = Some(Utc::now() - chrono::Duration::hours(hours_since_denial));
-        let mut resource = StackResourceState::new_pending(
-            "storage".to_string(),
-            Resource::new(storage.clone()),
-            Some(ResourceLifecycle::Live),
-            vec![],
-        );
-        resource.status = ResourceStatus::Running;
-        resource.outputs = controller.build_outputs();
-        resource.internal_state = Some(serialize_controller(&controller).unwrap());
-        let mut state = StackState::new(Platform::Aws);
-        state.resource_prefix = "test".to_string();
-        state.resources.insert(storage.id.clone(), resource);
-
-        let mut mock_s3 = MockS3Api::new();
-        mock_s3
-            .expect_enable_bucket_abac()
-            .times(usize::from(retry_due))
-            .returning(|_| Ok(()));
-        expect_ready_heartbeat_reads(&mut mock_s3);
-        let deployment_config = DeploymentConfig::builder()
-            .stack_settings(StackSettings::default())
-            .environment_variables(EnvironmentVariablesSnapshot {
-                variables: vec![],
-                hash: String::new(),
-                created_at: String::new(),
-            })
-            .external_bindings(ExternalBindings::default())
-            .allow_frozen_changes(false)
-            .build();
-        let executor =
-            StackExecutor::builder(&stack, ClientConfig::Aws(Box::new(AwsClientConfig::mock())))
-                .deployment_config(&deployment_config)
-                .service_provider(setup_mock_service_provider(Arc::new(mock_s3)))
-                .build()
-                .unwrap();
-
-        let observed = executor.refresh(state).await.unwrap().next_state;
-        let resource = &observed.resources[&storage.id];
-        assert_eq!(resource.status, ResourceStatus::Running);
-        assert_eq!(
-            resource.internal_state.as_ref().unwrap()["abacEnabled"],
-            false
-        );
-
-        let planned = executor.step(observed).await.unwrap().next_state;
-        let resource = &planned.resources[&storage.id];
-        assert_eq!(
-            resource.internal_state.as_ref().unwrap()["abacEnabled"],
-            retry_due
-        );
-        assert_eq!(
-            resource.status,
-            if retry_due {
-                ResourceStatus::Updating
-            } else {
-                ResourceStatus::Running
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn live_bucket_created_before_abac_gets_it_on_the_next_update() {
-        let storage = basic_storage();
-        let controller = ready_controller_saved_before_abac(&storage.id);
-        let bucket_name = controller.bucket_name.clone().unwrap();
-
-        let mut mock_s3 = MockS3Api::new();
-        mock_s3
-            .expect_enable_bucket_abac()
-            .withf(move |bucket| bucket == bucket_name)
-            .times(1)
-            .returning(|_| Ok(()));
-
-        let mut executor = SingleControllerExecutor::builder()
-            .resource(storage.clone())
-            .controller(controller)
-            .platform(Platform::Aws)
-            .service_provider(setup_mock_service_provider(Arc::new(mock_s3)))
-            .with_test_dependencies()
-            .build()
-            .await
-            .unwrap();
-
-        assert!(executor.needs_update().unwrap());
-
-        executor.update(storage).unwrap();
-        executor.run_until_terminal().await.unwrap();
-
-        assert_eq!(executor.status(), ResourceStatus::Running);
-        assert!(!executor.needs_update().unwrap());
-    }
-
-    #[tokio::test]
-    async fn frozen_bucket_from_a_template_is_left_to_the_template() {
-        let storage = basic_storage();
-
-        let executor = SingleControllerExecutor::builder()
-            .resource(storage.clone())
-            .controller(ready_controller_saved_before_abac(&storage.id))
-            .platform(Platform::Aws)
-            .resource_lifecycle(ResourceLifecycle::Frozen)
-            .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
-            .service_provider(setup_mock_service_provider(Arc::new(MockS3Api::new())))
-            .with_test_dependencies()
-            .build()
-            .await
-            .unwrap();
-
-        assert!(!executor.needs_update().unwrap());
-    }
-
-    #[tokio::test]
-    async fn frozen_bucket_gets_abac_during_a_direct_setup() {
-        let storage = basic_storage();
-        let mut mock_s3 = MockS3Api::new();
-        mock_s3
-            .expect_enable_bucket_abac()
-            .times(1)
-            .returning(|_| Ok(()));
-
-        let mut executor = SingleControllerExecutor::builder()
-            .resource(storage.clone())
-            .controller(ready_controller_saved_before_abac(&storage.id))
-            .platform(Platform::Aws)
-            .resource_lifecycle(ResourceLifecycle::Frozen)
-            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
-            .service_provider(setup_mock_service_provider(Arc::new(mock_s3)))
-            .with_test_dependencies()
-            .build()
-            .await
-            .unwrap();
-
-        assert!(executor.needs_update().unwrap());
-
-        executor.update(storage).unwrap();
-        executor.run_until_terminal().await.unwrap();
-
-        assert_eq!(executor.status(), ResourceStatus::Running);
-        assert!(!executor.needs_update().unwrap());
+        assert_eq!(data.status.partial, issue_reason.is_some());
+        if let Some(reason) = issue_reason {
+            assert_eq!(data.status.collection_issues[0].reason, reason);
+        }
     }
 }

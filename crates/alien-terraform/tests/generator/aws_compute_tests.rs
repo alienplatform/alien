@@ -7,10 +7,17 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Platform, ResourceLifecycle,
-    Stack, StackSettings, Worker, WorkerCode,
+    import::EmitContext, ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData,
+    Network, NetworkSettings, Platform, ResourceLifecycle, Result, Stack, StackSettings, Worker,
+    WorkerCode,
 };
-use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
+use alien_terraform::{
+    block::{attr, resource_block},
+    emitters::aws::helpers::{private_subnet_ids_expr, required_label, vpc_id_expr},
+    expr, generate_terraform_module, TerraformOptions, TerraformTarget, TfEmitter, TfFragment,
+    TfRegistry,
+};
+use hcl::expr::Expression;
 
 #[test]
 fn aws_artifact_registry_renders_ecr_repository() {
@@ -171,5 +178,94 @@ fn aws_container_cluster_without_platform_extension_errors_cleanly() {
             assert_eq!(*platform, Platform::Aws);
         }
         other => panic!("expected ImportRegistrationMissing, got {other:?}"),
+    }
+}
+
+/// Stand-in for an extension compute-cluster emitter: it places its machines in the stack's
+/// network purely through the shared network helpers, the way out-of-crate emitters do.
+struct NetworkConsumerEmitter;
+
+impl TfEmitter for NetworkConsumerEmitter {
+    fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
+        let label = required_label(ctx)?;
+        Ok(TfFragment::default()
+            .with_resource(resource_block(
+                "aws_security_group",
+                label,
+                [attr("vpc_id", vpc_id_expr(ctx))],
+            ))
+            .with_resource(resource_block(
+                "aws_lb",
+                label,
+                [
+                    attr("internal", Expression::Bool(true)),
+                    attr("subnets", private_subnet_ids_expr(ctx)),
+                ],
+            )))
+    }
+
+    fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
+        let label = required_label(ctx)?;
+        Ok(expr::object([(
+            "securityGroupId",
+            expr::traversal(["aws_security_group", label, "id"]),
+        )]))
+    }
+}
+
+/// A container stack on the account's default VPC gets a compute cluster plus a `UseDefault`
+/// network. The network helpers resolve to the default-VPC data sources, so the network emitter
+/// must declare them for every consumer, not only for databases and EKS. `terraform validate`
+/// rejects any reference to an undeclared data source, which is the failure this pins; the
+/// dynamic network render runs alongside as the passing baseline.
+#[test]
+fn aws_compute_cluster_network_references_resolve_for_every_network_mode() {
+    for (scenario, network) in [
+        ("static_default_vpc", NetworkSettings::UseDefault),
+        (
+            "dynamic_network",
+            NetworkSettings::Create {
+                cidr: None,
+                availability_zones: 2,
+            },
+        ),
+    ] {
+        let stack = Stack::new("acme-cluster".to_string())
+            .add(
+                Network::new("default-network".to_string())
+                    .settings(network.clone())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ComputeCluster::new("compute".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        let mut registry = TfRegistry::built_in();
+        registry.register(
+            ComputeCluster::RESOURCE_TYPE,
+            Platform::Aws,
+            NetworkConsumerEmitter,
+        );
+        let module = generate_terraform_module(
+            &stack,
+            TerraformTarget::Aws,
+            TerraformOptions {
+                display_name: None,
+                registry: &registry,
+                stack_settings: StackSettings {
+                    network: Some(network),
+                    ..StackSettings::default()
+                },
+                registration: None,
+                helm_install: None,
+                supported_aws_regions: Vec::new(),
+            },
+        )
+        .expect("module should render");
+
+        assert_terraform_valid(&module, scenario);
     }
 }

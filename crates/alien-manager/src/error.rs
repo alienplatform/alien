@@ -102,6 +102,24 @@ pub enum ErrorData {
     )]
     ReleaseNotFound { release_id: String },
 
+    /// The deployment's desired release could not be loaded, so remote binding access cannot be
+    /// checked against it yet.
+    #[error(
+        code = "REMOTE_BINDING_DESIRED_RELEASE_UNAVAILABLE",
+        message = "Desired release '{release_id}' of deployment '{deployment_id}' could not be loaded to check remote binding access: {reason}",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    RemoteBindingDesiredReleaseUnavailable {
+        /// Deployment whose remote binding was requested.
+        deployment_id: String,
+        /// Desired release that could not be loaded.
+        release_id: String,
+        /// Why the release could not be loaded.
+        reason: String,
+    },
+
     /// The target-side management identity could not yet be impersonated.
     #[error(
         code = "REMOTE_CREDENTIAL_HANDOFF_FAILED",
