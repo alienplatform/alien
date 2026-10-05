@@ -220,7 +220,7 @@ fn emit_management_repository_bindings(
             let role = role_expression_for_binding(&binding.role, &custom_roles)?;
 
             match binding.target {
-                GcpBindingTargetScope::Project => {}
+                GcpBindingTargetScope::Project | GcpBindingTargetScope::ServiceAccount => {}
                 GcpBindingTargetScope::CurrentResource => {
                     let mut body = vec![
                         attr("project", expr::raw("var.gcp_project")),

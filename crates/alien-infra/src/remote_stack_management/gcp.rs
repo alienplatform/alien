@@ -337,6 +337,37 @@ impl GcpRemoteStackManagementController {
             "Granting impersonation permissions to management service account"
         );
 
+        let context = ResourcePermissionsHelper::gcp_permission_context(ctx)?
+            .with_service_account_name(
+                service_account_email
+                    .split('@')
+                    .next()
+                    .unwrap_or(service_account_email)
+                    .to_string(),
+            );
+        let generator = GcpRuntimePermissionsGenerator::new();
+        let mut self_bindings = Vec::new();
+        let mut explicit_target = None;
+        for set in Self::resolve_management_permission_sets(ctx)? {
+            let plan = generator
+                .generate_grant_plan(&set, BindingTarget::Stack, &context)
+                .context(ErrorData::ResourceConfigInvalid {
+                    message: "Failed to resolve management identity grants".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+            for binding in plan.bindings_for_target(GcpBindingTargetScope::ServiceAccount) {
+                let target = binding.target_resource_name.clone().ok_or_else(|| {
+                    AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: "Management identity grant is missing its explicit target"
+                            .to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })
+                })?;
+                explicit_target = Some(target);
+                self_bindings
+                    .push(ResourcePermissionsHelper::gcp_policy_binding_from_iam_binding(binding));
+            }
+        }
         let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
 
         // Get current service account IAM policy
@@ -363,12 +394,20 @@ impl GcpRemoteStackManagementController {
         ];
         let owned_exact_roles =
             ResourcePermissionsHelper::gcp_predefined_role_names(&desired_bindings);
-        let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+        let mut changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
             &mut all_bindings,
             desired_bindings,
             &member,
             &[],
             &owned_exact_roles,
+        );
+
+        changed |= ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+            &mut all_bindings,
+            self_bindings,
+            &format!("serviceAccount:{service_account_email}"),
+            &[ResourcePermissionsHelper::gcp_stack_custom_role_name_prefix(&context)],
+            &[],
         );
 
         if !changed {
@@ -393,7 +432,10 @@ impl GcpRemoteStackManagementController {
             .build();
 
         iam_client
-            .set_service_account_iam_policy(service_account_email.clone(), new_policy)
+            .set_service_account_iam_policy(
+                explicit_target.unwrap_or_else(|| service_account_email.clone()),
+                new_policy,
+            )
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(

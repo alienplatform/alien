@@ -186,7 +186,8 @@ fn emit_project_management_bindings(
                 ),
             })
         })?;
-    let bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+    let mut bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+    bindings.extend(grant_plan.bindings_for_target(GcpBindingTargetScope::ServiceAccount));
     let custom_roles = emit_custom_roles_for_bindings(fragment, &grant_plan, &bindings)?;
 
     for (idx, binding) in bindings.into_iter().enumerate() {

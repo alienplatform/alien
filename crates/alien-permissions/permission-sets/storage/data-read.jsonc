@@ -52,10 +52,10 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}/serviceAccounts/${serviceAccountName}@${projectName}.iam.gserviceaccount.com"
           },
           "resource": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}/serviceAccounts/${serviceAccountName}@${projectName}.iam.gserviceaccount.com"
           }
         }
       }

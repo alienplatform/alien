@@ -15,7 +15,7 @@ use alien_gcp_clients::iam::{
 };
 use alien_macros::controller;
 use alien_permissions::{
-    generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
+    generators::{GcpBindingTargetScope, GcpIamBinding, GcpRuntimePermissionsGenerator},
     BindingTarget, PermissionContext,
 };
 use chrono::Utc;
@@ -600,6 +600,57 @@ impl GcpServiceAccountController {
             })
     }
 
+    fn own_service_account_bindings(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        email: &str,
+    ) -> Result<Vec<GcpIamBinding>> {
+        let config = ctx.desired_resource_config::<ServiceAccount>()?;
+        let context = ResourcePermissionsHelper::gcp_permission_context(ctx)?
+            .with_service_account_name(email.split('@').next().unwrap_or(email).to_string());
+        let generator = GcpRuntimePermissionsGenerator::new();
+        let mut bindings = Vec::new();
+        let mut collect =
+            |set: &PermissionSet, target, context: &PermissionContext| -> Result<()> {
+                if set.platforms.gcp.is_none() {
+                    return Ok(());
+                }
+                let plan = generator
+                    .generate_grant_plan(set, target, context)
+                    .context(ErrorData::ResourceConfigInvalid {
+                        message: "Failed to resolve executing service-account grants".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+                for binding in plan.bindings_for_target(GcpBindingTargetScope::ServiceAccount) {
+                    if !bindings.contains(&binding) {
+                        bindings.push(binding);
+                    }
+                }
+                Ok(())
+            };
+        for set in &config.stack_permission_sets {
+            collect(set, BindingTarget::Stack, &context)?;
+        }
+        if let Some(profile_name) = config.id.strip_suffix("-sa") {
+            if let Some(profile) = ctx.desired_stack.permissions.profiles.get(profile_name) {
+                for (resource_id, refs) in &profile.0 {
+                    if resource_id == "*" {
+                        continue;
+                    }
+                    let resource_context = context
+                        .clone()
+                        .with_resource_name(format!("{}-{resource_id}", ctx.resource_prefix));
+                    for reference in refs {
+                        let set =
+                            Self::resolve_permission_set(reference, profile_name, &config.id)?;
+                        collect(&set, BindingTarget::Resource, &resource_context)?;
+                    }
+                }
+            }
+        }
+        Ok(bindings)
+    }
+
     async fn apply_resource_permissions_to_service_account(
         &self,
         ctx: &ResourceControllerContext<'_>,
@@ -618,6 +669,20 @@ impl GcpServiceAccountController {
         if let Some(service_account_email) = &self.service_account_email {
             let gcp_config = ctx.get_gcp_config()?;
             let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+            let own_bindings = self.own_service_account_bindings(ctx, service_account_email)?;
+            let explicit_target = own_bindings
+                .first()
+                .and_then(|binding| binding.target_resource_name.clone());
+            if own_bindings.iter().any(|binding| {
+                binding.target_resource_name.is_none()
+                    || binding.target_resource_name != explicit_target
+            }) {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "Executing service-account grants must share one explicit target"
+                        .to_string(),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
             let sa_email_owned = service_account_email.clone();
             let config_id_owned = config.id.clone();
 
@@ -628,9 +693,17 @@ impl GcpServiceAccountController {
                 "Service account",
                 "service-account",
                 client,
-                |client, iam_policy| async move {
+                |client, mut iam_policy| async move {
+                    iam_policy.bindings.extend(
+                        own_bindings
+                            .into_iter()
+                            .map(ResourcePermissionsHelper::gcp_policy_binding_from_iam_binding),
+                    );
                     client
-                        .set_service_account_iam_policy(sa_email_owned.clone(), iam_policy)
+                        .set_service_account_iam_policy(
+                            explicit_target.unwrap_or_else(|| sa_email_owned.clone()),
+                            iam_policy,
+                        )
                         .await
                         .context(ErrorData::CloudPlatformError {
                             message: format!(

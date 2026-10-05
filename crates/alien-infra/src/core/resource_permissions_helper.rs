@@ -977,6 +977,14 @@ impl ResourcePermissionsHelper {
         // Get the service account for this profile
         let service_account_email = Self::get_gcp_service_account_email(ctx, profile_name)?;
 
+        let permission_context = permission_context.clone().with_service_account_name(
+            service_account_email
+                .split('@')
+                .next()
+                .unwrap_or(&service_account_email)
+                .to_string(),
+        );
+
         // Process each permission set for this resource
         for permission_set_ref in permission_set_refs {
             let permission_set = permission_set_ref
@@ -989,7 +997,11 @@ impl ResourcePermissionsHelper {
                 })?;
 
             let grant_plan = generator
-                .generate_grant_plan(&permission_set, BindingTarget::Resource, permission_context)
+                .generate_grant_plan(
+                    &permission_set,
+                    BindingTarget::Resource,
+                    &permission_context,
+                )
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
                         "Failed to generate IAM grant plan for permission set '{}'",
@@ -1154,6 +1166,13 @@ impl ResourcePermissionsHelper {
         );
 
         let member = format!("serviceAccount:{}", management_sa_email);
+        let permission_context = permission_context.clone().with_service_account_name(
+            management_sa_email
+                .split('@')
+                .next()
+                .unwrap_or(&management_sa_email)
+                .to_string(),
+        );
 
         for permission_set_ref in &combined_refs {
             let permission_set = permission_set_ref
@@ -1169,7 +1188,11 @@ impl ResourcePermissionsHelper {
                 })?;
 
             let grant_plan = generator
-                .generate_grant_plan(&permission_set, BindingTarget::Resource, permission_context)
+                .generate_grant_plan(
+                    &permission_set,
+                    BindingTarget::Resource,
+                    &permission_context,
+                )
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
                         "Failed to generate IAM grant plan for management permission set '{}'",
@@ -1749,6 +1772,13 @@ impl ResourcePermissionsHelper {
         );
 
         let member = format!("serviceAccount:{}", management_sa_email);
+        let permission_context = permission_context.clone().with_service_account_name(
+            management_sa_email
+                .split('@')
+                .next()
+                .unwrap_or(&management_sa_email)
+                .to_string(),
+        );
 
         for permission_set_ref in management_refs {
             let permission_set = permission_set_ref
@@ -1764,7 +1794,11 @@ impl ResourcePermissionsHelper {
                 })?;
 
             let grant_plan = generator
-                .generate_grant_plan(&permission_set, BindingTarget::Resource, permission_context)
+                .generate_grant_plan(
+                    &permission_set,
+                    BindingTarget::Resource,
+                    &permission_context,
+                )
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
                         "Failed to generate IAM grant plan for management permission set '{}'",
@@ -1928,7 +1962,8 @@ mod tests {
             .with_project_name("test-project")
             .with_region("us-central1")
             .with_stack_prefix("test")
-            .with_resource_name("test-bucket");
+            .with_resource_name("test-bucket")
+            .with_service_account_name("reader");
 
         let grant_plan = generator
             .generate_grant_plan(permission_set, BindingTarget::Resource, &permission_context)
@@ -1936,19 +1971,20 @@ mod tests {
 
         let resource_bindings =
             grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
-        let project_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+        let account_bindings =
+            grant_plan.bindings_for_target(GcpBindingTargetScope::ServiceAccount);
 
         let resource_custom_roles = grant_plan.custom_roles_for_bindings(&resource_bindings);
-        let project_custom_roles = grant_plan.custom_roles_for_bindings(&project_bindings);
+        let account_custom_roles = grant_plan.custom_roles_for_bindings(&account_bindings);
 
         assert_eq!(resource_custom_roles.len(), 1);
         assert!(resource_custom_roles[0]
             .included_permissions
             .iter()
             .any(|permission| permission == "storage.objects.get"));
-        assert_eq!(project_custom_roles.len(), 1);
+        assert_eq!(account_custom_roles.len(), 1);
         assert_eq!(
-            project_custom_roles[0].included_permissions,
+            account_custom_roles[0].included_permissions,
             vec!["iam.serviceAccounts.signBlob"]
         );
     }

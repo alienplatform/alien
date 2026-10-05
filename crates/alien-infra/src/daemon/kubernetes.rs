@@ -1254,6 +1254,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn daemon_without_profile_does_not_mount_a_workload_identity() {
+        let mut config = manifest_test_daemon(&[("OBJECTS_BUCKET", "objects")]);
+        config.permissions = None;
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        let manifest = manifest_test_controller()
+            .build_daemonset(
+                &config,
+                "agent",
+                "test-ns",
+                None,
+                None,
+                None,
+                &harness.ctx(),
+            )
+            .await
+            .expect("daemonset manifest");
+        let spec = manifest.spec.unwrap().template.spec.unwrap();
+        assert_eq!(spec.service_account_name, None);
+        assert_eq!(spec.automount_service_account_token, Some(false));
+        assert_eq!(spec.containers.len(), 1);
+        assert!(spec.containers[0]
+            .env
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|entry| {
+                entry.name == "OBJECTS_BUCKET" && entry.value.as_deref() == Some("objects")
+            }));
+    }
+
+    #[tokio::test]
     async fn daemonset_manifest_projects_secrets_and_never_carries_alien_secrets() {
         let variables = vec![
             secret_env_var("APP_SECRET", "s3cret", None),
