@@ -2,7 +2,7 @@
 #![cfg(feature = "full-api")]
 
 use alien_platform_api::types::{DeploymentConfig, SyncAcquireResponseDeployment};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 fn config() -> Value {
     json!({
@@ -54,7 +54,7 @@ fn acquired_config_retains_stored_secret_ids_without_secret_values() {
 }
 
 #[test]
-fn absent_or_empty_stored_secret_ids_remain_backward_compatible() {
+fn absent_and_empty_stored_secret_ids_remain_distinct() {
     for original in [config(), {
         let mut config = config();
         config["storedSecretInputIds"] = json!([]);
@@ -62,16 +62,26 @@ fn absent_or_empty_stored_secret_ids_remain_backward_compatible() {
     }] {
         let acquired: SyncAcquireResponseDeployment =
             serde_json::from_value(acquired_deployment(original.clone())).unwrap();
+        let rebuilt: DeploymentConfig =
+            alien_platform_api::types::builder::DeploymentConfig::from(acquired.config.clone())
+                .stored_secret_input_ids(
+                    original
+                        .get("storedSecretInputIds")
+                        .map(|value| serde_json::from_value::<Vec<String>>(value.clone()).unwrap()),
+                )
+                .try_into()
+                .unwrap();
         let encoded = serde_json::to_value(&acquired.config).unwrap();
-        // Empty optional arrays may be omitted when the generated model serializes.
-        let ids: Vec<String> = serde_json::from_value(
-            encoded
-                .get("storedSecretInputIds")
-                .cloned()
-                .unwrap_or_else(|| json!([])),
-        )
-        .unwrap();
-        assert!(ids.is_empty());
+        assert_eq!(serde_json::to_value(rebuilt).unwrap(), encoded);
+        assert_eq!(
+            encoded.get("storedSecretInputIds"),
+            original.get("storedSecretInputIds")
+        );
+        let response = serde_json::to_value(&acquired).unwrap();
+        assert_eq!(
+            response["config"].get("storedSecretInputIds"),
+            original.get("storedSecretInputIds")
+        );
         assert_eq!(encoded["inputValues"], original["inputValues"]);
         assert_eq!(
             encoded["environmentVariables"],
@@ -101,4 +111,17 @@ fn stored_secret_ids_reject_malformed_arrays_in_acquired_configs() {
             "malformed presence must fail acquisition decoding"
         );
     }
+}
+
+#[test]
+fn null_presence_decodes_like_legacy_omission() {
+    // The API schema remains nonnullable; Rust matches core's permissive legacy decoder.
+    let mut original = config();
+    original["storedSecretInputIds"] = Value::Null;
+    let acquired: SyncAcquireResponseDeployment =
+        serde_json::from_value(acquired_deployment(original)).unwrap();
+    assert!(serde_json::to_value(acquired.config)
+        .unwrap()
+        .get("storedSecretInputIds")
+        .is_none());
 }

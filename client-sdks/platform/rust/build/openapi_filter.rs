@@ -171,6 +171,7 @@ pub fn filter_openapi(document: &Value, required_operation_ids: &[&str]) -> Resu
         "components".to_string(),
         reachable_components(document, &filtered)?,
     );
+    preserve_secret_presence(&mut filtered)?;
     normalize_binding_unions(&mut filtered)?;
     open_string_enums(&mut filtered)?;
     deduplicate_anonymous_schemas(
@@ -474,11 +475,49 @@ pub fn normalize_openapi(document: &Value) -> Result<Value, String> {
         .as_object()
         .ok_or_else(|| "OpenAPI document must be a JSON object".to_string())?
         .clone();
+    preserve_secret_presence(&mut root)?;
     normalize_binding_unions(&mut root)?;
     open_string_enums(&mut root)?;
     canonicalize_nullable_enums(&mut root);
     allow_unknown_properties(&mut root);
     Ok(Value::Object(root))
+}
+
+// A native Vec avoids typify's intrinsic empty-array default for this optional
+// field, yielding Option<Vec<String>> without changing the canonical API schema.
+fn preserve_secret_presence(document: &mut Map<String, Value>) -> Result<(), String> {
+    let Some(config) = document
+        .get_mut("components")
+        .and_then(|components| components.get_mut("schemas"))
+        .and_then(|schemas| schemas.get_mut("DeploymentConfig"))
+    else {
+        return Ok(());
+    };
+    let required = config
+        .get("required")
+        .and_then(Value::as_array)
+        .is_some_and(|fields| fields.iter().any(|field| field == "storedSecretInputIds"));
+    let Some(field) = config.pointer_mut("/properties/storedSecretInputIds") else {
+        return Ok(());
+    };
+    let valid = !required
+        && field.get("type").and_then(Value::as_str) == Some("array")
+        && field.get("items") == Some(&serde_json::json!({"type": "string"}))
+        && field
+            .get("nullable")
+            .is_none_or(|nullable| nullable == &Value::Bool(false))
+        && field.as_object().is_some_and(|field| {
+            field
+                .keys()
+                .all(|key| matches!(key.as_str(), "type" | "items" | "description" | "nullable"))
+        });
+    if !valid {
+        return Err("DeploymentConfig.storedSecretInputIds must remain an optional unconstrained nonnullable string array".to_string());
+    }
+    field.as_object_mut().unwrap().insert("x-rust-type".to_string(), serde_json::json!({
+        "crate": "std", "version": "*", "path": "std::vec::Vec", "parameters": [{"type": "string"}]
+    }));
+    Ok(())
 }
 
 fn open_string_enums(document: &mut Map<String, Value>) -> Result<(), String> {
