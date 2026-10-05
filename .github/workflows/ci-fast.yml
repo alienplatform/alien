@@ -504,13 +504,20 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=12288"
         run: pnpm test:ts
 
-      - name: Build bindings dev addon
-        working-directory: crates/alien-bindings-node
-        run: ../../packages/package-layout/node_modules/.bin/napi build --platform
-
-      - name: Build all CLIs and package gateway
-        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
-        run: cargo build -p alien-cli -p alien-deploy-cli -p alien-operator -p alien-ai-gateway
+      # One cargo invocation, so the addon and the CLIs share their dependency builds.
+      # `napi build --platform` would only add a generated index.js/index.d.ts, which this
+      # crate does not use (see its .gitignore): packages/bindings loads the .node file.
+      - name: Build bindings dev addon, CLIs and gateway
+        env:
+          BUILD_CLIS: ${{ steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' }}
+        run: |
+          packages=(-p alien-bindings-node)
+          if [[ "$BUILD_CLIS" == "true" ]]; then
+            packages+=(-p alien-cli -p alien-deploy-cli -p alien-operator -p alien-ai-gateway)
+          fi
+          cargo build "${packages[@]}"
+          cp target/debug/libalien_bindings_node.so \
+            crates/alien-bindings-node/alien-bindings-node.linux-arm64-gnu.node
 
       - name: Build package-layout dependencies
         run: pnpm --filter @alienplatform/sdk... build
@@ -541,10 +548,16 @@ jobs:
         run: pnpm -C packages/commands test:integration
 
       - name: Install operation compiler generation tools
+        id: wasm_bindgen
         run: |
           MISE_DATA_DIR="$RUNNER_TEMP/mise-rust" mise -E release-prepare install rust
           VERSION=$(node -e 'const fs = require("node:fs"); console.log(fs.readFileSync("Cargo.lock", "utf8").match(/name = "wasm-bindgen"\nversion = "([^"]+)"/)[1])')
-          MISE_DATA_DIR="$RUNNER_TEMP/mise-rust" mise -E release-prepare exec -- cargo install --locked --version "$VERSION" wasm-bindgen-cli
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # A prebuilt wasm-bindgen-cli at the Cargo.lock version, instead of compiling it each run.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ steps.wasm_bindgen.outputs.version }}
 
       - name: Regenerate local TypeScript APIs
         run: pnpm generate
