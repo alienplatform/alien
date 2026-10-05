@@ -55,6 +55,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       typescript: ${{ steps.filter.outputs.typescript }}
+      worker_integration: ${{ steps.filter.outputs.worker_integration }}
       platform_sdk: ${{ steps.filter.outputs.platform_sdk }}
     steps:
       - uses: actions/checkout@v7
@@ -88,6 +89,24 @@ jobs:
               - 'client-sdks/platform/rust/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
+            # What the Worker integration tests exercise: the local worker manager, the build
+            # toolchain, the bindings addon a TypeScript worker loads, and the example app.
+            worker_integration:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'mise*.toml'
+              - 'crates/alien-local/**'
+              - 'crates/alien-build/**'
+              - 'crates/alien-core/**'
+              - 'crates/alien-bindings/**'
+              - 'crates/alien-bindings-node/**'
+              - 'crates/alien-worker-runtime/**'
+              - 'crates/alien-worker-protocol/**'
+              - 'crates/alien-ai-gateway/**'
+              - 'packages/**'
+              - 'examples/basic-worker-ts/**'
+              - '.github/workflows/ci-fast.yml'
             typescript:
               - 'mise*.toml'
               - 'rust-toolchain.toml'
@@ -288,6 +307,9 @@ jobs:
             'and not binary_id(alien-ai-gateway::live_direct_providers)'
             'and not binary_id(alien-ai-gateway::live_foundry_claude)'
             'and not binary_id(alien-ai-gateway::live_vertex_claude)'
+
+            # Real TypeScript workers through alien build: the Worker integration job runs them.
+            'and not binary_id(alien-local::worker_integration)'
           )
           # Compile non-default feature coverage in the same unified graph. Running
           # these as later `cargo test` commands adds two serial recompilation tails.
@@ -499,6 +521,82 @@ jobs:
         # the gate focused on generated behavior and schema content.
         run: git diff --ignore-all-space --exit-code -- packages/core packages/sdk packages/permissions/generated
 
+  worker-integration:
+    name: Worker integration
+    needs: [pr-conventions, changes]
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.worker_integration == 'true'
+    runs-on: depot-ubuntu-24.04-arm-8
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_BUILD_JOBS: "6"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install development tools
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: node pnpm bun
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
+
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
+        with:
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            examples/pnpm-lock.yaml
+
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: rust
+          cache: false
+
+      - uses: taiki-e/install-action@nextest
+
+      # Rust on aarch64 Linux links with GNU ld by default; mold is much faster.
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # main
+        with:
+          mold-version: 2.42.1
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "35.x"
+          repo-token: ${{ github.token }}
+
+      - name: Configure git credentials for cargo
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build TypeScript dependencies for Rust tests
+        run: pnpm exec turbo run build --filter=@alienplatform/sdk --filter=@alienplatform/commands
+
+      # alien build stages the bindings addon and AI gateway it finds here. Without them it
+      # builds both in release mode inside the first test, which takes minutes.
+      - name: Build the bindings addon and AI gateway
+        run: |
+          cargo build --locked -p alien-bindings-node --lib -p alien-ai-gateway --bin alien-ai-gateway
+          cp target/debug/libalien_bindings_node.so \
+            crates/alien-bindings-node/alien-bindings-node.linux-arm64-gnu.node
+
+      - name: Worker integration tests
+        run: cargo nextest run --locked -p alien-local --test worker_integration
+
   all-tests-passed:
     name: All tests passed
     if: >-
@@ -507,7 +605,7 @@ jobs:
       github.event.pull_request.head.repo.fork != true) &&
       (github.event_name != 'push' ||
       startsWith(github.event.head_commit.message, 'chore: release '))
-    needs: [pr-conventions, changes, rust, typescript]
+    needs: [pr-conventions, changes, rust, typescript, worker-integration]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every test area
