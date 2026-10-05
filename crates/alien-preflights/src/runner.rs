@@ -1,11 +1,9 @@
 use crate::error::{ErrorData, Result};
-use crate::{PreflightRegistry, PreflightSummary};
+use crate::{CheckResult, CompileTimeCheck, PreflightRegistry, PreflightSummary};
 use alien_core::{DeploymentConfig, Platform, Stack, StackState};
 use alien_error::{AlienError, Context};
 use tracing::{debug, error, info, warn};
 
-#[cfg(feature = "runtime-checks")]
-use crate::CheckResult;
 #[cfg(feature = "runtime-checks")]
 use alien_core::ClientConfig;
 
@@ -36,37 +34,7 @@ impl PreflightRunner {
         info!("Running compile-time checks for platform {:?}", platform);
 
         let checks = self.registry.get_compile_time_checks(stack, platform);
-        let mut results = Vec::new();
-
-        for check in checks {
-            debug!("Running check: {}", check.description());
-
-            let mut result =
-                check
-                    .check(stack, platform)
-                    .await
-                    .context(ErrorData::CompileTimeCheckFailed {
-                        check_name: check.description().to_string(),
-                        message: "Check execution failed".to_string(),
-                        resource_id: None,
-                    })?;
-
-            result = result.with_check_metadata(check.code(), check.description());
-
-            if !result.success {
-                error!(check = %check.description(), "Compile-time check failed");
-                for msg in &result.errors {
-                    error!(check = %check.description(), "  {}", msg);
-                }
-            }
-
-            for warning in &result.warnings {
-                warn!(check = %check.description(), "  Warning: {}", warning);
-            }
-
-            results.push(result);
-        }
-
+        let results = run_stack_checks(checks, stack, platform).await?;
         Ok(PreflightSummary::from_results(results))
     }
 
@@ -348,8 +316,12 @@ impl PreflightRunner {
     ) -> Result<PreflightSummary> {
         info!("Running build-time preflights for platform {:?}", platform);
 
-        // Run compile-time checks only - mutations are now deployment-time only
-        let check_summary = self.run_compile_time_checks(stack, platform).await?;
+        // Run compile-time checks only - mutations are now deployment-time only. Build-time-only
+        // checks apply to new stacks, never to ones that are already released.
+        let mut checks = self.registry.get_compile_time_checks(stack, platform);
+        checks.extend(self.registry.get_build_time_checks(stack, platform));
+        let check_summary =
+            PreflightSummary::from_results(run_stack_checks(checks, stack, platform).await?);
 
         // If checks failed, return early with the error summary
         if !check_summary.success {
@@ -887,4 +859,44 @@ mod setup_update_authorization_tests {
             .expect_err("the deployment's own platform is neither Azure nor GCP");
         assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
     }
+}
+
+/// Run stack checks that need no cloud access, logging each failure and warning.
+async fn run_stack_checks(
+    checks: Vec<&dyn CompileTimeCheck>,
+    stack: &Stack,
+    platform: Platform,
+) -> Result<Vec<CheckResult>> {
+    let mut results = Vec::new();
+
+    for check in checks {
+        debug!("Running check: {}", check.description());
+
+        let mut result =
+            check
+                .check(stack, platform)
+                .await
+                .context(ErrorData::CompileTimeCheckFailed {
+                    check_name: check.description().to_string(),
+                    message: "Check execution failed".to_string(),
+                    resource_id: None,
+                })?;
+
+        result = result.with_check_metadata(check.code(), check.description());
+
+        if !result.success {
+            error!(check = %check.description(), "Compile-time check failed");
+            for msg in &result.errors {
+                error!(check = %check.description(), "  {}", msg);
+            }
+        }
+
+        for warning in &result.warnings {
+            warn!(check = %check.description(), "  Warning: {}", warning);
+        }
+
+        results.push(result);
+    }
+
+    Ok(results)
 }
