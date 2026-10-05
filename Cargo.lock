@@ -115,7 +115,7 @@ checksum = "250f629c0161ad8107cf89319e990051fae62832fd343083bea452d93e2205fd"
 
 [[package]]
 name = "alien-ai-gateway"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-bindings",
  "alien-core",
@@ -143,7 +143,7 @@ dependencies = [
 
 [[package]]
 name = "alien-aws-clients"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-aws-clients",
  "alien-client-core",
@@ -186,7 +186,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-clients"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-azure-model-generator",
  "alien-azure-models-1",
@@ -231,7 +231,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-model-generator"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "openapiv3",
  "prettyplease 0.2.37",
@@ -242,7 +242,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-1"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -255,7 +255,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-2"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -268,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-3"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -281,7 +281,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-4"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -294,7 +294,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-5"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -307,7 +307,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings-node"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-bindings",
  "alien-core",
@@ -372,7 +372,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings-python"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-ai-gateway",
  "alien-bindings",
@@ -390,7 +390,7 @@ dependencies = [
 
 [[package]]
 name = "alien-build"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-build",
  "alien-core",
@@ -430,7 +430,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-bindings",
  "alien-build",
@@ -508,7 +508,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli-common"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-core",
  "alien-deployment",
@@ -531,7 +531,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-config"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -549,7 +549,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-core"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-error",
  "anyhow",
@@ -568,7 +568,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cloudformation"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -583,7 +583,7 @@ dependencies = [
 
 [[package]]
 name = "alien-commands"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -621,7 +621,7 @@ dependencies = [
 
 [[package]]
 name = "alien-commands-client"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-core",
  "base64 0.23.1",
@@ -636,7 +636,7 @@ dependencies = [
 
 [[package]]
 name = "alien-core"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-error",
  "alien-macros",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deploy-cli"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-cli-common",
  "alien-core",
@@ -717,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deployment"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -749,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-error-derive",
  "anyhow",
@@ -762,7 +762,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error-derive"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -772,7 +772,7 @@ dependencies = [
 
 [[package]]
 name = "alien-gcp-clients"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -806,7 +806,7 @@ dependencies = [
 
 [[package]]
 name = "alien-helm"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -826,7 +826,7 @@ dependencies = [
 
 [[package]]
 name = "alien-infra"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -889,7 +889,7 @@ dependencies = [
 
 [[package]]
 name = "alien-k8s-clients"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -918,7 +918,7 @@ dependencies = [
 
 [[package]]
 name = "alien-local"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-bindings",
  "alien-build",
@@ -966,7 +966,7 @@ dependencies = [
 
 [[package]]
 name = "alien-macros"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -975,7 +975,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "aegis",
  "alien-aws-clients",
@@ -1047,7 +1047,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager-api"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-error",
  "chrono",
@@ -1066,7 +1066,7 @@ dependencies = [
 
 [[package]]
 name = "alien-observer"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -1086,7 +1086,7 @@ dependencies = [
 
 [[package]]
 name = "alien-operations-sdk"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1102,7 +1102,7 @@ dependencies = [
 
 [[package]]
 name = "alien-operator"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "aegis",
  "alien-client-config",
@@ -1153,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "alien-permission-types"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "indexmap 2.14.1",
  "serde",
@@ -1162,7 +1162,7 @@ dependencies = [
 
 [[package]]
 name = "alien-permissions"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1184,7 +1184,7 @@ dependencies = [
 
 [[package]]
 name = "alien-platform-api"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-error",
  "chrono",
@@ -1203,7 +1203,7 @@ dependencies = [
 
 [[package]]
 name = "alien-preflights"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1220,7 +1220,7 @@ dependencies = [
 
 [[package]]
 name = "alien-sandbox-agent"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1243,7 +1243,7 @@ dependencies = [
 
 [[package]]
 name = "alien-sdk"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-bindings",
  "alien-core",
@@ -1265,7 +1265,7 @@ dependencies = [
 
 [[package]]
 name = "alien-terraform"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1280,7 +1280,7 @@ dependencies = [
 
 [[package]]
 name = "alien-test"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-ai-gateway",
  "alien-aws-clients",
@@ -1332,7 +1332,7 @@ dependencies = [
 
 [[package]]
 name = "alien-test-app"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-error",
  "alien-sdk",
@@ -1378,7 +1378,7 @@ dependencies = [
 
 [[package]]
 name = "alien-tunnel"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-error",
  "alien-tunnel",
@@ -1402,7 +1402,7 @@ dependencies = [
 
 [[package]]
 name = "alien-worker-protocol"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-error",
  "async-stream",
@@ -1421,7 +1421,7 @@ dependencies = [
 
 [[package]]
 name = "alien-worker-runtime"
-version = "3.3.26"
+version = "3.3.27"
 dependencies = [
  "alien-bindings",
  "alien-commands",
