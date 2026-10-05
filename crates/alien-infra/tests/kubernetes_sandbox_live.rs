@@ -81,6 +81,7 @@ async fn the_lifecycle_creates_and_removes_pool_pods_on_a_real_cluster() {
     kubectl(&path, &["create", "namespace", NAMESPACE]);
 
     let mut executor = SingleControllerExecutor::builder()
+        .real_delays()
         .resource(sandbox("live"))
         .controller(KubernetesSandboxController::default())
         .platform(Platform::Kubernetes)
