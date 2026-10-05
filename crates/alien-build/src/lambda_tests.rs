@@ -1,4 +1,5 @@
 use super::*;
+use crate::toolchain::{docker::DockerToolchain, Toolchain, ToolchainContext};
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -355,7 +356,6 @@ async fn lambda_publish_acceptance_image() {
 #[tokio::test]
 #[ignore = "requires Docker, a disposable ECR repository and ECR credentials"]
 async fn lambda_docker_publish_acceptance_image() {
-    use crate::toolchain::{docker::DockerToolchain, Toolchain, ToolchainContext};
     let src = tempdir().unwrap();
     let images = tempdir().unwrap();
     std::fs::write(src.path().join("Dockerfile"), "FROM public.ecr.aws/lambda/python:3.12\nCOPY handler.py /var/task/handler.py\nCMD [\"handler.handle\"]\n").unwrap();
