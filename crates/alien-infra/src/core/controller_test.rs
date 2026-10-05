@@ -266,6 +266,30 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
 
+/// Asserts that no wait suggested during one phase (create, update, delete) is shorter than
+/// `min_delay`; a shorter wait would hammer the cloud API in production.
+pub fn assert_polling_delays(delays: &[Duration], min_delay: Duration, phase: &str) {
+    assert!(
+        delays.iter().all(|delay| *delay >= min_delay),
+        "{phase} polls should each wait at least {min_delay:?}, got {delays:?}"
+    );
+}
+
+/// How [`SingleControllerExecutor`] waits between controller steps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DelayMode {
+    /// Record each suggested delay and continue at once. Mocked providers answer
+    /// immediately, so sleeping only adds wall-clock time.
+    #[default]
+    Record,
+    /// Sleep for each suggested delay. For tests against real cloud APIs.
+    Real,
+}
+
+/// Longest delay a controller may suggest between steps. Anything longer is a polling bug
+/// (for example a seconds/milliseconds mix-up) that would stall a real deployment.
+pub const MAX_SUGGESTED_DELAY: Duration = Duration::from_secs(10 * 60);
+
 /// A simplified executor for testing a single controller.
 ///
 /// This executor allows you to test a controller in isolation, including update and delete operations.
@@ -337,6 +361,9 @@ pub struct SingleControllerExecutor {
     // Heartbeats emitted by the most recent step.
     last_heartbeats: Vec<ResourceHeartbeat>,
     initial_setup_authority: alien_core::InitialSetupAuthority,
+    // How to wait between steps, and the delays the controller suggested so far.
+    delay_mode: DelayMode,
+    suggested_delays: Vec<Duration>,
 }
 
 impl SingleControllerExecutor {
@@ -411,6 +438,50 @@ impl SingleControllerExecutor {
         Ok(step_result)
     }
 
+    /// Every delay the controller suggested between steps, in order. Tests assert on these
+    /// to pin polling behavior; with the default [`DelayMode::Record`] they are not slept.
+    pub fn suggested_delays(&self) -> &[Duration] {
+        &self.suggested_delays
+    }
+
+    /// Returns the delays recorded since the last call and clears them, so a test can check
+    /// one phase (create, update, delete) at a time.
+    pub fn take_suggested_delays(&mut self) -> Vec<Duration> {
+        std::mem::take(&mut self.suggested_delays)
+    }
+
+    /// Records the controller's suggested delay, rejects an implausible one, and waits
+    /// before the next step according to the executor's [`DelayMode`].
+    async fn wait_for_next_step(&mut self, suggested: Option<Duration>) -> Result<()> {
+        if let Some(delay) = suggested {
+            debug!("Controller suggested delay of {:?}", delay);
+            if delay > MAX_SUGGESTED_DELAY {
+                return Err(AlienError::new(ErrorData::InfrastructureError {
+                    message: format!(
+                        "Controller suggested waiting {delay:?} before its next step; \
+                         more than {MAX_SUGGESTED_DELAY:?} would stall a real deployment"
+                    ),
+                    operation: Some("wait_for_next_step".to_string()),
+                    resource_id: Some(self.resource_id.clone()),
+                }));
+            }
+            self.suggested_delays.push(delay);
+        }
+
+        match self.delay_mode {
+            DelayMode::Record => {
+                #[cfg(not(target_arch = "wasm32"))]
+                tokio::task::yield_now().await;
+            }
+            DelayMode::Real => {
+                // Without a suggestion, a short pause keeps a live loop from spinning.
+                #[cfg(not(target_arch = "wasm32"))]
+                tokio::time::sleep(suggested.unwrap_or(Duration::from_millis(50))).await;
+            }
+        }
+        Ok(())
+    }
+
     /// Runs the controller until it reaches a "synced" state.
     ///
     /// For create/update operations, this means reaching `Running` status.
@@ -438,15 +509,7 @@ impl SingleControllerExecutor {
             // Don't wait for suggested delays once we're synced - heartbeats suggest delays
             // but we want to stop as soon as we reach the desired state
             if !self.is_synced() {
-                if let Some(delay) = step_result.suggested_delay {
-                    debug!("Controller suggested delay of {:?}", delay);
-                    #[cfg(not(target_arch = "wasm32"))]
-                    tokio::time::sleep(delay).await;
-                } else {
-                    // Small delay to prevent tight loops
-                    #[cfg(not(target_arch = "wasm32"))]
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
+                self.wait_for_next_step(step_result.suggested_delay).await?;
             }
 
             step_count += 1;
@@ -487,13 +550,7 @@ impl SingleControllerExecutor {
 
             let step_result = self.step().await?;
             if self.controller.get_status() != expected {
-                if let Some(delay) = step_result.suggested_delay {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    tokio::time::sleep(delay).await;
-                } else {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
+                self.wait_for_next_step(step_result.suggested_delay).await?;
             }
 
             step_count += 1;
@@ -640,6 +697,7 @@ pub struct SingleControllerExecutorBuilder {
     initial_setup_authority: alien_core::InitialSetupAuthority,
     resource_prefix: String,
     permission_profiles: Vec<(String, alien_core::permissions::PermissionProfile)>,
+    delay_mode: DelayMode,
 }
 
 impl SingleControllerExecutorBuilder {
@@ -668,7 +726,15 @@ impl SingleControllerExecutorBuilder {
             initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
             resource_prefix: "test".to_string(),
             permission_profiles: Vec::new(),
+            delay_mode: DelayMode::default(),
         }
+    }
+
+    /// Sleeps for each delay the controller suggests. Use it for tests that drive real
+    /// cloud APIs; mocked tests keep the default, which records delays without sleeping.
+    pub fn real_delays(mut self) -> Self {
+        self.delay_mode = DelayMode::Real;
+        self
     }
 
     /// Sets the deployment's resource prefix. Defaults to `test`.
@@ -1248,6 +1314,8 @@ impl SingleControllerExecutorBuilder {
             resource_prefix: self.resource_prefix,
             last_heartbeats: Vec::new(),
             initial_setup_authority: self.initial_setup_authority,
+            delay_mode: self.delay_mode,
+            suggested_delays: Vec::new(),
         })
     }
 }
@@ -1302,4 +1370,57 @@ pub fn test_azure_storage_account() -> AzureStorageAccount {
 /// Creates a standard test Azure Service Bus Namespace dependency
 pub fn test_azure_service_bus_namespace() -> AzureServiceBusNamespace {
     AzureServiceBusNamespace::new("default-service-bus-namespace".to_string()).build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::worker::TestWorkerController;
+
+    async fn test_executor() -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(test_function_1())
+            .controller(TestWorkerController::default())
+            .platform(Platform::Test)
+            .build()
+            .await
+            .expect("executor should build")
+    }
+
+    #[tokio::test]
+    async fn records_suggested_delays_without_sleeping() {
+        let mut executor = test_executor().await;
+        let started = std::time::Instant::now();
+
+        executor
+            .wait_for_next_step(Some(Duration::from_secs(30)))
+            .await
+            .expect("a 30 s delay is within the limit");
+        executor
+            .wait_for_next_step(None)
+            .await
+            .expect("no suggestion is fine");
+
+        assert_eq!(executor.suggested_delays(), &[Duration::from_secs(30)]);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the default mode must not sleep"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_a_delay_that_would_stall_a_deployment() {
+        let mut executor = test_executor().await;
+
+        let error = executor
+            .wait_for_next_step(Some(MAX_SUGGESTED_DELAY + Duration::from_secs(1)))
+            .await
+            .expect_err("a delay over the limit should fail the run");
+
+        assert!(
+            error.to_string().contains("would stall a real deployment"),
+            "unexpected error: {error}"
+        );
+        assert!(executor.suggested_delays().is_empty());
+    }
 }

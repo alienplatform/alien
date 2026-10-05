@@ -7,8 +7,16 @@ license-file.workspace = true
 edition = "2021"
 include = ["build.rs", "build/**/*", "src/**/*", "openapi.json"]
 
+# docs.rs documents the complete published SDK.
+[package.metadata.docs.rs]
+features = ["full-api"]
+
 [features]
-default = ["rustls", "full-api"]
+default = ["rustls"]
+# Generate every Platform API operation. Without it the client covers only the operations
+# Alien itself calls (build/openapi_filter.rs). Off by default because `cargo build` or
+# `cargo test` at the workspace root selects this crate, and its defaults would then put the
+# full client in every build.
 full-api = []
 native-tls = ["reqwest/native-tls"]
 rustls = ["reqwest/rustls-tls-webpki-roots"]
