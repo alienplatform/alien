@@ -76,7 +76,7 @@ pub struct DeployerSecretSlot<'a> {
     /// Key of the value in the `secrets` vault.
     pub vault_key: String,
     /// The deployment still stores a value for this input from before slots
-    /// were vault-native. It is used until the slot is filled, then dropped.
+    /// were vault-native. It is used until the control plane drops it.
     pub has_stored_value: bool,
 }
 
@@ -398,8 +398,10 @@ pub struct DeployerSecretEnv {
 /// secrets, each with the resources its mapping targets (`None` = all).
 ///
 /// A slot is read from the vault once Alien has a report for it, unless the
-/// deployment still stores a value from before slots were vault-native and the
-/// slot is not filled yet: that value keeps today's path until then.
+/// deployment still stores a value from before slots were vault-native: that
+/// value keeps today's path until the control plane drops it. The workload's
+/// profile gains the vault read grant at the same point, so a workload never
+/// reads a slot it may not read.
 pub fn deployer_secret_environment(
     inputs: &[StackInputDefinition],
     values: &HashMap<String, serde_json::Value>,
@@ -412,8 +414,7 @@ pub fn deployer_secret_environment(
             let report = reports
                 .iter()
                 .find(|report| report.input_id == slot.input.id)?;
-            (!slot.has_stored_value || report.status == DeployerSecretStatus::Present)
-                .then_some((slot, report))
+            (!slot.has_stored_value).then_some((slot, report))
         })
         .flat_map(|(slot, report)| {
             slot.input.env.iter().map(move |mapping| {
@@ -718,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stored_value_keeps_today_s_path_until_the_slot_is_filled() {
+    fn a_stored_value_keeps_today_s_path_until_it_is_dropped() {
         let inputs = vec![secret(
             "databasePassword",
             vec![StackInputProvider::Deployer],
@@ -735,10 +736,20 @@ mod tests {
             &[report("databasePassword", DeployerSecretStatus::Missing)],
         )
         .is_empty());
-        assert_eq!(
+        assert!(
             deployer_secret_environment(
                 &inputs,
                 &stored,
+                Platform::Aws,
+                &[report("databasePassword", DeployerSecretStatus::Present)],
+            )
+            .is_empty(),
+            "a filled slot is not read while the stored value has no vault read grant"
+        );
+        assert_eq!(
+            deployer_secret_environment(
+                &inputs,
+                &HashMap::new(),
                 Platform::Aws,
                 &[report("databasePassword", DeployerSecretStatus::Present)],
             )
