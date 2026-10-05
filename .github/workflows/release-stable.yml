@@ -94,7 +94,7 @@ jobs:
               ai-gateway-bin-linux-arm64 ai-gateway-bin-linux-x64 \
               binaries-aarch64-apple-darwin binaries-aarch64-unknown-linux-musl \
               binaries-x86_64-pc-windows-msvc binaries-x86_64-unknown-linux-musl \
-              changelog qualified-ai-gateway qualified-bindings \
+              qualified-ai-gateway qualified-bindings \
               qualified-client-sdks qualified-crates \
               qualified-image-digests qualified-npm \
               qualified-python-linux-aarch64 qualified-python-linux-x86_64 \

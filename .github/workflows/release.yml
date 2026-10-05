@@ -461,37 +461,6 @@ jobs:
             echo "ready=false" >> "$GITHUB_OUTPUT"
           fi
 
-  # ─── Changelog generation ──────────────────────────────────────────
-
-  generate-changelog:
-    needs: prepare
-    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
-    runs-on: depot-ubuntu-24.04-arm
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.prepare.outputs.source_ref }}
-          fetch-depth: 0
-
-      - name: Generate changelog
-        id: changelog
-        uses: orhun/git-cliff-action@v4
-        with:
-          config: cliff.toml
-          # The release tag does not exist yet: render the commits since the
-          # previous tag under the new version.
-          args: --unreleased --tag v${{ needs.prepare.outputs.version }} --strip header
-        env:
-          OUTPUT: CHANGELOG-release.md
-
-      - name: Upload changelog
-        uses: actions/upload-artifact@v7
-        with:
-          name: changelog
-          retention-days: 30
-          path: CHANGELOG-release.md
-
   # ─── Registry publishing (crates.io + npm) ──────────────────────────
 
   publish-crates:
@@ -2430,9 +2399,11 @@ jobs:
             --version "$VERSION" --app-version "$VERSION" --destination dist
           helm push "dist/alien-manager-${VERSION}.tgz" oci://ghcr.io/alienplatform/charts
 
-  # Publish the GitHub release only after the registries and binary store have
-  # accepted their qualified artifacts.
-  create-github-release:
+  # Create the immutable release tag only after the registries and binary
+  # store have accepted their qualified artifacts. The GitHub release for the
+  # tag, with the archives of the full binary set, is created by the official
+  # CLI distribution, which needs this tag and these binaries first.
+  create-release-tag:
     needs:
       - prepare
       - publish-crates
@@ -2444,22 +2415,9 @@ jobs:
       - publish-images
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
     runs-on: depot-ubuntu-24.04-arm
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.prepare.outputs.release_commit }}
-          fetch-depth: 0
-
-      - name: Download qualified changelog
-        uses: actions/download-artifact@v8
-        with:
-          run-id: ${{ needs.prepare.outputs.qualification_run_id }}
-          github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          name: changelog
-          path: .
-
-      - name: Require immutable GitHub release protections
+      - name: Require immutable release protections
         env:
           GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
         run: |
@@ -2499,148 +2457,42 @@ jobs:
             exit 1
           fi
 
-      - name: Verify existing release tag
-        id: verify_tag
+      - name: Create or verify the release tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ needs.prepare.outputs.version }}
+          COMMIT: ${{ needs.prepare.outputs.release_commit }}
         run: |
-          VERSION="${{ needs.prepare.outputs.version }}"
-          TAG="v${VERSION}"
-          COMMIT="${{ needs.prepare.outputs.release_commit }}"
-          FULL_REF="refs/tags/${TAG}"
+          tag_commit() {
+            local refs ref_json tag_type sha
+            refs=$(gh api --paginate --slurp \
+              "/repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${TAG}" |
+              jq -c --arg ref "refs/tags/${TAG}" '[add[] | select(.ref == $ref)]')
+            case "$(jq 'length' <<< "$refs")" in
+              0) return 0 ;;
+              1) ;;
+              *) echo "::error::Expected at most one refs/tags/${TAG}" >&2; exit 1 ;;
+            esac
+            ref_json=$(jq -c '.[0]' <<< "$refs")
+            tag_type=$(jq -r '.object.type' <<< "$ref_json")
+            sha=$(jq -r '.object.sha' <<< "$ref_json")
+            if [ "$tag_type" = "tag" ]; then
+              sha=$(gh api "/repos/${GITHUB_REPOSITORY}/git/tags/${sha}" --jq '.object.sha')
+            elif [ "$tag_type" != "commit" ]; then
+              echo "::error::${TAG} points to unsupported Git object type ${tag_type}" >&2
+              exit 1
+            fi
+            echo "$sha"
+          }
 
-          MATCHING_REFS=$(gh api --paginate --slurp \
-            "/repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${TAG}" |
-            jq -c --arg ref "$FULL_REF" '[add[] | select(.ref == $ref)]')
-          MATCH_COUNT=$(jq 'length' <<< "$MATCHING_REFS")
-          if [ "$MATCH_COUNT" = "0" ]; then
-            echo "${TAG} does not exist; GitHub Release creation will create it"
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          existing=$(tag_commit)
+          if [ -z "$existing" ]; then
+            gh api --method POST "/repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/${TAG}" -f sha="$COMMIT" >/dev/null
+            existing=$(tag_commit)
           fi
-          if [ "$MATCH_COUNT" != "1" ]; then
-            echo "::error::Expected at most one exact ${FULL_REF}"
-            exit 1
-          fi
-
-          REF_JSON=$(jq -c '.[0]' <<< "$MATCHING_REFS")
-          TAG_TYPE=$(jq -r '.object.type' <<< "$REF_JSON")
-          TAG_COMMIT=$(jq -r '.object.sha' <<< "$REF_JSON")
-          if [ "$TAG_TYPE" = "tag" ]; then
-            TAG_COMMIT=$(gh api \
-              "/repos/${GITHUB_REPOSITORY}/git/tags/${TAG_COMMIT}" \
-              --jq '.object.sha')
-          elif [ "$TAG_TYPE" != "commit" ]; then
-            echo "::error::${TAG} points to unsupported Git object type ${TAG_TYPE}"
-            exit 1
-          fi
-
-          if [ "$TAG_COMMIT" != "$COMMIT" ]; then
-            echo "::error::${TAG} already points to ${TAG_COMMIT}, expected ${COMMIT}"
-            exit 1
-          fi
-          echo "exists=true" >> "$GITHUB_OUTPUT"
-          echo "${TAG} points to the qualified release commit"
-
-      - name: Verify existing GitHub release
-        id: verify_release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          releases=$(gh api --paginate --slurp \
-            "/repos/${GITHUB_REPOSITORY}/releases" |
-            jq -c --arg tag "v${VERSION}" '[add[] | select(.tag_name == $tag)]')
-          release_count=$(jq 'length' <<< "$releases")
-          if [ "$release_count" -gt 1 ]; then
-            echo "::error::Multiple GitHub releases use v${VERSION}"
-            exit 1
-          fi
-
-          complete=false
-          if [ "$release_count" = "1" ] &&
-             [ "$(jq -r '.[0].draft' <<< "$releases")" = "false" ]; then
-            complete=true
-          fi
-          echo "complete=${complete}" >> "$GITHUB_OUTPUT"
-
-      - name: Stage GitHub Release
-        id: stage_release
-        if: ${{ steps.verify_release.outputs.complete != 'true' }}
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          tag_name: v${{ needs.prepare.outputs.version }}
-          target_commitish: ${{ needs.prepare.outputs.release_commit }}
-          name: Alien v${{ needs.prepare.outputs.version }}
-          body_path: CHANGELOG-release.md
-          draft: true
-          prerelease: false
-
-      - name: Publish staged GitHub Release
-        if: ${{ steps.verify_release.outputs.complete != 'true' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION="${{ needs.prepare.outputs.version }}"
-          TAG="v${VERSION}"
-          COMMIT="${{ needs.prepare.outputs.release_commit }}"
-
-          staged_release=$(gh api \
-            "/repos/${GITHUB_REPOSITORY}/releases/${{ steps.stage_release.outputs.id }}")
-          if ! jq -e \
-            --arg tag "$TAG" \
-            --arg commit "$COMMIT" \
-            '.draft == true and
-             .tag_name == $tag and
-             .target_commitish == $commit' \
-            <<< "$staged_release" >/dev/null; then
-            echo "::error::Staged release does not target the qualified commit"
-            exit 1
-          fi
-
-          published_release=$(gh api \
-            --method PATCH \
-            "/repos/${GITHUB_REPOSITORY}/releases/${{ steps.stage_release.outputs.id }}" \
-            --field draft=false \
-            --raw-field make_latest=true)
-          if ! jq -e '.draft == false and .immutable == true' \
-            <<< "$published_release" >/dev/null; then
-            echo "::error::GitHub did not publish an immutable release"
-            exit 1
-          fi
-
-      - name: Verify published release tag
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION="${{ needs.prepare.outputs.version }}"
-          TAG="v${VERSION}"
-          COMMIT="${{ needs.prepare.outputs.release_commit }}"
-          FULL_REF="refs/tags/${TAG}"
-
-          MATCHING_REFS=$(gh api --paginate --slurp \
-            "/repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${TAG}" |
-            jq -c --arg ref "$FULL_REF" '[add[] | select(.ref == $ref)]')
-          if [ "$(jq 'length' <<< "$MATCHING_REFS")" != "1" ]; then
-            echo "::error::Expected exactly one ${FULL_REF} after release publication"
-            exit 1
-          fi
-
-          REF_JSON=$(jq -c '.[0]' <<< "$MATCHING_REFS")
-          TAG_TYPE=$(jq -r '.object.type' <<< "$REF_JSON")
-          TAG_COMMIT=$(jq -r '.object.sha' <<< "$REF_JSON")
-          if [ "$TAG_TYPE" = "tag" ]; then
-            TAG_COMMIT=$(gh api \
-              "/repos/${GITHUB_REPOSITORY}/git/tags/${TAG_COMMIT}" \
-              --jq '.object.sha')
-          elif [ "$TAG_TYPE" != "commit" ]; then
-            echo "::error::${TAG} points to unsupported Git object type ${TAG_TYPE}"
-            exit 1
-          fi
-
-          if [ "$TAG_COMMIT" != "$COMMIT" ]; then
-            echo "::error::${TAG} points to ${TAG_COMMIT}, expected ${COMMIT}"
+          if [ "$existing" != "$COMMIT" ]; then
+            echo "::error::${TAG} points to ${existing}, expected ${COMMIT}"
             exit 1
           fi
           echo "${TAG} points to the qualified release commit"
