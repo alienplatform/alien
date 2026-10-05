@@ -1408,65 +1408,42 @@ fn versions_body(
 
     let mut provider_attrs: Vec<Structure> = Vec::new();
     if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
-        // 6.23 adds `aws_s3_bucket_abac` and tags buckets through the S3 Control tagging API,
-        // which keeps working after ABAC is enabled.
-        provider_attrs.push(attr("aws", provider_decl_attr("hashicorp/aws", ">= 6.23")));
+        provider_attrs.push(attr("aws", provider_requirement("aws")));
         if include_awscc_provider {
-            provider_attrs.push(attr(
-                "awscc",
-                provider_decl_attr("hashicorp/awscc", ">= 1.0"),
-            ));
+            provider_attrs.push(attr("awscc", provider_requirement("awscc")));
         }
         if matches!(target, TerraformTarget::Eks) {
-            provider_attrs.push(attr("tls", provider_decl_attr("hashicorp/tls", ">= 4.0")));
+            provider_attrs.push(attr("tls", provider_requirement("tls")));
         }
     }
     if matches!(target.cloud_platform(), alien_core::Platform::Gcp) {
-        provider_attrs.push(attr(
-            "google",
-            provider_decl_attr("hashicorp/google", ">= 5.0"),
-        ));
+        provider_attrs.push(attr("google", provider_requirement("google")));
         if include_google_beta_provider {
             // The floor is where `google_vertex_ai_reasoning_engine` exists.
-            provider_attrs.push(attr(
-                "google-beta",
-                provider_decl_attr("hashicorp/google-beta", ">= 6.0"),
-            ));
+            provider_attrs.push(attr("google-beta", provider_requirement("google-beta")));
         }
     }
     if matches!(target.cloud_platform(), alien_core::Platform::Azure) {
         // Upper bound deliberate: an open-ended constraint promises every future
         // major works, and azurerm 5 renamed arguments we emit. Raise it once the
         // emitters are ported, rather than letting a release decide for us.
-        provider_attrs.push(attr(
-            "azurerm",
-            provider_decl_attr("hashicorp/azurerm", ">= 4.75, < 5.0"),
-        ));
+        provider_attrs.push(attr("azurerm", provider_requirement("azurerm")));
         if include_azapi_provider {
             // Bounded for the same reason as azurerm, and more sharply: the sandbox group is a
             // preview type, and a major bump is free to change what `body` accepts.
-            provider_attrs.push(attr(
-                "azapi",
-                provider_decl_attr("Azure/azapi", ">= 2.6, < 3.0"),
-            ));
+            provider_attrs.push(attr("azapi", provider_requirement("azapi")));
         }
     }
     if include_time_provider {
-        provider_attrs.push(attr("time", provider_decl_attr("hashicorp/time", ">= 0.9")));
+        provider_attrs.push(attr("time", provider_requirement("time")));
     }
     if include_kubernetes_provider {
-        provider_attrs.push(attr(
-            "kubernetes",
-            provider_decl_attr("hashicorp/kubernetes", ">= 2.30"),
-        ));
+        provider_attrs.push(attr("kubernetes", provider_requirement("kubernetes")));
     }
     if include_helm_provider {
-        provider_attrs.push(attr("helm", provider_decl_attr("hashicorp/helm", ">= 3.0")));
+        provider_attrs.push(attr("helm", provider_requirement("helm")));
     }
-    provider_attrs.push(attr(
-        "random",
-        provider_decl_attr("hashicorp/random", ">= 3.6"),
-    ));
+    provider_attrs.push(attr("random", provider_requirement("random")));
     if let Some(registration) = registration {
         provider_attrs.push(attr(
             &registration.provider_name,
@@ -1489,6 +1466,32 @@ fn versions_body(
     };
 
     Body::from(vec![Structure::Block(terraform_block)])
+}
+
+/// Every provider the generated stacks can declare: local name, source and version constraint.
+/// `scripts/terraform-provider-mirror.sh` mirrors exactly these for CI, and
+/// `provider_mirror_matches_generator_requirements` keeps the two in sync.
+pub(crate) const PROVIDER_REQUIREMENTS: &[(&str, &str, &str)] = &[
+    ("aws", "hashicorp/aws", ">= 6.23"),
+    ("awscc", "hashicorp/awscc", ">= 1.0"),
+    ("tls", "hashicorp/tls", ">= 4.0"),
+    ("google", "hashicorp/google", ">= 5.0"),
+    ("google-beta", "hashicorp/google-beta", ">= 6.0"),
+    ("azurerm", "hashicorp/azurerm", ">= 4.75, < 5.0"),
+    ("azapi", "Azure/azapi", ">= 2.6, < 3.0"),
+    ("time", "hashicorp/time", ">= 0.9"),
+    ("kubernetes", "hashicorp/kubernetes", ">= 2.30"),
+    ("helm", "hashicorp/helm", ">= 3.0"),
+    ("random", "hashicorp/random", ">= 3.6"),
+];
+
+/// The `required_providers` entry for a provider in [`PROVIDER_REQUIREMENTS`].
+fn provider_requirement(name: &str) -> Expression {
+    let (_, source, version) = PROVIDER_REQUIREMENTS
+        .iter()
+        .find(|(provider, _, _)| *provider == name)
+        .unwrap_or_else(|| panic!("provider '{name}' is not in PROVIDER_REQUIREMENTS"));
+    provider_decl_attr(source, version)
 }
 
 fn provider_decl_attr(source: &str, version: &str) -> Expression {
@@ -4324,6 +4327,25 @@ fn readme_kubernetes_destroy_order() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    /// CI serves these providers from a mirror that falls back to the registry only for providers
+    /// it doesn't list, so a constraint changed here without the script would break CI's inits.
+    #[test]
+    fn provider_mirror_matches_generator_requirements() {
+        let script = include_str!("../../../scripts/terraform-provider-mirror.sh");
+        let mirrored: Vec<String> = script
+            .lines()
+            .filter(|line| line.contains("source = ") && line.contains("version = "))
+            .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect();
+        let expected: Vec<String> = PROVIDER_REQUIREMENTS
+            .iter()
+            .map(|(name, source, version)| {
+                format!("{name} = {{ source = \"{source}\", version = \"{version}\" }}")
+            })
+            .collect();
+        assert_eq!(mirrored, expected);
+    }
+
     use super::*;
     use alien_core::{Queue, RemoteStackManagement, ResourceLifecycle, ResourceRef};
 

@@ -2,6 +2,9 @@ pub(crate) mod command_output;
 pub mod dependencies;
 mod dockerignore;
 pub mod error;
+mod lambda_image;
+#[cfg(test)]
+mod lambda_tests;
 pub mod merge;
 pub mod plan;
 pub mod registry;
@@ -1285,6 +1288,23 @@ fn strip_local_daemon_only_compute_clusters(stack: &mut Stack, platform: Platfor
     }
 }
 
+/// Check local AWS Worker images before a release cache can replace their paths.
+/// Remote image references supplied explicitly by the stack are left unchanged.
+pub fn validate_aws_worker_artifacts(stack: &Stack) -> Result<()> {
+    for target in collect_push_targets(stack)? {
+        if target.resource_type == "worker" {
+            lambda_image::validate(
+                &target.local_image_dir.join(format!(
+                    "{}.oci.tar",
+                    BinaryTarget::LinuxArm64.runtime_platform_id()
+                )),
+                target.resource_name(),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// A compute resource that has a locally-built image directory and needs to be pushed to a registry.
 #[derive(Debug)]
 struct ResourcePushTarget {
@@ -1529,6 +1549,9 @@ pub async fn push_stack(
         push_settings.repository
     );
 
+    if platform == Platform::Aws {
+        validate_aws_worker_artifacts(&stack)?;
+    }
     let to_push = collect_push_targets(&stack)?;
 
     let resource_count = to_push
@@ -1810,26 +1833,39 @@ async fn push_resource_images(
         resource_name: resource_name.to_string(),
     }));
 
-    // Local Workers/Daemons execute native binaries; containers and cloud runtimes use Linux.
-    let selected_tarballs =
-        if *platform == Platform::Local && matches!(resource_type, "worker" | "daemon") {
-            let host = BinaryTarget::current_os();
-            let archive = oci_files
-                .iter()
-                .find(|path| oci_tarball_target(path) == Some(host))
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::InvalidResourceConfig {
-                        resource_id: resource_name.to_string(),
-                        reason: format!(
-                            "No OCI archive for local host target '{}'",
-                            host.runtime_platform_id()
-                        ),
-                    })
-                })?;
-            vec![(host, archive.clone())]
-        } else {
-            select_linux_tarballs(&oci_files)
-        };
+    // Lambda requires one ARM64 image. Local Workers/Daemons execute host binaries;
+    // other container runtimes can consume Linux multi-architecture indexes.
+    let selected_tarballs = if *platform == Platform::Aws && resource_type == "worker" {
+        let target = BinaryTarget::LinuxArm64;
+        let archive = oci_files
+            .iter()
+            .find(|path| oci_tarball_target(path) == Some(target))
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::InvalidResourceConfig {
+                    resource_id: resource_name.to_string(),
+                    reason: "AWS Workers require a Linux ARM64 OCI archive".to_string(),
+                })
+            })?;
+        lambda_image::validate(archive, resource_name)?;
+        vec![(target, archive.clone())]
+    } else if *platform == Platform::Local && matches!(resource_type, "worker" | "daemon") {
+        let host = BinaryTarget::current_os();
+        let archive = oci_files
+            .iter()
+            .find(|path| oci_tarball_target(path) == Some(host))
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::InvalidResourceConfig {
+                    resource_id: resource_name.to_string(),
+                    reason: format!(
+                        "No OCI archive for local host target '{}'",
+                        host.runtime_platform_id()
+                    ),
+                })
+            })?;
+        vec![(host, archive.clone())]
+    } else {
+        select_linux_tarballs(&oci_files)
+    };
 
     // No linux image (unusual) — push whatever tarballs are present.
     if selected_tarballs.is_empty() {
@@ -2260,6 +2296,9 @@ async fn compute_source_artifact_cache_key(
 ) -> Result<String> {
     let mut hasher = Sha256::new();
     hasher.update(b"alien-build-artifact-cache-v3");
+    if source_layer_compression(settings, workload) == dockdash::LayerCompression::Gzip {
+        hasher.update(b"\0layer-compression:gzip-v1\0");
+    }
     hasher.update(src.as_bytes());
     hasher.update(
         serde_json::to_vec(toolchain_config)
@@ -2940,6 +2979,19 @@ async fn materialize_complete_oci_tarball(tarball_path: &Path, output_path: &Pat
     Ok(true)
 }
 
+fn source_layer_compression(
+    settings: &BuildSettings,
+    workload: toolchain::WorkloadKind,
+) -> dockdash::LayerCompression {
+    if settings.platform.runtime_platform() == Platform::Aws
+        && workload == toolchain::WorkloadKind::Worker
+    {
+        dockdash::LayerCompression::Gzip
+    } else {
+        dockdash::LayerCompression::Zstd
+    }
+}
+
 /// Build a specific OS/architecture target to an OCI tarball file
 #[allow(clippy::too_many_arguments)]
 async fn build_target_to_file(
@@ -3065,7 +3117,9 @@ async fn build_target_to_file(
                 for attempt in 1..=BASE_IMAGE_BUILD_MAX_ATTEMPTS {
                     // Rebuild the lightweight application layer for each retry because
                     // dockdash layers are consumed by the image builder.
-                    let mut app_layer_builder = DockDashLayer::builder().map_dockdash_err()?;
+                    let mut app_layer_builder = DockDashLayer::builder()
+                        .map_dockdash_err()?
+                        .compression(source_layer_compression(settings, workload));
 
                     for file_spec in files_to_package {
                         let absolute_container_path = if file_spec.container_path.starts_with("/") {
@@ -3191,7 +3245,9 @@ async fn build_target_to_file(
             // Add toolchain-specified layers (runtime binary, app code, etc.)
             for layer_spec in layers {
                 info!("Adding layer: {}", layer_spec.description);
-                let mut layer_builder = DockDashLayer::builder().map_dockdash_err()?;
+                let mut layer_builder = DockDashLayer::builder()
+                    .map_dockdash_err()?
+                    .compression(source_layer_compression(settings, workload));
 
                 for file_spec in &layer_spec.files {
                     let absolute_container_path = if file_spec.container_path.starts_with("/") {
@@ -3240,6 +3296,12 @@ async fn build_target_to_file(
 
             info!("Successfully built image from scratch");
         }
+    }
+
+    if source_layer_compression(settings, workload) == dockdash::LayerCompression::Gzip
+        && *target == BinaryTarget::LinuxArm64
+    {
+        lambda_image::validate(output_path, resource_name)?;
     }
 
     info!(
