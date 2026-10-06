@@ -228,6 +228,14 @@ async fn refresh_local_deployment_environment(
 ) -> Result<()> {
     let path = state_dir.join("dev-server.db");
     if !path.exists() {
+        if name.starts_with("dep_") || name.contains('/') {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "deployment-name".to_string(),
+                message: format!(
+                    "No local deployment exists for '{name}'; use a bare name to create a new deployment"
+                ),
+            }));
+        }
         return Ok(());
     }
     let db = SqliteDatabase::new(&path.to_string_lossy()).await.context(
@@ -1538,6 +1546,22 @@ mod tests {
             .expect("the full dev session also reuses durable state");
         assert_eq!(session, "dep_1");
         assert_eq!(created.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn missing_local_migration_target_fails_without_creating_state() {
+        let directory = TempDir::new().unwrap();
+        for reference in ["dep_missing", "legacy/api", "legacy/"] {
+            let error = refresh_local_deployment_environment(directory.path(), reference, &[])
+                .await
+                .expect_err("an explicit reference must select an existing deployment");
+            assert_eq!(error.code(), "VALIDATION_ERROR");
+            assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+        }
+        refresh_local_deployment_environment(directory.path(), "api", &[])
+            .await
+            .expect("a bare name may start a new deployment");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
     }
 
     #[tokio::test]
