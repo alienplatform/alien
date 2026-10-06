@@ -47,16 +47,7 @@ pub unsafe fn drop_to(identity: ExecIdentity) -> io::Result<()> {
             return Err(io::Error::from_raw_os_error(libc::EPERM));
         }
         // Clear ambient and inherited capabilities even if the supervisor received ALL.
-        if libc::prctl(
-            libc::PR_CAP_AMBIENT,
-            libc::PR_CAP_AMBIENT_CLEAR_ALL,
-            0,
-            0,
-            0,
-        ) != 0
-        {
-            return Err(io::Error::last_os_error());
-        }
+        clear_ambient_capabilities()?;
         if libc::geteuid() == 0 {
             for capability in 0..64 {
                 let present = libc::prctl(libc::PR_CAPBSET_READ, capability, 0, 0, 0);
@@ -137,6 +128,29 @@ pub unsafe fn drop_to(identity: ExecIdentity) -> io::Result<()> {
     Ok(())
 }
 
+/// A kernel or sandbox runtime without ambient capabilities (Linux < 4.3, older gVisor) rejects
+/// PR_CAP_AMBIENT with EINVAL. The arguments are constant, so EINVAL can only mean unsupported,
+/// and the capset to zero inheritable that follows would clear an ambient set anyway.
+#[cfg(target_os = "linux")]
+unsafe fn clear_ambient_capabilities() -> io::Result<()> {
+    if libc::prctl(
+        libc::PR_CAP_AMBIENT,
+        libc::PR_CAP_AMBIENT_CLEAR_ALL,
+        0,
+        0,
+        0,
+    ) == 0
+    {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::EINVAL) {
+        Ok(())
+    } else {
+        Err(error)
+    }
+}
+
 /// Shrinks AWS's ALL capability grant before the supervisor starts image code or serves exec.
 /// Retains only network administration, identity dropping, and access to command-owned files.
 #[cfg(target_os = "linux")]
@@ -172,16 +186,7 @@ pub fn restrict_supervisor() -> io::Result<()> {
                 return Err(io::Error::last_os_error());
             }
         }
-        if libc::prctl(
-            libc::PR_CAP_AMBIENT,
-            libc::PR_CAP_AMBIENT_CLEAR_ALL,
-            0,
-            0,
-            0,
-        ) != 0
-        {
-            return Err(io::Error::last_os_error());
-        }
+        clear_ambient_capabilities()?;
         let header = Header {
             version: 0x20080522,
             pid: 0,
