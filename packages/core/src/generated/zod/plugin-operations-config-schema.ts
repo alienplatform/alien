@@ -13,7 +13,7 @@ import { OperationSettingValueSchema } from "./operation-setting-value-schema.js
 export const PluginOperationsConfigSchema = z.object({
     "approval": z.optional(z.object({
     
-    }).catchall(z.lazy(() => OperationApprovalSchema).describe("Approval rule for the operations a pattern matches.")).describe("Approval rule per operation pattern: an operation name, `*`, or a prefix ending in `*`.\nOperations no rule matches need approval.")),
+    }).catchall(z.lazy(() => OperationApprovalSchema).describe("Approval rule for the operations a pattern matches.")).describe("Approval rule per operation: an operation name, or `*` for all of them.\nOperations no rule matches need approval.")),
 "settings": z.optional(z.object({
     
     }).catchall(z.lazy(() => OperationSettingValueSchema).describe("Value of one plugin setting.")).describe("Values for the settings the plugin's manifest declares."))

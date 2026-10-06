@@ -375,7 +375,7 @@ fn gcp_generated_custom_role_ids_fit_gcp_role_id_limits() {
 #[rstest]
 #[case::data_read("storage/data-read")]
 #[case::data_write("storage/data-write")]
-fn gcp_storage_resource_grant_plan_isolates_project_sign_blob_helper(
+fn gcp_storage_resource_grant_plan_isolates_service_account_signing(
     #[case] permission_set_id: &str,
 ) {
     let generator = GcpRuntimePermissionsGenerator::new();
@@ -387,9 +387,12 @@ fn gcp_storage_resource_grant_plan_isolates_project_sign_blob_helper(
         .expect("should generate storage grant plan");
 
     let resource_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
-    let project_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+    assert!(grant_plan
+        .bindings_for_target(GcpBindingTargetScope::Project)
+        .is_empty());
+    let account_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::ServiceAccount);
 
-    assert_eq!(project_bindings.len(), 1);
+    assert_eq!(account_bindings.len(), 1);
     if permission_set_id == "storage/data-write" {
         assert_eq!(resource_bindings.len(), 2);
         assert!(resource_bindings
@@ -406,19 +409,27 @@ fn gcp_storage_resource_grant_plan_isolates_project_sign_blob_helper(
 
         let resource_roles = grant_plan.custom_roles_for_bindings(&resource_bindings);
         assert_eq!(resource_roles.len(), 1);
-        assert!(resource_roles[0]
-            .included_permissions
-            .iter()
-            .any(|permission| permission == "storage.objects.get"));
+        assert_eq!(
+            resource_roles[0].included_permissions,
+            [
+                "storage.buckets.get",
+                "storage.buckets.list",
+                "storage.multipartUploads.list",
+                "storage.multipartUploads.listParts",
+                "storage.objects.get",
+                "storage.objects.getIamPolicy",
+                "storage.objects.list",
+            ]
+        );
     }
 
-    let project_roles = grant_plan.custom_roles_for_bindings(&project_bindings);
-    assert_eq!(project_roles.len(), 1);
+    let account_roles = grant_plan.custom_roles_for_bindings(&account_bindings);
+    assert_eq!(account_roles.len(), 1);
     assert_eq!(
-        project_roles[0].included_permissions,
+        account_roles[0].included_permissions,
         vec!["iam.serviceAccounts.signBlob"]
     );
-    assert!(!project_roles[0]
+    assert!(!account_roles[0]
         .included_permissions
         .iter()
         .any(|permission| permission.starts_with("storage.objects.")));
@@ -428,7 +439,6 @@ fn gcp_storage_resource_grant_plan_isolates_project_sign_blob_helper(
 fn gcp_resource_target_project_bindings_do_not_include_sensitive_data_permissions() {
     let generator = GcpRuntimePermissionsGenerator::new();
     let context = create_test_context().with_resource_name("current-resource");
-    let mut mixed_target_sets = Vec::new();
 
     for permission_set_id in list_permission_set_ids() {
         let permission_set = get_permission_set(permission_set_id).expect("permission set exists");
@@ -443,9 +453,6 @@ fn gcp_resource_target_project_bindings_do_not_include_sensitive_data_permission
             grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
         let project_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
         let is_mixed_target = !resource_bindings.is_empty() && !project_bindings.is_empty();
-        if is_mixed_target {
-            mixed_target_sets.push(permission_set_id.to_string());
-        }
 
         if !is_mixed_target || !is_resource_data_permission_set(permission_set_id) {
             continue;
@@ -465,15 +472,6 @@ fn gcp_resource_target_project_bindings_do_not_include_sensitive_data_permission
             );
         }
     }
-
-    assert!(
-        mixed_target_sets.contains(&"storage/data-read".to_string()),
-        "storage/data-read should exercise mixed resource/project grant envelopes"
-    );
-    assert!(
-        mixed_target_sets.contains(&"storage/data-write".to_string()),
-        "storage/data-write should exercise mixed resource/project grant envelopes"
-    );
 }
 
 #[test]
@@ -687,4 +685,171 @@ fn is_resource_data_permission_set(permission_set_id: &str) -> bool {
         || permission_set_id.starts_with("vault/")
         || permission_set_id.starts_with("kv/")
         || permission_set_id.starts_with("queue/")
+}
+
+fn custom_role_ids(resource_prefix: &str, permission_set_id: &str) -> Vec<String> {
+    let permission_set = get_permission_set(permission_set_id).expect("permission set exists");
+    GcpRuntimePermissionsGenerator::new()
+        .generate_custom_roles(
+            permission_set,
+            &create_test_context().with_stack_prefix(resource_prefix),
+        )
+        .expect("GCP custom roles should compile")
+        .into_iter()
+        .map(|role| role.role_id)
+        .collect()
+}
+
+#[test]
+fn gcp_custom_role_ids_differ_for_prefixes_sharing_their_first_18_characters() {
+    for permission_set_id in list_permission_set_ids() {
+        let permission_set = get_permission_set(permission_set_id).expect("permission set exists");
+        if permission_set.platforms.gcp.is_none() {
+            continue;
+        }
+        let eu = custom_role_ids("customer-acme-prod-eu", permission_set_id);
+        let us = custom_role_ids("customer-acme-prod-us", permission_set_id);
+
+        assert_eq!(eu.len(), us.len());
+        for role_id in &eu {
+            assert!(
+                !us.contains(role_id),
+                "'{permission_set_id}' gives both deployments the role ID '{role_id}'"
+            );
+        }
+    }
+}
+
+/// Expected namespaces were produced by `terraform console` evaluating the
+/// generated module's `gcp_custom_role_prefix` local with each `resource_prefix`.
+#[rstest]
+#[case::short("acme", "acme")]
+#[case::hyphenated("acme-prod", "acme_prod")]
+#[case::exactly_18("customer-acme-prod", "customer_acme_prod")]
+#[case::nineteen("acme-platform-eu-12", "acme_plat_20cb2504")]
+#[case::hyphen_at_cut("customer-acme-prod-eu", "customer__2e6bb8cf")]
+#[case::forty("abcdefgh-ijklmnopqrs-tuvwxyz0123-456789", "abcdefgh__10cdde91")]
+fn gcp_custom_role_namespace_matches_terraform(
+    #[case] resource_prefix: &str,
+    #[case] expected: &str,
+) {
+    assert_eq!(
+        alien_permissions::generators::custom_role_namespace_for_prefix(resource_prefix),
+        expected
+    );
+    let role_ids = custom_role_ids(resource_prefix, "storage/data-read");
+    assert!(!role_ids.is_empty());
+    for role_id in role_ids {
+        assert!(
+            role_id.starts_with(&format!("role_{expected}_")),
+            "{role_id}"
+        );
+    }
+}
+
+#[test]
+fn gcp_custom_role_namespace_override_keeps_existing_role_ids() {
+    let permission_set = get_permission_set("storage/data-read").expect("permission set exists");
+    let context = create_test_context()
+        .with_stack_prefix("customer-acme-prod-eu")
+        .with_gcp_custom_role_namespace("customer_acme_prod");
+
+    let roles = GcpRuntimePermissionsGenerator::new()
+        .generate_custom_roles(permission_set, &context)
+        .expect("GCP custom roles should compile");
+
+    // The IDs runtime setup created for this prefix before long prefixes were hashed.
+    assert_eq!(
+        roles
+            .iter()
+            .map(|role| role.name.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "projects/my-project/roles/role_customer_acme_prod_read_cloud_storage_objects",
+            "projects/my-project/roles/role_customer_acme_prod_sign_cloud_storage_download_urls",
+        ]
+    );
+    assert_eq!(
+        alien_permissions::generators::legacy_custom_role_namespace_for_prefix(
+            "customer-acme-prod-eu"
+        ),
+        "customer_acme_prod"
+    );
+}
+
+#[test]
+fn gcp_custom_role_description_names_only_its_exact_prefix() {
+    use alien_permissions::generators::custom_role_description_names_prefix as names;
+
+    let description = "Used by Acme. Allows reading data. Resource prefix: acme-prod.";
+    assert!(names(description, "acme-prod"));
+    assert!(!names(description, "acme"));
+    assert!(!names(description, "prod"));
+    assert!(!names("Allows reading data. Resource prefix: acme.", "cme"));
+    assert!(!names(
+        "Allows reading data. Resource prefix: acme.extra.",
+        "acme"
+    ));
+}
+
+#[test]
+fn storage_signing_targets_only_the_executing_account_for_both_grant_scopes() {
+    let generator = GcpRuntimePermissionsGenerator::new();
+    for set_id in ["storage/data-read", "storage/data-write"] {
+        let set = get_permission_set(set_id).unwrap();
+        for scope in [BindingTarget::Stack, BindingTarget::Resource] {
+            let mut targets = Vec::new();
+            for account in ["reader", "writer"] {
+                let context = alien_permissions::PermissionContext::new()
+                    .with_project_name("example-project")
+                    .with_stack_prefix("example")
+                    .with_resource_name("objects")
+                    .with_service_account_name(account);
+                let plan = generator.generate_grant_plan(set, scope, &context).unwrap();
+                let bindings = plan.bindings_for_target(GcpBindingTargetScope::ServiceAccount);
+                assert_eq!(bindings.len(), 1);
+                let binding = &bindings[0];
+                assert_eq!(binding.target_resource_name.as_deref(), Some(format!("projects/example-project/serviceAccounts/{account}@example-project.iam.gserviceaccount.com").as_str()));
+                assert_eq!(
+                    binding.members,
+                    [format!(
+                        "serviceAccount:{account}@example-project.iam.gserviceaccount.com"
+                    )]
+                );
+                assert!(binding.condition.is_none());
+                let roles = plan.custom_roles_for_bindings(&bindings);
+                assert_eq!(roles.len(), 1);
+                assert_eq!(
+                    roles[0].included_permissions,
+                    ["iam.serviceAccounts.signBlob"]
+                );
+                for binding in plan.bindings_for_target(GcpBindingTargetScope::Project) {
+                    assert_ne!(binding.role, roles[0].name);
+                    assert!(binding.target_resource_name.is_none());
+                }
+                targets.push(binding.target_resource_name.clone());
+            }
+            assert_ne!(targets[0], targets[1]);
+        }
+    }
+}
+
+#[test]
+fn storage_signing_refuses_missing_or_unresolved_executing_identity() {
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let set = get_permission_set("storage/data-read").unwrap();
+    for account in [
+        None,
+        Some(""),
+        Some(" "),
+        Some("${serviceAccountName}"),
+        Some("SERVICE_ACCOUNT"),
+    ] {
+        let mut context =
+            alien_permissions::PermissionContext::new().with_project_name("example-project");
+        context.service_account_name = account.map(str::to_owned);
+        for scope in [BindingTarget::Stack, BindingTarget::Resource] {
+            assert!(generator.generate_grant_plan(set, scope, &context).is_err());
+        }
+    }
 }

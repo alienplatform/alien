@@ -2,7 +2,10 @@
 //!
 //! Three modes:
 //!
-//! * `UseDefault` — emit nothing (controller falls back to default VPC).
+//! * `UseDefault` — declare the account's default VPC and subnets as data
+//!   sources. The shared network helpers (`vpc_id_expr`,
+//!   `private_subnet_ids_expr`) resolve to them, so any emitter placing
+//!   resources in this network can reference them.
 //! * `ByoVpcAws` — emit nothing (existing network IDs are passed via variables; the
 //!   variables themselves are added to `variables.tf` via the
 //!   generator's per-target variables list).
@@ -29,12 +32,11 @@ impl TfEmitter for AwsNetworkEmitter {
         let label = required_label(ctx)?;
 
         match &network.settings {
-            // Setup-owned databases and managed EKS share these network lookups.
-            // Each consumer applies its service-specific subnet filtering afterward.
-            NetworkSettings::UseDefault if stack_needs_default_network_data(ctx) => {
-                Ok(default_network_data(label, None))
-            }
-            NetworkSettings::UseDefault => Ok(TfFragment::empty()),
+            // Every consumer of a static default network (setup-owned databases, managed EKS,
+            // compute clusters) reads the VPC through `helpers::vpc_id_expr` and friends, which
+            // resolve to these data sources unconditionally. Declaring them only for some
+            // consumers leaves the others referencing undeclared addresses.
+            NetworkSettings::UseDefault => Ok(default_network_data(label, None)),
             NetworkSettings::ByoVpcAws { .. } => {
                 // Declare the availability-zones data source so the
                 // `availabilityZones` field in import data resolves —

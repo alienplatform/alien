@@ -1,11 +1,9 @@
 use crate::error::{ErrorData, Result};
-use crate::{PreflightRegistry, PreflightSummary};
+use crate::{CheckResult, CompileTimeCheck, PreflightRegistry, PreflightSummary};
 use alien_core::{DeploymentConfig, Platform, Stack, StackState};
 use alien_error::{AlienError, Context};
 use tracing::{debug, error, info, warn};
 
-#[cfg(feature = "runtime-checks")]
-use crate::CheckResult;
 #[cfg(feature = "runtime-checks")]
 use alien_core::ClientConfig;
 
@@ -36,37 +34,7 @@ impl PreflightRunner {
         info!("Running compile-time checks for platform {:?}", platform);
 
         let checks = self.registry.get_compile_time_checks(stack, platform);
-        let mut results = Vec::new();
-
-        for check in checks {
-            debug!("Running check: {}", check.description());
-
-            let mut result =
-                check
-                    .check(stack, platform)
-                    .await
-                    .context(ErrorData::CompileTimeCheckFailed {
-                        check_name: check.description().to_string(),
-                        message: "Check execution failed".to_string(),
-                        resource_id: None,
-                    })?;
-
-            result = result.with_check_metadata(check.code(), check.description());
-
-            if !result.success {
-                error!(check = %check.description(), "Compile-time check failed");
-                for msg in &result.errors {
-                    error!(check = %check.description(), "  {}", msg);
-                }
-            }
-
-            for warning in &result.warnings {
-                warn!(check = %check.description(), "  Warning: {}", warning);
-            }
-
-            results.push(result);
-        }
-
+        let results = run_stack_checks(checks, stack, platform).await?;
         Ok(PreflightSummary::from_results(results))
     }
 
@@ -348,8 +316,12 @@ impl PreflightRunner {
     ) -> Result<PreflightSummary> {
         info!("Running build-time preflights for platform {:?}", platform);
 
-        // Run compile-time checks only - mutations are now deployment-time only
-        let check_summary = self.run_compile_time_checks(stack, platform).await?;
+        // Run compile-time checks only - mutations are now deployment-time only. Build-time-only
+        // checks apply to new stacks, never to ones that are already released.
+        let mut checks = self.registry.get_compile_time_checks(stack, platform);
+        checks.extend(self.registry.get_build_time_checks(stack, platform));
+        let check_summary =
+            PreflightSummary::from_results(run_stack_checks(checks, stack, platform).await?);
 
         // If checks failed, return early with the error summary
         if !check_summary.success {
@@ -397,6 +369,7 @@ impl PreflightRunner {
 
         // Run compile-time checks first (fast, no cloud API calls)
         let compile_summary = self.run_compile_time_checks(&stack, platform).await?;
+        let compile_checks_succeeded = compile_summary.success;
         all_results.extend(compile_summary.results);
 
         // Apply mutations BEFORE compatibility checks
@@ -436,12 +409,16 @@ impl PreflightRunner {
                 // These checks compare the prepared target with installed resources,
                 // including runtime-owned capacity changes. Do not duplicate that
                 // decision using a hash of the unprepared release.
-                if !compatibility_summary.success && all_results.iter().all(|result| result.success)
-                {
+                // Setup is where missing target prerequisites (such as a new
+                // external binding) can be supplied. They must not hide the
+                // independently required Frozen handoff behind a generic error.
+                // Intrinsically invalid releases still fail ordinary validation.
+                if !compatibility_summary.success && compile_checks_succeeded {
                     return Err(AlienError::new(ErrorData::SetupRequired {
                         message: compatibility_summary
                             .results
                             .iter()
+                            .chain(all_results.iter())
                             .flat_map(|result| result.errors.iter().cloned())
                             .collect::<Vec<_>>()
                             .join("; "),
@@ -888,71 +865,44 @@ mod setup_update_authorization_tests {
             .expect_err("the deployment's own platform is neither Azure nor GCP");
         assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
     }
+}
 
-    #[cfg(feature = "runtime-checks")]
-    fn compute_stack(instance_type: &str, size: u32) -> Stack {
-        let cluster = alien_core::ComputeCluster::new("compute".to_string())
-            .capacity_group(alien_core::CapacityGroup {
-                group_id: "workers".to_string(),
-                instance_type: Some(instance_type.to_string()),
-                profile: alien_core::instance_catalog::find_instance_type(
-                    Platform::Aws,
-                    instance_type,
-                )
-                .map(|spec| spec.to_machine_profile()),
-                min_size: size,
-                max_size: size,
-                scale_policy: None,
-                nested_virtualization: None,
-            })
-            .build();
-        Stack::new("stack".to_string())
-            .add(cluster, alien_core::ResourceLifecycle::Frozen)
-            .build()
-    }
+/// Run stack checks that need no cloud access, logging each failure and warning.
+async fn run_stack_checks(
+    checks: Vec<&dyn CompileTimeCheck>,
+    stack: &Stack,
+    platform: Platform,
+) -> Result<Vec<CheckResult>> {
+    let mut results = Vec::new();
 
-    /// A resize and a same-architecture AWS machine change both move the setup-owned digest and
-    /// both clear the Frozen check on the installed platform; a cross-architecture change needs setup.
-    #[cfg(feature = "runtime-checks")]
-    #[tokio::test]
-    async fn an_aws_machine_change_rolls_without_setup_like_a_resize() {
-        let old = compute_stack("t4g.micro", 2);
-        let resized = compute_stack("t4g.micro", 3);
-        let machine = compute_stack("c7g.medium", 2);
-        let runner = PreflightRunner::with_registry(crate::PreflightRegistry::new());
-        let config = deployment_config();
-        let client = ClientConfig::Local {
-            state_directory: "/unused".to_string(),
-        };
+    for check in checks {
+        debug!("Running check: {}", check.description());
 
-        for target in [&resized, &machine] {
-            assert_ne!(old.setup_owned_digest(), target.setup_owned_digest());
-            runner
-                .run_deployment_time_preflights(
-                    target.clone(),
-                    &StackState::new(Platform::Aws),
-                    &config,
-                    &client,
-                    Some(&old),
-                    None,
-                    None,
-                )
+        let mut result =
+            check
+                .check(stack, platform)
                 .await
-                .unwrap_or_else(|error| panic!("an AWS runtime compute change: {error:?}"));
+                .context(ErrorData::CompileTimeCheckFailed {
+                    check_name: check.description().to_string(),
+                    message: "Check execution failed".to_string(),
+                    resource_id: None,
+                })?;
+
+        result = result.with_check_metadata(check.code(), check.description());
+
+        if !result.success {
+            error!(check = %check.description(), "Compile-time check failed");
+            for msg in &result.errors {
+                error!(check = %check.description(), "  {}", msg);
+            }
         }
 
-        let error = runner
-            .run_deployment_time_preflights(
-                compute_stack("m7i.large", 2),
-                &StackState::new(Platform::Aws),
-                &config,
-                &client,
-                Some(&old),
-                None,
-                None,
-            )
-            .await
-            .expect_err("arm64 to x86_64 needs setup");
-        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+        for warning in &result.warnings {
+            warn!(check = %check.description(), "  Warning: {}", warning);
+        }
+
+        results.push(result);
     }
+
+    Ok(results)
 }

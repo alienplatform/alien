@@ -6,6 +6,11 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../lib/primitives.js";
 import { ClosedEnum } from "../types/enums.js";
 import {
+  ExternalBindingUnion,
+  ExternalBindingUnion$Outbound,
+  ExternalBindingUnion$outboundSchema,
+} from "./externalbindingunion.js";
+import {
   ImportedResource,
   ImportedResource$Outbound,
   ImportedResource$outboundSchema,
@@ -55,10 +60,10 @@ export type ImportSourceFailureDomains2 = {
 
 export type ImportSourceFailureDomainsUnion2 =
   | ImportSourceFailureDomains2
-  | any;
+  | string;
 
 export type ImportSourcePoolsAutoscale = {
-  failureDomains?: ImportSourceFailureDomains2 | any | null | undefined;
+  failureDomains?: ImportSourceFailureDomains2 | string | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -93,10 +98,10 @@ export type ImportSourceFailureDomains1 = {
 
 export type ImportSourceFailureDomainsUnion1 =
   | ImportSourceFailureDomains1
-  | any;
+  | string;
 
 export type ImportSourcePoolsFixed = {
-  failureDomains?: ImportSourceFailureDomains1 | any | null | undefined;
+  failureDomains?: ImportSourceFailureDomains1 | string | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -133,7 +138,7 @@ export type ImportSourceCompute = {
     | undefined;
 };
 
-export type ImportSourceComputeUnion = ImportSourceCompute | any;
+export type ImportSourceComputeUnion = ImportSourceCompute | string;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -153,20 +158,20 @@ export type ImportSourceAws = {
   certificateArn: string;
 };
 
-export type ImportSourceAwsUnion = ImportSourceAws | any;
+export type ImportSourceAwsUnion = ImportSourceAws | string;
 
 export type ImportSourceAzure = {
   keyVaultCertificateId: string;
   keyVaultResourceId?: string | null | undefined;
 };
 
-export type ImportSourceAzureUnion = ImportSourceAzure | any;
+export type ImportSourceAzureUnion = ImportSourceAzure | string;
 
 export type ImportSourceGcp = {
   certificateName: string;
 };
 
-export type ImportSourceGcpUnion = ImportSourceGcp | any;
+export type ImportSourceGcpUnion = ImportSourceGcp | string;
 
 /**
  * Namespace-scoped Kubernetes TLS Secret reference.
@@ -191,16 +196,16 @@ export type ImportSourceDomainsKubernetes = {
 
 export type ImportSourceDomainsKubernetesUnion =
   | ImportSourceDomainsKubernetes
-  | any;
+  | string;
 
 /**
  * Platform-specific certificate references for custom domains.
  */
 export type ImportSourceDomainsCertificate = {
-  aws?: ImportSourceAws | any | null | undefined;
-  azure?: ImportSourceAzure | any | null | undefined;
-  gcp?: ImportSourceGcp | any | null | undefined;
-  kubernetes?: ImportSourceDomainsKubernetes | any | null | undefined;
+  aws?: ImportSourceAws | string | null | undefined;
+  azure?: ImportSourceAzure | string | null | undefined;
+  gcp?: ImportSourceGcp | string | null | undefined;
+  kubernetes?: ImportSourceDomainsKubernetes | string | null | undefined;
 };
 
 /**
@@ -246,7 +251,7 @@ export type ImportSourcePublicEndpointTargetMachineAddresses = {
 export type ImportSourcePublicEndpointTargetUnion =
   | ImportSourcePublicEndpointTargetLoadBalancer
   | ImportSourcePublicEndpointTargetMachineAddresses
-  | any;
+  | string;
 
 /**
  * Domain configuration for the stack.
@@ -264,22 +269,26 @@ export type ImportSourceDomains = {
   publicEndpointTarget?:
     | ImportSourcePublicEndpointTargetLoadBalancer
     | ImportSourcePublicEndpointTargetMachineAddresses
-    | any
+    | string
     | null
     | undefined;
 };
 
-export type ImportSourceDomainsUnion = ImportSourceDomains | any;
+export type ImportSourceDomainsUnion = ImportSourceDomains | string;
 
 /**
- * External bindings for pre-existing infrastructure.
- *
- * @remarks
- * Allows using existing resources (MinIO, Redis, shared Container Apps
- * Environment, etc.) instead of having Alien provision them.
- * Required for Kubernetes platform, optional for cloud platforms.
+ * Reachability of the deployment's public endpoints, fixed at setup.
  */
-export type ImportSourceExternalBindings = {};
+export const ImportSourceEndpointAccess = {
+  Internet: "internet",
+  Private: "private",
+} as const;
+/**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export type ImportSourceEndpointAccess = ClosedEnum<
+  typeof ImportSourceEndpointAccess
+>;
 
 /**
  * How heartbeat health checks are handled.
@@ -306,7 +315,7 @@ export type ImportSourceCloud = {
   subscriptionId?: string | null | undefined;
 };
 
-export type ImportSourceCloudUnion = ImportSourceCloud | any;
+export type ImportSourceCloudUnion = ImportSourceCloud | string;
 
 /**
  * Ownership model for the Kubernetes cluster.
@@ -325,7 +334,7 @@ export type ImportSourceOwnership = ClosedEnum<typeof ImportSourceOwnership>;
  * Kubernetes cluster setup settings.
  */
 export type ImportSourceCluster = {
-  cloud?: ImportSourceCloud | any | null | undefined;
+  cloud?: ImportSourceCloud | string | null | undefined;
   /**
    * Namespace where the Alien chart and application resources run.
    */
@@ -336,7 +345,7 @@ export type ImportSourceCluster = {
   ownership: ImportSourceOwnership;
 };
 
-export type ImportSourceClusterUnion = ImportSourceCluster | any;
+export type ImportSourceClusterUnion = ImportSourceCluster | string;
 
 export type ImportSourceCertificateNone2 = {
   mode: "none";
@@ -470,7 +479,7 @@ export type ImportSourceProviderUnion4 =
   | ImportSourceProviderAwsAlb4
   | ImportSourceProviderAzureApplicationGatewayForContainers4
   | ImportSourceProviderGkeGateway4
-  | any;
+  | string;
 
 /**
  * Shared Gateway API route profile values.
@@ -500,7 +509,7 @@ export type ImportSourceRouteGateway2 = {
     | ImportSourceProviderAwsAlb4
     | ImportSourceProviderAzureApplicationGatewayForContainers4
     | ImportSourceProviderGkeGateway4
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -576,7 +585,7 @@ export type ImportSourceProviderUnion3 =
   | ImportSourceProviderAwsAlb3
   | ImportSourceProviderAzureApplicationGatewayForContainers3
   | ImportSourceProviderGkeGateway3
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -602,7 +611,7 @@ export type ImportSourceRouteIngress2 = {
     | ImportSourceProviderAwsAlb3
     | ImportSourceProviderAzureApplicationGatewayForContainers3
     | ImportSourceProviderGkeGateway3
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -770,7 +779,7 @@ export type ImportSourceProviderUnion2 =
   | ImportSourceProviderAwsAlb2
   | ImportSourceProviderAzureApplicationGatewayForContainers2
   | ImportSourceProviderGkeGateway2
-  | any;
+  | string;
 
 /**
  * Shared Gateway API route profile values.
@@ -800,7 +809,7 @@ export type ImportSourceRouteGateway1 = {
     | ImportSourceProviderAwsAlb2
     | ImportSourceProviderAzureApplicationGatewayForContainers2
     | ImportSourceProviderGkeGateway2
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -876,7 +885,7 @@ export type ImportSourceProviderUnion1 =
   | ImportSourceProviderAwsAlb1
   | ImportSourceProviderAzureApplicationGatewayForContainers1
   | ImportSourceProviderGkeGateway1
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -902,7 +911,7 @@ export type ImportSourceRouteIngress1 = {
     | ImportSourceProviderAwsAlb1
     | ImportSourceProviderAzureApplicationGatewayForContainers1
     | ImportSourceProviderGkeGateway1
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -947,7 +956,7 @@ export type ImportSourceExposureUnion =
   | ImportSourceExposureCustom
   | ImportSourceExposureGenerated
   | ImportSourceExposureDisabled
-  | any;
+  | string;
 
 /**
  * Kubernetes runtime substrate configuration.
@@ -960,17 +969,17 @@ export type ImportSourceExposureUnion =
  * cluster.
  */
 export type ImportSourceKubernetes = {
-  cluster?: ImportSourceCluster | any | null | undefined;
+  cluster?: ImportSourceCluster | string | null | undefined;
   exposure?:
     | ImportSourceExposureCustom
     | ImportSourceExposureGenerated
     | ImportSourceExposureDisabled
-    | any
+    | string
     | null
     | undefined;
 };
 
-export type ImportSourceKubernetesUnion = ImportSourceKubernetes | any;
+export type ImportSourceKubernetesUnion = ImportSourceKubernetes | string;
 
 export const ImportSourceTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
@@ -1096,7 +1105,7 @@ export type ImportSourceNetworkUnion =
   | ImportSourceNetworkByoVnetAzure
   | ImportSourceNetworkUseDefault
   | ImportSourceNetworkCreate
-  | any;
+  | string;
 
 /**
  * How telemetry (logs, metrics, traces) is handled.
@@ -1136,33 +1145,29 @@ export type ImportSourceUpdates = ClosedEnum<typeof ImportSourceUpdates>;
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type ImportSourceStackSettings = {
-  compute?: ImportSourceCompute | any | null | undefined;
+  compute?: ImportSourceCompute | string | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
   deploymentModel?: ImportSourceDeploymentModel | undefined;
-  domains?: ImportSourceDomains | any | null | undefined;
+  domains?: ImportSourceDomains | string | null | undefined;
   /**
-   * External bindings for pre-existing infrastructure.
-   *
-   * @remarks
-   * Allows using existing resources (MinIO, Redis, shared Container Apps
-   * Environment, etc.) instead of having Alien provision them.
-   * Required for Kubernetes platform, optional for cloud platforms.
+   * Reachability of the deployment's public endpoints, fixed at setup.
    */
-  externalBindings?: ImportSourceExternalBindings | null | undefined;
+  endpointAccess?: ImportSourceEndpointAccess | undefined;
+  externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
   /**
    * How heartbeat health checks are handled.
    */
   heartbeats?: ImportSourceHeartbeats | undefined;
-  kubernetes?: ImportSourceKubernetes | any | null | undefined;
+  kubernetes?: ImportSourceKubernetes | string | null | undefined;
   network?:
     | ImportSourceNetworkByoVpcAws
     | ImportSourceNetworkByoVpcGcp
     | ImportSourceNetworkByoVnetAzure
     | ImportSourceNetworkUseDefault
     | ImportSourceNetworkCreate
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -1271,7 +1276,7 @@ export type ImportSourceManagementConfigUnion =
   | ImportSourceManagementConfigAws
   | ImportSourceManagementConfigGcp
   | ImportSourceManagementConfigKubernetes
-  | any;
+  | string;
 
 /**
  * Resolved setup import payload
@@ -1336,7 +1341,7 @@ export type ImportSource = {
     | ImportSourceManagementConfigAws
     | ImportSourceManagementConfigGcp
     | ImportSourceManagementConfigKubernetes
-    | any
+    | string
     | null
     | undefined;
   resources: Array<ImportedResource>;
@@ -1375,7 +1380,7 @@ export function importSourceFailureDomains2ToJSON(
 /** @internal */
 export type ImportSourceFailureDomainsUnion2$Outbound =
   | ImportSourceFailureDomains2$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const ImportSourceFailureDomainsUnion2$outboundSchema: z.ZodType<
@@ -1383,7 +1388,7 @@ export const ImportSourceFailureDomainsUnion2$outboundSchema: z.ZodType<
   ImportSourceFailureDomainsUnion2
 > = z.union([
   z.lazy(() => ImportSourceFailureDomains2$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function importSourceFailureDomainsUnion2ToJSON(
@@ -1400,7 +1405,7 @@ export function importSourceFailureDomainsUnion2ToJSON(
 export type ImportSourcePoolsAutoscale$Outbound = {
   failure_domains?:
     | ImportSourceFailureDomains2$Outbound
-    | any
+    | string
     | null
     | undefined;
   machine?: string | null | undefined;
@@ -1417,7 +1422,7 @@ export const ImportSourcePoolsAutoscale$outboundSchema: z.ZodType<
   failureDomains: z.nullable(
     z.union([
       z.lazy(() => ImportSourceFailureDomains2$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -1466,7 +1471,7 @@ export function importSourceFailureDomains1ToJSON(
 /** @internal */
 export type ImportSourceFailureDomainsUnion1$Outbound =
   | ImportSourceFailureDomains1$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const ImportSourceFailureDomainsUnion1$outboundSchema: z.ZodType<
@@ -1474,7 +1479,7 @@ export const ImportSourceFailureDomainsUnion1$outboundSchema: z.ZodType<
   ImportSourceFailureDomainsUnion1
 > = z.union([
   z.lazy(() => ImportSourceFailureDomains1$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function importSourceFailureDomainsUnion1ToJSON(
@@ -1491,7 +1496,7 @@ export function importSourceFailureDomainsUnion1ToJSON(
 export type ImportSourcePoolsFixed$Outbound = {
   failure_domains?:
     | ImportSourceFailureDomains1$Outbound
-    | any
+    | string
     | null
     | undefined;
   machine?: string | null | undefined;
@@ -1507,7 +1512,7 @@ export const ImportSourcePoolsFixed$outboundSchema: z.ZodType<
   failureDomains: z.nullable(
     z.union([
       z.lazy(() => ImportSourceFailureDomains1$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -1583,13 +1588,13 @@ export function importSourceComputeToJSON(
 /** @internal */
 export type ImportSourceComputeUnion$Outbound =
   | ImportSourceCompute$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const ImportSourceComputeUnion$outboundSchema: z.ZodType<
   ImportSourceComputeUnion$Outbound,
   ImportSourceComputeUnion
-> = z.union([z.lazy(() => ImportSourceCompute$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => ImportSourceCompute$outboundSchema), z.string()]);
 
 export function importSourceComputeUnionToJSON(
   importSourceComputeUnion: ImportSourceComputeUnion,
@@ -1624,13 +1629,13 @@ export function importSourceAwsToJSON(
 }
 
 /** @internal */
-export type ImportSourceAwsUnion$Outbound = ImportSourceAws$Outbound | any;
+export type ImportSourceAwsUnion$Outbound = ImportSourceAws$Outbound | string;
 
 /** @internal */
 export const ImportSourceAwsUnion$outboundSchema: z.ZodType<
   ImportSourceAwsUnion$Outbound,
   ImportSourceAwsUnion
-> = z.union([z.lazy(() => ImportSourceAws$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => ImportSourceAws$outboundSchema), z.string()]);
 
 export function importSourceAwsUnionToJSON(
   importSourceAwsUnion: ImportSourceAwsUnion,
@@ -1664,13 +1669,15 @@ export function importSourceAzureToJSON(
 }
 
 /** @internal */
-export type ImportSourceAzureUnion$Outbound = ImportSourceAzure$Outbound | any;
+export type ImportSourceAzureUnion$Outbound =
+  | ImportSourceAzure$Outbound
+  | string;
 
 /** @internal */
 export const ImportSourceAzureUnion$outboundSchema: z.ZodType<
   ImportSourceAzureUnion$Outbound,
   ImportSourceAzureUnion
-> = z.union([z.lazy(() => ImportSourceAzure$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => ImportSourceAzure$outboundSchema), z.string()]);
 
 export function importSourceAzureUnionToJSON(
   importSourceAzureUnion: ImportSourceAzureUnion,
@@ -1700,13 +1707,13 @@ export function importSourceGcpToJSON(
 }
 
 /** @internal */
-export type ImportSourceGcpUnion$Outbound = ImportSourceGcp$Outbound | any;
+export type ImportSourceGcpUnion$Outbound = ImportSourceGcp$Outbound | string;
 
 /** @internal */
 export const ImportSourceGcpUnion$outboundSchema: z.ZodType<
   ImportSourceGcpUnion$Outbound,
   ImportSourceGcpUnion
-> = z.union([z.lazy(() => ImportSourceGcp$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => ImportSourceGcp$outboundSchema), z.string()]);
 
 export function importSourceGcpUnionToJSON(
   importSourceGcpUnion: ImportSourceGcpUnion,
@@ -1765,7 +1772,7 @@ export function importSourceDomainsKubernetesToJSON(
 /** @internal */
 export type ImportSourceDomainsKubernetesUnion$Outbound =
   | ImportSourceDomainsKubernetes$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const ImportSourceDomainsKubernetesUnion$outboundSchema: z.ZodType<
@@ -1773,7 +1780,7 @@ export const ImportSourceDomainsKubernetesUnion$outboundSchema: z.ZodType<
   ImportSourceDomainsKubernetesUnion
 > = z.union([
   z.lazy(() => ImportSourceDomainsKubernetes$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function importSourceDomainsKubernetesUnionToJSON(
@@ -1788,10 +1795,14 @@ export function importSourceDomainsKubernetesUnionToJSON(
 
 /** @internal */
 export type ImportSourceDomainsCertificate$Outbound = {
-  aws?: ImportSourceAws$Outbound | any | null | undefined;
-  azure?: ImportSourceAzure$Outbound | any | null | undefined;
-  gcp?: ImportSourceGcp$Outbound | any | null | undefined;
-  kubernetes?: ImportSourceDomainsKubernetes$Outbound | any | null | undefined;
+  aws?: ImportSourceAws$Outbound | string | null | undefined;
+  azure?: ImportSourceAzure$Outbound | string | null | undefined;
+  gcp?: ImportSourceGcp$Outbound | string | null | undefined;
+  kubernetes?:
+    | ImportSourceDomainsKubernetes$Outbound
+    | string
+    | null
+    | undefined;
 };
 
 /** @internal */
@@ -1800,18 +1811,18 @@ export const ImportSourceDomainsCertificate$outboundSchema: z.ZodType<
   ImportSourceDomainsCertificate
 > = z.object({
   aws: z.nullable(
-    z.union([z.lazy(() => ImportSourceAws$outboundSchema), z.any()]),
+    z.union([z.lazy(() => ImportSourceAws$outboundSchema), z.string()]),
   ).optional(),
   azure: z.nullable(
-    z.union([z.lazy(() => ImportSourceAzure$outboundSchema), z.any()]),
+    z.union([z.lazy(() => ImportSourceAzure$outboundSchema), z.string()]),
   ).optional(),
   gcp: z.nullable(
-    z.union([z.lazy(() => ImportSourceGcp$outboundSchema), z.any()]),
+    z.union([z.lazy(() => ImportSourceGcp$outboundSchema), z.string()]),
   ).optional(),
   kubernetes: z.nullable(
     z.union([
       z.lazy(() => ImportSourceDomainsKubernetes$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -1915,7 +1926,7 @@ export function importSourcePublicEndpointTargetMachineAddressesToJSON(
 export type ImportSourcePublicEndpointTargetUnion$Outbound =
   | ImportSourcePublicEndpointTargetLoadBalancer$Outbound
   | ImportSourcePublicEndpointTargetMachineAddresses$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const ImportSourcePublicEndpointTargetUnion$outboundSchema: z.ZodType<
@@ -1924,7 +1935,7 @@ export const ImportSourcePublicEndpointTargetUnion$outboundSchema: z.ZodType<
 > = z.union([
   z.lazy(() => ImportSourcePublicEndpointTargetLoadBalancer$outboundSchema),
   z.lazy(() => ImportSourcePublicEndpointTargetMachineAddresses$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function importSourcePublicEndpointTargetUnionToJSON(
@@ -1946,7 +1957,7 @@ export type ImportSourceDomains$Outbound = {
   publicEndpointTarget?:
     | ImportSourcePublicEndpointTargetLoadBalancer$Outbound
     | ImportSourcePublicEndpointTargetMachineAddresses$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -1968,7 +1979,7 @@ export const ImportSourceDomains$outboundSchema: z.ZodType<
       z.lazy(() =>
         ImportSourcePublicEndpointTargetMachineAddresses$outboundSchema
       ),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -1984,13 +1995,13 @@ export function importSourceDomainsToJSON(
 /** @internal */
 export type ImportSourceDomainsUnion$Outbound =
   | ImportSourceDomains$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const ImportSourceDomainsUnion$outboundSchema: z.ZodType<
   ImportSourceDomainsUnion$Outbound,
   ImportSourceDomainsUnion
-> = z.union([z.lazy(() => ImportSourceDomains$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => ImportSourceDomains$outboundSchema), z.string()]);
 
 export function importSourceDomainsUnionToJSON(
   importSourceDomainsUnion: ImportSourceDomainsUnion,
@@ -2001,23 +2012,9 @@ export function importSourceDomainsUnionToJSON(
 }
 
 /** @internal */
-export type ImportSourceExternalBindings$Outbound = {};
-
-/** @internal */
-export const ImportSourceExternalBindings$outboundSchema: z.ZodType<
-  ImportSourceExternalBindings$Outbound,
-  ImportSourceExternalBindings
-> = z.object({});
-
-export function importSourceExternalBindingsToJSON(
-  importSourceExternalBindings: ImportSourceExternalBindings,
-): string {
-  return JSON.stringify(
-    ImportSourceExternalBindings$outboundSchema.parse(
-      importSourceExternalBindings,
-    ),
-  );
-}
+export const ImportSourceEndpointAccess$outboundSchema: z.ZodEnum<
+  typeof ImportSourceEndpointAccess
+> = z.enum(ImportSourceEndpointAccess);
 
 /** @internal */
 export const ImportSourceHeartbeats$outboundSchema: z.ZodEnum<
@@ -2058,13 +2055,15 @@ export function importSourceCloudToJSON(
 }
 
 /** @internal */
-export type ImportSourceCloudUnion$Outbound = ImportSourceCloud$Outbound | any;
+export type ImportSourceCloudUnion$Outbound =
+  | ImportSourceCloud$Outbound
+  | string;
 
 /** @internal */
 export const ImportSourceCloudUnion$outboundSchema: z.ZodType<
   ImportSourceCloudUnion$Outbound,
   ImportSourceCloudUnion
-> = z.union([z.lazy(() => ImportSourceCloud$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => ImportSourceCloud$outboundSchema), z.string()]);
 
 export function importSourceCloudUnionToJSON(
   importSourceCloudUnion: ImportSourceCloudUnion,
@@ -2081,7 +2080,7 @@ export const ImportSourceOwnership$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type ImportSourceCluster$Outbound = {
-  cloud?: ImportSourceCloud$Outbound | any | null | undefined;
+  cloud?: ImportSourceCloud$Outbound | string | null | undefined;
   namespace?: string | null | undefined;
   ownership: string;
 };
@@ -2092,7 +2091,7 @@ export const ImportSourceCluster$outboundSchema: z.ZodType<
   ImportSourceCluster
 > = z.object({
   cloud: z.nullable(
-    z.union([z.lazy(() => ImportSourceCloud$outboundSchema), z.any()]),
+    z.union([z.lazy(() => ImportSourceCloud$outboundSchema), z.string()]),
   ).optional(),
   namespace: z.nullable(z.string()).optional(),
   ownership: ImportSourceOwnership$outboundSchema,
@@ -2109,13 +2108,13 @@ export function importSourceClusterToJSON(
 /** @internal */
 export type ImportSourceClusterUnion$Outbound =
   | ImportSourceCluster$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const ImportSourceClusterUnion$outboundSchema: z.ZodType<
   ImportSourceClusterUnion$Outbound,
   ImportSourceClusterUnion
-> = z.union([z.lazy(() => ImportSourceCluster$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => ImportSourceCluster$outboundSchema), z.string()]);
 
 export function importSourceClusterUnionToJSON(
   importSourceClusterUnion: ImportSourceClusterUnion,
@@ -2398,7 +2397,7 @@ export type ImportSourceProviderUnion4$Outbound =
   | ImportSourceProviderAwsAlb4$Outbound
   | ImportSourceProviderAzureApplicationGatewayForContainers4$Outbound
   | ImportSourceProviderGkeGateway4$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const ImportSourceProviderUnion4$outboundSchema: z.ZodType<
@@ -2410,7 +2409,7 @@ export const ImportSourceProviderUnion4$outboundSchema: z.ZodType<
     ImportSourceProviderAzureApplicationGatewayForContainers4$outboundSchema
   ),
   z.lazy(() => ImportSourceProviderGkeGateway4$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function importSourceProviderUnion4ToJSON(
@@ -2432,7 +2431,7 @@ export type ImportSourceRouteGateway2$Outbound = {
     | ImportSourceProviderAwsAlb4$Outbound
     | ImportSourceProviderAzureApplicationGatewayForContainers4$Outbound
     | ImportSourceProviderGkeGateway4$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -2455,7 +2454,7 @@ export const ImportSourceRouteGateway2$outboundSchema: z.ZodType<
         ImportSourceProviderAzureApplicationGatewayForContainers4$outboundSchema
       ),
       z.lazy(() => ImportSourceProviderGkeGateway4$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("gateway"),
@@ -2578,7 +2577,7 @@ export type ImportSourceProviderUnion3$Outbound =
   | ImportSourceProviderAwsAlb3$Outbound
   | ImportSourceProviderAzureApplicationGatewayForContainers3$Outbound
   | ImportSourceProviderGkeGateway3$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const ImportSourceProviderUnion3$outboundSchema: z.ZodType<
@@ -2590,7 +2589,7 @@ export const ImportSourceProviderUnion3$outboundSchema: z.ZodType<
     ImportSourceProviderAzureApplicationGatewayForContainers3$outboundSchema
   ),
   z.lazy(() => ImportSourceProviderGkeGateway3$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function importSourceProviderUnion3ToJSON(
@@ -2611,7 +2610,7 @@ export type ImportSourceRouteIngress2$Outbound = {
     | ImportSourceProviderAwsAlb3$Outbound
     | ImportSourceProviderAzureApplicationGatewayForContainers3$Outbound
     | ImportSourceProviderGkeGateway3$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -2633,7 +2632,7 @@ export const ImportSourceRouteIngress2$outboundSchema: z.ZodType<
         ImportSourceProviderAzureApplicationGatewayForContainers3$outboundSchema
       ),
       z.lazy(() => ImportSourceProviderGkeGateway3$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
@@ -2985,7 +2984,7 @@ export type ImportSourceProviderUnion2$Outbound =
   | ImportSourceProviderAwsAlb2$Outbound
   | ImportSourceProviderAzureApplicationGatewayForContainers2$Outbound
   | ImportSourceProviderGkeGateway2$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const ImportSourceProviderUnion2$outboundSchema: z.ZodType<
@@ -2997,7 +2996,7 @@ export const ImportSourceProviderUnion2$outboundSchema: z.ZodType<
     ImportSourceProviderAzureApplicationGatewayForContainers2$outboundSchema
   ),
   z.lazy(() => ImportSourceProviderGkeGateway2$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function importSourceProviderUnion2ToJSON(
@@ -3019,7 +3018,7 @@ export type ImportSourceRouteGateway1$Outbound = {
     | ImportSourceProviderAwsAlb2$Outbound
     | ImportSourceProviderAzureApplicationGatewayForContainers2$Outbound
     | ImportSourceProviderGkeGateway2$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -3042,7 +3041,7 @@ export const ImportSourceRouteGateway1$outboundSchema: z.ZodType<
         ImportSourceProviderAzureApplicationGatewayForContainers2$outboundSchema
       ),
       z.lazy(() => ImportSourceProviderGkeGateway2$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("gateway"),
@@ -3165,7 +3164,7 @@ export type ImportSourceProviderUnion1$Outbound =
   | ImportSourceProviderAwsAlb1$Outbound
   | ImportSourceProviderAzureApplicationGatewayForContainers1$Outbound
   | ImportSourceProviderGkeGateway1$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const ImportSourceProviderUnion1$outboundSchema: z.ZodType<
@@ -3177,7 +3176,7 @@ export const ImportSourceProviderUnion1$outboundSchema: z.ZodType<
     ImportSourceProviderAzureApplicationGatewayForContainers1$outboundSchema
   ),
   z.lazy(() => ImportSourceProviderGkeGateway1$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function importSourceProviderUnion1ToJSON(
@@ -3198,7 +3197,7 @@ export type ImportSourceRouteIngress1$Outbound = {
     | ImportSourceProviderAwsAlb1$Outbound
     | ImportSourceProviderAzureApplicationGatewayForContainers1$Outbound
     | ImportSourceProviderGkeGateway1$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -3220,7 +3219,7 @@ export const ImportSourceRouteIngress1$outboundSchema: z.ZodType<
         ImportSourceProviderAzureApplicationGatewayForContainers1$outboundSchema
       ),
       z.lazy(() => ImportSourceProviderGkeGateway1$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
@@ -3332,7 +3331,7 @@ export type ImportSourceExposureUnion$Outbound =
   | ImportSourceExposureCustom$Outbound
   | ImportSourceExposureGenerated$Outbound
   | ImportSourceExposureDisabled$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const ImportSourceExposureUnion$outboundSchema: z.ZodType<
@@ -3342,7 +3341,7 @@ export const ImportSourceExposureUnion$outboundSchema: z.ZodType<
   z.lazy(() => ImportSourceExposureCustom$outboundSchema),
   z.lazy(() => ImportSourceExposureGenerated$outboundSchema),
   z.lazy(() => ImportSourceExposureDisabled$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function importSourceExposureUnionToJSON(
@@ -3355,12 +3354,12 @@ export function importSourceExposureUnionToJSON(
 
 /** @internal */
 export type ImportSourceKubernetes$Outbound = {
-  cluster?: ImportSourceCluster$Outbound | any | null | undefined;
+  cluster?: ImportSourceCluster$Outbound | string | null | undefined;
   exposure?:
     | ImportSourceExposureCustom$Outbound
     | ImportSourceExposureGenerated$Outbound
     | ImportSourceExposureDisabled$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -3371,14 +3370,14 @@ export const ImportSourceKubernetes$outboundSchema: z.ZodType<
   ImportSourceKubernetes
 > = z.object({
   cluster: z.nullable(
-    z.union([z.lazy(() => ImportSourceCluster$outboundSchema), z.any()]),
+    z.union([z.lazy(() => ImportSourceCluster$outboundSchema), z.string()]),
   ).optional(),
   exposure: z.nullable(
     z.union([
       z.lazy(() => ImportSourceExposureCustom$outboundSchema),
       z.lazy(() => ImportSourceExposureGenerated$outboundSchema),
       z.lazy(() => ImportSourceExposureDisabled$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -3394,13 +3393,13 @@ export function importSourceKubernetesToJSON(
 /** @internal */
 export type ImportSourceKubernetesUnion$Outbound =
   | ImportSourceKubernetes$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const ImportSourceKubernetesUnion$outboundSchema: z.ZodType<
   ImportSourceKubernetesUnion$Outbound,
   ImportSourceKubernetesUnion
-> = z.union([z.lazy(() => ImportSourceKubernetes$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => ImportSourceKubernetes$outboundSchema), z.string()]);
 
 export function importSourceKubernetesUnionToJSON(
   importSourceKubernetesUnion: ImportSourceKubernetesUnion,
@@ -3609,7 +3608,7 @@ export type ImportSourceNetworkUnion$Outbound =
   | ImportSourceNetworkByoVnetAzure$Outbound
   | ImportSourceNetworkUseDefault$Outbound
   | ImportSourceNetworkCreate$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const ImportSourceNetworkUnion$outboundSchema: z.ZodType<
@@ -3621,7 +3620,7 @@ export const ImportSourceNetworkUnion$outboundSchema: z.ZodType<
   z.lazy(() => ImportSourceNetworkByoVnetAzure$outboundSchema),
   z.lazy(() => ImportSourceNetworkUseDefault$outboundSchema),
   z.lazy(() => ImportSourceNetworkCreate$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function importSourceNetworkUnionToJSON(
@@ -3644,19 +3643,23 @@ export const ImportSourceUpdates$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type ImportSourceStackSettings$Outbound = {
-  compute?: ImportSourceCompute$Outbound | any | null | undefined;
+  compute?: ImportSourceCompute$Outbound | string | null | undefined;
   deploymentModel?: string | undefined;
-  domains?: ImportSourceDomains$Outbound | any | null | undefined;
-  externalBindings?: ImportSourceExternalBindings$Outbound | null | undefined;
+  domains?: ImportSourceDomains$Outbound | string | null | undefined;
+  endpointAccess?: string | undefined;
+  externalBindings?:
+    | { [k: string]: ExternalBindingUnion$Outbound }
+    | null
+    | undefined;
   heartbeats?: string | undefined;
-  kubernetes?: ImportSourceKubernetes$Outbound | any | null | undefined;
+  kubernetes?: ImportSourceKubernetes$Outbound | string | null | undefined;
   network?:
     | ImportSourceNetworkByoVpcAws$Outbound
     | ImportSourceNetworkByoVpcGcp$Outbound
     | ImportSourceNetworkByoVnetAzure$Outbound
     | ImportSourceNetworkUseDefault$Outbound
     | ImportSourceNetworkCreate$Outbound
-    | any
+    | string
     | null
     | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
@@ -3670,18 +3673,19 @@ export const ImportSourceStackSettings$outboundSchema: z.ZodType<
   ImportSourceStackSettings
 > = z.object({
   compute: z.nullable(
-    z.union([z.lazy(() => ImportSourceCompute$outboundSchema), z.any()]),
+    z.union([z.lazy(() => ImportSourceCompute$outboundSchema), z.string()]),
   ).optional(),
   deploymentModel: ImportSourceDeploymentModel$outboundSchema.optional(),
   domains: z.nullable(
-    z.union([z.lazy(() => ImportSourceDomains$outboundSchema), z.any()]),
+    z.union([z.lazy(() => ImportSourceDomains$outboundSchema), z.string()]),
   ).optional(),
+  endpointAccess: ImportSourceEndpointAccess$outboundSchema.optional(),
   externalBindings: z.nullable(
-    z.lazy(() => ImportSourceExternalBindings$outboundSchema),
+    z.record(z.string(), ExternalBindingUnion$outboundSchema),
   ).optional(),
   heartbeats: ImportSourceHeartbeats$outboundSchema.optional(),
   kubernetes: z.nullable(
-    z.union([z.lazy(() => ImportSourceKubernetes$outboundSchema), z.any()]),
+    z.union([z.lazy(() => ImportSourceKubernetes$outboundSchema), z.string()]),
   ).optional(),
   network: z.nullable(
     z.union([
@@ -3690,7 +3694,7 @@ export const ImportSourceStackSettings$outboundSchema: z.ZodType<
       z.lazy(() => ImportSourceNetworkByoVnetAzure$outboundSchema),
       z.lazy(() => ImportSourceNetworkUseDefault$outboundSchema),
       z.lazy(() => ImportSourceNetworkCreate$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   publicEndpoints: z.nullable(
@@ -3837,7 +3841,7 @@ export type ImportSourceManagementConfigUnion$Outbound =
   | ImportSourceManagementConfigAws$Outbound
   | ImportSourceManagementConfigGcp$Outbound
   | ImportSourceManagementConfigKubernetes$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const ImportSourceManagementConfigUnion$outboundSchema: z.ZodType<
@@ -3848,7 +3852,7 @@ export const ImportSourceManagementConfigUnion$outboundSchema: z.ZodType<
   z.lazy(() => ImportSourceManagementConfigAws$outboundSchema),
   z.lazy(() => ImportSourceManagementConfigGcp$outboundSchema),
   z.lazy(() => ImportSourceManagementConfigKubernetes$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function importSourceManagementConfigUnionToJSON(
@@ -3881,7 +3885,7 @@ export type ImportSource$Outbound = {
     | ImportSourceManagementConfigAws$Outbound
     | ImportSourceManagementConfigGcp$Outbound
     | ImportSourceManagementConfigKubernetes$Outbound
-    | any
+    | string
     | null
     | undefined;
   resources: Array<ImportedResource$Outbound>;
@@ -3911,7 +3915,7 @@ export const ImportSource$outboundSchema: z.ZodType<
       z.lazy(() => ImportSourceManagementConfigAws$outboundSchema),
       z.lazy(() => ImportSourceManagementConfigGcp$outboundSchema),
       z.lazy(() => ImportSourceManagementConfigKubernetes$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   resources: z.array(ImportedResource$outboundSchema),

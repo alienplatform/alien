@@ -9,9 +9,9 @@
 const value: models.CreateManagerResponseKubernetes2 = {};
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

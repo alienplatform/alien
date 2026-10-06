@@ -134,6 +134,19 @@ pub enum ErrorData {
         operation: String,
     },
 
+    /// Required deployer secrets are not in the customer's secret store yet;
+    /// workloads wait for them.
+    #[error(
+        code = "DEPLOYER_SECRETS_MISSING",
+        message = "Waiting for deployer secrets: {summary}",
+        retryable = "true",
+        internal = "false"
+    )]
+    DeployerSecretsMissing {
+        /// One `missing: <label>` / `invalid: <label> (...)` entry per slot
+        summary: String,
+    },
+
     /// Required configuration is missing.
     #[error(
         code = "MISSING_CONFIGURATION",

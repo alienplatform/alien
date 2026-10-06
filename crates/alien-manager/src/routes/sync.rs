@@ -689,6 +689,78 @@ mod tests {
         ReconcileRequest,
     };
 
+    #[tokio::test]
+    async fn completed_receipt_recovery_returns_only_an_acknowledgment() {
+        let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+        store
+            .expect_acknowledge_completed_execution()
+            .times(2)
+            .withf(|_, deployment, session, claim| {
+                deployment == "dep_test"
+                    && session == "session_test"
+                    && claim.operation_id == "operation_test"
+                    && claim.attempt_id == "attempt_test"
+            })
+            .returning(|_, _, _, _| Ok(true));
+        let request: AgentSyncRequest = serde_json::from_value(json!({
+            "deploymentId": "dep_test", "session": "session_test",
+            "supportsExecutionClaims": true,
+            "executionClaim": { "operationId": "operation_test", "attemptId": "attempt_test" },
+            "currentState": { "status": "running" },
+        }))
+        .expect("valid replay request");
+        for error in ["DEPLOYMENT_UPDATE_CLAIM_LOST", "DEPLOYMENT_LEASE_LOST"] {
+            let response = super::acknowledge_completed_claim(
+                &store,
+                &crate::auth::Subject::system(),
+                &request,
+                error,
+                Some("https://manager.example.test".into()),
+            )
+            .await
+            .expect("acknowledge completed receipt")
+            .expect("successful recovery");
+            assert_eq!(
+                serde_json::to_value(response).expect("serialize acknowledgment"),
+                json!({"tunnelUrl": "https://manager.example.test"})
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unrelated_errors_and_uncompleted_claims_are_not_acknowledged() {
+        let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+        store
+            .expect_acknowledge_completed_execution()
+            .times(1)
+            .returning(|_, _, _, _| Ok(false));
+        let request: AgentSyncRequest = serde_json::from_value(json!({
+            "deploymentId": "dep_test", "session": "session_test",
+            "executionClaim": { "operationId": "operation_test", "attemptId": "attempt_test" },
+        }))
+        .expect("valid request");
+        assert!(super::acknowledge_completed_claim(
+            &store,
+            &crate::auth::Subject::system(),
+            &request,
+            "SYNC_FAILED",
+            None,
+        )
+        .await
+        .expect("unrelated error")
+        .is_none());
+        assert!(super::acknowledge_completed_claim(
+            &store,
+            &crate::auth::Subject::system(),
+            &request,
+            "DEPLOYMENT_UPDATE_CLAIM_LOST",
+            None,
+        )
+        .await
+        .expect("live claim is not recovered")
+        .is_none());
+    }
+
     #[test]
     fn release_stack_platform_keeps_imported_kubernetes_deployment_platform() {
         assert_eq!(
@@ -1312,11 +1384,14 @@ mod tests {
             None,
         );
         assert_eq!(config.input_values, stored_values);
+        assert!(config.stored_secret_input_ids.is_none());
 
         // A control-plane-supplied config owns the values when present.
         let control_plane_values =
             HashMap::from([("enableAnalytics".to_string(), serde_json::json!(false))]);
         deployment.deployment_config = Some(DeploymentConfig {
+            stored_secret_input_ids: Some(vec!["apiKey".to_string()]),
+
             input_values: control_plane_values.clone(),
             ..test_deployment_config()
         });
@@ -1331,6 +1406,26 @@ mod tests {
             None,
         );
         assert_eq!(config.input_values, control_plane_values);
+        assert_eq!(
+            config.stored_secret_input_ids,
+            Some(vec!["apiKey".to_string()])
+        );
+
+        deployment
+            .deployment_config
+            .as_mut()
+            .unwrap()
+            .stored_secret_input_ids = Some(Vec::new());
+        let empty = build_target_deployment_config(
+            &deployment,
+            StackSettings::default(),
+            None,
+            vec![],
+            "https://manager.example.test".to_string(),
+            None,
+            None,
+        );
+        assert_eq!(empty.stored_secret_input_ids, Some(Vec::new()));
 
         // A config from a control plane that predates gate answers has an
         // empty map; the stored answers must stand in, not the defaults.
@@ -1346,6 +1441,7 @@ mod tests {
             None,
         );
         assert_eq!(config.input_values, stored_values);
+        assert!(config.stored_secret_input_ids.is_none());
     }
 
     fn uninitialized_state() -> DeploymentState {
@@ -1365,6 +1461,7 @@ mod tests {
 
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            stored_secret_input_ids: None,
             input_values: Default::default(),
             deployment_name: None,
             stack_settings: StackSettings::default(),
@@ -1387,6 +1484,7 @@ mod tests {
             manager_url: None,
             deployment_token: None,
             native_image_host: None,
+            volume_restores: Vec::new(),
         }
     }
 
@@ -1503,6 +1601,41 @@ async fn reconcile_agent_report(
     store.reconcile_request(subject, request.build()).await
 }
 
+/// A completed receipt grants no authority to replay a report or take new work.
+async fn acknowledge_completed_claim(
+    store: &dyn crate::traits::DeploymentStore,
+    subject: &crate::auth::Subject,
+    request: &AgentSyncRequest,
+    error_code: &str,
+    tunnel_url: Option<String>,
+) -> Result<Option<AgentSyncResponse>, alien_error::AlienError> {
+    if !matches!(
+        error_code,
+        "DEPLOYMENT_LEASE_LOST" | "DEPLOYMENT_UPDATE_CLAIM_LOST"
+    ) {
+        return Ok(None);
+    }
+    let Some(claim) = request.execution_claim.as_ref() else {
+        return Ok(None);
+    };
+    if !store
+        .acknowledge_completed_execution(subject, &request.deployment_id, &request.session, claim)
+        .await?
+    {
+        return Ok(None);
+    }
+    Ok(Some(AgentSyncResponse {
+        execution_claim: None,
+        current_state: None,
+        target: None,
+        commands_url: None,
+        target_operations_bundle_set: None,
+        target_dynamic_containers: None,
+        tunnel_url,
+        target_operator_image: None,
+    }))
+}
+
 /// `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
 /// path; `caller: &Subject` is threaded into the store so embedders see
 /// the agent's own scope.
@@ -1518,6 +1651,7 @@ async fn reconcile_agent_report(
         ("bearer" = [])
     )
 ))]
+
 async fn agent_sync(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1572,6 +1706,19 @@ async fn agent_sync(
             )
             .await
         {
+            match acknowledge_completed_claim(
+                state.deployment_store.as_ref(),
+                &subject,
+                &req,
+                &error.code,
+                state.tunnels.as_ref().map(|_| state.config.base_url()),
+            )
+            .await
+            {
+                Ok(Some(response)) => return Json(response).into_response(),
+                Ok(None) => {}
+                Err(ack_error) => return ack_error.into_response(),
+            }
             return error.into_response();
         }
     }
@@ -1640,6 +1787,19 @@ async fn agent_sync(
                     match reconcile_result {
                         Err(e) => {
                             if report_has_claim {
+                                match acknowledge_completed_claim(
+                                    state.deployment_store.as_ref(),
+                                    &subject,
+                                    &req,
+                                    &e.code,
+                                    state.tunnels.as_ref().map(|_| state.config.base_url()),
+                                )
+                                .await
+                                {
+                                    Ok(Some(response)) => return Json(response).into_response(),
+                                    Ok(None) => {}
+                                    Err(ack_error) => return ack_error.into_response(),
+                                }
                                 return e.into_response();
                             }
                             tracing::warn!(deployment_id = %req.deployment_id, error = %e, "Failed to reconcile agent-reported state");
@@ -2135,6 +2295,9 @@ fn build_target_deployment_config(
                 .filter(|values| !values.is_empty())
                 .unwrap_or_else(|| deployment.input_values.clone()),
         )
+        .maybe_stored_secret_input_ids(
+            deployment_config.and_then(|config| config.stored_secret_input_ids.clone()),
+        )
         .maybe_management_config(management_config)
         .environment_variables(EnvironmentVariablesSnapshot {
             variables: env_vars,
@@ -2153,6 +2316,11 @@ fn build_target_deployment_config(
         .maybe_manager_url(Some(manager_url))
         .maybe_deployment_token(agent_token)
         .maybe_native_image_host(native_image_host)
+        .volume_restores(
+            deployment_config
+                .map(|config| config.volume_restores.clone())
+                .unwrap_or_default(),
+        )
         .build()
 }
 
@@ -2553,6 +2721,26 @@ async fn initialize(
                 ids::generate_token(TokenType::Deployment.prefix());
             let dep_token = Some(raw_token.clone());
 
+            // The release a deployment created here starts on. Install values
+            // come from the deployer, who may not choose a generated secret:
+            // refuse them before anything is created.
+            let starting_release =
+                match super::channels::release_for_deployment(&state, &subject, None).await {
+                    Ok(release) => release,
+                    Err(e) => return e.into_response(),
+                };
+            if let Some(stack) = starting_release
+                .as_ref()
+                .and_then(|release| release.stacks.get(&platform))
+            {
+                if let Err(e) = crate::generated_inputs::reject_generated_input_values(
+                    &stack.inputs,
+                    &req.input_values,
+                ) {
+                    return e.into_response();
+                }
+            }
+
             // Developer-provided setup on the group applies to every deployment
             // it creates; values supplied by the deployer at install win.
             let group_setup = match state
@@ -2565,7 +2753,7 @@ async fn initialize(
                     return AlienError::new(ErrorData::DeploymentGroupNotFound {
                         deployment_group_id: dg_id.clone(),
                     })
-                    .into_response()
+                    .into_response();
                 }
                 Err(e) => return e.into_response(),
             };
@@ -2573,6 +2761,23 @@ async fn initialize(
             input_values.extend(req.input_values);
             let environment_variables = (!group_setup.environment_variables.is_empty())
                 .then_some(group_setup.environment_variables);
+
+            // Generated secret inputs get their value from the starting
+            // release's stack now, once, and keep it in the stored input
+            // values for every later update.
+            let initial_release = (req.initial_desired_release == InitialDesiredRelease::Active)
+                .then_some(starting_release)
+                .flatten();
+            if let Some(stack) = initial_release
+                .as_ref()
+                .and_then(|release| release.stacks.get(&platform))
+            {
+                crate::generated_inputs::generate_missing_input_values(
+                    &stack.inputs,
+                    platform,
+                    &mut input_values,
+                );
+            }
 
             let deployment = match state
                 .deployment_store
@@ -2600,17 +2805,16 @@ async fn initialize(
                 Err(e) => return e.into_response(),
             };
 
-            if req.initial_desired_release == InitialDesiredRelease::Active {
-                // Initialize is the agent's own bootstrap: keep the caller's
-                // subject for reads and writes so embedders can authorize
-                // against the agent's scope rather than a service credential.
-                if let Ok(Some(release)) =
-                    super::channels::release_for_deployment(&state, &subject, None).await
+            // Initialize is the agent's own bootstrap: keep the caller's
+            // subject for reads and writes so embedders can authorize
+            // against the agent's scope rather than a service credential.
+            if let Some(release) = &initial_release {
+                if let Err(e) = state
+                    .deployment_store
+                    .set_deployment_desired_release(&subject, &deployment.id, &release.id)
+                    .await
                 {
-                    let _ = state
-                        .deployment_store
-                        .set_deployment_desired_release(&subject, &deployment.id, &release.id)
-                        .await;
+                    return e.into_response();
                 }
             }
 

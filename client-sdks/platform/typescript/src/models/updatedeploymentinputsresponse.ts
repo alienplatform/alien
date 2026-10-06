@@ -81,7 +81,7 @@ export type UpdateDeploymentInputsResponseDefaultUnion =
   | UpdateDeploymentInputsResponseDefaultNumber
   | UpdateDeploymentInputsResponseDefaultBoolean
   | UpdateDeploymentInputsResponseDefaultStringList
-  | any;
+  | string;
 
 /**
  * Environment variable handling for a stack input mapping.
@@ -99,7 +99,7 @@ export type UpdateDeploymentInputsResponseTypeEnvEnum = ClosedEnum<
 
 export type UpdateDeploymentInputsResponseTypeUnion =
   | UpdateDeploymentInputsResponseTypeEnvEnum
-  | any;
+  | string;
 
 /**
  * How a resolved stack input is injected into runtime environment variables.
@@ -113,8 +113,29 @@ export type UpdateDeploymentInputsResponseEnv = {
    * Target resource IDs or patterns. None means every env-capable resource.
    */
   targetResources?: Array<string> | null | undefined;
-  type?: UpdateDeploymentInputsResponseTypeEnvEnum | any | null | undefined;
+  type?: UpdateDeploymentInputsResponseTypeEnvEnum | string | null | undefined;
 };
+
+/**
+ * Asks Alien to generate a secret input's value.
+ *
+ * @remarks
+ *
+ * The value is an alphanumeric string (`A-Z`, `a-z`, `0-9`), so it is safe in
+ * connection strings, command lines and environment variables. It is generated
+ * once, when the deployment's input values are first resolved, and then kept
+ * with the deployment's other input values.
+ */
+export type UpdateDeploymentInputsResponseGenerate = {
+  /**
+   * Number of characters to generate.
+   */
+  length: number;
+};
+
+export type UpdateDeploymentInputsResponseGenerateUnion =
+  | UpdateDeploymentInputsResponseGenerate
+  | string;
 
 /**
  * Primitive stack input kind.
@@ -212,7 +233,7 @@ export type UpdateDeploymentInputsResponseValidation = {
 
 export type UpdateDeploymentInputsResponseValidationUnion =
   | UpdateDeploymentInputsResponseValidation
-  | any;
+  | string;
 
 /**
  * Stack input definition serialized into a release stack.
@@ -223,7 +244,7 @@ export type UpdateDeploymentInputsResponseInput = {
     | UpdateDeploymentInputsResponseDefaultNumber
     | UpdateDeploymentInputsResponseDefaultBoolean
     | UpdateDeploymentInputsResponseDefaultStringList
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -234,6 +255,7 @@ export type UpdateDeploymentInputsResponseInput = {
    * Runtime env-var mappings for v1 input resolution.
    */
   env?: Array<UpdateDeploymentInputsResponseEnv> | undefined;
+  generate?: UpdateDeploymentInputsResponseGenerate | string | null | undefined;
   /**
    * Stable input ID used by CLI/API calls.
    */
@@ -264,7 +286,7 @@ export type UpdateDeploymentInputsResponseInput = {
   required: boolean;
   validation?:
     | UpdateDeploymentInputsResponseValidation
-    | any
+    | string
     | null
     | undefined;
 };
@@ -413,7 +435,7 @@ export const UpdateDeploymentInputsResponseDefaultUnion$inboundSchema:
     z.lazy(() => UpdateDeploymentInputsResponseDefaultNumber$inboundSchema),
     z.lazy(() => UpdateDeploymentInputsResponseDefaultBoolean$inboundSchema),
     z.lazy(() => UpdateDeploymentInputsResponseDefaultStringList$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function updateDeploymentInputsResponseDefaultUnionFromJSON(
@@ -441,7 +463,10 @@ export const UpdateDeploymentInputsResponseTypeEnvEnum$inboundSchema: z.ZodEnum<
 export const UpdateDeploymentInputsResponseTypeUnion$inboundSchema: z.ZodType<
   UpdateDeploymentInputsResponseTypeUnion,
   unknown
-> = z.union([UpdateDeploymentInputsResponseTypeEnvEnum$inboundSchema, z.any()]);
+> = z.union([
+  UpdateDeploymentInputsResponseTypeEnvEnum$inboundSchema,
+  z.string(),
+]);
 
 export function updateDeploymentInputsResponseTypeUnionFromJSON(
   jsonString: string,
@@ -467,7 +492,10 @@ export const UpdateDeploymentInputsResponseEnv$inboundSchema: z.ZodType<
   name: z.string(),
   targetResources: z.nullable(z.array(z.string())).optional(),
   type: z.nullable(
-    z.union([UpdateDeploymentInputsResponseTypeEnvEnum$inboundSchema, z.any()]),
+    z.union([
+      UpdateDeploymentInputsResponseTypeEnvEnum$inboundSchema,
+      z.string(),
+    ]),
   ).optional(),
 });
 
@@ -478,6 +506,48 @@ export function updateDeploymentInputsResponseEnvFromJSON(
     jsonString,
     (x) => UpdateDeploymentInputsResponseEnv$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'UpdateDeploymentInputsResponseEnv' from JSON`,
+  );
+}
+
+/** @internal */
+export const UpdateDeploymentInputsResponseGenerate$inboundSchema: z.ZodType<
+  UpdateDeploymentInputsResponseGenerate,
+  unknown
+> = z.object({
+  length: z.int(),
+});
+
+export function updateDeploymentInputsResponseGenerateFromJSON(
+  jsonString: string,
+): SafeParseResult<UpdateDeploymentInputsResponseGenerate, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      UpdateDeploymentInputsResponseGenerate$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'UpdateDeploymentInputsResponseGenerate' from JSON`,
+  );
+}
+
+/** @internal */
+export const UpdateDeploymentInputsResponseGenerateUnion$inboundSchema:
+  z.ZodType<UpdateDeploymentInputsResponseGenerateUnion, unknown> = z.union([
+    z.lazy(() => UpdateDeploymentInputsResponseGenerate$inboundSchema),
+    z.string(),
+  ]);
+
+export function updateDeploymentInputsResponseGenerateUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  UpdateDeploymentInputsResponseGenerateUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      UpdateDeploymentInputsResponseGenerateUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'UpdateDeploymentInputsResponseGenerateUnion' from JSON`,
   );
 }
 
@@ -532,7 +602,7 @@ export function updateDeploymentInputsResponseValidationFromJSON(
 export const UpdateDeploymentInputsResponseValidationUnion$inboundSchema:
   z.ZodType<UpdateDeploymentInputsResponseValidationUnion, unknown> = z.union([
     z.lazy(() => UpdateDeploymentInputsResponseValidation$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function updateDeploymentInputsResponseValidationUnionFromJSON(
@@ -564,12 +634,18 @@ export const UpdateDeploymentInputsResponseInput$inboundSchema: z.ZodType<
       z.lazy(() =>
         UpdateDeploymentInputsResponseDefaultStringList$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   description: z.string(),
   env: z.array(z.lazy(() => UpdateDeploymentInputsResponseEnv$inboundSchema))
     .optional(),
+  generate: z.nullable(
+    z.union([
+      z.lazy(() => UpdateDeploymentInputsResponseGenerate$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   id: z.string(),
   kind: UpdateDeploymentInputsResponseKind$inboundSchema,
   label: z.string(),
@@ -582,7 +658,7 @@ export const UpdateDeploymentInputsResponseInput$inboundSchema: z.ZodType<
   validation: z.nullable(
     z.union([
       z.lazy(() => UpdateDeploymentInputsResponseValidation$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });

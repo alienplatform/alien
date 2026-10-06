@@ -49,6 +49,8 @@ impl ResourceImporter for AzureRemoteStackManagementImporter {
             role_definition_id: None,
             role_assignment_ids: Vec::new(),
             role_assignment_wait_until_epoch_secs: None,
+            // Setup was applied by an external engine, which refreshes it itself.
+            management_permissions_revision: None,
             _internal_stay_count: None,
         };
         make_imported_state_with_status(controller, ctx, status)

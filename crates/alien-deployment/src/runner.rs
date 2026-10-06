@@ -590,9 +590,9 @@ pub fn failed_status_for_deployment_error(status: DeploymentStatus) -> Deploymen
     match status {
         DeploymentStatus::Pending => DeploymentStatus::PreflightsFailed,
         DeploymentStatus::InitialSetup => DeploymentStatus::InitialSetupFailed,
-        DeploymentStatus::Provisioning | DeploymentStatus::WaitingForMachines => {
-            DeploymentStatus::ProvisioningFailed
-        }
+        DeploymentStatus::Provisioning
+        | DeploymentStatus::WaitingForMachines
+        | DeploymentStatus::WaitingForSecrets => DeploymentStatus::ProvisioningFailed,
         DeploymentStatus::Running => DeploymentStatus::RefreshFailed,
         DeploymentStatus::UpdatePending | DeploymentStatus::Updating => {
             DeploymentStatus::UpdateFailed
@@ -898,6 +898,7 @@ mod tests {
 
     fn test_config() -> DeploymentConfig {
         DeploymentConfig {
+            stored_secret_input_ids: None,
             input_values: Default::default(),
             deployment_name: Some("test deployment".to_string()),
             stack_settings: StackSettings::default(),
@@ -920,6 +921,7 @@ mod tests {
             manager_url: None,
             deployment_token: None,
             native_image_host: None,
+            volume_restores: Vec::new(),
         }
     }
 

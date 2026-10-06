@@ -1,10 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{
     Container, Daemon, Platform, Stack, StackInputDefaultValue, StackInputDefinition,
-    StackInputKind, StackInputValidation, Worker,
+    StackInputGenerate, StackInputKind, StackInputProvider, StackInputValidation, Worker,
+    STACK_INPUT_GENERATE_MAX_LENGTH, STACK_INPUT_GENERATE_MIN_LENGTH,
 };
 
 /// Validates stack input definitions before release/package generation.
@@ -23,9 +24,22 @@ impl CompileTimeCheck for StackInputsDefinitionCheck {
     async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
         let mut errors = Vec::new();
         let mut ids = HashSet::new();
+        let mut deployer_secret_keys = HashMap::new();
 
         for input in stack.inputs() {
             validate_input(input, stack, &mut ids, &mut errors);
+            // Each deployer secret owns one slot in the secrets vault; two
+            // inputs sharing a slot would read each other's value.
+            if alien_core::is_deployer_secret_input(input) {
+                let key = alien_core::deployer_secret_vault_key(&input.id);
+                if let Some(other) = deployer_secret_keys.insert(key.clone(), input.id.as_str()) {
+                    errors.push(format!(
+                        "Stack input '{}': deployer secrets '{other}' and '{}' both use the \
+                         secrets vault key '{key}'; rename one so each has its own slot",
+                        input.id, input.id
+                    ));
+                }
+            }
         }
 
         if errors.is_empty() {
@@ -85,6 +99,10 @@ fn validate_input(
 
     if let Some(validation) = &input.validation {
         validate_constraints(input, validation, errors);
+    }
+
+    if let Some(generate) = &input.generate {
+        validate_generate(input, generate, errors);
     }
 
     for mapping in &input.env {
@@ -213,6 +231,69 @@ fn validate_constraints(
     }
 }
 
+fn validate_generate(
+    input: &StackInputDefinition,
+    generate: &StackInputGenerate,
+    errors: &mut Vec<String>,
+) {
+    if input.kind != StackInputKind::Secret {
+        errors.push(format!(
+            "Stack input '{}': generate is only supported on secret inputs",
+            input.id
+        ));
+    }
+
+    if input.default.is_some() {
+        errors.push(format!(
+            "Stack input '{}': generate cannot be combined with a default",
+            input.id
+        ));
+    }
+
+    if input.provided_by != [StackInputProvider::Developer] {
+        errors.push(format!(
+            "Stack input '{}': generated inputs must be providedBy 'developer' only; Alien supplies the value, so the deployer is never asked for it",
+            input.id
+        ));
+    }
+
+    if !(STACK_INPUT_GENERATE_MIN_LENGTH..=STACK_INPUT_GENERATE_MAX_LENGTH)
+        .contains(&generate.length)
+    {
+        errors.push(format!(
+            "Stack input '{}': generate.length must be between {} and {}, got {}",
+            input.id,
+            STACK_INPUT_GENERATE_MIN_LENGTH,
+            STACK_INPUT_GENERATE_MAX_LENGTH,
+            generate.length
+        ));
+    }
+
+    let Some(validation) = &input.validation else {
+        return;
+    };
+
+    if validation.pattern.is_some() || validation.format.is_some() {
+        errors.push(format!(
+            "Stack input '{}': generate cannot be combined with pattern or format; generated values are alphanumeric",
+            input.id
+        ));
+    }
+
+    let below_min = validation
+        .min_length
+        .is_some_and(|min| generate.length < min);
+    let above_max = validation
+        .max_length
+        .is_some_and(|max| generate.length > max);
+    if below_min || above_max {
+        errors.push(format!(
+            "Stack input '{}': generate.length {} is outside the input's minLength/maxLength",
+            input.id, generate.length
+        ));
+    }
+}
+
 fn validate_env_name(input_id: &str, name: &str, errors: &mut Vec<String>) {
     if name.is_empty() {
         errors.push(format!(
@@ -323,8 +404,7 @@ mod tests {
     use super::*;
     use alien_core::{
         permissions::PermissionsConfig, Resource, ResourceEntry, ResourceLifecycle,
-        StackInputEnvironmentMapping, StackInputEnvironmentVariableType, StackInputProvider,
-        Worker, WorkerCode,
+        StackInputEnvironmentMapping, StackInputEnvironmentVariableType, Worker, WorkerCode,
     };
     use indexmap::IndexMap;
 
@@ -382,6 +462,7 @@ mod tests {
                 min_items: None,
                 max_items: None,
             }),
+            generate: None,
             env: vec![StackInputEnvironmentMapping {
                 name: "TENANT_SLUG".to_string(),
                 target_resources: Some(vec!["api".to_string()]),
@@ -420,6 +501,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejects_deployer_secrets_that_share_a_vault_slot() {
+        let secret = |id: &str| StackInputDefinition {
+            kind: StackInputKind::Secret,
+            validation: None,
+            ..string_input(id)
+        };
+
+        let check = StackInputsDefinitionCheck;
+        let result = check
+            .check(
+                &test_stack(vec![secret("apiKey"), secret("api_key")]),
+                Platform::Aws,
+            )
+            .await
+            .expect("check should run");
+        assert!(!result.success);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.contains("both use the secrets vault key 'input-api-key'")),
+            "{:?}",
+            result.errors
+        );
+
+        let result = check
+            .check(
+                &test_stack(vec![secret("apiKey"), secret("apiToken")]),
+                Platform::Aws,
+            )
+            .await
+            .expect("check should run");
+        assert!(result.success, "errors: {:?}", result.errors);
+    }
+
+    #[tokio::test]
     async fn rejects_unknown_target_resource() {
         let mut input = string_input("tenantSlug");
         input.env[0].target_resources = Some(vec!["missing".to_string()]);
@@ -435,5 +552,83 @@ mod tests {
             .errors
             .iter()
             .any(|error| error.contains("targets unknown resource")));
+    }
+
+    fn generated_secret(length: u32) -> StackInputDefinition {
+        StackInputDefinition {
+            id: "databasePassword".to_string(),
+            kind: StackInputKind::Secret,
+            provided_by: vec![StackInputProvider::Developer],
+            required: true,
+            label: "Database password".to_string(),
+            description: "Password the app uses for its database.".to_string(),
+            placeholder: None,
+            default: None,
+            platforms: None,
+            validation: None,
+            generate: Some(StackInputGenerate { length }),
+            env: vec![],
+        }
+    }
+
+    async fn errors_for(input: StackInputDefinition) -> Vec<String> {
+        StackInputsDefinitionCheck
+            .check(&test_stack(vec![input]), Platform::Aws)
+            .await
+            .expect("check should run")
+            .errors
+    }
+
+    #[tokio::test]
+    async fn accepts_generated_developer_secret() {
+        assert_eq!(errors_for(generated_secret(64)).await, Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn rejects_misused_generate() {
+        let mut not_secret = generated_secret(64);
+        not_secret.kind = StackInputKind::String;
+        assert_eq!(
+            errors_for(not_secret).await,
+            vec!["Stack input 'databasePassword': generate is only supported on secret inputs"]
+        );
+
+        let mut deployer = generated_secret(64);
+        deployer.provided_by = vec![StackInputProvider::Developer, StackInputProvider::Deployer];
+        assert_eq!(
+            errors_for(deployer).await,
+            vec!["Stack input 'databasePassword': generated inputs must be providedBy 'developer' only; Alien supplies the value, so the deployer is never asked for it"]
+        );
+
+        assert_eq!(
+            errors_for(generated_secret(8)).await,
+            vec![
+                "Stack input 'databasePassword': generate.length must be between 16 and 256, got 8"
+            ]
+        );
+        assert_eq!(
+            errors_for(generated_secret(257)).await,
+            vec!["Stack input 'databasePassword': generate.length must be between 16 and 256, got 257"]
+        );
+
+        let mut with_pattern = generated_secret(64);
+        with_pattern.validation = Some(StackInputValidation {
+            min_length: Some(80),
+            max_length: None,
+            pattern: Some("[a-f0-9]+".to_string()),
+            format: None,
+            min: None,
+            max: None,
+            values: None,
+            min_items: None,
+            max_items: None,
+        });
+        assert_eq!(
+            errors_for(with_pattern).await,
+            vec![
+                "Stack input 'databasePassword': generate cannot be combined with pattern or format; generated values are alphanumeric",
+                "Stack input 'databasePassword': generate.length 64 is outside the input's minLength/maxLength",
+            ]
+        );
     }
 }

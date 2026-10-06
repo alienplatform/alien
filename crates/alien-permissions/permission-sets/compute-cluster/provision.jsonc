@@ -288,10 +288,13 @@
         }
       },
       // Describe actions — AWS requires Resource: "*" for these read-only APIs.
+      // DescribeInstanceTypeOfferings keeps Auto Scaling Groups out of zones that
+      // do not offer the worker machine type.
       {
         "grant": {
           "actions": [
             "ec2:DescribeImages",
+            "ec2:DescribeInstanceTypeOfferings",
             "ec2:DescribeInstances",
             "ec2:DescribeInstanceStatus",
             "ec2:DescribeTags",
@@ -331,6 +334,34 @@
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
+          }
+        }
+      },
+      // Read profile metadata in this account: generated profile names need not
+      // carry the stack prefix. The backing role is inspected within PassRole's scope.
+      {
+        "grant": {
+          "actions": ["iam:GetInstanceProfile"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:instance-profile/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:instance-profile/*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["iam:GetRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
           }
         }
       },

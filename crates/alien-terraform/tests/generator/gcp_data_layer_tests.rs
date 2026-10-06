@@ -506,3 +506,77 @@ run "default_network" {
         super::helpers::test_utils::terraform_test(&files).assert_ok("GCP default network plan");
     }
 }
+
+#[test]
+fn explicit_management_storage_signing_uses_the_management_account_policy() {
+    let stack = Stack::new("example".to_string())
+        .add(
+            Storage::new("objects".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .management(ManagementPermissions::Extend(
+            PermissionProfile::new().resource("objects", ["storage/data-read"]),
+        ))
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .files
+        .iter()
+        .filter(|(name, _)| name.ends_with(".tf"))
+        .map(|(_, content)| content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let body = hcl::parse(&rendered).expect("module parses");
+    let signing_roles: Vec<_> = body
+        .blocks()
+        .filter(|block| {
+            block.labels().first().map(|label| label.as_str())
+                == Some("google_project_iam_custom_role")
+                && block.body().attributes().any(|attr| {
+                    attr.key() == "permissions"
+                        && attr.expr()
+                            == &hcl::Expression::Array(vec![hcl::Expression::String(
+                                "iam.serviceAccounts.signBlob".to_string(),
+                            )])
+                })
+        })
+        .collect();
+    assert_eq!(signing_roles.len(), 1);
+    let role = format!(
+        "google_project_iam_custom_role.{}[0].name",
+        signing_roles[0].labels()[1].as_str()
+    );
+    let grants: Vec<_> = body
+        .blocks()
+        .filter(|block| {
+            block
+                .body()
+                .attributes()
+                .any(|attr| attr.key() == "role" && matches!(attr.expr(), hcl::Expression::Conditional(condition) if condition.true_expr.to_string() == role))
+        })
+        .collect();
+    assert_eq!(grants.len(), 1);
+    assert_eq!(
+        grants[0].labels()[0].as_str(),
+        "google_service_account_iam_member"
+    );
+    let attribute = |key: &str| {
+        grants[0]
+            .body()
+            .attributes()
+            .find(|attr| attr.key() == key)
+            .expect("required binding attribute")
+            .expr()
+            .to_string()
+    };
+    assert_eq!(attribute("service_account_id"), "\"projects/${var.gcp_project}/serviceAccounts/${google_service_account.management.account_id}@${var.gcp_project}.iam.gserviceaccount.com\"");
+    assert_eq!(
+        attribute("member"),
+        "\"serviceAccount:${google_service_account.management.email}\""
+    );
+    assert_terraform_valid(&module, "explicit management storage signing");
+}

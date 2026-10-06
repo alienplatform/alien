@@ -1,12 +1,15 @@
 use crate::{ErrorData, Result};
 use alien_aws_clients::{StsApi, StsClient};
-use alien_bindings::{BindingsProvider, BindingsProviderApi};
+use alien_bindings::{BindingsProvider, BindingsProviderApi, SecretPresence};
 use alien_core::{
-    AwsEnvironmentInfo, AzureEnvironmentInfo, ClientConfig, ComputeKind, DeploymentConfig,
-    EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
-    GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform, ResourceLifecycle,
-    ResourceStatus, SecretDelivery, Stack, StackState, TestEnvironmentInfo, Vault, Worker,
-    ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS,
+    deployer_secret_environment, deployer_secret_location, deployer_secret_slots,
+    AwsEnvironmentInfo, AzureEnvironmentInfo, AzureResourceGroupOutputs, ClientConfig, ComputeKind,
+    DeployerSecretEnv, DeployerSecretLocationContext, DeployerSecretReport, DeployerSecretStatus,
+    DeploymentConfig, EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType,
+    EnvironmentVariablesSnapshot, GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform,
+    ResourceLifecycle, ResourceStatus, SecretDelivery, Stack, StackState, TestEnvironmentInfo,
+    Vault, VaultBinding, Worker, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_DEPLOYER_SECRETS,
+    ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, SECRETS_VAULT_ID,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
@@ -155,11 +158,15 @@ async fn collect_test_env_info() -> Result<EnvironmentInfo> {
 
 /// Configuration for ALIEN_SECRETS environment variable
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AlienSecretsConfig {
     /// Secret keys to load from vault
     keys: Vec<String>,
     /// Hash of all env var values - triggers redeployment when changed
     hash: String,
+    /// Env vars read from vault-native deployer secrets at startup
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    deployer_secrets: Vec<DeployerSecretEnv>,
 }
 
 /// Inject environment variables into stack functions and containers.
@@ -174,14 +181,29 @@ struct AlienSecretsConfig {
 /// `SecretsVaultMutation` links the secrets vault only to Worker wrappers that
 /// can consume vault pointers. Native-projected workloads use the deployment
 /// environment snapshot directly and receive no workload vault grant.
+///
+/// Vault-native deployer secrets (see `alien_core::deployer_secret_environment`)
+/// are named, never valued: vault-pointer Workers list them in ALIEN_SECRETS,
+/// natively projected workloads in ALIEN_DEPLOYER_SECRETS for their hosting
+/// controller. `deployer_reports` are the deployment's last slot reports, so
+/// every phase derives the same resource config.
 pub fn inject_environment_variables(
     stack: &mut Stack,
     config: &DeploymentConfig,
     platform: Platform,
+    deployer_reports: &[DeployerSecretReport],
 ) -> Result<()> {
     info!("Injecting environment variables into compute resources");
 
     let snapshot = &config.environment_variables;
+    let deployer_environment = deployer_secret_environment(
+        &stack.inputs,
+        &config.input_values,
+        config.stored_secret_input_ids.as_deref(),
+        &config.environment_variables.variables,
+        platform,
+        deployer_reports,
+    );
     for (resource_name, resource_entry) in &mut stack.resources {
         let resource_type = resource_entry.config.resource_type();
 
@@ -189,7 +211,18 @@ pub fn inject_environment_variables(
             || resource_type == alien_core::Container::RESOURCE_TYPE
             || resource_type == alien_core::Daemon::RESOURCE_TYPE
         {
-            inject_into_compute_resource(resource_name, resource_entry, snapshot, platform)?;
+            let deployer_secrets: Vec<DeployerSecretEnv> = deployer_environment
+                .iter()
+                .filter(|(_, targets)| alien_core::targets_resource(targets, resource_name))
+                .map(|(variable, _)| variable.clone())
+                .collect();
+            inject_into_compute_resource(
+                resource_name,
+                resource_entry,
+                snapshot,
+                platform,
+                &deployer_secrets,
+            )?;
         }
     }
 
@@ -410,6 +443,7 @@ fn inject_into_compute_resource(
     resource_entry: &mut alien_core::ResourceEntry,
     snapshot: &EnvironmentVariablesSnapshot,
     platform: Platform,
+    deployer_secrets: &[DeployerSecretEnv],
 ) -> Result<()> {
     if let Some(worker) = resource_entry.config.downcast_mut::<alien_core::Worker>() {
         inject_into_environment(
@@ -418,6 +452,7 @@ fn inject_into_compute_resource(
             &mut worker.environment,
             snapshot,
             platform,
+            deployer_secrets,
         )
     } else if let Some(container) = resource_entry
         .config
@@ -429,6 +464,7 @@ fn inject_into_compute_resource(
             &mut container.environment,
             snapshot,
             platform,
+            deployer_secrets,
         )
     } else if let Some(daemon) = resource_entry.config.downcast_mut::<alien_core::Daemon>() {
         inject_into_environment(
@@ -437,6 +473,7 @@ fn inject_into_compute_resource(
             &mut daemon.environment,
             snapshot,
             platform,
+            deployer_secrets,
         )
     } else {
         Err(AlienError::new(ErrorData::InternalError {
@@ -454,12 +491,16 @@ fn inject_into_environment(
     environment: &mut HashMap<String, String>,
     snapshot: &EnvironmentVariablesSnapshot,
     platform: Platform,
+    deployer_secrets: &[DeployerSecretEnv],
 ) -> Result<()> {
-    // Filter variables that apply to this resource
+    // Filter variables that apply to this resource. A vault-native deployer
+    // secret owns its env var name: a value the snapshot still carries for it
+    // (stored before the slot was filled) no longer applies.
     let applicable_vars: Vec<&EnvironmentVariable> = snapshot
         .variables
         .iter()
-        .filter(|v| matches_resource_pattern(resource_name, &v.target_resources))
+        .filter(|v| alien_core::targets_resource(&v.target_resources, resource_name))
+        .filter(|v| !deployer_secrets.iter().any(|secret| secret.name == v.name))
         .collect();
 
     // Inject plain variables directly
@@ -486,6 +527,19 @@ fn inject_into_environment(
         .collect();
 
     if SecretDelivery::resolve(platform, kind).is_native_projection() {
+        // The hosting layer resolves vault-native deployer secrets before
+        // process start from this list of names.
+        if !deployer_secrets.is_empty() {
+            let deployer_secrets_json = serde_json::to_string(deployer_secrets)
+                .into_alien_error()
+                .context(ErrorData::InternalError {
+                    message: "Failed to serialize ALIEN_DEPLOYER_SECRETS".to_string(),
+                })?;
+            environment.insert(
+                ENV_ALIEN_DEPLOYER_SECRETS.to_string(),
+                deployer_secrets_json,
+            );
+        }
         // The hosting layer projects these secrets natively before process
         // start (Kubernetes secretKeyRef, local supervisor plain env, or native
         // cloud container secret injection); injecting ALIEN_SECRETS here would leak a
@@ -503,10 +557,11 @@ fn inject_into_environment(
 
     // If resource needs secrets, add ALIEN_SECRETS env var
     // alien-worker-runtime will load these from the vault at startup
-    if !secret_keys.is_empty() {
+    if !secret_keys.is_empty() || !deployer_secrets.is_empty() {
         let alien_secrets = AlienSecretsConfig {
             keys: secret_keys.clone(),
             hash: snapshot.hash.clone(),
+            deployer_secrets: deployer_secrets.to_vec(),
         };
         let alien_secrets_json = serde_json::to_string(&alien_secrets)
             .into_alien_error()
@@ -525,27 +580,6 @@ fn inject_into_environment(
     }
 
     Ok(())
-}
-
-/// Check if a resource name matches the target patterns
-fn matches_resource_pattern(resource_name: &str, target_resources: &Option<Vec<String>>) -> bool {
-    match target_resources {
-        // None means apply to all resources
-        None => true,
-        // Empty list means no resources (shouldn't happen, but handle gracefully)
-        Some(patterns) if patterns.is_empty() => false,
-        // Check if resource name matches any pattern
-        Some(patterns) => patterns.iter().any(|pattern| {
-            if pattern.ends_with('*') {
-                // Wildcard suffix match: "api-*" matches "api-handler", "api-auth", etc.
-                let prefix = &pattern[..pattern.len() - 1];
-                resource_name.starts_with(prefix)
-            } else {
-                // Exact match
-                resource_name == pattern
-            }
-        }),
-    }
 }
 
 /// Sync secret-type environment variables to the vault
@@ -665,6 +699,163 @@ pub async fn sync_secrets_to_vault(
     Ok(true)
 }
 
+/// Checks every vault-native deployer secret slot of the deployment against the
+/// `secrets` vault, using metadata-only calls: no value is read, so this is
+/// safe to run from a control plane that must never see the customer's secret.
+///
+/// Returns one report per slot with where the deployer writes it. A deployment
+/// without a secrets vault keeps its pre-vault delivery until setup adds one.
+pub async fn check_deployer_secrets(
+    stack: &Stack,
+    stack_state: &StackState,
+    client_config: &ClientConfig,
+    config: &DeploymentConfig,
+    platform: Platform,
+) -> Result<Vec<DeployerSecretReport>> {
+    let slots = deployer_secret_slots(
+        &stack.inputs,
+        &config.input_values,
+        config.stored_secret_input_ids.as_deref(),
+        &config.environment_variables.variables,
+        platform,
+    );
+    if slots.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // A deployment installed before its stack had a `secrets` vault has
+    // nowhere to hold a slot yet. Its workloads keep the values they were
+    // installed with until setup adds the vault, so there is nothing to
+    // report, and its refreshes must not fail on that.
+    let Some(vault) = stack_state.resources.get(SECRETS_VAULT_ID) else {
+        return Ok(Vec::new());
+    };
+    let binding = vault.remote_binding_params.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::MissingConfiguration {
+            message: format!(
+                "Stack input '{}' is a deployer secret, which lives in the deployment's \
+                     '{SECRETS_VAULT_ID}' vault, but that vault has no binding yet",
+                slots[0].input.id
+            ),
+        })
+    })?;
+    let binding: VaultBinding =
+        serde_json::from_value(binding)
+            .into_alien_error()
+            .context(ErrorData::InternalError {
+                message: format!("Failed to parse the '{SECRETS_VAULT_ID}' vault binding"),
+            })?;
+    let context = deployer_secret_location_context(stack_state, client_config, config);
+
+    let provider = BindingsProvider::from_stack_state(stack_state, client_config.clone()).context(
+        ErrorData::InternalError {
+            message: "Failed to create bindings provider for deployer secret checks".to_string(),
+        },
+    )?;
+    let vault =
+        provider
+            .load_vault(SECRETS_VAULT_ID)
+            .await
+            .context(ErrorData::SecretSyncFailed {
+                vault_name: SECRETS_VAULT_ID.to_string(),
+                reason: "Failed to load secrets vault".to_string(),
+            })?;
+
+    let mut reports = Vec::with_capacity(slots.len());
+    for slot in slots {
+        let location = deployer_secret_location(&binding, &slot.vault_key, &context).context(
+            ErrorData::InternalError {
+                message: format!(
+                    "Failed to name where deployer secret '{}' is written",
+                    slot.input.id
+                ),
+            },
+        )?;
+        let presence =
+            vault
+                .secret_presence(&slot.vault_key)
+                .await
+                .context(ErrorData::SecretSyncFailed {
+                    vault_name: SECRETS_VAULT_ID.to_string(),
+                    reason: format!("Failed to check deployer secret '{}'", location.name),
+                })?;
+        let (status, message, version) = match presence {
+            SecretPresence::Present { version } => (DeployerSecretStatus::Present, None, version),
+            SecretPresence::Missing => (DeployerSecretStatus::Missing, None, None),
+            SecretPresence::Invalid { reason } => {
+                (DeployerSecretStatus::Invalid, Some(reason), None)
+            }
+        };
+        reports.push(DeployerSecretReport {
+            input_id: slot.input.id.clone(),
+            label: slot.input.label.clone(),
+            required: slot.input.required,
+            status,
+            message,
+            version,
+            location,
+        });
+    }
+    Ok(reports)
+}
+
+/// The required deployer secrets that keep workloads from starting: filled by
+/// neither the customer's secret store nor a value stored before slots were
+/// vault-native.
+pub fn deployer_secrets_blocking_start<'a>(
+    stack: &Stack,
+    config: &DeploymentConfig,
+    platform: Platform,
+    reports: &'a [DeployerSecretReport],
+) -> Vec<&'a DeployerSecretReport> {
+    let slots = deployer_secret_slots(
+        &stack.inputs,
+        &config.input_values,
+        config.stored_secret_input_ids.as_deref(),
+        &config.environment_variables.variables,
+        platform,
+    );
+    reports
+        .iter()
+        .filter(|report| report.blocks_start())
+        .filter(|report| {
+            slots
+                .iter()
+                .any(|slot| slot.input.id == report.input_id && !slot.has_stored_value)
+        })
+        .collect()
+}
+
+fn deployer_secret_location_context(
+    stack_state: &StackState,
+    client_config: &ClientConfig,
+    config: &DeploymentConfig,
+) -> DeployerSecretLocationContext {
+    let mut context = DeployerSecretLocationContext {
+        deployment_name: config.deployment_name.clone(),
+        ..Default::default()
+    };
+    let cloud = match client_config {
+        ClientConfig::KubernetesCloud { cloud, .. } => cloud.as_ref(),
+        other => other,
+    };
+    match cloud {
+        ClientConfig::Aws(aws) => context.aws_region = Some(aws.region.clone()),
+        ClientConfig::Gcp(gcp) => context.gcp_project_id = Some(gcp.project_id.clone()),
+        ClientConfig::Azure(azure) => {
+            context.azure_subscription_id = Some(azure.subscription_id.clone());
+            context.azure_resource_group = stack_state
+                .resources
+                .values()
+                .filter_map(|resource| resource.outputs.as_ref())
+                .find_map(|outputs| outputs.downcast_ref::<AzureResourceGroupOutputs>())
+                .map(|outputs| outputs.name.clone());
+        }
+        _ => {}
+    }
+    context
+}
+
 /// Delete only vault keys that this deployment owns before its runtime resources are destroyed.
 ///
 /// The vault resource is setup-owned and may outlive runtime cleanup. Its contents are not:
@@ -682,24 +873,24 @@ pub async fn delete_deployment_vault_secrets(
         return Ok(false);
     }
 
+    // Secrets reach the vault only through its binding, which exists once the vault is
+    // provisioned. A vault that never got that far (a deployment whose setup failed with the
+    // vault still queued) holds nothing to delete, and loading it would fail the deletion.
+    if !secrets_vault_is_addressable(stack_state) {
+        runtime_metadata.last_synced_env_vars_hash = None;
+        runtime_metadata.last_synced_secret_names.clear();
+        return Ok(false);
+    }
+
     let mut owned_names = runtime_metadata
         .last_synced_secret_names
         .iter()
         .cloned()
         .chain(desired_vault_secrets(stack, client_config.platform(), config).into_keys())
         .collect::<Vec<_>>();
-    if !has_secrets_vault(stack_state) && owned_names.is_empty() {
-        runtime_metadata.last_synced_env_vars_hash = None;
-        runtime_metadata.last_synced_secret_names.clear();
-        return Ok(false);
-    }
     owned_names.push(ENV_ALIEN_COMMANDS_TOKEN.to_string());
     owned_names.sort();
     owned_names.dedup();
-
-    if owned_names.is_empty() {
-        return Ok(false);
-    }
 
     let provider = BindingsProvider::from_stack_state(stack_state, client_config.clone()).context(
         ErrorData::InternalError {
@@ -740,6 +931,15 @@ fn has_secrets_vault(stack_state: &StackState) -> bool {
         .is_some_and(|resource| resource.resource_type == Vault::RESOURCE_TYPE.as_ref())
 }
 
+/// Whether the `secrets` vault exists and has the binding the bindings provider loads it by.
+fn secrets_vault_is_addressable(stack_state: &StackState) -> bool {
+    has_secrets_vault(stack_state)
+        && stack_state
+            .resources
+            .get("secrets")
+            .is_some_and(|resource| resource.remote_binding_params.is_some())
+}
+
 fn desired_vault_secrets(
     stack: &Stack,
     platform: Platform,
@@ -767,7 +967,7 @@ fn desired_vault_secrets(
         .filter(|var| {
             vault_backed_workers
                 .iter()
-                .any(|resource_id| matches_resource_pattern(resource_id, &var.target_resources))
+                .any(|resource_id| alien_core::targets_resource(&var.target_resources, resource_id))
         })
         .map(|var| (var.name.clone(), var.value.clone()))
         .collect::<BTreeMap<_, _>>();
@@ -1016,52 +1216,6 @@ mod tests {
     const OTEL_EXPORTER_OTLP_HEADERS: &str = "OTEL_EXPORTER_OTLP_HEADERS";
     const OTEL_EXPORTER_OTLP_METRICS_HEADERS: &str = "OTEL_EXPORTER_OTLP_METRICS_HEADERS";
 
-    #[test]
-    fn test_matches_resource_pattern_null() {
-        // None means all resources
-        assert!(matches_resource_pattern("api-handler", &None));
-        assert!(matches_resource_pattern("worker", &None));
-        assert!(matches_resource_pattern("anything", &None));
-    }
-
-    #[test]
-    fn test_matches_resource_pattern_exact() {
-        let patterns = Some(vec!["api-handler".to_string()]);
-
-        assert!(matches_resource_pattern("api-handler", &patterns));
-        assert!(!matches_resource_pattern("api-auth", &patterns));
-        assert!(!matches_resource_pattern("worker", &patterns));
-    }
-
-    #[test]
-    fn test_matches_resource_pattern_wildcard() {
-        let patterns = Some(vec!["api-*".to_string()]);
-
-        assert!(matches_resource_pattern("api-handler", &patterns));
-        assert!(matches_resource_pattern("api-auth", &patterns));
-        assert!(matches_resource_pattern("api-", &patterns));
-        assert!(!matches_resource_pattern("api", &patterns));
-        assert!(!matches_resource_pattern("worker", &patterns));
-    }
-
-    #[test]
-    fn test_matches_resource_pattern_multiple() {
-        let patterns = Some(vec!["api-*".to_string(), "worker".to_string()]);
-
-        assert!(matches_resource_pattern("api-handler", &patterns));
-        assert!(matches_resource_pattern("api-auth", &patterns));
-        assert!(matches_resource_pattern("worker", &patterns));
-        assert!(!matches_resource_pattern("scheduler", &patterns));
-    }
-
-    #[test]
-    fn test_matches_resource_pattern_empty() {
-        let patterns = Some(vec![]);
-
-        assert!(!matches_resource_pattern("api-handler", &patterns));
-        assert!(!matches_resource_pattern("worker", &patterns));
-    }
-
     // ── inject_environment_variables tests ──────────────────────────
 
     use alien_core::{
@@ -1107,6 +1261,94 @@ mod tests {
             .allow_frozen_changes(false)
             .external_bindings(ExternalBindings::default())
             .build()
+    }
+
+    #[tokio::test]
+    async fn stored_dual_secret_presence_skips_vault_checks_but_not_deployer_only_secrets() {
+        let mut stack = make_single_function_stack("demo-worker");
+        stack.inputs = vec![serde_json::from_value(serde_json::json!({
+            "id": "apiKey", "kind": "secret", "providedBy": ["developer", "deployer"],
+            "required": true, "label": "API key", "description": ""
+        }))
+        .unwrap()];
+        let mut config = make_config(make_snapshot(&[], &[]));
+        config.stored_secret_input_ids = Some(vec!["apiKey".to_string()]);
+        let mut state = StackState::new(Platform::Test);
+        let reports =
+            check_deployer_secrets(&stack, &state, &ClientConfig::Test, &config, Platform::Test)
+                .await
+                .unwrap();
+        assert!(reports.is_empty());
+        assert!(config.input_values.is_empty());
+        let missing = DeployerSecretReport {
+            input_id: "apiKey".to_string(),
+            label: "API key".to_string(),
+            required: true,
+            status: DeployerSecretStatus::Missing,
+            message: None,
+            version: None,
+            location: alien_core::DeployerSecretLocation {
+                store: alien_core::DeployerSecretStore::LocalVault,
+                name: "input-api-key".to_string(),
+                vault_name: None,
+                console_url: None,
+                cli_command: String::new(),
+                delete_command: None,
+            },
+        };
+        assert!(deployer_secrets_blocking_start(
+            &stack,
+            &config,
+            Platform::Test,
+            &[missing.clone()]
+        )
+        .is_empty());
+        config.stored_secret_input_ids = Some(Vec::new());
+        assert!(
+            check_deployer_secrets(&stack, &state, &ClientConfig::Test, &config, Platform::Test)
+                .await
+                .unwrap()
+                .is_empty(),
+            "pre-vault deployments can still refresh"
+        );
+        state.resources.insert(
+            SECRETS_VAULT_ID.to_string(),
+            StackResourceState::new_pending(
+                Vault::RESOURCE_TYPE.to_string(),
+                Resource::new(Vault::new(SECRETS_VAULT_ID.to_string()).build()),
+                Some(ResourceLifecycle::Frozen),
+                Vec::new(),
+            ),
+        );
+        assert!(check_deployer_secrets(
+            &stack,
+            &state,
+            &ClientConfig::Test,
+            &config,
+            Platform::Test
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            deployer_secrets_blocking_start(&stack, &config, Platform::Test, &[missing.clone()])
+                .len(),
+            1
+        );
+        config.stored_secret_input_ids = Some(vec!["apiKey".to_string()]);
+        stack.inputs[0].provided_by = vec![alien_core::StackInputProvider::Deployer];
+        assert!(check_deployer_secrets(
+            &stack,
+            &state,
+            &ClientConfig::Test,
+            &config,
+            Platform::Test
+        )
+        .await
+        .is_err());
+        assert!(
+            deployer_secrets_blocking_start(&stack, &config, Platform::Test, &[missing]).is_empty(),
+            "legacy stored presence remains a fallback until the vault is filled"
+        );
     }
 
     fn make_single_function_stack(function_id: &str) -> Stack {
@@ -1318,7 +1560,7 @@ mod tests {
         let config = make_config(snapshot);
         let mut stack = make_single_function_stack("worker");
 
-        inject_environment_variables(&mut stack, &config, Platform::Aws).unwrap();
+        inject_environment_variables(&mut stack, &config, Platform::Aws, &[]).unwrap();
 
         let func = stack
             .resources
@@ -1351,7 +1593,7 @@ mod tests {
         let config = make_config(snapshot);
         let mut stack = make_single_function_stack("worker");
 
-        inject_environment_variables(&mut stack, &config, Platform::Aws).unwrap();
+        inject_environment_variables(&mut stack, &config, Platform::Aws, &[]).unwrap();
 
         let func = stack
             .resources
@@ -1377,7 +1619,7 @@ mod tests {
         let config = make_config(snapshot);
         let mut stack = make_single_function_stack("worker");
 
-        inject_environment_variables(&mut stack, &config, Platform::Aws).unwrap();
+        inject_environment_variables(&mut stack, &config, Platform::Aws, &[]).unwrap();
 
         let func = stack
             .resources
@@ -1397,7 +1639,7 @@ mod tests {
         let config = make_config(snapshot);
         let mut stack = make_compute_stack();
 
-        inject_environment_variables(&mut stack, &config, Platform::Kubernetes).unwrap();
+        inject_environment_variables(&mut stack, &config, Platform::Kubernetes, &[]).unwrap();
 
         // Kubernetes controllers project all compute secrets via secretKeyRef:
         // no pointer and no raw value enters the resource config.
@@ -1436,7 +1678,7 @@ mod tests {
             let config = make_config(snapshot);
             let mut stack = make_compute_stack();
 
-            inject_environment_variables(&mut stack, &config, platform).unwrap();
+            inject_environment_variables(&mut stack, &config, platform, &[]).unwrap();
 
             let worker_env = resource_env(&stack, "worker");
             assert_eq!(
@@ -1977,6 +2219,51 @@ mod tests {
         .await
         .expect("already-clean token-only sync is idempotent"));
         assert!(vault.get_secret(ENV_ALIEN_COMMANDS_TOKEN).await.is_err());
+    }
+
+    /// A deployment whose setup failed before the vault was created still has to delete: its
+    /// `secrets` vault is queued with no binding, so nothing was ever written to it.
+    #[tokio::test]
+    async fn deployment_deletion_skips_a_secrets_vault_that_was_never_provisioned() {
+        let mut stack_state = StackState::new(Platform::Test);
+        stack_state.resources.insert(
+            "secrets".to_string(),
+            StackResourceState::new_pending(
+                Vault::RESOURCE_TYPE.to_string(),
+                Resource::new(Vault::new("secrets".to_string()).build()),
+                Some(ResourceLifecycle::Frozen),
+                Vec::new(),
+            ),
+        );
+        assert_eq!(
+            stack_state.resources["secrets"].status,
+            ResourceStatus::Pending
+        );
+        assert!(stack_state.resources["secrets"].outputs.is_none());
+
+        let config = make_config(make_snapshot(&[], &[("API_TOKEN", "secret")]));
+        let mut metadata = RuntimeMetadata {
+            last_synced_env_vars_hash: Some("previous-sync".to_string()),
+            last_synced_secret_names: vec!["API_TOKEN".to_string()],
+            ..RuntimeMetadata::default()
+        };
+
+        let deleted = delete_deployment_vault_secrets(
+            &make_single_function_stack("worker"),
+            &stack_state,
+            &ClientConfig::Test,
+            &config,
+            &mut metadata,
+        )
+        .await
+        .expect("a never-provisioned vault must not block deployment deletion");
+
+        assert!(
+            !deleted,
+            "nothing was deleted from a vault that never existed"
+        );
+        assert!(metadata.last_synced_env_vars_hash.is_none());
+        assert!(metadata.last_synced_secret_names.is_empty());
     }
 
     #[tokio::test]

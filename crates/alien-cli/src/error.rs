@@ -192,6 +192,23 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// An installed deployment's pending work needs setup authority, and this
+    /// run has neither a login session nor a deployment group token.
+    #[error(
+        code = "DEPLOYMENT_SETUP_AUTHORITY_REQUIRED",
+        message = "Deployment '{deployment}' {reason}; continuing it needs setup authority for its deployment group",
+        hint = "Run `alien login` as a developer of the project, or pass the deployment group token with `--token`, then rerun `alien deploy`.",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 401
+    )]
+    DeploymentSetupAuthorityRequired {
+        /// The deployment's name
+        deployment: String,
+        /// Why setup has to run
+        reason: String,
+    },
+
     /// Several workspaces exist but one can't be chosen without a terminal.
     #[error(
         code = "WORKSPACE_SELECTION_REQUIRED",

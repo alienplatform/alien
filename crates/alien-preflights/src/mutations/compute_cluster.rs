@@ -6,13 +6,19 @@
 //! using the instance catalog.
 
 use crate::error::Result;
-use crate::StackMutation;
+use crate::{
+    compile_time::{permission_sets_exist::node_permissions_apply, PermissionSetsExistCheck},
+    CompileTimeCheck, StackMutation,
+};
 use alien_core::{
-    compute_planner::{capacity_group_requirements, validate_compute_pool_selection},
+    compute_planner::{
+        capacity_group_requirements, default_persistent_failure_domains,
+        validate_compute_pool_selection,
+    },
     instance_catalog::{self, WorkloadRequirements},
-    CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, Container, Daemon, DeploymentConfig,
-    MachineProfile, Network, Platform, ResourceEntry, ResourceLifecycle, ResourceRef, Stack,
-    StackState,
+    CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Container,
+    Daemon, DeploymentConfig, MachineProfile, Network, PermissionSetReference, Platform,
+    ResourceEntry, ResourceLifecycle, ResourceRef, Stack, StackState,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -38,6 +44,17 @@ impl StackMutation for ComputeClusterMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> bool {
+        if stack.resources.values().any(|entry| {
+            entry
+                .config
+                .downcast_ref::<ComputeCluster>()
+                .is_some_and(|cluster| {
+                    cluster.node_permissions.is_some()
+                        || cluster.node_permissions_platforms.is_some()
+                })
+        }) {
+            return true;
+        }
         if stack_state.platform == Platform::Kubernetes {
             return false;
         }
@@ -147,6 +164,9 @@ impl StackMutation for ComputeClusterMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<Stack> {
+        let stack = self
+            .materialize_node_permissions(stack, stack_state.platform)
+            .await?;
         let has_cluster = stack
             .resources
             .values()
@@ -165,6 +185,100 @@ impl StackMutation for ComputeClusterMutation {
 }
 
 impl ComputeClusterMutation {
+    async fn materialize_node_permissions(
+        &self,
+        mut stack: Stack,
+        platform: Platform,
+    ) -> Result<Stack> {
+        if !stack.resources.values().any(|entry| {
+            entry
+                .config
+                .downcast_ref::<ComputeCluster>()
+                .is_some_and(|cluster| {
+                    cluster.node_permissions.is_some()
+                        || cluster.node_permissions_platforms.is_some()
+                })
+        }) {
+            return Ok(stack);
+        }
+        // Project declarations before target validation or dependency materialization.
+        for entry in stack.resources.values_mut() {
+            let Some(cluster) = entry.config.downcast_mut::<ComputeCluster>() else {
+                continue;
+            };
+            let applies = node_permissions_apply(cluster, platform).map_err(|message| {
+                AlienError::new(crate::error::ErrorData::StackMutationFailed {
+                    mutation_name: self.description().to_string(),
+                    message,
+                    resource_id: Some(cluster.id.clone()),
+                })
+            })?;
+            if !applies {
+                cluster.node_permissions = None;
+            }
+            cluster.node_permissions_platforms = None;
+        }
+        // Use the same concrete-target and platform validation as compilation.
+        let validation = PermissionSetsExistCheck.check(&stack, platform).await?;
+        if !validation.success {
+            return Err(AlienError::new(
+                crate::error::ErrorData::StackMutationFailed {
+                    mutation_name: self.description().to_string(),
+                    message: validation.errors.join("; "),
+                    resource_id: None,
+                },
+            ));
+        }
+        let target_refs: std::collections::HashMap<_, _> = stack
+            .resources
+            .iter()
+            .map(|(id, entry)| {
+                (
+                    id.clone(),
+                    ResourceRef::new(entry.config.resource_type(), id.clone()),
+                )
+            })
+            .collect();
+        for entry in stack.resources.values_mut() {
+            let Some(cluster) = entry.config.downcast_mut::<ComputeCluster>() else {
+                continue;
+            };
+            let Some(profile) = &mut cluster.node_permissions else {
+                continue;
+            };
+            for (target_id, references) in &mut profile.0 {
+                let target = target_refs.get(target_id).ok_or_else(|| {
+                    AlienError::new(crate::error::ErrorData::StackMutationFailed {
+                        mutation_name: self.description().to_string(),
+                        message: format!("Node permission target '{target_id}' does not exist"),
+                        resource_id: Some(cluster.id.clone()),
+                    })
+                })?;
+                // Node grants are applied by the cluster after the target is ready.
+                // The runner validates the complete graph after dependency wiring.
+                if !entry.dependencies.contains(target) {
+                    entry.dependencies.push(target.clone());
+                }
+                for reference in references {
+                    let set = reference
+                        .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                        .ok_or_else(|| {
+                            AlienError::new(crate::error::ErrorData::StackMutationFailed {
+                                mutation_name: self.description().to_string(),
+                                message: format!(
+                                    "Unknown node permission set '{}'",
+                                    reference.id()
+                                ),
+                                resource_id: Some(cluster.id.clone()),
+                            })
+                        })?;
+                    *reference = PermissionSetReference::Inline(set);
+                }
+            }
+        }
+        Ok(stack)
+    }
+
     fn materialize_persistent_container_pools(
         &self,
         mut stack: Stack,
@@ -277,29 +391,39 @@ impl ComputeClusterMutation {
             };
             for group in cluster.capacity_groups.iter_mut() {
                 materialize_group(group, stack_state.platform, config)?;
-                let Some(selection) = config
+                let explicit_selection = config
                     .stack_settings
                     .compute
                     .as_ref()
                     .and_then(|settings| settings.pools.get(&group.group_id))
                     .and_then(|selection| selection.failure_domains())
-                else {
-                    continue;
-                };
-                let existing_group_is_aggregate = stack_state
+                    .cloned();
+                let existing_group = stack_state
                     .resources
                     .get(cluster_id)
                     .and_then(|state| state.config.downcast_ref::<ComputeCluster>())
-                    .is_some_and(|existing| {
+                    .filter(|existing| {
                         existing
                             .capacity_groups
                             .iter()
                             .any(|existing_group| existing_group.group_id == group.group_id)
-                            && !existing.failure_domain_spread.contains_key(&group.group_id)
-                            && !existing
-                                .selected_failure_domains
-                                .contains_key(&group.group_id)
                     });
+                // Without an explicit choice, a persistent pool that does not exist yet gets
+                // the planner's default. Leaving it aggregate would spread its machines over
+                // every zone while its volumes are created in one. A pool that already exists
+                // keeps the topology it was created with.
+                let Some(selection) = explicit_selection.or_else(|| {
+                    (existing_group.is_none() && fresh_persistent_pools.contains(&group.group_id))
+                        .then(default_persistent_failure_domains)
+                }) else {
+                    continue;
+                };
+                let existing_group_is_aggregate = existing_group.is_some_and(|existing| {
+                    !existing.failure_domain_spread.contains_key(&group.group_id)
+                        && !existing
+                            .selected_failure_domains
+                            .contains_key(&group.group_id)
+                });
                 let is_implicit_single_domain_default = selection.spread == 1
                     && selection.selected_failure_domains.is_empty()
                     && !fresh_persistent_pools.contains(&group.group_id);
@@ -641,6 +765,16 @@ fn materialize_group(
                 ),
             })
         })?;
+    materialize_selected_group(group, platform, selection)
+}
+
+/// Use the same validation and profile derivation for declared machine changes
+/// as for deployment compute selections.
+pub(crate) fn materialize_selected_group(
+    group: &mut CapacityGroup,
+    platform: Platform,
+    selection: &ComputePoolSelection,
+) -> Result<()> {
     selection.validate().map_err(|message| {
         AlienError::new(crate::error::ErrorData::StackMutationFailed {
             mutation_name: "ComputeClusterMutation".to_string(),
@@ -998,7 +1132,7 @@ mod tests {
     use alien_core::{
         compute_planner::plan_compute, ComputeChoiceRange, ComputePoolSelection, ComputeSettings,
         ContainerAutoscaling, ContainerCode, DaemonCode, EnvironmentVariablesSnapshot,
-        ExternalBindings, FailureDomainSelection, NetworkSettings, PersistentStorage, ResourceSpec,
+        ExternalBindings, FailureDomainSelection, NetworkSettings, PersistentStorage, ResourceSpec, VolumeBackups,
         StackSettings,
     };
     use indexmap::IndexMap;
@@ -1028,6 +1162,392 @@ mod tests {
             .build()
     }
 
+    fn node_dependency_stack() -> Stack {
+        let storage = alien_core::Storage::new("objects".to_string()).build();
+        let daemon = Daemon::new("app".to_string())
+            .code(DaemonCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .cluster("compute".to_string())
+            .permissions("reader".to_string())
+            .link(&storage)
+            .build();
+        let mut stack = Stack::new("example".to_string())
+            .add(
+                Network::new("network".to_string())
+                    .settings(NetworkSettings::Create {
+                        cidr: None,
+                        availability_zones: 2,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(storage, ResourceLifecycle::Frozen)
+            .add(
+                ComputeCluster::new("compute".to_string())
+                    .node_permissions(
+                        alien_core::PermissionProfile::new()
+                            .resource("objects", ["storage/data-read"]),
+                    )
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(daemon, ResourceLifecycle::Live)
+            .permission(
+                "reader",
+                alien_core::PermissionProfile::new().resource("objects", ["storage/data-read"]),
+            )
+            .build();
+        stack.resources.get_mut("compute").unwrap().dependencies =
+            vec![ResourceRef::new(Network::RESOURCE_TYPE, "network")];
+        stack
+    }
+
+    fn node_dependency_runner() -> crate::runner::PreflightRunner {
+        let mut registry = crate::PreflightRegistry::new();
+        registry.add_mutation(Box::new(ComputeClusterMutation));
+        registry.add_mutation(Box::new(crate::mutations::ServiceAccountMutation));
+        registry.add_mutation(Box::new(
+            crate::mutations::ServiceAccountDependenciesMutation,
+        ));
+        crate::runner::PreflightRunner::with_registry(registry)
+    }
+
+    #[tokio::test]
+    async fn node_platform_selector_projects_one_manifest_before_target_validation() {
+        let mut stack = node_dependency_stack();
+        stack.supported_platforms = Some(vec![Platform::Aws, Platform::Machines]);
+        stack
+            .resources
+            .get_mut("compute")
+            .unwrap()
+            .config
+            .downcast_mut::<ComputeCluster>()
+            .unwrap()
+            .node_permissions_platforms = Some(vec![Platform::Aws]);
+        let app = stack.resources["app"].config.clone();
+        let profiles = stack.permissions.clone();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        for platform in [Platform::Aws, Platform::Machines] {
+            let check = PermissionSetsExistCheck
+                .check(&stack, platform)
+                .await
+                .unwrap();
+            assert!(check.success, "{:?}", check.errors);
+            let prepared = node_dependency_runner()
+                .apply_mutations(stack.clone(), &StackState::new(platform), &config)
+                .await
+                .unwrap();
+            let cluster = prepared.resources["compute"]
+                .config
+                .downcast_ref::<ComputeCluster>()
+                .unwrap();
+            assert_eq!(cluster.id, "compute");
+            assert_eq!(cluster.node_permissions_platforms, None);
+            let mut expected_dependencies =
+                vec![ResourceRef::new(Network::RESOURCE_TYPE, "network")];
+            if platform == Platform::Aws {
+                assert_eq!(
+                    cluster.node_permissions.as_ref().unwrap().0["objects"],
+                    vec![PermissionSetReference::Inline(
+                        alien_permissions::get_permission_set("storage/data-read")
+                            .unwrap()
+                            .clone()
+                    )]
+                );
+                expected_dependencies.push(ResourceRef::new(
+                    alien_core::Storage::RESOURCE_TYPE,
+                    "objects",
+                ));
+            } else {
+                assert_eq!(cluster.node_permissions, None);
+            }
+            assert_eq!(
+                prepared.resources["compute"].dependencies,
+                expected_dependencies
+            );
+            assert_eq!(prepared.resources["app"].config, app);
+            assert_eq!(prepared.permissions, profiles);
+        }
+        // An excluded node-only target need not exist on the other platform.
+        stack
+            .resources
+            .get_mut("compute")
+            .unwrap()
+            .config
+            .downcast_mut::<ComputeCluster>()
+            .unwrap()
+            .node_permissions =
+            Some(alien_core::PermissionProfile::new().resource("missing", ["storage/data-read"]));
+        assert!(
+            PermissionSetsExistCheck
+                .check(&stack, Platform::Machines)
+                .await
+                .unwrap()
+                .success
+        );
+        let excluded = node_dependency_runner()
+            .apply_mutations(stack.clone(), &StackState::new(Platform::Machines), &config)
+            .await
+            .unwrap();
+        assert_eq!(
+            excluded.resources["compute"].dependencies,
+            vec![ResourceRef::new(Network::RESOURCE_TYPE, "network")]
+        );
+        assert!(
+            !PermissionSetsExistCheck
+                .check(&stack, Platform::Aws)
+                .await
+                .unwrap()
+                .success
+        );
+        assert!(node_dependency_runner()
+            .apply_mutations(stack, &StackState::new(Platform::Aws), &config)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn invalid_node_platform_selectors_fail_declaration_and_preparation() {
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        for (platforms, has_profile) in [
+            (vec![], true),
+            (vec![Platform::Aws, Platform::Aws], true),
+            (vec![Platform::Machines], true),
+            (vec![Platform::Kubernetes], true),
+            (vec![Platform::Aws], false),
+        ] {
+            let mut stack = node_dependency_stack();
+            let cluster = stack
+                .resources
+                .get_mut("compute")
+                .unwrap()
+                .config
+                .downcast_mut::<ComputeCluster>()
+                .unwrap();
+            cluster.node_permissions_platforms = Some(platforms);
+            if !has_profile {
+                cluster.node_permissions = None;
+            }
+            let state = StackState::new(Platform::Machines);
+            assert!(ComputeClusterMutation.should_run(&stack, &state, &config));
+            let check = PermissionSetsExistCheck
+                .check(&stack, state.platform)
+                .await
+                .unwrap();
+            assert!(!check.success);
+            assert!(check
+                .errors
+                .iter()
+                .any(|error| error.contains("nodePermissionsPlatforms")));
+            let error = node_dependency_runner()
+                .apply_mutations(stack, &state, &config)
+                .await
+                .unwrap_err();
+            assert!(format!("{error:?}").contains("nodePermissionsPlatforms"));
+        }
+        let unselected = node_dependency_stack();
+        assert!(
+            !PermissionSetsExistCheck
+                .check(&unselected, Platform::Machines)
+                .await
+                .unwrap()
+                .success
+        );
+        assert!(node_dependency_runner()
+            .apply_mutations(unselected, &StackState::new(Platform::Machines), &config)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn node_targets_preserve_typed_dependencies_profiles_and_links() {
+        let state = StackState::new(Platform::Gcp);
+        let mut config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        // External locations do not replace the declared resource's identity/type.
+        config.external_bindings.insert(
+            "objects",
+            alien_core::ExternalBinding::Storage(alien_core::StorageBinding::gcs(
+                "existing-objects",
+            )),
+        );
+        let stack = node_dependency_stack();
+        let profiles = stack.permissions.clone();
+        let app = stack.resources["app"].config.clone();
+        let runner = node_dependency_runner();
+        let prepared = runner
+            .apply_mutations(stack, &state, &config)
+            .await
+            .unwrap();
+        assert_eq!(
+            prepared.resources["compute"].dependencies,
+            vec![
+                ResourceRef::new(Network::RESOURCE_TYPE, "network"),
+                ResourceRef::new(alien_core::Storage::RESOURCE_TYPE, "objects"),
+            ]
+        );
+        assert_eq!(
+            prepared.resources["objects"].dependencies,
+            vec![ResourceRef::new(
+                alien_core::ServiceAccount::RESOURCE_TYPE,
+                "reader-sa"
+            )]
+        );
+        assert!(prepared.resources["reader-sa"].dependencies.is_empty());
+        assert_eq!(prepared.permissions, profiles);
+        assert_eq!(prepared.resources["app"].config, app);
+        let check = crate::compile_time::ValidResourceDependenciesCheck
+            .check(&prepared, Platform::Gcp)
+            .await
+            .unwrap();
+        assert!(check.success, "{:?}", check.errors);
+        let repeated = runner
+            .apply_mutations(prepared.clone(), &state, &config)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&repeated).unwrap(),
+            serde_json::to_value(&prepared).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn node_target_cycle_is_rejected_by_post_mutation_dependency_validation() {
+        let mut stack = node_dependency_stack();
+        stack
+            .resources
+            .get_mut("compute")
+            .unwrap()
+            .config
+            .downcast_mut::<ComputeCluster>()
+            .unwrap()
+            .node_permissions_platforms = Some(vec![Platform::Gcp]);
+        stack
+            .resources
+            .get_mut("objects")
+            .unwrap()
+            .dependencies
+            .push(ResourceRef::new(ComputeCluster::RESOURCE_TYPE, "compute"));
+        assert!(
+            crate::compile_time::ValidResourceDependenciesCheck
+                .check(&stack, Platform::Gcp)
+                .await
+                .unwrap()
+                .success
+        );
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let error = node_dependency_runner()
+            .apply_mutations(stack, &StackState::new(Platform::Gcp), &config)
+            .await
+            .expect_err("node target creates a real cycle");
+        assert_eq!(error.code, "VALIDATION_FAILED");
+        assert!(format!("{error:?}").contains("POST_MUTATION_DEPENDENCY_INVALID"));
+    }
+
+    #[tokio::test]
+    async fn absent_node_grants_leave_existing_dependencies_unchanged() {
+        let mut stack = node_dependency_stack();
+        stack
+            .resources
+            .get_mut("compute")
+            .unwrap()
+            .config
+            .downcast_mut::<ComputeCluster>()
+            .unwrap()
+            .node_permissions = None;
+        let before = serde_json::to_value(&stack).unwrap();
+        let after = ComputeClusterMutation
+            .materialize_node_permissions(stack, Platform::Gcp)
+            .await
+            .unwrap();
+        assert_eq!(serde_json::to_value(&after).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn explicit_node_grants_are_materialized_without_workloads() {
+        let stack = Stack::new("example".to_string())
+            .add(
+                alien_core::Storage::new("objects".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ComputeCluster::new("compute".to_string())
+                    .node_permissions(
+                        alien_core::PermissionProfile::new()
+                            .resource("objects", ["storage/data-read"]),
+                    )
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let state = StackState {
+            platform: Platform::Gcp,
+            resources: Default::default(),
+            resource_prefix: "test".to_string(),
+        };
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        assert!(ComputeClusterMutation.should_run(&stack, &state, &config));
+        let prepared = ComputeClusterMutation
+            .mutate(stack.clone(), &state, &config)
+            .await
+            .unwrap();
+        let cluster = prepared.resources["compute"]
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap();
+        let expected = alien_permissions::get_permission_set("storage/data-read")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            cluster.node_permissions.as_ref().unwrap().0["objects"],
+            vec![PermissionSetReference::Inline(expected)]
+        );
+        assert!(prepared.permissions.profiles.is_empty());
+        assert!(ComputeClusterMutation
+            .materialize_node_permissions(stack.clone(), Platform::Machines)
+            .await
+            .is_err());
+        let mut missing = stack;
+        missing.resources.shift_remove("objects");
+        assert!(ComputeClusterMutation
+            .materialize_node_permissions(missing, Platform::Gcp)
+            .await
+            .is_err());
+    }
+
     #[tokio::test]
     async fn persistent_stateful_container_gets_pool_with_single_capacity_group() {
         let mut container = Container::new("database".to_string())
@@ -1045,6 +1565,7 @@ mod tests {
             .persistent_storage(PersistentStorage {
                 size: "20Gi".to_string(),
                 mount_path: "/data".to_string(),
+                backups: VolumeBackups::default(),
             })
             .stateful(true)
             .replicas(3)
@@ -1303,6 +1824,7 @@ mod tests {
             .persistent_storage(PersistentStorage {
                 size: "20Gi".to_string(),
                 mount_path: "/data".to_string(),
+                backups: VolumeBackups::default(),
             })
             .stateful(true)
             .replicas(1)
@@ -1340,6 +1862,84 @@ mod tests {
         assert_eq!(cluster.capacity_groups.len(), 1);
         assert_eq!(cluster.capacity_groups[0].group_id, "general");
         assert!(!mutation.should_run(&result, &stack_state, &config));
+    }
+
+    /// A deploy config that picks a machine for the stateful pool but says nothing about
+    /// failure domains must still get one failure domain.
+    /// Otherwise the AWS pool spans every zone while its EBS volume is created in one zone, and
+    /// the replica can only be scheduled when the machine happens to land in that zone.
+    #[tokio::test]
+    async fn fresh_persistent_pool_without_failure_domain_choice_gets_single_domain() {
+        let container = Container::new("database".to_string())
+            .code(ContainerCode::Image {
+                image: "database:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .persistent_storage(PersistentStorage {
+                size: "20Gi".to_string(),
+                mount_path: "/data".to_string(),
+                backups: VolumeBackups::default(),
+            })
+            .stateful(true)
+            .replicas(1)
+            .port(8080)
+            .permissions("database".to_string())
+            .build();
+        let stack = Stack::new("test-stack".to_string())
+            .add(container, ResourceLifecycle::Live)
+            .build();
+        let stack_state = StackState {
+            platform: Platform::Aws,
+            resources: Default::default(),
+            resource_prefix: "test".to_string(),
+        };
+        let machine_without_domains = ComputeSettings {
+            pools: [(
+                "stateful".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 1,
+                    machine: Some("t4g.medium".to_string()),
+                    failure_domains: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings {
+                compute: Some(machine_without_domains),
+                ..StackSettings::default()
+            })
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let result = ComputeClusterMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .expect("persistent container should be planned");
+        let container = result.resources["database"]
+            .config
+            .downcast_ref::<Container>()
+            .expect("container should remain present");
+        assert_eq!(container.pool.as_deref(), Some("stateful"));
+        let cluster = result.resources[container.cluster.as_deref().unwrap()]
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .expect("assigned cluster should exist");
+        assert_eq!(cluster.failure_domain_spread.get("stateful"), Some(&1));
+        assert!(
+            !cluster.selected_failure_domains.contains_key("stateful"),
+            "the provider picks the concrete zone"
+        );
     }
 
     #[test]

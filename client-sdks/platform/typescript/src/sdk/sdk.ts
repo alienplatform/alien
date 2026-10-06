@@ -13,17 +13,22 @@ import { finalizeAwsVirtualKeyDeletion } from "../funcs/finalizeAwsVirtualKeyDel
 import { getAwsVirtualKey } from "../funcs/getAwsVirtualKey.js";
 import { getDeploymentCredentialRotation } from "../funcs/getDeploymentCredentialRotation.js";
 import { getDeploymentCredentialRotationValues } from "../funcs/getDeploymentCredentialRotationValues.js";
+import { getLogExportDeliveryConfig } from "../funcs/getLogExportDeliveryConfig.js";
 import { getPendingWorkspaceInvitation } from "../funcs/getPendingWorkspaceInvitation.js";
+import { getProjectLogExport } from "../funcs/getProjectLogExport.js";
 import { getWorkspaceInvitationPreview } from "../funcs/getWorkspaceInvitationPreview.js";
 import { getWorkspaceInviteLink } from "../funcs/getWorkspaceInviteLink.js";
 import { listAwsVirtualKeys } from "../funcs/listAwsVirtualKeys.js";
 import { listWorkspaceInvitations } from "../funcs/listWorkspaceInvitations.js";
 import { prepareDeploymentCredentialRotation } from "../funcs/prepareDeploymentCredentialRotation.js";
+import { reportLogExportDelivery } from "../funcs/reportLogExportDelivery.js";
 import { resendWorkspaceInvitation } from "../funcs/resendWorkspaceInvitation.js";
 import { restoreAwsVirtualKey } from "../funcs/restoreAwsVirtualKey.js";
 import { revokeWorkspaceInvitation } from "../funcs/revokeWorkspaceInvitation.js";
 import { revokeWorkspaceInviteLink } from "../funcs/revokeWorkspaceInviteLink.js";
 import { rotateAwsVirtualKeyCredential } from "../funcs/rotateAwsVirtualKeyCredential.js";
+import { testProjectLogExport } from "../funcs/testProjectLogExport.js";
+import { updateProjectLogExport } from "../funcs/updateProjectLogExport.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
@@ -249,6 +254,61 @@ export class Alien extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.AcceptWorkspaceInvitationResponse> {
     return unwrapAsync(acceptWorkspaceInvitation(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async getProjectLogExport(
+    request: operations.GetProjectLogExportRequest,
+    options?: RequestOptions,
+  ): Promise<operations.GetProjectLogExportResponse> {
+    return unwrapAsync(getProjectLogExport(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async updateProjectLogExport(
+    request: operations.UpdateProjectLogExportRequest,
+    options?: RequestOptions,
+  ): Promise<operations.UpdateProjectLogExportResponse> {
+    return unwrapAsync(updateProjectLogExport(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async testProjectLogExport(
+    request: operations.TestProjectLogExportRequest,
+    options?: RequestOptions,
+  ): Promise<operations.TestProjectLogExportResponse> {
+    return unwrapAsync(testProjectLogExport(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async getLogExportDeliveryConfig(
+    request: operations.GetLogExportDeliveryConfigRequest,
+    options?: RequestOptions,
+  ): Promise<operations.GetLogExportDeliveryConfigResponse> {
+    return unwrapAsync(getLogExportDeliveryConfig(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async reportLogExportDelivery(
+    request: operations.ReportLogExportDeliveryRequest,
+    options?: RequestOptions,
+  ): Promise<operations.ReportLogExportDeliveryResponse> {
+    return unwrapAsync(reportLogExportDelivery(
       this,
       request,
       options,

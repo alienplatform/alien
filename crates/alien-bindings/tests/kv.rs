@@ -1697,27 +1697,21 @@ async fn test_value_validation(#[case] ctx: impl KvTestContext) {
 
     ctx.track_key(&key);
 
-    // Test empty value (should be allowed)
-    // let empty_value_result = kv.put(&key, vec![], None).await;
-    // assert!(empty_value_result.is_ok(), "[{}] Empty value should be allowed", provider_name);
+    let max_bytes = match provider_name {
+        "aws" => 408_576,
+        "gcp" => 783_360,
+        _ => 24_576,
+    };
+    let error = kv
+        .put(&key, vec![0; max_bytes + 1], None)
+        .await
+        .expect_err("oversized value must be rejected");
+    assert_eq!(error.code, "INVALID_INPUT");
 
-    // Test value too large (> 24 KiB)
-    let large_value = vec![0u8; 24_577]; // 24KiB + 1 byte
-    let large_value_result = kv.put(&key, large_value, None).await;
-    assert!(
-        large_value_result.is_err(),
-        "[{}] Value exceeding 24KiB should be rejected",
-        provider_name
-    );
-
-    // Test maximum allowed value size (24 KiB)
-    let max_value = vec![42u8; 24_576]; // Exactly 24KiB
-    let max_value_result = kv.put(&key, max_value.clone(), None).await;
-    assert!(
-        max_value_result.is_ok(),
-        "[{}] Value of exactly 24KiB should be allowed",
-        provider_name
-    );
+    let max_value = vec![42; max_bytes];
+    kv.put(&key, max_value.clone(), None)
+        .await
+        .expect("maximum value must fit provider storage");
 
     // Verify the large value was stored correctly
     let retrieved_value = kv

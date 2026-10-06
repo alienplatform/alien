@@ -208,7 +208,7 @@ export class Daemon extends ResourceBuilder {
   /**
    * Links another resource to this daemon.
    * This makes the linked resource accessible to the daemon, often by injecting
-   * environment variables or granting permissions.
+   * environment variables. Permission grants require an explicit workload profile.
    * @param resource The resource to link.
    * @returns The Daemon builder instance.
    */
@@ -221,7 +221,7 @@ export class Daemon extends ResourceBuilder {
   }
 
   /**
-   * Assigns a permission profile to this daemon.
+   * Assigns a permission profile to this daemon. Without one, no workload cloud identity is created.
    * The profile defines the permissions granted to this daemon when interacting
    * with other cloud resources.
    * @param permissions The permission profile name.

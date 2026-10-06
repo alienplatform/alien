@@ -82,6 +82,11 @@ output "aws_s3_bucket" {
   sensitive = true
 }
 
+output "e2e_aws_terraform_state_bucket" {
+  value     = module.aws.e2e_terraform_state_bucket
+  sensitive = true
+}
+
 output "aws_lambda_image_uri" {
   value     = module.aws.lambda_image_uri
   sensitive = true

@@ -87,6 +87,12 @@ pub struct RuntimeMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_prepared_stack: Option<crate::Stack>,
 
+    /// Release `pending_prepared_stack` was prepared from. The target can move
+    /// to a newer release while that stack is still being applied; this tells
+    /// the update which release actually converged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_prepared_release_id: Option<String>,
+
     /// One-shot setup update authority. It contains only non-secret identity
     /// and canonical resource digests, never the imported payload or tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -115,6 +121,12 @@ pub struct RuntimeMetadata {
     /// teardown removes exactly what is recorded here.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub setup_scaffolding: BTreeMap<String, SetupScaffolding>,
+
+    /// Whether each vault-native deployer secret is in the customer's secret
+    /// store, with where it goes. Checked from metadata only; no value is ever
+    /// read or recorded here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deployer_secrets: Vec<crate::DeployerSecretReport>,
 }
 
 /// Cloud objects a direct setup created so a runtime-owned resource can run.

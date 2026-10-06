@@ -58,6 +58,7 @@ use crate::ui::{
 use alien_core::Platform;
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager::AlienManager;
+use alien_manager_api::{Client as AlienManagerClient, SdkResultExt as _};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::env;
 use std::io::IsTerminal;
@@ -282,7 +283,7 @@ pub struct DevCommand {
     #[arg(long)]
     pub status_file: Option<PathBuf>,
 
-    /// Deployment name for the initial deployment
+    /// Deployment name, or an existing ID / group/name to migrate legacy local state
     #[arg(long, default_value = "default")]
     pub deployment_name: String,
 
@@ -1391,9 +1392,35 @@ async fn run_dev_session(
         )?;
     }
 
+    let mut manager = None;
     let result = async {
         // Start local services (invisible step — fast, no user-facing progress)
-        ensure_server_running_for_dev_session(port, status_file.clone(), user_env_vars).await?;
+        manager = Some(
+            ensure_server_running_for_dev_session(
+                port,
+                status_file.clone(),
+                user_env_vars,
+                &deployment_name,
+            )
+            .await?,
+        );
+
+        let deployment_name = if deployment_name.starts_with("dep_") {
+            AlienManagerClient::new(&format!("http://localhost:{port}"))
+                .get_deployment()
+                .id(&deployment_name)
+                .send()
+                .await
+                .into_sdk_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: "Failed to read the migrated local deployment".to_string(),
+                    url: None,
+                })?
+                .name
+                .clone()
+        } else {
+            deployment_name.rsplit('/').next().unwrap().to_string()
+        };
 
         // Step 0: Building
         let is_tty = steps.is_enabled();
@@ -1434,6 +1461,17 @@ async fn run_dev_session(
         Ok::<(), alien_error::AlienError<ErrorData>>(())
     }
     .await;
+
+    let result = match manager {
+        Some(manager) => match (result, manager.shutdown().await) {
+            (Ok(()), shutdown) => shutdown,
+            (Err(error), Ok(())) => Err(error),
+            (Err(error), Err(shutdown_error)) => Err(error).context(ErrorData::ServerStartFailed {
+                reason: format!("Local manager shutdown also failed: {shutdown_error}"),
+            }),
+        },
+        None => result,
+    };
 
     if let Some(status_file) = &status_file {
         let status = match &result {

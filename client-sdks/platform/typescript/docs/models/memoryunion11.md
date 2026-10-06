@@ -12,9 +12,9 @@ const value: models.SyncReconcileRequestMemory11 = {
 };
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

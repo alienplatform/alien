@@ -293,6 +293,9 @@ pub trait StackMutation: Send + Sync {
 /// Registry of all available checks and mutations
 pub struct PreflightRegistry {
     compile_time_checks: Vec<Box<dyn CompileTimeCheck>>,
+    /// Compile-time checks that run only when building a new stack, never while deploying or
+    /// rendering a setup template for an already-released one.
+    build_time_checks: Vec<Box<dyn CompileTimeCheck>>,
     deployment_prerequisite_checks: Vec<Box<dyn DeploymentPrerequisiteCheck>>,
     #[cfg(feature = "runtime-checks")]
     runtime_checks: Vec<Box<dyn RuntimeCheck>>,
@@ -308,6 +311,7 @@ impl PreflightRegistry {
     pub fn new() -> Self {
         Self {
             compile_time_checks: Vec::new(),
+            build_time_checks: Vec::new(),
             deployment_prerequisite_checks: Vec::new(),
             #[cfg(feature = "runtime-checks")]
             runtime_checks: Vec::new(),
@@ -367,14 +371,22 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::ResourceNameLengthCheck));
         registry.add_compile_time_check(Box::new(compile_time::ResourceIdPatternCheck));
         registry.add_compile_time_check(Box::new(compile_time::WorkerMemoryCheck));
+        registry.add_compile_time_check(Box::new(compile_time::VolumeBackupsCheck));
         registry.add_compile_time_check(Box::new(
             compile_time::kubernetes_compute::KubernetesComputeCheck,
         ));
         registry.add_compile_time_check(Box::new(compile_time::StackInputsDefinitionCheck));
 
+        // Add build-time-only checks. A rule added here applies to new releases; stacks
+        // released before it existed keep deploying and updating.
+        registry.add_build_time_check(Box::new(compile_time::UniqueEndpointHostLabelsCheck));
+
         // Add deployment prerequisite checks. These validate the concrete
         // deployment target/config, so they run only after deployment-time
         // mutations have produced the final stack shape.
+        registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::PrivateEndpointAccessCheck,
+        ));
         registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::ManagedContainerBackendRequiredCheck,
         ));
@@ -495,6 +507,12 @@ impl PreflightRegistry {
         self.compile_time_checks.push(check);
     }
 
+    /// Add a compile-time check that runs only when building a new stack.
+    pub fn add_build_time_check(&mut self, check: Box<dyn CompileTimeCheck>) {
+        self.register_check_code(check.code());
+        self.build_time_checks.push(check);
+    }
+
     /// Add a deployment prerequisite check
     pub fn add_deployment_prerequisite_check(
         &mut self,
@@ -529,6 +547,19 @@ impl PreflightRegistry {
         platform: Platform,
     ) -> Vec<&dyn CompileTimeCheck> {
         self.compile_time_checks
+            .iter()
+            .filter(|check| check.should_run(stack, platform))
+            .map(|check| check.as_ref())
+            .collect()
+    }
+
+    /// Get the checks that run only when building a new stack.
+    pub fn get_build_time_checks(
+        &self,
+        stack: &Stack,
+        platform: Platform,
+    ) -> Vec<&dyn CompileTimeCheck> {
+        self.build_time_checks
             .iter()
             .filter(|check| check.should_run(stack, platform))
             .map(|check| check.as_ref())

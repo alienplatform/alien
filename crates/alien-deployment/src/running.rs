@@ -49,7 +49,12 @@ pub async fn handle_running(
     // as what was deployed during Provisioning. Without this, the executor detects
     // a config mismatch (prepared_stack without env vars vs stack_state with env vars)
     // and incorrectly triggers an update flow.
-    crate::helpers::inject_environment_variables(&mut target_stack, &config, current.platform)?;
+    crate::helpers::inject_environment_variables(
+        &mut target_stack,
+        &config,
+        current.platform,
+        &runtime_metadata.deployer_secrets,
+    )?;
 
     // Inject OTLP monitoring env vars if monitoring is configured
     if let Some(monitoring) = &config.monitoring {
@@ -58,6 +63,24 @@ pub async fn handle_running(
             monitoring,
             current.platform,
         )?;
+    }
+
+    // Report each deployer secret slot as it is now, so a slot the deployer
+    // fills or empties while the deployment runs shows up without a redeploy.
+    // The workload config above keeps the reports it was deployed with; new
+    // ones take effect with the next update.
+    let deployer_secrets = crate::helpers::check_deployer_secrets(
+        &target_stack,
+        &stack_state,
+        &client_config,
+        &config,
+        current.platform,
+    )
+    .await?;
+    if deployer_secrets != runtime_metadata.deployer_secrets {
+        let mut runtime_metadata = runtime_metadata.clone();
+        runtime_metadata.deployer_secrets = deployer_secrets;
+        next.runtime_metadata = Some(runtime_metadata);
     }
 
     let executor = StackExecutor::builder(&target_stack, client_config)

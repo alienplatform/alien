@@ -60,6 +60,16 @@ pub struct ComputeMachineOption {
     pub recommended: bool,
 }
 
+/// Failure-domain policy for a pool that hosts persistent stateful workloads when the
+/// deployment does not choose one: one provider-selected domain, so the pool's machines
+/// and their volumes land in the same zone.
+pub fn default_persistent_failure_domains() -> FailureDomainSelection {
+    FailureDomainSelection {
+        spread: 1,
+        selected_failure_domains: Vec::new(),
+    }
+}
+
 /// Compute a deterministic deployment-time plan.
 pub fn plan_compute(
     stack: &Stack,
@@ -243,10 +253,7 @@ fn recommended_selection(
 
     let failure_domains = (requires_failure_domain
         && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure))
-    .then_some(FailureDomainSelection {
-        spread: 1,
-        selected_failure_domains: Vec::new(),
-    });
+    .then(default_persistent_failure_domains);
 
     match scale {
         CapacityGroupScalePolicy::Fixed { machines } => Ok(ComputePoolSelection::Fixed {

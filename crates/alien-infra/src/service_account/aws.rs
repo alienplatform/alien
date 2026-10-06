@@ -820,24 +820,19 @@ impl AwsServiceAccountController {
                     service: principal_value,
                 },
                 action: "sts:AssumeRole".to_string(),
+                condition: None,
             });
         }
 
-        // Statement for other IAM roles (impersonators)
+        // IAM resolves role principals at policy creation time. These roles may still be
+        // provisioning (or be recreated later), so constrain the account principal by
+        // exact role ARNs instead. This also requires the caller's sts:AssumeRole grant;
+        // it does not grant assumption to arbitrary identities in the account.
         if !role_arns.is_empty() {
-            let principal_value = if role_arns.len() == 1 {
-                TrustPolicyPrincipalValue::Single(role_arns[0].clone())
-            } else {
-                TrustPolicyPrincipalValue::Multiple(role_arns)
-            };
-
-            statements.push(TrustPolicyStatement {
-                effect: "Allow".to_string(),
-                principal: TrustPolicyPrincipal::Aws {
-                    aws: principal_value,
-                },
-                action: "sts:AssumeRole".to_string(),
-            });
+            statements.push(role_trust_statement(
+                &ctx.get_aws_config()?.account_id,
+                role_arns,
+            ));
         }
 
         // Create the complete trust policy document
@@ -1077,4 +1072,42 @@ fn emit_aws_service_account_heartbeat(
         )),
         raw: vec![],
     });
+}
+
+/// Trust only the named roles without requiring them to exist when setup creates the policy.
+fn role_trust_statement(account_id: &str, role_arns: Vec<String>) -> TrustPolicyStatement {
+    TrustPolicyStatement {
+        effect: "Allow".to_string(),
+        principal: TrustPolicyPrincipal::Aws {
+            aws: TrustPolicyPrincipalValue::Single(format!("arn:aws:iam::{account_id}:root")),
+        },
+        action: "sts:AssumeRole".to_string(),
+        condition: Some(serde_json::json!({
+            "ArnEquals": { "aws:PrincipalArn": role_arns }
+        })),
+    }
+}
+
+#[cfg(test)]
+mod trust_tests {
+    use super::*;
+
+    #[test]
+    fn role_trust_requires_an_exact_allowed_role_in_the_same_account() {
+        let roles = vec![
+            "arn:aws:iam::123456789012:role/test-compute-role".to_string(),
+            "arn:aws:iam::123456789012:role/test-execution-sa".to_string(),
+        ];
+        let policy = serde_json::to_value(role_trust_statement("123456789012", roles.clone()))
+            .expect("trust statement should serialize");
+        assert_eq!(
+            policy,
+            serde_json::json!({
+                "Effect": "Allow",
+                "Principal": {"AWS": "arn:aws:iam::123456789012:root"},
+                "Action": "sts:AssumeRole",
+                "Condition": {"ArnEquals": {"aws:PrincipalArn": roles}}
+            })
+        );
+    }
 }

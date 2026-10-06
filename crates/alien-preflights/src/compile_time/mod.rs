@@ -26,7 +26,9 @@ pub mod single_exposed_port_check;
 pub mod single_queue_trigger;
 pub mod stack_inputs;
 pub mod trigger_edge_ownership;
+pub mod unique_endpoint_host_labels;
 pub mod unique_resources;
+pub mod volume_backups;
 pub mod valid_resource_dependencies;
 pub mod worker_memory;
 
@@ -53,7 +55,11 @@ pub use single_exposed_port_check::SingleExposedPortCheck;
 pub use single_queue_trigger::SingleQueueTriggerCheck;
 pub use stack_inputs::StackInputsDefinitionCheck;
 pub use trigger_edge_ownership::TriggerEdgeOwnershipCheck;
+pub use unique_endpoint_host_labels::{
+    endpoint_host_label_conflicts, UniqueEndpointHostLabelsCheck,
+};
 pub use unique_resources::UniqueResourcesCheck;
+pub use volume_backups::VolumeBackupsCheck;
 pub use valid_resource_dependencies::{
     validate_stack_dependencies, ValidResourceDependenciesCheck,
 };

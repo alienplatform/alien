@@ -129,6 +129,8 @@ export interface RawKvHandle {
 
 /** Raw napi queue handle, already scoped to its configured queue. */
 export interface RawQueueHandle {
+  sendBatchJson(messages: string[]): Promise<string>
+  sendBatchText(messages: string[]): Promise<string>
   sendJson(jsonString: string): Promise<void>
   sendText(text: string): Promise<void>
   receive(max: number): Promise<RawQueueMessage[]>
@@ -273,7 +275,9 @@ export interface RawBindingsHandle {
 
 /** Raw napi remote bindings entry point. */
 export interface RawRemoteBindingsHandle {
+  queue(name: string): Promise<RawQueueHandle>
   storage(name: string): Promise<RawRemoteStorageHandle>
+  kv(name: string): Promise<RawKvHandle>
   key(name: string): Promise<RawKeyHandle>
   sandbox(name: string): Promise<RawSandboxHandle>
   ai(): Promise<RawRemoteAiLease>

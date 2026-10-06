@@ -10,7 +10,13 @@ local fast_steps = new Mapping<String, Step> {
     }
     ["check-added-large-files"] = (Builtins.check_added_large_files) {
         // Embedded WASM is verified against native Rust in the package tests.
-        exclude = List("packages/permissions/generated/bytes.js")
+        // The generated OpenAPI inputs are already tracked above the size limit.
+        exclude = List(
+            "packages/permissions/generated/bytes.js",
+            "client-sdks/platform/openapi.json",
+            "client-sdks/platform/rust/openapi.json",
+            "client-sdks/platform/rust/openapi-3.0.json",
+        )
     }
     ["check-merge-conflict"] = Builtins.check_merge_conflict
     ["newlines"] = Builtins.newlines

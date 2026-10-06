@@ -59,9 +59,9 @@ const value: models.DeploymentNetworkByoVnetAzure = {
 };
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

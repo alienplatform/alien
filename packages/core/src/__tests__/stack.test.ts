@@ -194,6 +194,65 @@ describe("Stack builder validation", () => {
     })
   })
 
+  it("declares a secret input whose value Alien generates", () => {
+    const stackInputs = alien.inputs({
+      databasePassword: alien.secret({
+        providedBy: "developer",
+        required: true,
+        label: "Database password",
+        description: "Password the app uses for its database.",
+        generate: { length: 64 },
+        env: "DATABASE_PASSWORD",
+      }),
+    })
+
+    expect(alien.getStackInputDefinitions(stackInputs)).toEqual([
+      expect.objectContaining({
+        id: "databasePassword",
+        kind: "secret",
+        providedBy: ["developer"],
+        required: true,
+        generate: { length: 64 },
+      }),
+    ])
+  })
+
+  it("rejects generate options Alien cannot honor", () => {
+    const generated = {
+      providedBy: "developer" as const,
+      required: true,
+      label: "Database password",
+      description: "Password the app uses for its database.",
+      generate: { length: 64 },
+    }
+
+    expect(() =>
+      alien.inputs({ databasePassword: alien.secret({ ...generated, providedBy: "deployer" }) }),
+    ).toThrow(
+      `Stack input 'databasePassword' generated inputs must be providedBy "developer" only; Alien supplies the value, so the deployer is never asked for it`,
+    )
+    expect(() =>
+      alien.inputs({ databasePassword: alien.secret({ ...generated, generate: { length: 8 } }) }),
+    ).toThrow(
+      "Stack input 'databasePassword' generate.length must be an integer between 16 and 256",
+    )
+    expect(() =>
+      alien.inputs({ databasePassword: alien.secret({ ...generated, generate: { length: 300 } }) }),
+    ).toThrow(
+      "Stack input 'databasePassword' generate.length must be an integer between 16 and 256",
+    )
+    expect(() =>
+      alien.inputs({ databasePassword: alien.secret({ ...generated, pattern: "[a-f0-9]+" }) }),
+    ).toThrow(
+      "Stack input 'databasePassword' generate cannot be combined with pattern or format; generated values are alphanumeric",
+    )
+    expect(() =>
+      alien.inputs({ databasePassword: alien.secret({ ...generated, maxLength: 32 }) }),
+    ).toThrow(
+      "Stack input 'databasePassword' generate.length 64 is outside the input's minLength/maxLength",
+    )
+  })
+
   it("rejects non-portable stack input regex patterns", () => {
     expect(() =>
       alien.inputs({
@@ -225,6 +284,28 @@ describe("Stack builder validation", () => {
       size: "20Gi",
       mountPath: "/var/lib/postgresql/data",
     })
+  })
+
+  it("sets or turns off persistent volume backups", () => {
+    const base = () =>
+      new alien.Container("db")
+        .code({ type: "image", image: "postgres:16-alpine" })
+        .cpu(0.5)
+        .memory("512Mi")
+        .port(5432)
+        .permissions("database")
+
+    const hourly = base()
+      .persistentStorage("20Gi", { backups: { intervalHours: 1, retentionDays: 3 } })
+      .build()
+    expect(hourly.config.persistentStorage?.backups).toEqual({
+      enabled: true,
+      intervalHours: 1,
+      retentionDays: 3,
+    })
+
+    const off = base().persistentStorage("20Gi", { backups: false }).build()
+    expect(off.config.persistentStorage?.backups?.enabled).toBe(false)
   })
 
   it("builds container and daemon stop grace periods", () => {

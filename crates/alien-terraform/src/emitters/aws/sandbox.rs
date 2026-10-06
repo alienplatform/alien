@@ -22,12 +22,15 @@ use alien_core::sandbox_egress::{
 use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::{
     import::EmitContext, permissions::PermissionSetReference, BundleUri, ErrorData, RemoteBindings,
-    ResourceLifecycle, Result, Sandbox, SandboxCode, SandboxEgress, ALIEN_MANAGED_BY_TAG_KEY,
-    ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
+    ResourceLifecycle, Result, Sandbox, SandboxCode, SandboxEgress, ServiceAccount,
+    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::AlienError;
 use alien_permissions::BindingTarget;
 use hcl::expr::Expression;
+
+/// Permission-set id prefix for this resource type.
+const PERMISSION_SET_PREFIX: &str = "sandbox/";
 
 /// Terraform resource type for a MicroVM image.
 ///
@@ -401,10 +404,14 @@ impl TfEmitter for AwsSandboxEmitter {
             // no subset to ask for, so the answer is none — and the key has to be present.
             (
                 "AdditionalOsCapabilities",
-                Expression::from(Vec::<Expression>::new()),
+                Expression::from(if sandbox.privileged_supervisor.is_some() {
+                    vec![Expression::String("ALL".to_string())]
+                } else {
+                    vec![]
+                }),
             ),
             ("Hooks", hooks()),
-            ("EnvironmentVariables", environment_variables()),
+            ("EnvironmentVariables", environment_variables(sandbox)),
             ("Tags", tag_objects(ctx, false)),
         ]);
 
@@ -444,6 +451,7 @@ impl TfEmitter for AwsSandboxEmitter {
                 .with_resource(connector);
         }
         emit_remote_bindings_policy(ctx, &mut fragment)?;
+        emit_profile_policies(ctx, &mut fragment)?;
         Ok(fragment)
     }
 
@@ -458,7 +466,7 @@ impl TfEmitter for AwsSandboxEmitter {
             ("egressConnectorArns", egress_connector_arns(sandbox, label)),
             (
                 "allowEgress",
-                Expression::Bool(matches!(sandbox.egress, SandboxEgress::Allow)),
+                Expression::Bool(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
             ),
             // The ARN, not the name. Measured against the live API: `GetMicrovmImage` and
             // `RunMicrovm` both refuse a bare name — the latter with "Malformed ARN - doesn't
@@ -490,7 +498,7 @@ impl TfEmitter for AwsSandboxEmitter {
             ("egressConnectorArns", egress_connector_arns(sandbox, label)),
             (
                 "allowEgress",
-                Expression::Bool(matches!(sandbox.egress, SandboxEgress::Allow)),
+                Expression::Bool(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
             ),
             ("imageArn", image_property(label, "ImageArn")),
             (
@@ -539,7 +547,7 @@ fn runtime_import_ref(sandbox: &Sandbox, label: &str) -> Result<Expression> {
         ("egressConnectorArns", egress_connector_arns(sandbox, label)),
         (
             "allowEgress",
-            Expression::Bool(matches!(sandbox.egress, SandboxEgress::Allow)),
+            Expression::Bool(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
         ),
         (
             "buildRoleArn",
@@ -622,6 +630,67 @@ fn emit_remote_bindings_policy(ctx: &EmitContext<'_>, fragment: &mut TfFragment)
         &context,
         BindingTarget::Resource,
     )
+}
+
+/// Attaches each profile's granted `sandbox/*` sets to that profile's role, scoped to this
+/// sandbox's image.
+///
+/// Emitted for both lifecycles: a Live image is built after apply, under the same
+/// `${local.resource_prefix}-<id>` name, so a name-scoped grant written now covers it. Without
+/// these a Worker holding `sandbox/management` on the sandbox is denied its first `RunMicrovm`.
+fn emit_profile_policies(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Result<()> {
+    // The bare resource id, as in `emit_remote_bindings_policy`.
+    let context =
+        aws_terraform_permission_context().with_resource_name(ctx.resource_id.to_string());
+    for (profile_name, profile) in ctx.stack.permission_profiles() {
+        let Some(role_label) = service_account_label(ctx, profile_name) else {
+            continue;
+        };
+        let mut seen = std::collections::HashSet::new();
+        let granted = [ctx.resource_id, "*"]
+            .into_iter()
+            .filter_map(|key| profile.0.get(key))
+            .flatten()
+            .filter(|reference| reference.id().starts_with(PERMISSION_SET_PREFIX))
+            .filter(|reference| seen.insert(reference.id().to_string()));
+        for reference in granted {
+            let permission_set = reference
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::GenericError {
+                        message: format!(
+                            "permission set '{}' granted on sandbox '{}' is not registered",
+                            reference.id(),
+                            ctx.resource_id
+                        ),
+                    })
+                })?;
+            let set_segment = iam_policy_name_sanitize(&permission_set.id);
+            emit_iam_role_policy_for_target_with_label(
+                fragment,
+                role_label,
+                &permission_set,
+                &format!("{role_label}_{}_{set_segment}", ctx.resource_id),
+                &format!("access-{}-{set_segment}", ctx.resource_id),
+                &context,
+                BindingTarget::Resource,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// The Terraform label of the `<profile>-sa` service account, whose role the profile's grants
+/// attach to.
+fn service_account_label<'a>(ctx: &'a EmitContext<'_>, profile_name: &str) -> Option<&'a str> {
+    let service_account_id = format!("{profile_name}-sa");
+    ctx.stack
+        .resources()
+        .find(|(id, entry)| {
+            id.as_str() == service_account_id
+                && entry.config.downcast_ref::<ServiceAccount>().is_some()
+        })
+        .and_then(|(id, _)| ctx.name_for(id))
 }
 
 fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
@@ -830,7 +899,7 @@ fn operator_statements() -> Vec<Expression> {
 /// Which network, and which stacks are refused, is [`sandbox_egress_network`]'s decision; a
 /// created or bring-your-own VPC both render through `private_subnet_ids_expr`.
 fn egress_subnet_ids(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Option<Expression>> {
-    let network = sandbox_egress_network(ctx.stack, &sandbox.egress).map_err(|refusal| {
+    let network = sandbox_egress_network(ctx.stack, sandbox.cloud_egress()).map_err(|refusal| {
         AlienError::new(ErrorData::OperationNotSupported {
             operation: format!("terraform emit sandbox '{}'", sandbox.id()),
             reason: refusal.to_string(),
@@ -848,7 +917,7 @@ fn egress_subnet_ids(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Option<
 /// Empty is not a missing value here: it is how `allow` is expressed on the wire, and
 /// `allowEgress` travels beside it so a stripped `deny` cannot be mistaken for it.
 fn egress_connector_arns(sandbox: &Sandbox, label: &str) -> Expression {
-    match sandbox.egress {
+    match sandbox.cloud_egress() {
         SandboxEgress::Allow => Expression::from(Vec::<Expression>::new()),
         _ => Expression::from(vec![expr::traversal([
             NETWORK_CONNECTOR_RESOURCE,
@@ -929,7 +998,7 @@ fn hooks() -> Expression {
 ///
 /// `ALIEN_SANDBOX_AUTHORIZATION` is `transport` on AWS: the proxy validates a token scoped to one
 /// MicroVM before a request arrives, and one MicroVM is one session.
-fn environment_variables() -> Expression {
+fn environment_variables(sandbox: &Sandbox) -> Expression {
     let pairs = [
         ("ALIEN_SANDBOX_ROOT", AWS_MICROVM.session_root.to_string()),
         ("ALIEN_SANDBOX_PORT", AWS_MICROVM.port.to_string()),
@@ -941,6 +1010,17 @@ fn environment_variables() -> Expression {
         ("ALIEN_SANDBOX_EXEC_GID", AWS_MICROVM.exec_uid.to_string()),
     ];
 
+    let mut pairs: Vec<(String, String)> = pairs
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value))
+        .collect();
+    let mut overrides = sandbox.supervisor_environment();
+    for (key, value) in &mut pairs {
+        if let Some(replacement) = overrides.remove(key) {
+            *value = replacement;
+        }
+    }
+    pairs.extend(overrides);
     Expression::from(
         pairs
             .into_iter()
@@ -1146,7 +1226,7 @@ mod tests {
             "a snake_case hook property is refused: {hooks}"
         );
 
-        let variables = environment_variables().to_string();
+        let variables = environment_variables(&sandbox_with_lifecycle(None, None)).to_string();
         assert!(
             variables.contains("Key") && variables.contains("Value"),
             "{variables}"

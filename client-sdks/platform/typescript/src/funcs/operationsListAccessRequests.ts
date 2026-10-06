@@ -89,6 +89,7 @@ async function $do(
   const path = pathToFunc("/v1/access-requests")();
 
   const query = encodeFormQuery({
+    "agentSessionId": payload.agentSessionId,
     "cursor": payload.cursor,
     "deploymentId": payload.deploymentId,
     "limit": payload.limit,

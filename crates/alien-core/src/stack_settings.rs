@@ -392,6 +392,28 @@ impl HeartbeatsMode {
     }
 }
 
+/// Reachability of the deployment's public endpoints, fixed at setup.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum EndpointAccess {
+    /// Endpoints are reachable from the internet.
+    #[default]
+    Internet,
+    /// Endpoints are reachable only through the deployment network (AWS only).
+    Private,
+}
+
+impl EndpointAccess {
+    /// Serialized setup parameter value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Internet => "internet",
+            Self::Private => "private",
+        }
+    }
+}
+
 /// Domain configuration for the stack.
 ///
 /// When `custom_domains` is set, the specified resources use customer-provided
@@ -699,6 +721,11 @@ pub struct KubernetesTlsSecretRef {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct StackSettings {
+    /// Who can reach public endpoints. Private access requires AWS managed containers.
+    /// This choice cannot change after setup; create a new deployment to change it.
+    #[serde(default)]
+    pub endpoint_access: EndpointAccess,
+
     /// Network configuration for the stack (VPC/VNet settings).
     /// If `None`, an isolated VPC with NAT is auto-created when the stack has resources
     /// that require networking (e.g., containers). Set explicitly to customize:
@@ -771,7 +798,6 @@ pub struct StackSettings {
     /// Environment, etc.) instead of having Alien provision them.
     /// Required for Kubernetes platform, optional for cloud platforms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "openapi", schema(value_type = Option<Object>))]
     pub external_bindings: Option<crate::ExternalBindings>,
 }
 

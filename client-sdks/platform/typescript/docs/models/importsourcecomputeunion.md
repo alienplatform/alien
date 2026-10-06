@@ -9,9 +9,9 @@
 const value: models.ImportSourceCompute = {};
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

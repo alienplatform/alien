@@ -159,6 +159,7 @@ async fn prepare_stack_for_render(
 
     let stack_state = StackState::new(platform);
     let config = DeploymentConfig {
+        stored_secret_input_ids: None,
         input_values: Default::default(),
         deployment_name: Some(stack.id().to_string()),
         stack_settings: stack_settings.clone(),
@@ -181,6 +182,7 @@ async fn prepare_stack_for_render(
         manager_url: None,
         deployment_token: None,
         native_image_host: None,
+        volume_restores: Vec::new(),
     };
 
     runner
@@ -609,6 +611,7 @@ mod tests {
                 }
 
                 let config = DeploymentConfig {
+                    stored_secret_input_ids: None,
                     input_values: Default::default(),
                     deployment_name: Some("agents-stack".to_string()),
                     stack_settings: StackSettings::default(),
@@ -631,6 +634,7 @@ mod tests {
                     manager_url: None,
                     deployment_token: None,
                     native_image_host: None,
+                    volume_restores: Vec::new(),
                 };
                 let runner = alien_preflights::runner::PreflightRunner::new();
                 let on_gcp = runner

@@ -52,11 +52,22 @@ jobs:
           echo "git_sha=$git_sha" >> "$GITHUB_OUTPUT"
           echo "short_sha=${git_sha:0:12}" >> "$GITHUB_OUTPUT"
 
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v7
+      - name: Install development tools
+        id: mise
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
         with:
-          node-version: 24
+          version: 2026.10.1
+          add_shims_to_path: false
+          working_directory: .npm-dev-tools
+          install_args: node pnpm
+          cache_key: "{{default}}-${{ hashFiles('.npm-dev-tools/package.json') }}"
+
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
+        with:
           cache: pnpm
 
       - name: Test version and dependency rewriting
@@ -111,16 +122,31 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.git_sha }}
 
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+          path: .npm-dev-tools
+          persist-credentials: false
+
       - name: Setup Rust (linux)
         if: matrix.os == 'linux'
-        uses: ./.github/actions/setup-rust
+        uses: ./.npm-dev-tools/.github/actions/setup-rust
         with:
           depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
           repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
           install-protoc: "true"
 
-      - uses: dtolnay/rust-toolchain@nightly
-        if: matrix.os == 'macos'
+      - if: matrix.os == 'macos'
+        name: Install Rust toolchain
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          working_directory: .npm-dev-tools
+          install_args: rust
+          cache: false
 
       - name: Configure git credentials for cargo (macos)
         if: matrix.os == 'macos'
@@ -134,11 +160,22 @@ jobs:
         if: matrix.target == 'x86_64-apple-darwin'
         run: rustup target add x86_64-apple-darwin
 
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v7
+      - name: Install development tools
+        id: mise
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
         with:
-          node-version: 24
+          version: 2026.10.1
+          add_shims_to_path: false
+          working_directory: .npm-dev-tools
+          install_args: node pnpm
+          cache_key: "{{default}}-${{ hashFiles('.npm-dev-tools/package.json') }}"
+
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
+        with:
           cache: pnpm
 
       - name: Install dependencies
@@ -214,11 +251,22 @@ jobs:
           ref: ${{ github.ref }}
           path: .npm-dev-tools
 
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v7
+      - name: Install development tools
+        id: mise
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
         with:
-          node-version: 24
+          version: 2026.10.1
+          add_shims_to_path: false
+          working_directory: .npm-dev-tools
+          install_args: node pnpm
+          cache_key: "{{default}}-${{ hashFiles('.npm-dev-tools/package.json') }}"
+
+      - name: Cache pnpm dependencies and configure npm registry
+        uses: actions/setup-node@v7
+        with:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 

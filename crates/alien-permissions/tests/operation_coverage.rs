@@ -53,6 +53,8 @@ fn critical_e2e_provider_operations_are_declared() {
             permission_set_id: "worker/provision",
             aws_actions: &[
                 "lambda:CreateFunction",
+                "logs:CreateLogGroup",
+                "logs:PutRetentionPolicy",
                 "ec2:DescribeSecurityGroups",
                 "ec2:DescribeNetworkInterfaces",
                 "ec2:DescribeSubnets",
@@ -319,6 +321,35 @@ fn critical_e2e_provider_operations_are_declared() {
                 "aiplatform.sandboxEnvironments.resume",
                 "aiplatform.sandboxEnvironments.snapshot",
             ],
+            gcp_predefined_roles: &[],
+            azure_actions: &[],
+            azure_data_actions: &[],
+            azure_predefined_roles: &[],
+        },
+        OperationCoverage {
+            // Setup-time Auto Scaling Group creation: zone placement reads offerings, and
+            // launch progress is judged from scaling activities.
+            permission_set_id: "compute-cluster/provision",
+            aws_actions: &[
+                "autoscaling:CreateAutoScalingGroup",
+                "autoscaling:DescribeScalingActivities",
+                "ec2:DescribeInstanceTypeOfferings",
+            ],
+            gcp_permissions: &[],
+            gcp_predefined_roles: &[],
+            azure_actions: &[],
+            azure_data_actions: &[],
+            azure_predefined_roles: &[],
+        },
+        OperationCoverage {
+            // Runtime Auto Scaling Group creation (new capacity groups, failure domains).
+            permission_set_id: "compute-cluster/management",
+            aws_actions: &[
+                "autoscaling:CreateAutoScalingGroup",
+                "autoscaling:DescribeScalingActivities",
+                "ec2:DescribeInstanceTypeOfferings",
+            ],
+            gcp_permissions: &[],
             gcp_predefined_roles: &[],
             azure_actions: &[],
             azure_data_actions: &[],

@@ -88,4 +88,4 @@ alien dev --secret-file API_TOKEN="$HOME/.config/example/api-token:api,worker"
 ## Features
 
 - `otlp` (default) — OpenTelemetry forwarding
-- `platform` (default) — alien.dev sign-in (OAuth, keyring) and the `login`, `workspaces`, `projects`, `link`, `manager` commands. Without it, point commands at a manager with `ALIEN_MANAGER_URL` and `ALIEN_API_KEY`.
+- `platform` (default) — alien.dev sign-in (OAuth) and the `login`, `workspaces`, `projects`, `link`, `manager` commands. Without it, point commands at a manager with `ALIEN_MANAGER_URL` and `ALIEN_API_KEY`.

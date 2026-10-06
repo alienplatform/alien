@@ -20,6 +20,7 @@ use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps
 use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
 use alien_core::{
     ClientConfig, ComputeSettings, DeploymentState, DeploymentStatus, NetworkSettings, Platform,
+    ResourceLifecycle,
 };
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::manager_api_transport::{
@@ -28,8 +29,10 @@ use alien_deployment::manager_api_transport::{
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_infra::ClientConfigExt;
+use alien_infra::{ClientConfigExt, StackStateExt};
+use alien_platform_api::types::DeploymentUpdateOperationStatus;
 use alien_platform_api::Client as SdkClient;
+use alien_platform_api::SdkResultExt as _;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Parser;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
@@ -150,6 +153,7 @@ struct ResolvedDeployArgs {
     platform_enum: Platform,
     network_settings: Option<NetworkSettings>,
     compute_settings: Option<ComputeSettings>,
+    domain_settings: Option<alien_core::DomainSettings>,
     input_values: HashMap<String, serde_json::Value>,
     public_subdomain: Option<String>,
 }
@@ -161,6 +165,7 @@ struct DeployConfigFile {
     platform: Option<String>,
     network: Option<DeployConfigNetwork>,
     compute: Option<ComputeSettings>,
+    domains: Option<alien_core::DomainSettings>,
     inputs: Option<HashMap<String, String>>,
     secret_inputs: Option<HashMap<String, String>>,
 }
@@ -315,6 +320,7 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
         platform_enum,
         network_settings,
         compute_settings,
+        domain_settings: config.as_ref().and_then(|config| config.domains.clone()),
         input_values,
         public_subdomain: args.public_subdomain.clone(),
     })
@@ -889,7 +895,7 @@ async fn create_deployment_with_group_session(
     parse_api_response(response, "Failed to create deployment").await
 }
 
-fn deployment_manager_http_client(
+pub(crate) fn deployment_manager_http_client(
     deployment_token: &str,
     workspace: Option<&str>,
 ) -> Result<reqwest::Client> {
@@ -943,6 +949,10 @@ fn deployment_stack_settings_json(
         "updates": "auto",
     });
 
+    if let Some(access) = args.network.endpoint_access {
+        settings["endpointAccess"] = serde_json::json!(access);
+    }
+
     if let Some(network_settings) = resolved_args.network_settings.as_ref() {
         settings["network"] = serde_json::to_value(network_settings)
             .into_alien_error()
@@ -957,6 +967,14 @@ fn deployment_stack_settings_json(
             .context(ErrorData::ConfigurationError {
                 message: "Failed to serialize compute settings".to_string(),
             })?;
+    }
+
+    if let Some(domains) = resolved_args.domain_settings.as_ref() {
+        settings["domains"] = serde_json::to_value(domains).into_alien_error().context(
+            ErrorData::ConfigurationError {
+                message: "Failed to serialize domain settings".to_string(),
+            },
+        )?;
     }
 
     Ok(settings)
@@ -1268,6 +1286,8 @@ async fn deploy_task_with_environment(
     } else {
         tracker.get_deployment(&resolved_args.name).cloned()
     };
+    // A deployment group token passed for an existing deployment, with its group.
+    let mut supplied_group_token: Option<(String, String)> = None;
     let tracked_deployment = match existing_deployment {
         Some(deployment) => {
             info!("Found tracked deployment '{}'", resolved_args.name);
@@ -1301,9 +1321,18 @@ async fn deploy_task_with_environment(
                                 },
                             )?
                         }
-                        // A group token authorizes creating deployments, not re-keying
-                        // one that already exists, so keep the stored deployment key.
-                        DeploymentToken::DeploymentGroup { .. } => deployment,
+                        // A group token authorizes creating deployments and running
+                        // setup, not re-keying one that already exists: keep the
+                        // stored deployment key and hold the group token as setup
+                        // authority.
+                        DeploymentToken::DeploymentGroup {
+                            deployment_group_id,
+                            ..
+                        } => {
+                            supplied_group_token =
+                                Some((deployment_group_id, provided_token.clone()));
+                            deployment
+                        }
                     }
                 }
                 _ => deployment,
@@ -1371,6 +1400,13 @@ async fn deploy_task_with_environment(
                             alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Pull
                         };
                         let stack_settings = alien_platform_api::types::NewDeploymentRequestStackSettings {
+                        endpoint_access: args.network.endpoint_access
+                            .map(|access| serde_json::from_value(serde_json::json!(access)))
+                            .transpose()
+                            .into_alien_error()
+                            .context(ErrorData::ConfigurationError {
+                                message: "Failed to convert endpoint access to SDK type".to_string(),
+                            })?,
                         compute: sdk_compute,
                         deployment_model: Some(deployment_model),
                         heartbeats: Some(if args.no_heartbeat {
@@ -1384,7 +1420,12 @@ async fn deploy_task_with_environment(
                         }),
                         updates: Some(alien_platform_api::types::NewDeploymentRequestStackSettingsUpdates::Auto),
                         network: sdk_network,
-                        domains: None,
+                        domains: resolved_args.domain_settings.clone().map(|domains| {
+                            let value = serde_json::to_value(domains).into_alien_error()
+                                .context(ErrorData::ConfigurationError { message: "Failed to serialize domain settings".to_string() })?;
+                            serde_json::from_value(value).into_alien_error()
+                                .context(ErrorData::ConfigurationError { message: "Failed to convert domain settings to SDK type".to_string() })
+                        }).transpose()?,
                         external_bindings: None,
                         kubernetes: None,
                         public_endpoints: None,
@@ -1590,6 +1631,107 @@ async fn deploy_task_with_environment(
 
     let client_config = client_config.expect("non-Machines deploys validate client config");
 
+    // An installed deployment with nothing pending has nothing to deploy, and
+    // one whose update waits for setup needs setup authority this run must
+    // bring: say so now instead of waiting for a lock nobody grants.
+    let initial_setup =
+        existing_deployment_plan(&status, None, false) == ExistingDeploymentPlan::InitialSetup;
+    let (deployment_group_id, active_update) = if ctx.is_platform() && !initial_setup {
+        let (group, active_update) = platform_deployment_progress(
+            &base_url,
+            &tracked_deployment.api_key,
+            &tracked_deployment.deployment_id,
+        )
+        .await?;
+        (Some(group), active_update)
+    } else {
+        (None, None)
+    };
+    let plan = existing_deployment_plan(&status, active_update, ctx.is_platform());
+    if plan == ExistingDeploymentPlan::WaitForManager {
+        return Err(AlienError::new(ErrorData::DeploymentFailed {
+            message: format!(
+                "Deployment '{}' is {status:?} with an update waiting for setup. Setup can run once the manager returns it to running; check `alien deployments get {}`.",
+                resolved_args.name, tracked_deployment.deployment_id
+            ),
+        }));
+    }
+    if plan == ExistingDeploymentPlan::NothingToDo {
+        steps.complete(2, Some("Nothing to deploy".to_string()));
+        steps.skip(3, Some("Already running".to_string()));
+        drop(steps);
+        println!(
+            "{}",
+            success_line("Deployment is running with no pending update. Nothing to do.")
+        );
+        println!(
+            "{} {}",
+            dim_label("Next"),
+            command(&format!(
+                "alien deployments redeploy {}",
+                tracked_deployment.deployment_id
+            ))
+        );
+        return Ok(());
+    }
+
+    // Setup runs with setup authority for the deployment group; the
+    // deployment token keeps configuring the runtime.
+    let setup_client = match plan {
+        ExistingDeploymentPlan::SetupUpdate { retry } => {
+            let deployment_group_id = deployment_group_id.as_deref().ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: "A setup update needs the deployment's group from the platform"
+                        .to_string(),
+                })
+            })?;
+            let supplied_group_token = match supplied_group_token.as_ref() {
+                Some((group, _)) if group != deployment_group_id => {
+                    return Err(AlienError::new(ErrorData::ValidationError {
+                        field: "token".to_string(),
+                        message: format!(
+                            "The deployment group token is for group {group}, but deployment '{}' belongs to group {deployment_group_id}.",
+                            resolved_args.name
+                        ),
+                    }));
+                }
+                Some((_, token)) => Some(token.as_str()),
+                None => None,
+            };
+            let setup_token = setup_authority_token(
+                supplied_group_token,
+                || async {
+                    let auth = ctx.auth_http().await?;
+                    let workspace = ctx.resolve_platform_workspace_context(true).await?;
+                    Ok(LoginSession {
+                        client: auth.client,
+                        workspace: workspace.query,
+                    })
+                },
+                &base_url,
+                deployment_group_id,
+                &resolved_args.name,
+                &plan.setup_reason(&status),
+            )
+            .await?;
+            if retry {
+                request_deployment_retry(
+                    &base_url,
+                    &setup_token,
+                    &tracked_deployment.deployment_id,
+                )
+                .await?;
+            }
+            Some(alien_manager_api::Client::new_with_client(
+                &manager_ctx.manager_url,
+                deployment_manager_http_client(&setup_token, manager_ctx.workspace.as_deref())?,
+            ))
+        }
+        _ => None,
+    };
+    // The client that holds the lock: setup authority for a setup update.
+    let lock_client = setup_client.as_ref().unwrap_or(&manager_client);
+
     // Build deployment state
     let mut current = DeploymentState {
         status,
@@ -1628,43 +1770,17 @@ async fn deploy_task_with_environment(
     // Deployment records intentionally omit the release stack. Resolve it
     // before entering the step loop; a missing or incompatible target is a
     // configuration error, not an observe-only deployment.
-    if current.target_release.is_none() {
-        if let Some(release_id) = deployment.desired_release_id.as_ref() {
-            let url = format!("{}/v1/releases/{}", manager_ctx.manager_url, release_id);
-            let response = manager_ctx
-                .http_client
-                .get(&url)
-                .header(
-                    reqwest::header::AUTHORIZATION,
-                    format!("Bearer {}", tracked_deployment.api_key),
-                )
-                .send()
-                .await
-                .into_alien_error()
-                .context(ErrorData::ApiRequestFailed {
-                    message: format!("loading target release '{release_id}'"),
-                    url: Some(url.clone()),
-                })?;
-            let response = response.error_for_status().into_alien_error().context(
-                ErrorData::ApiRequestFailed {
-                    message: format!("loading target release '{release_id}'"),
-                    url: Some(url),
-                },
-            )?;
-            let release_json = response
-                .json::<serde_json::Value>()
-                .await
-                .into_alien_error()
-                .context(ErrorData::ConfigurationError {
-                    message: format!("Failed to decode target release '{release_id}'"),
-                })?;
-            current.target_release = Some(target_release_from_json(
-                release_id,
-                platform,
-                release_json,
-            )?);
-        }
-    }
+    let deployment_token = tracked_deployment.api_key.as_str();
+    let manager_ctx_ref = &manager_ctx;
+    (current.target_release, current.current_release) = load_run_releases(
+        deployment.desired_release_id.as_deref(),
+        deployment.current_release_id.as_deref(),
+        matches!(plan, ExistingDeploymentPlan::SetupUpdate { .. }),
+        move |release_id: String| async move {
+            load_release(manager_ctx_ref, deployment_token, &release_id, platform).await
+        },
+    )
+    .await?;
 
     // Running deploy on a failed deployment is an implicit retry request
     if current.status.is_failed() {
@@ -1699,6 +1815,15 @@ async fn deploy_task_with_environment(
         }
     }
 
+    if let Some(requested_domains) = resolved_args.domain_settings.as_ref() {
+        if stack_settings.domains.as_ref() != Some(requested_domains) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "domains".to_string(),
+                message: "Domain settings differ from the existing deployment. Update its stack settings before resuming setup.".to_string(),
+            }));
+        }
+    }
+
     let mut config: alien_core::DeploymentConfig = serde_json::from_value(serde_json::json!({
         "stackSettings": serde_json::to_value(&stack_settings).unwrap_or_default(),
         "environmentVariables": {
@@ -1720,18 +1845,15 @@ async fn deploy_task_with_environment(
     }
 
     let setup_owned_status = matches!(
-        current.status,
-        DeploymentStatus::Pending
-            | DeploymentStatus::PreflightsFailed
-            | DeploymentStatus::InitialSetup
-            | DeploymentStatus::InitialSetupFailed
+        plan,
+        ExistingDeploymentPlan::InitialSetup | ExistingDeploymentPlan::SetupUpdate { .. }
     );
 
     // Acquire → step loop → reconcile → release (all via manager)
     let session = format!("cli-deploy-{}", Uuid::new_v4());
     let acquired_deployment = if setup_owned_status {
         acquire_setup_run_deployment(
-            &manager_client,
+            lock_client,
             &tracked_deployment.deployment_id,
             &session,
             stack_settings.deployment_model,
@@ -1807,7 +1929,7 @@ async fn deploy_task_with_environment(
         })?;
 
     let transport = ManagerApiTransport::with_execution_claim(
-        manager_client.clone(),
+        lock_client.clone(),
         session.clone(),
         acquired_deployment.execution_claim.clone(),
     );
@@ -1820,6 +1942,29 @@ async fn deploy_task_with_environment(
         },
         delay_strategy: alien_deployment::runner::DelayStrategy::Inline,
     };
+
+    // A setup update re-runs setup on an installed deployment: prepare the
+    // target release's setup-owned resources, then hand off like initial setup.
+    // A failed preparation releases the lock with the state as it was read.
+    if matches!(plan, ExistingDeploymentPlan::SetupUpdate { .. }) {
+        let mut prepared = current.clone();
+        if let Err(error) = prepare_setup_update(&mut prepared, &config, &client_config).await {
+            let finalized = final_reconcile(
+                lock_client,
+                &tracked_deployment.deployment_id,
+                &session,
+                acquired_deployment.execution_claim.as_ref(),
+                &current,
+            )
+            .await;
+            return combine_operation_and_finalization(Err::<(), _>(error), finalized).context(
+                ErrorData::GenericError {
+                    message: "setup update failed".to_string(),
+                },
+            );
+        }
+        current = prepared;
+    }
 
     let runner_result = alien_deployment::runner::run_step_loop(
         &mut current,
@@ -1841,7 +1986,7 @@ async fn deploy_task_with_environment(
     let runner_result = combine_operation_and_finalization(
         alien_deployment::runner::preserve_semantic_failure(runner_result, &current),
         final_reconcile(
-            &manager_client,
+            lock_client,
             &tracked_deployment.deployment_id,
             &session,
             acquired_deployment.execution_claim.as_ref(),
@@ -1872,11 +2017,13 @@ async fn deploy_task_with_environment(
         "Deployment loop finished"
     );
 
-    // Handle runner outcome
-    match loop_result.outcome {
+    // Handle runner outcome. `handed_off` means this run finished setup and the
+    // manager now provisions the deployment, so it is not running yet.
+    let handed_off = match loop_result.outcome {
         LoopOutcome::Success => {
             steps.complete(2, Some("Resources ready".to_string()));
             steps.complete(3, Some("Running".to_string()));
+            false
         }
         LoopOutcome::Failure => {
             steps.fail(2, Some(format!("{:?}", loop_result.final_status)));
@@ -1895,8 +2042,11 @@ async fn deploy_task_with_environment(
             );
         }
         LoopOutcome::Neutral if loop_result.stop_reason == LoopStopReason::Handoff => {
-            steps.complete(2, Some("Resources ready".to_string()));
-            steps.complete(3, Some("Running".to_string()));
+            // Provisioning can still block after the handoff (for example on a
+            // deployer secret that is not written yet), so do not report running.
+            steps.complete(2, Some("Handed off to the manager".to_string()));
+            steps.skip(3, Some("The manager provisions the deployment".to_string()));
+            true
         }
         LoopOutcome::Neutral => {
             steps.fail(2, Some(format!("{:?}", loop_result.final_status)));
@@ -1907,8 +2057,39 @@ async fn deploy_task_with_environment(
                 ),
             }));
         }
-    }
+    };
     drop(steps);
+
+    if handed_off {
+        // Setup only gets the deployment to the handoff. Report what the manager
+        // makes of it: running, failed, or blocked on the deployer.
+        println!(
+            "{}",
+            dim_label("Setup complete. Waiting for the manager to provision the deployment...")
+        );
+        let deployment_id = tracked_deployment.deployment_id.clone();
+        wait_for_handed_off_deployment(
+            || observe_deployment(&manager_client, &deployment_id),
+            HANDOFF_POLL_INTERVAL,
+            HANDOFF_TIMEOUT,
+            |observed| {
+                if matches!(
+                    observed.status,
+                    DeploymentStatus::WaitingForSecrets | DeploymentStatus::WaitingForMachines
+                ) {
+                    println!(
+                        "{} {}",
+                        dim_label("Blocked:"),
+                        observed
+                            .error_message
+                            .as_deref()
+                            .unwrap_or(describe_waiting_status(&observed.status))
+                    );
+                }
+            },
+        )
+        .await?;
+    }
 
     println!("{}", success_line("Deployment is running."));
     println!(
@@ -1927,6 +2108,124 @@ async fn deploy_task_with_environment(
     );
 
     Ok(())
+}
+
+/// How often `alien deploy` polls the deployment after handing it to the manager.
+const HANDOFF_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long `alien deploy` waits for the manager after the handoff. A deployment
+/// waiting for a deployer secret stays blocked until someone writes it.
+const HANDOFF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// A deployment's status and headline error, as observed after the handoff.
+#[derive(Debug, Clone)]
+struct ObservedDeployment {
+    status: DeploymentStatus,
+    error_message: Option<String>,
+}
+
+async fn observe_deployment(
+    manager_client: &alien_manager_api::Client,
+    deployment_id: &str,
+) -> Result<ObservedDeployment> {
+    let deployment = manager_client
+        .get_deployment()
+        .id(deployment_id)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to read deployment '{deployment_id}' after setup"),
+        })?
+        .into_inner();
+    let status = serde_json::from_value(serde_json::Value::String(deployment.status.clone()))
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Unknown deployment status: {}", deployment.status),
+        })?;
+    let error_message = deployment
+        .error
+        .map(serde_json::from_value::<AlienError>)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to decode the error of deployment '{deployment_id}'"),
+        })?
+        .map(|error| error.message);
+    Ok(ObservedDeployment {
+        status,
+        error_message,
+    })
+}
+
+/// Wait until the manager reports a handed-off deployment running.
+///
+/// A failed or deleted deployment, or the timeout, is an error, so `alien deploy`
+/// never exits successfully for a deployment that is not running. `on_change`
+/// sees each newly observed status and error, for example to say what a blocked
+/// deployment needs from the deployer.
+async fn wait_for_handed_off_deployment<F, Fut>(
+    mut observe: F,
+    interval: std::time::Duration,
+    timeout: std::time::Duration,
+    mut on_change: impl FnMut(&ObservedDeployment),
+) -> Result<()>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<ObservedDeployment>>,
+{
+    let started = tokio::time::Instant::now();
+    let mut last: Option<(DeploymentStatus, Option<String>)> = None;
+    loop {
+        let observed = observe().await?;
+        let key = (observed.status, observed.error_message.clone());
+        if last.as_ref() != Some(&key) {
+            on_change(&observed);
+            last = Some(key);
+        }
+
+        if observed.status == DeploymentStatus::Running {
+            return Ok(());
+        }
+        if observed.status.is_failed()
+            || matches!(
+                observed.status,
+                DeploymentStatus::DeletePending
+                    | DeploymentStatus::Deleting
+                    | DeploymentStatus::Deleted
+                    | DeploymentStatus::TeardownRequired
+                    | DeploymentStatus::Error
+            )
+        {
+            let phase = describe_failed_status(&observed.status);
+            return Err(AlienError::new(ErrorData::DeploymentFailed {
+                message: match observed.error_message {
+                    Some(cause) => format!("{phase} failed ({:?}): {cause}", observed.status),
+                    None => format!("{phase} failed ({:?})", observed.status),
+                },
+            }));
+        }
+        if started.elapsed() >= timeout {
+            let state = match observed.error_message {
+                Some(cause) => format!("{:?}: {cause}", observed.status),
+                None => format!("{:?}", observed.status),
+            };
+            return Err(AlienError::new(ErrorData::DeploymentFailed {
+                message: format!(
+                    "the deployment is still not running after {}s ({state})",
+                    timeout.as_secs()
+                ),
+            }));
+        }
+        tokio::time::sleep(interval).await;
+    }
+}
+
+fn describe_waiting_status(status: &DeploymentStatus) -> &'static str {
+    match status {
+        DeploymentStatus::WaitingForSecrets => "waiting for deployer secrets",
+        DeploymentStatus::WaitingForMachines => "waiting for machines to join",
+        _ => "waiting",
+    }
 }
 
 /// Validate a deployment file without constructing an authenticated execution context.
@@ -2095,6 +2394,80 @@ fn is_local_private_url(url: &str) -> bool {
         || url.starts_with("https://127.0.0.1:")
 }
 
+/// Loads a release's stack from the manager with the deployment token.
+async fn load_release(
+    manager_ctx: &crate::execution_context::ManagerContext,
+    deployment_token: &str,
+    release_id: &str,
+    platform: Platform,
+) -> Result<alien_core::ReleaseInfo> {
+    let url = format!("{}/v1/releases/{}", manager_ctx.manager_url, release_id);
+    let response = manager_ctx
+        .http_client
+        .get(&url)
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {deployment_token}"),
+        )
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("loading release '{release_id}'"),
+            url: Some(url.clone()),
+        })?;
+    let response =
+        response
+            .error_for_status()
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: format!("loading release '{release_id}'"),
+                url: Some(url),
+            })?;
+    let release_json = response
+        .json::<serde_json::Value>()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to decode release '{release_id}'"),
+        })?;
+    target_release_from_json(release_id, platform, release_json)
+}
+
+/// Loads the target and installed releases a run starts from. The target is
+/// the desired release. A setup update also needs the installed release: it
+/// reconciles state with the manager at every step, and without the installed
+/// release that would clear it. A failed refresh has no update in flight, so
+/// the deployment has no desired release; its setup retry applies the
+/// installed release again.
+async fn load_run_releases<L, LF>(
+    desired_release_id: Option<&str>,
+    current_release_id: Option<&str>,
+    setup_update: bool,
+    load: L,
+) -> Result<(
+    Option<alien_core::ReleaseInfo>,
+    Option<alien_core::ReleaseInfo>,
+)>
+where
+    L: Fn(String) -> LF,
+    LF: std::future::Future<Output = Result<alien_core::ReleaseInfo>>,
+{
+    let target = match desired_release_id {
+        Some(release_id) => Some(load(release_id.to_string()).await?),
+        None => None,
+    };
+    if !setup_update {
+        return Ok((target, None));
+    }
+    let installed = match current_release_id {
+        Some(release_id) => Some(load(release_id.to_string()).await?),
+        None => None,
+    };
+    let target = target.or_else(|| installed.clone());
+    Ok((target, installed))
+}
+
 fn target_release_from_json(
     release_id: &str,
     platform: Platform,
@@ -2125,12 +2498,478 @@ fn target_release_from_json(
     })
 }
 
+/// The deployment's active update, as far as taking a lock is concerned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActiveUpdate {
+    /// Queued or applying: a runtime lock picks it up.
+    Pending,
+    /// Blocked until setup runs again.
+    WaitingForSetup,
+}
+
+impl ActiveUpdate {
+    fn from_status(status: DeploymentUpdateOperationStatus) -> Option<Self> {
+        match status {
+            DeploymentUpdateOperationStatus::Queued | DeploymentUpdateOperationStatus::Applying => {
+                Some(Self::Pending)
+            }
+            DeploymentUpdateOperationStatus::Blocked => Some(Self::WaitingForSetup),
+            DeploymentUpdateOperationStatus::Succeeded
+            | DeploymentUpdateOperationStatus::Failed
+            | DeploymentUpdateOperationStatus::Superseded => None,
+        }
+    }
+}
+
+/// How `alien deploy` continues an existing deployment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExistingDeploymentPlan {
+    /// Setup has not handed the deployment off yet; its deployment token runs setup.
+    InitialSetup,
+    /// Pending work the deployment token's runtime lock picks up.
+    Runtime,
+    /// Installed deployment whose update waits for setup, or whose last update
+    /// or refresh failed. Running setup again needs setup authority for the
+    /// deployment group; `retry` first moves the failed operation back to ready.
+    SetupUpdate { retry: bool },
+    /// Running with nothing pending.
+    NothingToDo,
+    /// An update waits for setup while the deployment is in a status the
+    /// setup lock does not accept; the manager has to move it first.
+    WaitForManager,
+}
+
+impl ExistingDeploymentPlan {
+    /// What the deployment is waiting for, for a person.
+    fn setup_reason(self, status: &DeploymentStatus) -> String {
+        match self {
+            Self::SetupUpdate { retry: true } => {
+                format!("had its last {} fail", describe_failed_status(status))
+            }
+            _ => "has an update waiting for setup".to_string(),
+        }
+    }
+}
+
+/// Decides how to continue an existing deployment. `active_update` comes from
+/// the platform; a standalone manager has no blocked updates, so a running
+/// deployment there has nothing pending.
+fn existing_deployment_plan(
+    status: &DeploymentStatus,
+    active_update: Option<ActiveUpdate>,
+    platform_mode: bool,
+) -> ExistingDeploymentPlan {
+    if matches!(
+        status,
+        DeploymentStatus::Pending
+            | DeploymentStatus::PreflightsFailed
+            | DeploymentStatus::InitialSetup
+            | DeploymentStatus::InitialSetupFailed
+    ) {
+        return ExistingDeploymentPlan::InitialSetup;
+    }
+    if platform_mode {
+        if matches!(
+            status,
+            DeploymentStatus::UpdateFailed | DeploymentStatus::RefreshFailed
+        ) {
+            return ExistingDeploymentPlan::SetupUpdate { retry: true };
+        }
+        if active_update == Some(ActiveUpdate::WaitingForSetup) {
+            // The setup lock takes an installed deployment only while it
+            // runs or after a failed provisioning, update or refresh.
+            return if matches!(
+                status,
+                DeploymentStatus::Running | DeploymentStatus::ProvisioningFailed
+            ) {
+                ExistingDeploymentPlan::SetupUpdate { retry: false }
+            } else {
+                ExistingDeploymentPlan::WaitForManager
+            };
+        }
+    }
+    if *status == DeploymentStatus::Running && active_update.is_none() {
+        return ExistingDeploymentPlan::NothingToDo;
+    }
+    ExistingDeploymentPlan::Runtime
+}
+
+/// A platform user session able to mint a first-party deployment group
+/// session: its HTTP client and workspace query.
+struct LoginSession {
+    client: reqwest::Client,
+    workspace: Option<String>,
+}
+
+/// Returns a token with setup authority for the deployment group: the group
+/// token passed with `--token`, else a first-party session minted from the
+/// user's login. The deployment token never has it; it keeps configuring the
+/// runtime.
+async fn setup_authority_token<L, LF>(
+    supplied_group_token: Option<&str>,
+    login: L,
+    base_url: &str,
+    deployment_group_id: &str,
+    deployment_name: &str,
+    reason: &str,
+) -> Result<String>
+where
+    L: FnOnce() -> LF,
+    LF: std::future::Future<Output = Result<LoginSession>>,
+{
+    if let Some(token) = supplied_group_token {
+        return Ok(token.to_string());
+    }
+    let login = login().await.map_err(|error| {
+        if error.code == "LOGIN_REQUIRED" {
+            AlienError::new(ErrorData::DeploymentSetupAuthorityRequired {
+                deployment: deployment_name.to_string(),
+                reason: reason.to_string(),
+            })
+        } else {
+            error
+        }
+    })?;
+    let session = create_first_party_deployment_session(
+        &login.client,
+        base_url,
+        login.workspace.as_deref(),
+        deployment_group_id,
+    )
+    .await?;
+    Ok(session.token)
+}
+
+/// The deployment's group and active update, read from the platform with the
+/// deployment token.
+async fn platform_deployment_progress(
+    base_url: &str,
+    deployment_token: &str,
+    deployment_id: &str,
+) -> Result<(String, Option<ActiveUpdate>)> {
+    let deployment = create_platform_client(deployment_token, base_url)?
+        .get_deployment()
+        .id(deployment_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("reading deployment {deployment_id}"),
+            url: None,
+        })?
+        .into_inner();
+    let active_update = deployment
+        .update_state
+        .as_ref()
+        .and_then(|update_state| update_state.active.0.as_ref())
+        .and_then(|operation| ActiveUpdate::from_status(operation.status));
+    Ok((deployment.deployment_group_id.to_string(), active_update))
+}
+
+/// Prepares an installed deployment for a setup run: the target release's
+/// setup-owned (frozen) resources become the prepared stack, failed frozen
+/// resources are retried, and the deployment re-enters initial setup, which
+/// hands it back to the manager once setup is applied.
+async fn prepare_setup_update(
+    current: &mut DeploymentState,
+    config: &alien_core::DeploymentConfig,
+    client_config: &ClientConfig,
+) -> Result<()> {
+    if !matches!(
+        current.status,
+        DeploymentStatus::Running
+            | DeploymentStatus::UpdatePending
+            | DeploymentStatus::UpdateFailed
+            | DeploymentStatus::RefreshFailed
+            | DeploymentStatus::ProvisioningFailed
+    ) {
+        return Ok(());
+    }
+    let target_stack = current
+        .target_release
+        .as_ref()
+        .map(|release| release.stack.clone())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: "A setup update requires the deployment's desired release".to_string(),
+            })
+        })?;
+    let stack_state = current.stack_state.as_mut().ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "A setup update requires the deployment's stack state".to_string(),
+        })
+    })?;
+    let existing_metadata = current.runtime_metadata.as_ref().ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "An installed deployment has no prepared setup metadata".to_string(),
+        })
+    })?;
+    current.runtime_metadata = Some(
+        alien_deployment::prepare_direct_setup_update(
+            target_stack,
+            stack_state,
+            config,
+            client_config,
+            existing_metadata,
+        )
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to prepare the setup update".to_string(),
+        })?,
+    );
+    stack_state
+        .retry_failed_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to retry failed setup-owned resources".to_string(),
+        })?;
+    current.status = DeploymentStatus::InitialSetup;
+    Ok(())
+}
+
+/// Moves a failed deployment's operation back to ready so setup can take it.
+async fn request_deployment_retry(
+    base_url: &str,
+    setup_token: &str,
+    deployment_id: &str,
+) -> Result<()> {
+    create_platform_client(setup_token, base_url)?
+        .retry_deployment()
+        .id(deployment_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("requesting a retry of deployment {deployment_id}"),
+            url: None,
+        })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::time::{timeout, Duration};
+
+    #[test]
+    fn existing_deployment_plan_routes_each_state_to_the_lock_that_can_take_it() {
+        use ExistingDeploymentPlan::*;
+
+        for status in [
+            DeploymentStatus::Pending,
+            DeploymentStatus::PreflightsFailed,
+            DeploymentStatus::InitialSetup,
+            DeploymentStatus::InitialSetupFailed,
+        ] {
+            for platform_mode in [true, false] {
+                assert_eq!(
+                    existing_deployment_plan(&status, None, platform_mode),
+                    InitialSetup,
+                    "{status:?} is still in initial setup"
+                );
+            }
+        }
+
+        let cases = [
+            // Platform: installed deployments.
+            (DeploymentStatus::Running, None, true, NothingToDo),
+            (
+                DeploymentStatus::Running,
+                Some(ActiveUpdate::Pending),
+                true,
+                Runtime,
+            ),
+            (
+                DeploymentStatus::Running,
+                Some(ActiveUpdate::WaitingForSetup),
+                true,
+                SetupUpdate { retry: false },
+            ),
+            (
+                DeploymentStatus::UpdatePending,
+                Some(ActiveUpdate::WaitingForSetup),
+                true,
+                WaitForManager,
+            ),
+            (
+                DeploymentStatus::ProvisioningFailed,
+                Some(ActiveUpdate::WaitingForSetup),
+                true,
+                SetupUpdate { retry: false },
+            ),
+            (
+                DeploymentStatus::UpdatePending,
+                Some(ActiveUpdate::Pending),
+                true,
+                Runtime,
+            ),
+            (
+                DeploymentStatus::UpdateFailed,
+                None,
+                true,
+                SetupUpdate { retry: true },
+            ),
+            (
+                DeploymentStatus::RefreshFailed,
+                None,
+                true,
+                SetupUpdate { retry: true },
+            ),
+            (DeploymentStatus::Provisioning, None, true, Runtime),
+            (DeploymentStatus::WaitingForSecrets, None, true, Runtime),
+            // A standalone manager has no blocked updates or setup authority.
+            (DeploymentStatus::Running, None, false, NothingToDo),
+            (DeploymentStatus::UpdateFailed, None, false, Runtime),
+            (DeploymentStatus::UpdatePending, None, false, Runtime),
+        ];
+        for (status, active_update, platform_mode, expected) in cases {
+            assert_eq!(
+                existing_deployment_plan(&status, active_update, platform_mode),
+                expected,
+                "{status:?} with {active_update:?} (platform: {platform_mode})"
+            );
+        }
+    }
+
+    #[test]
+    fn only_queued_applying_and_blocked_updates_are_active() {
+        assert_eq!(
+            ActiveUpdate::from_status(DeploymentUpdateOperationStatus::Blocked),
+            Some(ActiveUpdate::WaitingForSetup)
+        );
+        for status in [
+            DeploymentUpdateOperationStatus::Queued,
+            DeploymentUpdateOperationStatus::Applying,
+        ] {
+            assert_eq!(
+                ActiveUpdate::from_status(status),
+                Some(ActiveUpdate::Pending)
+            );
+        }
+        for status in [
+            DeploymentUpdateOperationStatus::Succeeded,
+            DeploymentUpdateOperationStatus::Failed,
+            DeploymentUpdateOperationStatus::Superseded,
+        ] {
+            assert_eq!(ActiveUpdate::from_status(status), None);
+        }
+    }
+
+    /// A platform API that mints first-party sessions and records who asked.
+    async fn first_party_session_api() -> (String, Arc<std::sync::Mutex<Vec<(String, String)>>>) {
+        use axum::{extract::State, http::HeaderMap as AxumHeaders, routing::post, Json, Router};
+
+        type Calls = Arc<std::sync::Mutex<Vec<(String, String)>>>;
+        async fn mint(
+            State(calls): State<Calls>,
+            axum::extract::Path(group): axum::extract::Path<String>,
+            headers: AxumHeaders,
+        ) -> Json<serde_json::Value> {
+            let authorization = headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            calls.lock().unwrap().push((group, authorization));
+            Json(serde_json::json!({ "token": "minted-group-session" }))
+        }
+
+        let calls: Calls = Arc::default();
+        let app = Router::new()
+            .route(
+                "/v1/deployment-groups/{group}/first-party-session",
+                post(mint),
+            )
+            .with_state(calls.clone());
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let addr = listener.local_addr().expect("local addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        (format!("http://{addr}"), calls)
+    }
+
+    #[tokio::test]
+    async fn setup_authority_prefers_the_supplied_group_token() {
+        let (base_url, calls) = first_party_session_api().await;
+
+        let token = setup_authority_token(
+            Some("group-token"),
+            || async { panic!("a supplied group token must not need a login") },
+            &base_url,
+            "dg_1",
+            "production",
+            "has an update waiting for setup",
+        )
+        .await
+        .expect("supplied token");
+
+        assert_eq!(token, "group-token");
+        assert!(calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn setup_authority_mints_a_group_session_from_the_login() {
+        let (base_url, calls) = first_party_session_api().await;
+
+        let token = setup_authority_token(
+            None,
+            || async {
+                Ok(LoginSession {
+                    client: crate::auth::client_with_header("Bearer user-session")?,
+                    workspace: Some("acme".to_string()),
+                })
+            },
+            &base_url,
+            "dg_1",
+            "production",
+            "has an update waiting for setup",
+        )
+        .await
+        .expect("session token");
+
+        assert_eq!(token, "minted-group-session");
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![("dg_1".to_string(), "Bearer user-session".to_string())],
+            "the session is minted for the deployment's group with the user's login"
+        );
+    }
+
+    #[tokio::test]
+    async fn setup_authority_without_login_or_token_names_both_ways_to_get_it() {
+        let (base_url, calls) = first_party_session_api().await;
+
+        let error = setup_authority_token(
+            None,
+            || async {
+                Err(AlienError::new(ErrorData::LoginRequired {
+                    reason: "no usable login session on this machine".to_string(),
+                }))
+            },
+            &base_url,
+            "dg_1",
+            "production",
+            "has an update waiting for setup",
+        )
+        .await
+        .expect_err("no setup authority");
+
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_AUTHORITY_REQUIRED");
+        assert!(error
+            .message
+            .contains("'production' has an update waiting for setup"));
+        let hint = error.hint.as_deref().unwrap_or_default();
+        assert!(
+            hint.contains("alien login") && hint.contains("--token"),
+            "{hint}"
+        );
+        assert!(calls.lock().unwrap().is_empty());
+    }
 
     #[test]
     fn deployment_group_selector_is_available_without_a_token() {
@@ -2249,6 +3088,74 @@ mod tests {
         assert!(error.message.contains("aws"));
     }
 
+    /// Runs `load_run_releases` with a loader that records each release id it
+    /// is asked for and returns a release whose stack is named after it.
+    async fn run_releases(
+        desired: Option<&str>,
+        installed: Option<&str>,
+        setup_update: bool,
+    ) -> (Option<String>, Option<String>, Vec<String>) {
+        let loaded = std::sync::Mutex::new(Vec::new());
+        let (target, current) =
+            load_run_releases(desired, installed, setup_update, |release_id: String| {
+                loaded
+                    .lock()
+                    .expect("loader log lock")
+                    .push(release_id.clone());
+                let release: Result<alien_core::ReleaseInfo> = Ok(alien_core::ReleaseInfo {
+                    stack: alien_core::Stack::new(format!("stack-{release_id}")).build(),
+                    release_id: Some(release_id),
+                    version: None,
+                    description: None,
+                });
+                async move { release }
+            })
+            .await
+            .expect("releases load");
+        for release in target.iter().chain(current.iter()) {
+            let release_id = release.release_id.as_deref().expect("release id");
+            assert_eq!(release.stack.id, format!("stack-{release_id}"));
+        }
+        let id = |release: Option<alien_core::ReleaseInfo>| release.and_then(|r| r.release_id);
+        (
+            id(target),
+            id(current),
+            loaded.into_inner().expect("loader log"),
+        )
+    }
+
+    #[tokio::test]
+    async fn refresh_retry_without_a_desired_release_reapplies_the_installed_release() {
+        // A failed refresh has no update in flight, so the deployment carries
+        // only its installed release.
+        let (target, current, loaded) = run_releases(None, Some("rel_installed"), true).await;
+        assert_eq!(target.as_deref(), Some("rel_installed"));
+        assert_eq!(current.as_deref(), Some("rel_installed"));
+        assert_eq!(loaded, ["rel_installed"]);
+    }
+
+    #[tokio::test]
+    async fn setup_update_targets_the_desired_release_over_the_installed_one() {
+        let (target, current, loaded) =
+            run_releases(Some("rel_new"), Some("rel_installed"), true).await;
+        assert_eq!(target.as_deref(), Some("rel_new"));
+        assert_eq!(current.as_deref(), Some("rel_installed"));
+        assert_eq!(loaded, ["rel_new", "rel_installed"]);
+    }
+
+    #[tokio::test]
+    async fn runtime_runs_load_only_the_desired_release() {
+        let (target, current, loaded) =
+            run_releases(Some("rel_new"), Some("rel_installed"), false).await;
+        assert_eq!(target.as_deref(), Some("rel_new"));
+        assert_eq!(current, None);
+        assert_eq!(loaded, ["rel_new"]);
+
+        let (target, current, loaded) = run_releases(None, Some("rel_installed"), false).await;
+        assert_eq!((target, current), (None, None));
+        assert!(loaded.is_empty());
+    }
+
     #[test]
     fn deployment_models_match_platform_delivery() {
         for platform in [
@@ -2287,6 +3194,7 @@ machine = "m8i.2xlarge"
             platform_enum: Platform::Aws,
             network_settings: None,
             compute_settings: config.compute,
+            domain_settings: config.domains,
             input_values: HashMap::new(),
             public_subdomain: None,
         };
@@ -2303,6 +3211,41 @@ machine = "m8i.2xlarge"
                 "machines": 1,
                 "machine": "m8i.2xlarge"
             })
+        );
+    }
+
+    #[test]
+    fn deploy_config_preserves_custom_domains_in_both_creation_payloads() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("deploy.toml");
+        std::fs::write(
+            &path,
+            r#"
+name = "staging"
+platform = "aws"
+[domains.customDomains.gateway]
+domain = "api.example.com"
+[domains.customDomains.gateway.certificate.aws]
+certificateArn = "arn:aws:acm:us-west-2:123456789012:certificate/customer"
+"#,
+        )
+        .expect("write config");
+        let args = DeployArgs::try_parse_from(["deploy", "--config", path.to_str().expect("path")])
+            .expect("parse deploy arguments");
+        let resolved = resolve_deploy_args(&args).expect("resolve custom domain config");
+        let settings =
+            deployment_stack_settings_json(&resolved, &args).expect("group creation payload");
+        let expected = serde_json::json!({ "customDomains": { "gateway": {
+            "domain": "api.example.com",
+            "certificate": { "aws": { "certificateArn": "arn:aws:acm:us-west-2:123456789012:certificate/customer" }}
+        }}});
+        assert_eq!(settings["domains"], expected);
+        let sdk_settings: alien_platform_api::types::NewDeploymentRequestStackSettings =
+            serde_json::from_value(settings)
+                .expect("normal creation SDK accepts the same settings");
+        assert_eq!(
+            serde_json::to_value(sdk_settings).expect("SDK serialization")["domains"],
+            expected
         );
     }
 
@@ -2418,6 +3361,7 @@ max = 1
             platform_enum: Platform::Aws,
             network_settings: None,
             compute_settings: None,
+            domain_settings: None,
             input_values: HashMap::new(),
             public_subdomain: None,
         };
@@ -2504,5 +3448,113 @@ max = 1
                 None => assert!(!request_lower.contains("x-alien-workspace:")),
             }
         }
+    }
+
+    fn scripted_observer(
+        script: Vec<(DeploymentStatus, Option<&'static str>)>,
+    ) -> impl FnMut() -> std::future::Ready<Result<ObservedDeployment>> {
+        let mut script = script.into_iter();
+        let mut last = None;
+        move || {
+            // Once the script runs out, the deployment stays in its last status.
+            let (status, error) = script.next().or(last).expect("script is not empty");
+            last = Some((status, error));
+            std::future::ready(Ok(ObservedDeployment {
+                status,
+                error_message: error.map(str::to_string),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn handoff_wait_reports_a_blocked_deployment_once_and_succeeds_when_running() {
+        let mut seen = Vec::new();
+        wait_for_handed_off_deployment(
+            scripted_observer(vec![
+                (DeploymentStatus::Provisioning, None),
+                (
+                    DeploymentStatus::WaitingForSecrets,
+                    Some("missing: API key"),
+                ),
+                (
+                    DeploymentStatus::WaitingForSecrets,
+                    Some("missing: API key"),
+                ),
+                (DeploymentStatus::Provisioning, None),
+                (DeploymentStatus::Running, None),
+            ]),
+            Duration::from_millis(1),
+            Duration::from_secs(5),
+            |observed| seen.push((observed.status, observed.error_message.clone())),
+        )
+        .await
+        .expect("a deployment that reaches running succeeds");
+
+        assert_eq!(
+            seen,
+            vec![
+                (DeploymentStatus::Provisioning, None),
+                (
+                    DeploymentStatus::WaitingForSecrets,
+                    Some("missing: API key".to_string())
+                ),
+                (DeploymentStatus::Provisioning, None),
+                (DeploymentStatus::Running, None),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn handoff_wait_fails_with_the_deployment_error_after_the_handoff() {
+        let error = wait_for_handed_off_deployment(
+            scripted_observer(vec![
+                (DeploymentStatus::Provisioning, None),
+                (
+                    DeploymentStatus::InitialSetupFailed,
+                    Some("role trust policy rejected the manager"),
+                ),
+            ]),
+            Duration::from_millis(1),
+            Duration::from_secs(5),
+            |_| {},
+        )
+        .await
+        .expect_err("a failed deployment must not exit successfully");
+
+        assert!(
+            error
+                .message
+                .contains("role trust policy rejected the manager"),
+            "unexpected error: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains("InitialSetupFailed"),
+            "unexpected error: {}",
+            error.message
+        );
+    }
+
+    #[tokio::test]
+    async fn handoff_wait_times_out_naming_the_blocked_status() {
+        let error = wait_for_handed_off_deployment(
+            scripted_observer(vec![(
+                DeploymentStatus::WaitingForSecrets,
+                Some("missing: API key"),
+            )]),
+            Duration::from_millis(1),
+            Duration::from_millis(20),
+            |_| {},
+        )
+        .await
+        .expect_err("a deployment still blocked at the timeout is an error");
+
+        assert!(
+            error
+                .message
+                .contains("WaitingForSecrets: missing: API key"),
+            "unexpected error: {}",
+            error.message
+        );
     }
 }

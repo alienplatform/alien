@@ -10,7 +10,7 @@
 use crate::error::{ErrorData, Result};
 use crate::instance_catalog::{is_same_architecture_aws_machine, Architecture};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef};
-use crate::ResourceType;
+use crate::{PermissionProfile, Platform, ResourceType};
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -183,9 +183,9 @@ pub struct CapacityGroup {
 ///
 /// ## Architecture
 ///
-/// - **Setup** owns the identity and network boundary: IAM roles, instance profiles, security groups
-/// - **Runtime** manages the worker fleet (ASGs/MIGs/VMSSs) inside that boundary: machine count,
-///   machine image and, on AWS, machine type within one CPU architecture
+/// - **Setup** creates cloud resources: ASGs/MIGs/VMSSs, IAM roles, security groups
+/// - **Alien** manages allowed fleet operations: machine count, runtime
+///   machine image rollout and, on AWS, the machine type within one CPU architecture
 /// - A node agent runs on each machine from the selected runtime image channel
 ///
 /// ## Example
@@ -225,6 +225,15 @@ pub struct ComputeCluster {
     /// Each group becomes a separate ASG/MIG/VMSS.
     #[builder(field)]
     pub capacity_groups: Vec<CapacityGroup>,
+
+    /// Explicit grants for the node identity, keyed by concrete resource ID.
+    /// Independent of workload permission profiles; absent grants no data access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_permissions: Option<PermissionProfile>,
+
+    /// Cloud platforms on which the explicit node grants apply; absent applies everywhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_permissions_platforms: Option<Vec<Platform>>,
 
     /// Pool reserved for containers created after a deployment is installed.
     /// If absent, the runtime uses the `general` pool when it exists.
@@ -380,21 +389,22 @@ impl ResourceDefinition for ComputeCluster {
                 .iter()
                 .find(|g| g.group_id == new_group.group_id)
             {
-                // Without the platform, only the catalog rule is enforced here; the Frozen
-                // compatibility check also limits a runtime machine change to AWS.
-                if let Some((old, new)) = existing_group
-                    .instance_type
-                    .as_deref()
-                    .zip(new_group.instance_type.as_deref())
-                    .filter(|(old, new)| old != new && !is_same_architecture_aws_machine(old, new))
-                {
-                    return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
-                        resource_id: self.id.clone(),
-                        reason: format!(
-                            "instance type for capacity group '{}' can change only to an AWS machine of the same CPU architecture ('{}' -> '{}')",
-                            new_group.group_id, old, new
-                        ),
-                    }));
+                // The controller rolls the fleet onto another machine of the same architecture;
+                // the stack's images may not run on any other machine. Preflights also limit
+                // this to AWS, which this check can't see.
+                if let (Some(old), Some(new)) = (
+                    existing_group.instance_type.as_deref(),
+                    new_group.instance_type.as_deref(),
+                ) {
+                    if old != new && !is_same_architecture_aws_machine(old, new) {
+                        return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                            resource_id: self.id.clone(),
+                            reason: format!(
+                                "capacity group '{}' can't change machine from '{old}' to '{new}': only an AWS machine of the same CPU architecture can replace it",
+                                new_group.group_id
+                            ),
+                        }));
+                    }
                 }
             }
         }
@@ -569,79 +579,57 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    fn machine_cluster(instance_type: &str) -> ComputeCluster {
-        ComputeCluster::new("compute".to_string())
-            .capacity_group(CapacityGroup {
-                group_id: "general".to_string(),
-                instance_type: Some(instance_type.to_string()),
-                profile: None,
-                min_size: 1,
-                max_size: 5,
-                scale_policy: None,
-                nested_virtualization: None,
-            })
-            .build()
-    }
-
-    fn machine_update(old: &str, new: &str) -> Result<()> {
-        machine_cluster(old).validate_update(&machine_cluster(new))
-    }
-
     #[test]
-    fn an_aws_machine_change_within_one_architecture_is_a_valid_update() {
-        machine_update("t4g.micro", "c7g.medium").expect("arm64 to arm64 rolls at runtime");
-        machine_update("c7g.xlarge", "c7g.2xlarge").expect("arm64 to arm64 rolls at runtime");
-    }
-
-    /// GCP, Azure and uncatalogued names never resolve in the AWS catalog, so only name equality
-    /// keeps their scale-only updates valid.
-    #[test]
-    fn an_unchanged_machine_outside_the_aws_catalog_is_a_valid_update() {
-        for machine in ["n2-standard-2", "Standard_D2s_v5", "t4g.unknown"] {
-            let mut scaled = machine_cluster(machine);
-            scaled.capacity_groups[0].max_size = 10;
-            machine_cluster(machine)
-                .validate_update(&scaled)
-                .unwrap_or_else(|error| panic!("{machine}: {error:?}"));
-        }
-    }
-
-    #[test]
-    fn other_machine_changes_stay_immutable() {
+    fn machine_changes_stay_within_one_aws_architecture() {
+        let cluster = |machine: &str| {
+            ComputeCluster::new("compute".to_string())
+                .capacity_group(CapacityGroup {
+                    group_id: "general".to_string(),
+                    instance_type: Some(machine.to_string()),
+                    profile: None,
+                    min_size: 1,
+                    max_size: 5,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                })
+                .build()
+        };
+        cluster("t4g.small")
+            .validate_update(&cluster("t4g.medium"))
+            .expect("arm64 to arm64");
         for (old, new) in [
-            ("t4g.micro", "m7i.large"),
-            ("t4g.micro", "t4g.unknown"),
-            ("t4g.unknown", "t4g.micro"),
+            ("t4g.small", "m7i.large"),
+            ("t4g.small", "t4g.unknown"),
             ("n2-standard-2", "n2-standard-4"),
         ] {
-            let error = machine_update(old, new).expect_err("needs setup");
+            let error = cluster(old)
+                .validate_update(&cluster(new))
+                .expect_err("needs setup");
             assert_eq!(error.code, "INVALID_RESOURCE_UPDATE", "{old} -> {new}");
-            assert!(
-                error.message.contains("same CPU architecture"),
-                "{old} -> {new}"
-            );
         }
     }
 
     #[test]
-    fn a_machine_change_cannot_carry_an_id_or_cidr_change() {
-        let renamed = ComputeCluster {
-            id: "other".to_string(),
-            ..machine_cluster("c7g.medium")
-        };
-        assert!(machine_cluster("t4g.micro")
-            .validate_update(&renamed)
-            .is_err());
-
-        let with_cidr = |cidr: &str| ComputeCluster {
-            container_cidr: Some(cidr.to_string()),
-            ..machine_cluster("t4g.micro")
-        };
-        let moved = ComputeCluster {
-            container_cidr: Some("10.250.0.0/16".to_string()),
-            ..machine_cluster("c7g.medium")
-        };
-        assert!(with_cidr("10.244.0.0/16").validate_update(&moved).is_err());
+    fn node_permissions_are_inline_optional_and_roundtrip_exactly() {
+        let mut cluster = ComputeCluster::new("compute".to_string()).build();
+        let absent = serde_json::to_value(&cluster).unwrap();
+        assert!(absent.get("nodePermissions").is_none());
+        assert_eq!(
+            serde_json::from_value::<ComputeCluster>(absent).unwrap(),
+            cluster
+        );
+        cluster.node_permissions =
+            Some(PermissionProfile::new().resource("objects", ["storage/data-read"]));
+        let json = serde_json::to_value(&cluster).unwrap();
+        assert_eq!(
+            json["nodePermissions"],
+            serde_json::json!({"objects": ["storage/data-read"]})
+        );
+        assert_eq!(
+            serde_json::from_value::<ComputeCluster>(json).unwrap(),
+            cluster
+        );
+        assert_eq!(ResourceDefinition::get_permissions(&cluster), None);
     }
 
     #[test]

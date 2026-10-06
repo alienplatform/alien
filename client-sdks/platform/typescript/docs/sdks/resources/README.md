@@ -62,6 +62,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useResourcesListInventory,
+  useResourcesListInventorySuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchResourcesListInventory,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateResourcesListInventory,
+  invalidateAllResourcesListInventory,
+} from "@alienplatform/platform-api/react-query/resourcesListInventory.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="listInventory" method="get" path="/v1/resources" example="projectName" -->
@@ -112,6 +140,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useResourcesListInventory,
+  useResourcesListInventorySuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchResourcesListInventory,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateResourcesListInventory,
+  invalidateAllResourcesListInventory,
+} from "@alienplatform/platform-api/react-query/resourcesListInventory.js";
 ```
 
 ### Parameters
@@ -190,6 +246,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useResourcesListOverview,
+  useResourcesListOverviewSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchResourcesListOverview,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateResourcesListOverview,
+  invalidateAllResourcesListOverview,
+} from "@alienplatform/platform-api/react-query/resourcesListOverview.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="listResourceOverview" method="get" path="/v1/resources/{area}" example="projectName" -->
@@ -242,6 +326,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useResourcesListOverview,
+  useResourcesListOverviewSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchResourcesListOverview,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateResourcesListOverview,
+  invalidateAllResourcesListOverview,
+} from "@alienplatform/platform-api/react-query/resourcesListOverview.js";
 ```
 
 ### Parameters
@@ -324,6 +436,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useResourcesListDeployments,
+  useResourcesListDeploymentsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchResourcesListDeployments,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateResourcesListDeployments,
+  invalidateAllResourcesListDeployments,
+} from "@alienplatform/platform-api/react-query/resourcesListDeployments.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="listResourceDeployments" method="get" path="/v1/resources/{area}/{resourceId}/deployments" example="projectName" -->
@@ -378,6 +518,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useResourcesListDeployments,
+  useResourcesListDeploymentsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchResourcesListDeployments,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateResourcesListDeployments,
+  invalidateAllResourcesListDeployments,
+} from "@alienplatform/platform-api/react-query/resourcesListDeployments.js";
 ```
 
 ### Parameters
@@ -460,6 +628,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useResourcesGetDeploymentDetail,
+  useResourcesGetDeploymentDetailSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchResourcesGetDeploymentDetail,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateResourcesGetDeploymentDetail,
+  invalidateAllResourcesGetDeploymentDetail,
+} from "@alienplatform/platform-api/react-query/resourcesGetDeploymentDetail.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="getResourceDeploymentDetail" method="get" path="/v1/resources/{area}/deployments/{deploymentId}/{resourceId}" example="projectName" -->
@@ -516,6 +712,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useResourcesGetDeploymentDetail,
+  useResourcesGetDeploymentDetailSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchResourcesGetDeploymentDetail,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateResourcesGetDeploymentDetail,
+  invalidateAllResourcesGetDeploymentDetail,
+} from "@alienplatform/platform-api/react-query/resourcesGetDeploymentDetail.js";
 ```
 
 ### Parameters

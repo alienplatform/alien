@@ -9,8 +9,8 @@ use k8s_openapi::api::core::v1::{
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 
 use crate::core::{
-    kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels, projected_env_vars,
-    EnvironmentVariableBuilder, KubernetesEnvSecretPlan, ResourceController,
+    kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels, pod_template_annotations,
+    projected_env_vars, EnvironmentVariableBuilder, KubernetesEnvSecretPlan, ResourceController,
     ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
@@ -110,8 +110,7 @@ pub(super) async fn build_worker_deployment(
             name: name.to_string(),
         }]
     });
-    let pod_annotations = env_secret_plan
-        .map(|plan| BTreeMap::from([("env-secret-checksum".to_string(), plan.checksum.clone())]));
+    let pod_annotations = pod_template_annotations(env_secret_plan, &config.environment)?;
 
     // Source images share the stack build target. Workers do not select a
     // compute pool, but must still run on nodes compatible with that image.

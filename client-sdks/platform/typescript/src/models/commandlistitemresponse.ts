@@ -14,6 +14,10 @@ import {
   CommandProjectInfo,
   CommandProjectInfo$inboundSchema,
 } from "./commandprojectinfo.js";
+import {
+  CommandVerification,
+  CommandVerification$inboundSchema,
+} from "./commandverification.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 /**
@@ -157,6 +161,14 @@ export type CommandListItemResponse = {
    */
   error: { [k: string]: any | null } | null;
   /**
+   * The approved access request that authorized this operation command, if one did
+   */
+  accessRequestId: string | null;
+  /**
+   * Verification outcome of an operation command; null for commands that are not operations
+   */
+  verification: CommandVerification | null;
+  /**
    * Decoded command result when available
    */
   result?: any | null | undefined;
@@ -234,6 +246,8 @@ export const CommandListItemResponse$inboundSchema: z.ZodType<
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ),
   error: z.nullable(z.record(z.string(), z.nullable(z.any()))),
+  accessRequestId: z.nullable(z.string()),
+  verification: z.nullable(CommandVerification$inboundSchema),
   result: z.nullable(z.any()).optional(),
   resultAvailability: CommandListItemResponseResultAvailability$inboundSchema
     .optional(),

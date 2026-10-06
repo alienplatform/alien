@@ -1348,10 +1348,28 @@ impl StackExecutor {
     /// without planning structural changes. Logical Kubernetes compute pools are
     /// initialized here because cloud setup engines do not provision them.
     pub async fn continue_imported(&self, mut state: StackState) -> Result<StepResult> {
+        // Setup also registers each Live resource it renders scaffolding for (today a Live
+        // sandbox) as Provisioning with controller state, for the runtime controller to finish.
+        // Any other record outside the lifecycle filter didn't come from setup.
+        let left_for_runtime = |resource_id: &str, imported: &StackResourceState| {
+            self.desired_stack
+                .resources
+                .get(resource_id)
+                .is_some_and(|entry| {
+                    ownership_policy_for_resource_type(entry.config.resource_type().as_ref())
+                        .emits_setup_scaffolding(entry.lifecycle)
+                        && imported.status == ResourceStatus::Provisioning
+                        && imported.has_internal_state()
+                })
+        };
         if let Some(resource_id) = state
             .resources
-            .keys()
-            .find(|resource_id| !self.resources.contains_key(*resource_id))
+            .iter()
+            .find(|(resource_id, imported)| {
+                !self.resources.contains_key(*resource_id)
+                    && !left_for_runtime(resource_id, imported)
+            })
+            .map(|(resource_id, _)| resource_id)
         {
             return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
                 message: format!(

@@ -83,6 +83,8 @@ export type OperationsPluginOperationAw = {
 
 export const OperationsPluginOperationScope = {
   ProjectsDollarProjectName: "projects/${projectName}",
+  ProjectsDollarProjectNameBucketsDollarResourceName:
+    "projects/${projectName}/buckets/${resourceName}",
 } as const;
 export type OperationsPluginOperationScope = ClosedEnum<
   typeof OperationsPluginOperationScope

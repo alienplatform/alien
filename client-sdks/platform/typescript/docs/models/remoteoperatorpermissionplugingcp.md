@@ -11,7 +11,7 @@ let value: RemoteOperatorPermissionPluginGcp = {
     "<value 2>",
     "<value 3>",
   ],
-  scope: "projects/${projectName}",
+  scope: "projects/${projectName}/buckets/${resourceName}",
   reason: "<value>",
 };
 ```

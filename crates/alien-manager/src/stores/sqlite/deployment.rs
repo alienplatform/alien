@@ -68,6 +68,48 @@ impl SqliteDeploymentStore {
         Self { db }
     }
 
+    /// Replace user environment variables without deleting the deployment or its resources.
+    /// Callers must own the standalone database and stop its execution loop first.
+    pub async fn replace_environment_variables(
+        &self,
+        id: &str,
+        variables: &[EnvironmentVariable],
+    ) -> Result<(), AlienError> {
+        let json = serde_json::to_string(variables)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize deployment environment variables".to_string(),
+            })?;
+        let sql = Query::update()
+            .table(Deployments::Table)
+            .value(Deployments::EnvironmentVariables, json)
+            .and_where(Expr::col(Deployments::Id).eq(id))
+            .to_string(SqliteQueryBuilder);
+        self.db.execute(&sql).await
+    }
+
+    /// Move an explicitly selected local deployment without rewriting resource state.
+    /// The caller must exclusively own the stopped database during migration.
+    pub async fn reassign_local_deployment_group(
+        &self,
+        id: &str,
+        group_id: &str,
+    ) -> Result<(), AlienError> {
+        let sql = Query::update()
+            .table(Deployments::Table)
+            .value(Deployments::DeploymentGroupId, group_id)
+            .and_where(Expr::col(Deployments::Id).eq(id))
+            .and_where(Expr::col(Deployments::Platform).eq("local"))
+            .to_string(SqliteQueryBuilder);
+        let affected = self.db.execute_returning_rows_affected(&sql).await?;
+        if affected != 1 {
+            return Err(AlienError::new(GenericError {
+                message: format!("Expected one local deployment to migrate; updated {affected}"),
+            }));
+        }
+        Ok(())
+    }
+
     fn should_preserve_retry_requested(
         deployment: &DeploymentRecord,
         reported_state: &alien_core::DeploymentState,

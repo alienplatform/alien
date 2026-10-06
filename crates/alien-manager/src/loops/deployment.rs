@@ -85,6 +85,7 @@ fn synthesize_byo_horizon_machine_image() -> Option<alien_core::HorizonMachineIm
     }
 
     Some(HorizonMachineImage {
+        runtime_isolation_generation: 0,
         channel: "byo".to_string(),
         machine_image_version: "byo-local".to_string(),
         horizond_version: "byo".to_string(),
@@ -138,6 +139,7 @@ fn active_work_statuses() -> Vec<String> {
         "initial-setup",
         "provisioning",
         "waiting-for-machines",
+        "waiting-for-secrets",
         "update-pending",
         "updating",
         "delete-pending",
@@ -273,19 +275,43 @@ impl DeploymentLoop {
 
     /// Run the deployment loop forever.
     pub async fn run(&self) {
+        let (_sender, shutdown) = tokio::sync::watch::channel(false);
+        self.run_until_shutdown(shutdown).await;
+    }
+
+    pub(crate) async fn run_until_shutdown(
+        &self,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) {
         info!(
             interval_secs = self.config.deployment_interval_secs,
             "Starting deployment loop"
         );
 
-        loop {
+        while !*shutdown.borrow() {
             if let Err(payload) = AssertUnwindSafe(self.tick()).catch_unwind().await {
                 error!(
                     panic = panic_payload_message(payload.as_ref()),
                     "Deployment loop tick panicked"
                 );
             }
-            tokio::time::sleep(Duration::from_secs(self.config.deployment_interval_secs)).await;
+            tokio::select! {
+                _ = shutdown.changed() => break,
+                _ = tokio::time::sleep(Duration::from_secs(self.config.deployment_interval_secs)) => {}
+            }
+        }
+    }
+
+    pub(crate) async fn shutdown_local_runtimes(&self) {
+        let providers: Vec<_> = {
+            let mut cache = self
+                .local_bindings_cache
+                .lock()
+                .expect("local_bindings_cache poisoned");
+            cache.drain().map(|(_, provider)| provider).collect()
+        };
+        for provider in providers {
+            provider.shutdown().await;
         }
     }
 
@@ -716,6 +742,7 @@ impl DeploymentLoop {
                 .expect("stored deployment carries stack_settings");
 
             DeploymentConfig {
+                stored_secret_input_ids: None,
                 input_values: deployment.input_values.clone(),
                 deployment_name: Some(deployment.name.clone()),
                 stack_settings: stack_settings.clone(),
@@ -740,6 +767,7 @@ impl DeploymentLoop {
                 manager_url: Some(self.config.base_url()),
                 deployment_token: deployment.deployment_token.clone(),
                 native_image_host,
+                volume_restores: Vec::new(),
             }
         };
 
@@ -1308,6 +1336,7 @@ mod tests {
             DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
             DeploymentStatus::Provisioning => "provisioning",
             DeploymentStatus::WaitingForMachines => "waiting-for-machines",
+            DeploymentStatus::WaitingForSecrets => "waiting-for-secrets",
             DeploymentStatus::ProvisioningFailed => "provisioning-failed",
             DeploymentStatus::Running => "running",
             DeploymentStatus::RefreshFailed => "refresh-failed",
@@ -2059,6 +2088,7 @@ fn parse_status(status: &str) -> DeploymentStatus {
         "initial-setup-failed" => DeploymentStatus::InitialSetupFailed,
         "provisioning" => DeploymentStatus::Provisioning,
         "waiting-for-machines" => DeploymentStatus::WaitingForMachines,
+        "waiting-for-secrets" => DeploymentStatus::WaitingForSecrets,
         "provisioning-failed" => DeploymentStatus::ProvisioningFailed,
         "running" => DeploymentStatus::Running,
         "refresh-failed" => DeploymentStatus::RefreshFailed,

@@ -165,6 +165,69 @@ pub fn helm_template_for_release(
     })
 }
 
+/// Render a chart's NOTES.txt for a release in `namespace`. `helm template`
+/// skips NOTES.txt and `helm install --dry-run` needs a cluster, so the notes
+/// are rendered through a ConfigMap that includes them. Returns the notes text
+/// in `stdout` on success.
+pub fn helm_render_notes(
+    files: &LinterFiles,
+    values_yaml: &str,
+    release_name: &str,
+    namespace: &str,
+) -> LinterRun {
+    let Some(notes) = files.get("templates/NOTES.txt") else {
+        return LinterRun {
+            tool: "helm template".to_string(),
+            command: "helm template".to_string(),
+            status: LinterStatus::Failed(None),
+            stdout: String::new(),
+            stderr: "the chart has no templates/NOTES.txt".to_string(),
+        };
+    };
+    let mut files = files.clone();
+    files.insert(
+        "templates/_notes_render.tpl".to_string(),
+        format!("{{{{- define \"test.notesRender\" -}}}}\n{notes}\n{{{{- end -}}}}\n"),
+    );
+    files.insert(
+        "templates/notes-render.yaml".to_string(),
+        "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: notes-render\ndata:\n  notes: |\n{{ include \"test.notesRender\" . | indent 4 }}\n".to_string(),
+    );
+    run_when_enabled("helm template", || {
+        let dir = write_files_to_temp_dir(&files)?;
+        let values_path = dir.path().join("test-values.yaml");
+        write_file(&values_path, values_yaml)?;
+        let rendered = run_command(
+            "helm",
+            [
+                OsStr::new("template"),
+                OsStr::new(release_name),
+                dir.path().as_os_str(),
+                OsStr::new("--namespace"),
+                OsStr::new(namespace),
+                OsStr::new("--show-only"),
+                OsStr::new("templates/notes-render.yaml"),
+                OsStr::new("-f"),
+                values_path.as_os_str(),
+            ],
+            None,
+        )?;
+        if !rendered.is_ok() {
+            return Ok(rendered);
+        }
+        let manifest: serde_yaml::Value = serde_yaml::from_str(&rendered.stdout)
+            .map_err(|error| format!("rendered notes ConfigMap is not YAML: {error}"))?;
+        let notes = manifest["data"]["notes"]
+            .as_str()
+            .ok_or("rendered notes ConfigMap has no data.notes")?
+            .to_string();
+        Ok(LinterRun {
+            stdout: notes,
+            ..rendered
+        })
+    })
+}
+
 fn helm_template_with_debug_on_failure(
     rendered: LinterRun,
     args: &[std::ffi::OsString],

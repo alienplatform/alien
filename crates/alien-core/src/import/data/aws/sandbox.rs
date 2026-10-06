@@ -85,7 +85,9 @@ impl AwsSandboxImportData {
             BundleUri::Literal(uri) => uri.to_string(),
             BundleUri::Regional { before, after } => format!("{before}{region}{after}"),
         };
-        let egress_connector_arns = match &sandbox.egress {
+        // The cloud's half of the policy, as the setup emitters read it: a privileged supervisor
+        // enforces the declared egress in the guest, so the MicroVM itself gets open egress.
+        let egress_connector_arns = match sandbox.cloud_egress() {
             SandboxEgress::Allow => Vec::new(),
             SandboxEgress::Deny => vec![recorded_connector_arn
                 .ok_or_else(|| {
@@ -107,7 +109,7 @@ impl AwsSandboxImportData {
             bundle_uri: Some(bundle_uri),
             egress_connector_arns,
             preview_ports: sandbox.preview_ports.clone(),
-            allow_egress: matches!(sandbox.egress, SandboxEgress::Allow),
+            allow_egress: matches!(sandbox.cloud_egress(), SandboxEgress::Allow),
         })
     }
 }

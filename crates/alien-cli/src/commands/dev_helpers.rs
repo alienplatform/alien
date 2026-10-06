@@ -18,23 +18,30 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager::{
+    auth::Subject,
     providers::{
         in_memory_telemetry::InMemoryTelemetryBackend, local_credentials::LocalCredentialResolver,
         permissive_auth::PermissiveAuthValidator,
     },
+    standalone_config::ManagerTomlConfig,
+    stores::sqlite::{SqliteDatabase, SqliteDeploymentStore},
+    traits::deployment_store::{DeploymentFilter, DeploymentStore},
     LogBuffer,
 };
-use alien_manager_api::types::{CreateReleaseRequest, StackByPlatform};
+use alien_manager_api::types::{
+    CreateReleaseRequest, DeploymentInfoResponse, DeploymentResponse, StackByPlatform,
+};
 use alien_manager_api::Client as AlienManagerClient;
 use alien_manager_api::SdkResultExt;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
 use std::io::ErrorKind;
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::time::Duration;
+use tokio::{sync::oneshot, task::JoinHandle, time::Duration};
 use tracing::info;
 
 /// Parsed CLI environment variable.
@@ -99,14 +106,20 @@ pub async fn ensure_server_running(port: u16) -> Result<()> {
 
 /// Ensure the dev server is running for the full `alien dev` session.
 ///
-/// When we need to start a fresh embedded manager, clear stale runtime state so
-/// deployment recovery from older sessions does not leak into the new run.
+/// Own the manager port while retaining the deployment database and local storage.
 pub async fn ensure_server_running_for_dev_session(
     port: u16,
     status_file: Option<PathBuf>,
     user_env_vars: Vec<CliEnvVar>,
-) -> Result<()> {
-    ensure_server_running_internal(port, status_file, user_env_vars, true).await
+    deployment_name: &str,
+) -> Result<EmbeddedDevManager> {
+    ensure_server_running_internal(port, status_file, user_env_vars, Some(deployment_name))
+        .await?
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ServerStartFailed {
+                reason: "The full development session must own its manager".to_string(),
+            })
+        })
 }
 
 /// Ensure the dev server is running with user-provided env vars and optional status file (start if not)
@@ -115,21 +128,23 @@ pub async fn ensure_server_running_with_env(
     status_file: Option<PathBuf>,
     user_env_vars: Vec<CliEnvVar>,
 ) -> Result<()> {
-    ensure_server_running_internal(port, status_file, user_env_vars, false).await
+    ensure_server_running_internal(port, status_file, user_env_vars, None)
+        .await
+        .map(|_| ())
 }
 
 async fn ensure_server_running_internal(
     port: u16,
     status_file: Option<PathBuf>,
-    _user_env_vars: Vec<CliEnvVar>,
-    reset_state_on_start: bool,
-) -> Result<()> {
+    user_env_vars: Vec<CliEnvVar>,
+    deployment_name: Option<&str>,
+) -> Result<Option<EmbeddedDevManager>> {
     if check_server_health(port).await {
-        if reset_state_on_start {
+        if deployment_name.is_some() {
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "port".to_string(),
                 message: format!(
-                    "Another `alien dev` manager is already running on port {port}. Stop it first (Ctrl+C in that terminal, or kill the process), then rerun `alien dev`. If you need multiple sessions, use a different port with `alien dev --port <port>`."
+                    "Another `alien dev` manager is already running on port {port}. Stop it first (Ctrl+C in that terminal, or kill the process), then rerun `alien dev`. For simultaneous sessions, use separate project directories and different ports."
                 ),
             }));
         }
@@ -142,7 +157,7 @@ async fn ensure_server_running_internal(
                 &build_dev_status(port, DevStatusState::Initializing, None, None),
             )?;
         }
-        return Ok(());
+        return Ok(None);
     }
 
     if let Some(status_file) = status_file {
@@ -152,13 +167,188 @@ async fn ensure_server_running_internal(
         )?;
     }
 
-    if reset_state_on_start {
-        reset_local_dev_runtime_state()?;
-    }
-
     ensure_dev_port_available(port)?;
 
-    start_embedded_dev_manager(port).await
+    let state_lock = acquire_dev_state_lock(&get_current_dir()?.join(".alien"))?;
+    if let Some(name) = deployment_name {
+        refresh_local_deployment_environment(
+            &get_current_dir()?.join(".alien"),
+            name,
+            &user_env_vars,
+        )
+        .await?;
+    }
+
+    if deployment_name.is_some() {
+        start_owned_embedded_dev_manager(port, state_lock)
+            .await
+            .map(Some)
+    } else {
+        start_embedded_dev_manager_with_lock(port, state_lock)
+            .await
+            .map(|_| None)
+    }
+}
+
+/// Hold an OS lock for the entire manager lifetime, before opening its database.
+/// The lock file stays in place: unlinking it would let another process lock a new inode.
+fn acquire_dev_state_lock(state_dir: &Path) -> Result<File> {
+    std::fs::create_dir_all(state_dir)
+        .into_alien_error()
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to create the local manager state directory".to_string(),
+        })?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(state_dir.join("dev-server.lock"))
+        .into_alien_error()
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to open the local manager ownership lock".to_string(),
+        })?;
+    file.try_lock().map_err(|error| {
+        AlienError::new(ErrorData::ServerStartFailed {
+            reason: format!(
+                "Cannot own local manager state '{}': {error}. Stop the manager using this directory before restarting; simultaneous sessions require separate project directories and different ports.",
+                state_dir.display()
+            ),
+        })
+    })?;
+    Ok(file)
+}
+
+/// The full dev session owns this stopped manager's database. Refresh its CLI
+/// environment before execution resumes, preserving deployment identity and data.
+async fn refresh_local_deployment_environment(
+    state_dir: &Path,
+    name: &str,
+    variables: &[CliEnvVar],
+) -> Result<()> {
+    let path = state_dir.join("dev-server.db");
+    if !path.exists() {
+        if name.starts_with("dep_") || name.contains('/') {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "deployment-name".to_string(),
+                message: format!(
+                    "No local deployment exists for '{name}'; use a bare name to create a new deployment"
+                ),
+            }));
+        }
+        return Ok(());
+    }
+    let db = SqliteDatabase::new(&path.to_string_lossy()).await.context(
+        ErrorData::ServerStartFailed {
+            reason: "Failed to open the stopped local manager".to_string(),
+        },
+    )?;
+    let store = SqliteDeploymentStore::new(Arc::new(db));
+    let subject = Subject::system();
+    let groups =
+        store
+            .list_deployment_groups(&subject)
+            .await
+            .context(ErrorData::ServerStartFailed {
+                reason: "Failed to resolve the local development group".to_string(),
+            })?;
+    let canonical = groups.iter().find(|group| group.name == "local-dev");
+    let explicit = name.starts_with("dep_") || name.contains('/');
+    let (source_group, deployment_name) = match name.split_once('/') {
+        Some((group, name)) if !group.is_empty() && !name.is_empty() && !name.contains('/') => {
+            (Some(group), name)
+        }
+        Some(_) => {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "deployment-name".to_string(),
+                message: "Use a deployment ID or <group>/<name> for an explicit local migration"
+                    .to_string(),
+            }))
+        }
+        None => (None, name),
+    };
+    let deployments = store
+        .list_deployments(
+            &subject,
+            &DeploymentFilter {
+                name: if name.starts_with("dep_") {
+                    None
+                } else {
+                    Some(deployment_name.to_string())
+                },
+                platforms: Some(vec![alien_core::Platform::Local]),
+                ..Default::default()
+            },
+        )
+        .await
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to resolve local session deployment".to_string(),
+        })?;
+    let matches: Vec<_> = deployments
+        .iter()
+        .filter(|deployment| {
+            if name.starts_with("dep_") {
+                deployment.id == name
+            } else if let Some(source_group) = source_group {
+                deployment.name == deployment_name
+                    && groups.iter().any(|group| {
+                        group.name == source_group && group.id == deployment.deployment_group_id
+                    })
+            } else {
+                deployment.name == name
+                    && canonical.is_some_and(|group| group.id == deployment.deployment_group_id)
+            }
+        })
+        .collect();
+    if matches.len() > 1 || (explicit && matches.is_empty()) {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "deployment-name".to_string(),
+            message: format!(
+                "Expected one local deployment for '{name}'; found {}",
+                matches.len()
+            ),
+        }));
+    }
+    if !explicit && matches.is_empty() && !deployments.is_empty() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "deployment-name".to_string(),
+            message: format!("A local deployment named '{name}' exists outside local-dev. Preserve its identity by selecting it explicitly: alien dev --deployment-name {}", deployments[0].id),
+        }));
+    }
+    if let Some(deployment) = matches.first() {
+        if explicit {
+            let group_id =
+                match canonical {
+                    Some(group) => group.id.clone(),
+                    None => store
+                        .create_deployment_group(
+                            &subject,
+                            alien_manager::traits::deployment_store::CreateDeploymentGroupParams {
+                                name: "local-dev".to_string(),
+                                max_deployments: 100,
+                                setup: Default::default(),
+                            },
+                        )
+                        .await
+                        .context(ErrorData::ServerStartFailed {
+                            reason: "Failed to create the local development group".to_string(),
+                        })?
+                        .id,
+                };
+            store.reassign_local_deployment_group(&deployment.id, &group_id).await
+                .context(ErrorData::ServerStartFailed {
+                    reason: "Failed to migrate the selected local deployment; check for a conflicting name in local-dev".to_string(),
+                })?;
+        }
+        let variables = crate::cli_env_vars_to_core(variables).unwrap_or_default();
+        store
+            .replace_environment_variables(&deployment.id, &variables)
+            .await
+            .context(ErrorData::ServerStartFailed {
+                reason: "Failed to refresh the local session environment".to_string(),
+            })?;
+    }
+    Ok(())
 }
 
 fn ensure_dev_port_available(port: u16) -> Result<()> {
@@ -181,73 +371,6 @@ fn ensure_dev_port_available(port: u16) -> Result<()> {
     }
 }
 
-fn reset_local_dev_runtime_state() -> Result<()> {
-    let state_dir = get_current_dir()?.join(".alien");
-    if !state_dir.exists() {
-        return Ok(());
-    }
-
-    for db_file in ["dev-server.db", "dev-server.db-shm", "dev-server.db-wal"] {
-        let path = state_dir.join(db_file);
-        if path.exists() {
-            std::fs::remove_file(&path).into_alien_error().context(
-                ErrorData::FileOperationFailed {
-                    operation: "remove file".to_string(),
-                    file_path: path.display().to_string(),
-                    reason: "Failed to reset local dev manager database".to_string(),
-                },
-            )?;
-        }
-    }
-
-    for runtime_dir in ["commands_kv", "commands_storage"] {
-        let path = state_dir.join(runtime_dir);
-        if path.exists() {
-            std::fs::remove_dir_all(&path).into_alien_error().context(
-                ErrorData::FileOperationFailed {
-                    operation: "remove directory".to_string(),
-                    file_path: path.display().to_string(),
-                    reason: "Failed to reset local dev runtime state".to_string(),
-                },
-            )?;
-        }
-    }
-
-    let entries = std::fs::read_dir(&state_dir).into_alien_error().context(
-        ErrorData::FileOperationFailed {
-            operation: "read directory".to_string(),
-            file_path: state_dir.display().to_string(),
-            reason: "Failed to scan local dev state directory".to_string(),
-        },
-    )?;
-
-    for entry in entries {
-        let entry = entry
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "read directory entry".to_string(),
-                file_path: state_dir.display().to_string(),
-                reason: "Failed to inspect local dev state entry".to_string(),
-            })?;
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-
-        if name.starts_with("dep_") {
-            std::fs::remove_dir_all(&path).into_alien_error().context(
-                ErrorData::FileOperationFailed {
-                    operation: "remove directory".to_string(),
-                    file_path: path.display().to_string(),
-                    reason: "Failed to remove stale local deployment state".to_string(),
-                },
-            )?;
-        }
-    }
-
-    Ok(())
-}
-
 /// Build the embedded dev manager instance used by `alien dev`.
 ///
 /// This is a standalone manager with dev-friendly defaults:
@@ -258,8 +381,6 @@ fn reset_local_dev_runtime_state() -> Result<()> {
 pub async fn build_embedded_dev_manager(
     port: u16,
 ) -> Result<(alien_manager::AlienManager, SocketAddr)> {
-    use alien_manager::standalone_config::ManagerTomlConfig;
-
     let state_dir = get_current_dir()?.join(".alien");
     std::fs::create_dir_all(&state_dir)
         .into_alien_error()
@@ -302,7 +423,58 @@ pub async fn build_embedded_dev_manager(
 }
 
 /// Start the embedded dev manager in the background and wait for it to be healthy.
+/// Owns the embedded manager until its reconciliation and native runtimes finish.
+pub struct EmbeddedDevManager {
+    shutdown: oneshot::Sender<()>,
+    task: JoinHandle<Result<()>>,
+}
+
+impl EmbeddedDevManager {
+    pub async fn shutdown(self) -> Result<()> {
+        let _ = self.shutdown.send(());
+        self.task
+            .await
+            .into_alien_error()
+            .context(ErrorData::ServerStartFailed {
+                reason: "The local manager task failed during shutdown".to_string(),
+            })?
+    }
+}
+
+async fn start_owned_embedded_dev_manager(
+    port: u16,
+    state_lock: File,
+) -> Result<EmbeddedDevManager> {
+    let (server, addr) = build_embedded_dev_manager(port).await?;
+    alien_local::start_docker_bridge_proxy(addr)
+        .await
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to expose the dev server on Docker's private host gateway".to_string(),
+        })?;
+    let (shutdown, receiver) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let _state_lock = state_lock;
+        server
+            .start_with_shutdown(addr, async {
+                let _ = receiver.await;
+            })
+            .await
+            .context(ErrorData::ServerStartFailed {
+                reason: "The local manager failed".to_string(),
+            })
+    });
+    let manager = EmbeddedDevManager { shutdown, task };
+    wait_for_dev_server_ready(port).await?;
+    ensure_local_dev_deployment_group(port).await?;
+    Ok(manager)
+}
+
 pub async fn start_embedded_dev_manager(port: u16) -> Result<()> {
+    let state_lock = acquire_dev_state_lock(&get_current_dir()?.join(".alien"))?;
+    start_embedded_dev_manager_with_lock(port, state_lock).await
+}
+
+async fn start_embedded_dev_manager_with_lock(port: u16, state_lock: File) -> Result<()> {
     info!("Starting dev server on port {}...", port);
     let (server, addr) = build_embedded_dev_manager(port).await?;
 
@@ -313,6 +485,7 @@ pub async fn start_embedded_dev_manager(port: u16) -> Result<()> {
         })?;
 
     tokio::spawn(async move {
+        let _state_lock = state_lock;
         if let Err(e) = server.start(addr).await {
             tracing::error!("Dev server error: {}", e);
         }
@@ -373,6 +546,29 @@ pub(crate) async fn ensure_local_dev_deployment_group(port: u16) -> Result<()> {
     info!("Created default 'local-dev' deployment group");
 
     Ok(())
+}
+
+async fn local_dev_group_id(client: &AlienManagerClient) -> Result<String> {
+    let groups = client
+        .list_deployment_groups()
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Resolving the local development group".to_string(),
+            url: None,
+        })?;
+    groups
+        .items
+        .iter()
+        .find(|group| group.name == "local-dev")
+        .map(|group| group.id.clone())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ServerStartFailed {
+                reason: "The local development group is missing; restart the local manager"
+                    .to_string(),
+            })
+        })
 }
 
 /// Build and post a release to the dev server for the local `alien dev` flow.
@@ -585,10 +781,12 @@ pub async fn create_initial_deployment(
     input_values: HashMap<String, serde_json::Value>,
 ) -> Result<String> {
     let client = local_dev_client(port);
+    let group_id = local_dev_group_id(&client).await?;
 
     // Check if deployment exists
     let list_response = client
         .list_deployments()
+        .deployment_group_id(&group_id)
         .send()
         .await
         .into_sdk_error()
@@ -600,7 +798,7 @@ pub async fn create_initial_deployment(
     if let Some(existing) = list_response
         .items
         .iter()
-        .find(|d| d.name == deployment_name)
+        .find(|d| d.name == deployment_name && d.deployment_group_id == group_id)
     {
         // Inputs are fixed when a deployment is created, and the manager doesn't return them
         // (they may be secrets), so a rerun can't tell whether they changed: say so instead of
@@ -615,6 +813,30 @@ pub async fn create_initial_deployment(
         }
         info!("Deployment '{}' already exists", deployment_name);
         return Ok(existing.id.clone());
+    }
+
+    // Old clients omitted the group ID. Without an explicit identity, a same-name
+    // deployment in another group cannot safely be distinguished from an intentional one.
+    let outside = client
+        .list_deployments()
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to check for an existing local deployment".to_string(),
+            url: None,
+        })?
+        .into_inner();
+    if outside.next_cursor.is_some()
+        || outside.items.iter().any(|deployment| {
+            deployment.name == deployment_name
+                && deployment.platform == alien_manager_api::types::Platform::Local
+        })
+    {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "deployment-name".to_string(),
+            message: "A same-name local deployment may exist outside local-dev. Stop the manager and select its ID with alien dev --deployment-name dep_... to preserve its state".to_string(),
+        }));
     }
 
     // Create deployment
@@ -647,6 +869,7 @@ pub async fn create_initial_deployment(
         .body_map(|body| {
             let mut b = body
                 .name(deployment_name)
+                .deployment_group_id(group_id.clone())
                 .platform(alien_manager_api::types::Platform::Local)
                 .input_values(input_values.into_iter().collect::<serde_json::Map<_, _>>());
             if let Some(ref vars) = env_vars {
@@ -669,42 +892,12 @@ pub async fn create_initial_deployment(
 
 /// Prepare the deployment used by the full `alien dev` session.
 ///
-/// Unlike ad hoc deployment subcommands, the main dev loop should own a fresh
-/// deployment so stale local processes and incompatible stack state do not leak
-/// across runs.
+/// Reuse its durable deployment so restart does not delete storage or change bindings.
 pub async fn prepare_dev_session_deployment(
     deployment_name: &str,
     port: u16,
     environment_variables: Option<Vec<alien_core::EnvironmentVariable>>,
 ) -> Result<String> {
-    let client = local_dev_client(port);
-
-    if let Some(existing) = find_named_local_deployment(&client, deployment_name).await? {
-        info!(
-            "Refreshing existing local deployment '{}' ({})",
-            deployment_name, existing.id
-        );
-
-        client
-            .delete_deployment()
-            .id(&existing.id)
-            .body(alien_manager_api::types::DeleteDeploymentRequest {
-                action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
-            })
-            .send()
-            .await
-            .into_sdk_error()
-            .context(ErrorData::ApiRequestFailed {
-                message: format!(
-                    "Failed to delete existing local deployment '{}'",
-                    deployment_name
-                ),
-                url: None,
-            })?;
-
-        wait_for_local_deployment_absent(port, deployment_name).await?;
-    }
-
     create_initial_deployment(deployment_name, port, environment_variables, HashMap::new()).await
 }
 
@@ -724,11 +917,11 @@ pub async fn destroy_local_deployment(port: u16, deployment_name: &str, force: b
             })
         })?;
 
-    let action = if force {
-        alien_manager_api::types::DeleteDeploymentAction::Forget
-    } else {
-        alien_manager_api::types::DeleteDeploymentAction::Cleanup
-    };
+    if !force {
+        return super::destroy::destroy_local_target(port, existing).await;
+    }
+
+    let action = alien_manager_api::types::DeleteDeploymentAction::Forget;
     client
         .delete_deployment()
         .id(&existing.id)
@@ -748,21 +941,40 @@ async fn find_named_local_deployment(
     client: &AlienManagerClient,
     deployment_name: &str,
 ) -> Result<Option<alien_manager_api::types::DeploymentResponse>> {
-    let list_response = client
+    let group_id = local_dev_group_id(client).await?;
+    let response = client
         .list_deployments()
+        .deployment_group_id(&group_id)
+        .name(deployment_name)
         .send()
         .await
         .into_sdk_error()
         .context(ErrorData::ApiRequestFailed {
-            message: "Failed to list deployments".to_string(),
+            message: "Failed to list local development deployments".to_string(),
             url: None,
-        })?;
-
-    let inner = list_response.into_inner();
-    Ok(inner
-        .items
-        .into_iter()
-        .find(|deployment| deployment.name == deployment_name))
+        })?
+        .into_inner();
+    if response.next_cursor.is_some() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "name".to_string(),
+            message: "The manager returned an incomplete local deployment list".to_string(),
+        }));
+    }
+    let mut matches = response.items.into_iter().filter(|deployment| {
+        deployment.name == deployment_name
+            && deployment.deployment_group_id == group_id
+            && deployment.platform == alien_manager_api::types::Platform::Local
+    });
+    let first = matches.next();
+    if matches.next().is_some() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "name".to_string(),
+            message: format!(
+                "Multiple local development deployments are named '{deployment_name}'"
+            ),
+        }));
+    }
+    Ok(first)
 }
 
 async fn wait_for_local_deployment_absent(port: u16, deployment_name: &str) -> Result<()> {
@@ -786,8 +998,6 @@ async fn wait_for_local_deployment_absent(port: u16, deployment_name: &str) -> R
     }))
 }
 
-use alien_manager_api::types::{DeploymentInfoResponse, DeploymentResponse};
-
 pub async fn wait_for_dev_deployment_ready(
     port: u16,
     deployment_name: &str,
@@ -807,15 +1017,39 @@ where
 {
     let client = local_dev_client(port);
 
-    for _ in 0..180 {
-        if let Ok(list_response) = client.list_deployments().send().await {
+    let timeout_seconds = std::env::var("ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS")
+        .map(|value| value.parse::<u64>())
+        .unwrap_or(Ok(300))
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS must be a positive integer".to_string(),
+        })?;
+    if timeout_seconds == 0 {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS must be greater than zero".to_string(),
+        }));
+    }
+    let deadline = tokio::time::Instant::now()
+        .checked_add(Duration::from_secs(timeout_seconds))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: "ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS is too large".to_string(),
+            })
+        })?;
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(Ok(list_response)) =
+            tokio::time::timeout_at(deadline, client.list_deployments().send()).await
+        {
             if let Some(deployment) = list_response
                 .items
                 .iter()
                 .find(|d| d.name == deployment_name)
             {
-                if let Ok(info_response) =
-                    client.get_deployment_info().id(&deployment.id).send().await
+                if let Ok(Ok(info_response)) = tokio::time::timeout_at(
+                    deadline,
+                    client.get_deployment_info().id(&deployment.id).send(),
+                )
+                .await
                 {
                     let info = info_response.into_inner();
                     let snapshot = snapshot_from_info(&info, deployment_name)?;
@@ -856,7 +1090,7 @@ where
     }
 
     Err(AlienError::new(ErrorData::ConfigurationError {
-        message: "Timed out waiting for local deployment to become ready".to_string(),
+        message: format!("Stopped waiting after {}s; the local deployment may still be progressing. Inspect it with `alien dev deployments ls` or increase ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS.", timeout_seconds),
     }))
 }
 
@@ -915,8 +1149,14 @@ pub async fn fetch_all_dev_deployment_live_states(
     port: u16,
 ) -> Result<Vec<DevDeploymentLiveState>> {
     let client = local_dev_client(port);
+    let group_id = local_dev_group_id(&client).await?;
 
-    let list_response = match client.list_deployments().send().await {
+    let list_response = match client
+        .list_deployments()
+        .deployment_group_id(group_id)
+        .send()
+        .await
+    {
         Ok(response) => response.into_inner(),
         Err(_) => return Ok(Vec::new()),
     };
@@ -1043,6 +1283,7 @@ fn parse_deployment_status(status: &str) -> Result<DeploymentStatus> {
         "initial-setup-failed" => Ok(DeploymentStatus::InitialSetupFailed),
         "provisioning" => Ok(DeploymentStatus::Provisioning),
         "waiting-for-machines" => Ok(DeploymentStatus::WaitingForMachines),
+        "waiting-for-secrets" => Ok(DeploymentStatus::WaitingForSecrets),
         "provisioning-failed" => Ok(DeploymentStatus::ProvisioningFailed),
         "running" => Ok(DeploymentStatus::Running),
         "refresh-failed" => Ok(DeploymentStatus::RefreshFailed),
@@ -1067,9 +1308,13 @@ fn parse_deployment_status(status: &str) -> Result<DeploymentStatus> {
 mod tests {
     use super::*;
     use alien_core::ResourceLifecycle;
+    use alien_manager::traits::deployment_store::{
+        CreateDeploymentGroupParams, CreateDeploymentParams,
+    };
     use axum::{
-        extract::{Path as AxumPath, State},
+        extract::{Path as AxumPath, Query, State},
         http::StatusCode,
+        response::{IntoResponse, Response},
         routing::{get, post},
         Json, Router,
     };
@@ -1124,7 +1369,24 @@ mod tests {
         } else {
             serde_json::json!([])
         };
+        let mut items = items.as_array().unwrap().clone();
+        items.insert(
+            0,
+            serde_json::json!({
+                "id":"dep_other", "name":"api", "platform":"local", "status":"running",
+                "deploymentGroupId":"dg_other", "deploymentProtocolVersion":1,
+                "projectId":"default", "workspaceId":"default", "retryRequested":false,
+                "createdAt":"2026-01-01T00:00:00Z"
+            }),
+        );
         Json(serde_json::json!({ "items": items }))
+    }
+
+    async fn destroy_manager_groups() -> Json<serde_json::Value> {
+        Json(serde_json::json!({ "items": [{
+            "id":"dg_1", "name":"local-dev", "deploymentCount":1, "maxDeployments":100,
+            "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z"
+        }] }))
     }
 
     async fn destroy_manager_delete(
@@ -1143,13 +1405,13 @@ mod tests {
         )
     }
 
-    /// `alien dev destroy` finds the deployment by name on the dev manager, asks for a cleanup
-    /// delete, and returns only once the deployment is gone from the list. A name the manager
-    /// doesn't know is an error.
+    /// Forced local deletion forgets the named record and waits until it is absent.
+    /// An unknown deployment name is an error.
     #[tokio::test]
-    async fn destroy_local_deployment_deletes_by_name_and_waits() {
+    async fn force_destroy_local_deployment_deletes_by_name_and_waits() {
         let manager: SharedDestroyManager = Arc::default();
         let app = Router::new()
+            .route("/v1/deployment-groups", get(destroy_manager_groups))
             .route("/v1/deployments", get(destroy_manager_list))
             .route("/v1/deployments/{id}/delete", post(destroy_manager_delete))
             .with_state(manager.clone());
@@ -1157,7 +1419,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-        destroy_local_deployment(port, "api", false)
+        destroy_local_deployment(port, "api", true)
             .await
             .expect("the named deployment is deleted");
         {
@@ -1166,13 +1428,19 @@ mod tests {
                 manager.deleted,
                 vec![(
                     "dep_1".to_string(),
-                    serde_json::json!({ "action": "cleanup" })
+                    serde_json::json!({ "action": "forget" })
                 )]
             );
             // One poll still saw the deployment while cleanup ran; the command kept waiting
             // until a second poll saw it gone.
             assert_eq!(manager.lists_after_delete, 2);
         }
+
+        assert!(
+            destroy_local_deployment(port, "api", true).await.is_err(),
+            "the remaining same-name deployment outside local-dev must never be deleted"
+        );
+        assert_eq!(manager.lock().unwrap().deleted.len(), 1);
 
         let error = destroy_local_deployment(port, "missing", false)
             .await
@@ -1189,9 +1457,6 @@ mod tests {
     /// reuses the existing deployment, whose inputs were fixed at creation.
     #[tokio::test]
     async fn create_initial_deployment_sends_inputs() {
-        use axum::{extract::State, routing::get, Json, Router};
-        use std::sync::{Arc, Mutex};
-
         fn deployment(name: &str) -> serde_json::Value {
             serde_json::json!({
                 "id": "dep_1",
@@ -1207,14 +1472,26 @@ mod tests {
             })
         }
         type Created = Arc<Mutex<Vec<serde_json::Value>>>;
-        async fn list(State(created): State<Created>) -> Json<serde_json::Value> {
-            let items: Vec<_> = created
+        async fn list(
+            State(created): State<Created>,
+            Query(query): Query<HashMap<String, String>>,
+        ) -> Response {
+            if query.contains_key("name") && !query.contains_key("deploymentGroupId") {
+                return StatusCode::BAD_REQUEST.into_response();
+            }
+            let mut items: Vec<_> = created
                 .lock()
                 .unwrap()
                 .iter()
                 .map(|body| deployment(body["name"].as_str().unwrap()))
                 .collect();
-            Json(serde_json::json!({ "items": items }))
+            let mut unrelated = deployment("api");
+            unrelated["id"] = serde_json::json!("dep_other");
+            unrelated["deploymentGroupId"] = serde_json::json!("dg_other");
+            if !items.is_empty() {
+                items.insert(0, unrelated);
+            }
+            Json(serde_json::json!({ "items": items })).into_response()
         }
         async fn create(
             State(created): State<Created>,
@@ -1232,8 +1509,17 @@ mod tests {
             )
         }
 
+        async fn groups() -> Json<serde_json::Value> {
+            Json(serde_json::json!({ "items": [
+                { "id":"dg_other", "name":"other", "deploymentCount":1, "maxDeployments":100,
+                  "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z" },
+                { "id":"dg_1", "name":"local-dev", "deploymentCount":0, "maxDeployments":100,
+                  "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z" }
+            ] }))
+        }
         let created: Created = Arc::default();
         let app = Router::new()
+            .route("/v1/deployment-groups", get(groups))
             .route("/v1/deployments", get(list).post(create))
             .with_state(created.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1244,6 +1530,7 @@ mod tests {
         create_initial_deployment("api", port, None, inputs.clone())
             .await
             .expect("the deployment is created");
+        assert_eq!(created.lock().unwrap()[0]["deploymentGroupId"], "dg_1");
         assert_eq!(
             created.lock().unwrap()[0]["inputValues"],
             serde_json::json!({ "managedKey": false })
@@ -1254,7 +1541,289 @@ mod tests {
             .await
             .expect("a rerun reuses the existing deployment");
         assert_eq!(rerun, "dep_1");
+        let session = prepare_dev_session_deployment("api", port, None)
+            .await
+            .expect("the full dev session also reuses durable state");
+        assert_eq!(session, "dep_1");
         assert_eq!(created.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn missing_local_migration_target_fails_without_creating_state() {
+        let directory = TempDir::new().unwrap();
+        for reference in ["dep_missing", "legacy/api", "legacy/"] {
+            let error = refresh_local_deployment_environment(directory.path(), reference, &[])
+                .await
+                .expect_err("an explicit reference must select an existing deployment");
+            assert_eq!(error.code, "VALIDATION_ERROR");
+            assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+        }
+        refresh_local_deployment_environment(directory.path(), "api", &[])
+            .await
+            .expect("a bare name may start a new deployment");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn legacy_local_migration_requires_identity_and_preserves_state() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("dev-server.db");
+        let store = SqliteDeploymentStore::new(Arc::new(
+            SqliteDatabase::new(&path.to_string_lossy()).await.unwrap(),
+        ));
+        let subject = Subject::system();
+        let legacy = store
+            .create_deployment_group(
+                &subject,
+                CreateDeploymentGroupParams {
+                    name: "legacy".to_string(),
+                    max_deployments: 100,
+                    setup: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let parameters = CreateDeploymentParams {
+            name: "api".to_string(),
+            deployment_group_id: legacy.id,
+            platform: alien_core::Platform::Local,
+            deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            base_platform: None,
+            stack_settings: Default::default(),
+            stack_state: Some(StackState::with_resource_prefix(
+                alien_core::Platform::Local,
+                "retained".to_string(),
+            )),
+            environment_variables: None,
+            public_subdomain: None,
+            input_values: Default::default(),
+            setup_item: None,
+            deployment_token: None,
+        };
+        let before = store
+            .create_deployment(&subject, parameters.clone())
+            .await
+            .unwrap();
+        drop(store);
+        assert!(
+            refresh_local_deployment_environment(directory.path(), "api", &[])
+                .await
+                .is_err(),
+            "a same-name deployment in another group must not be adopted implicitly"
+        );
+        let variables = vec![CliEnvVar {
+            name: "APP_KEY".to_string(),
+            value: "updated".to_string(),
+            is_secret: false,
+            target_resources: None,
+        }];
+        refresh_local_deployment_environment(directory.path(), &before.id, &variables)
+            .await
+            .unwrap();
+        let store = SqliteDeploymentStore::new(Arc::new(
+            SqliteDatabase::new(&path.to_string_lossy()).await.unwrap(),
+        ));
+        let after = store
+            .get_deployment(&subject, &before.id)
+            .await
+            .unwrap()
+            .unwrap();
+        let groups = store.list_deployment_groups(&subject).await.unwrap();
+        let canonical = groups
+            .iter()
+            .find(|group| group.name == "local-dev")
+            .unwrap();
+        assert_eq!(after.id, before.id);
+        assert_eq!(after.deployment_group_id, canonical.id);
+        assert_eq!(
+            serde_json::to_value(&after.stack_state).unwrap(),
+            serde_json::to_value(&before.stack_state).unwrap()
+        );
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.created_at, before.created_at);
+        assert_eq!(
+            after.user_environment_variables.unwrap()[0].value,
+            "updated"
+        );
+        assert_eq!(
+            store
+                .list_deployments(&subject, &DeploymentFilter::default())
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        let conflicting = store.create_deployment(&subject, parameters).await.unwrap();
+        drop(store);
+        assert!(
+            refresh_local_deployment_environment(directory.path(), &conflicting.id, &variables)
+                .await
+                .is_err(),
+            "migration must not overwrite a same-name deployment in local-dev"
+        );
+        let store = SqliteDeploymentStore::new(Arc::new(
+            SqliteDatabase::new(&path.to_string_lossy()).await.unwrap(),
+        ));
+        let untouched = store
+            .get_deployment(&subject, &conflicting.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            untouched.deployment_group_id,
+            conflicting.deployment_group_id
+        );
+        assert_eq!(
+            untouched.user_environment_variables,
+            conflicting.user_environment_variables
+        );
+        assert_eq!(
+            serde_json::to_value(&untouched.stack_state).unwrap(),
+            serde_json::to_value(&conflicting.stack_state).unwrap()
+        );
+        drop(store);
+        refresh_local_deployment_environment(directory.path(), "local-dev/api", &[])
+            .await
+            .unwrap();
+        refresh_local_deployment_environment(directory.path(), "api", &[])
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn dev_state_ownership_is_exclusive_and_released_on_drop() {
+        let first = TempDir::new().unwrap();
+        let second = TempDir::new().unwrap();
+        let owner = acquire_dev_state_lock(first.path()).expect("first manager owns state");
+        assert!(
+            acquire_dev_state_lock(first.path()).is_err(),
+            "another port must not share state"
+        );
+        let independent =
+            acquire_dev_state_lock(second.path()).expect("separate state is independent");
+        drop(owner);
+        let restarted =
+            acquire_dev_state_lock(first.path()).expect("stopped manager releases state");
+        assert!(
+            acquire_dev_state_lock(first.path()).is_err(),
+            "restarted manager owns the same lock inode"
+        );
+        drop((restarted, independent));
+    }
+
+    #[tokio::test]
+    async fn session_environment_refresh_preserves_deployment_and_clears_old_values() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("dev-server.db");
+        let store = SqliteDeploymentStore::new(Arc::new(
+            SqliteDatabase::new(&path.to_string_lossy()).await.unwrap(),
+        ));
+        let subject = Subject::system();
+        let group = store
+            .create_deployment_group(
+                &subject,
+                CreateDeploymentGroupParams {
+                    name: "local-dev".to_string(),
+                    max_deployments: 100,
+                    setup: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let parameters = CreateDeploymentParams {
+            name: "api".to_string(),
+            deployment_group_id: group.id,
+            platform: alien_core::Platform::Local,
+            deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            base_platform: None,
+            stack_settings: Default::default(),
+            stack_state: Some(StackState::with_resource_prefix(
+                alien_core::Platform::Local,
+                "retained".to_string(),
+            )),
+            environment_variables: None,
+            public_subdomain: None,
+            input_values: Default::default(),
+            setup_item: None,
+            deployment_token: None,
+        };
+        let before = store
+            .create_deployment(&subject, parameters.clone())
+            .await
+            .unwrap();
+        let other_group = store
+            .create_deployment_group(
+                &subject,
+                CreateDeploymentGroupParams {
+                    name: "another-group".to_string(),
+                    max_deployments: 100,
+                    setup: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let other = store
+            .create_deployment(
+                &subject,
+                CreateDeploymentParams {
+                    deployment_group_id: other_group.id,
+                    ..parameters
+                },
+            )
+            .await
+            .unwrap();
+        drop(store);
+        let variables = vec![CliEnvVar {
+            name: "APP_KEY".to_string(),
+            value: "new-value".to_string(),
+            is_secret: true,
+            target_resources: Some(vec!["api".to_string()]),
+        }];
+        refresh_local_deployment_environment(directory.path(), "api", &variables)
+            .await
+            .unwrap();
+        let store = SqliteDeploymentStore::new(Arc::new(
+            SqliteDatabase::new(&path.to_string_lossy()).await.unwrap(),
+        ));
+        let after = store
+            .get_deployment(&subject, &before.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.id, before.id);
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.stack_state.unwrap().resource_prefix, "retained");
+        let actual = after.user_environment_variables.unwrap();
+        assert_eq!(actual[0].value, "new-value");
+        assert_eq!(
+            actual[0].var_type,
+            alien_core::EnvironmentVariableType::Secret
+        );
+        assert_eq!(actual[0].target_resources, Some(vec!["api".to_string()]));
+        drop(store);
+        refresh_local_deployment_environment(directory.path(), "api", &[])
+            .await
+            .unwrap();
+        let store = SqliteDeploymentStore::new(Arc::new(
+            SqliteDatabase::new(&path.to_string_lossy()).await.unwrap(),
+        ));
+        let cleared = store
+            .get_deployment(&subject, &before.id)
+            .await
+            .unwrap()
+            .unwrap();
+        let untouched = store
+            .get_deployment(&subject, &other.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            untouched.user_environment_variables,
+            other.user_environment_variables
+        );
+        assert_eq!(untouched.updated_at, other.updated_at);
+        assert!(cleared.user_environment_variables.unwrap().is_empty());
+        assert_eq!(cleared.stack_state.unwrap().resource_prefix, "retained");
     }
 
     #[test]
