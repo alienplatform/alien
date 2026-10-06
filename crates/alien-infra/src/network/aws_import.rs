@@ -69,6 +69,8 @@ impl ResourceImporter for AwsNetworkImporter {
             vpc_create_token: None,
             subnet_create_attempt: None,
             nat_gateway_create_token: None,
+            internet_gateway_create_token: None,
+            eip_create_token: None,
             _internal_stay_count: None,
         };
         if needs_default_vpc_discovery || needs_subnet_domain_discovery {

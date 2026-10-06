@@ -2781,6 +2781,8 @@ pub struct Address {
     /// Present for addresses allocated from a customer-owned public IPv4 pool
     /// (BYOIP). Those addresses do not consume the EC2-VPC Elastic IP quota.
     pub public_ipv4_pool: Option<String>,
+    #[serde(rename = "tagSet")]
+    pub tag_set: Option<TagSet>,
 }
 
 // ---------------------------------------------------------------------------

@@ -601,18 +601,21 @@ mod tests {
                         public_ip: None,
                         domain: Some("vpc".to_string()),
                         public_ipv4_pool: Some("amazon".to_string()),
+                        tag_set: None,
                     },
                     Address {
                         allocation_id: Some("eipalloc-amazon-legacy".to_string()),
                         public_ip: None,
                         domain: Some("vpc".to_string()),
                         public_ipv4_pool: None,
+                        tag_set: None,
                     },
                     Address {
                         allocation_id: Some("eipalloc-byoip".to_string()),
                         public_ip: None,
                         domain: Some("vpc".to_string()),
                         public_ipv4_pool: Some("ipv4pool-ec2-customer".to_string()),
+                        tag_set: None,
                     },
                 ],
             }),
@@ -630,6 +633,7 @@ mod tests {
                     public_ip: None,
                     domain: None,
                     public_ipv4_pool: None,
+                    tag_set: None,
                 }],
             }),
         };
@@ -649,12 +653,14 @@ mod tests {
                             public_ip: None,
                             domain: Some("vpc".to_string()),
                             public_ipv4_pool: Some("amazon".to_string()),
+                            tag_set: None,
                         },
                         Address {
                             allocation_id: Some("eipalloc-byoip".to_string()),
                             public_ip: None,
                             domain: Some("vpc".to_string()),
                             public_ipv4_pool: Some("ipv4pool-ec2-customer".to_string()),
+                            tag_set: None,
                         },
                     ],
                 }),
@@ -761,6 +767,12 @@ pub struct AwsNetworkController {
     /// Token tagged on the NAT gateway, recorded before `create_nat_gateway`.
     #[serde(default)]
     pub(crate) nat_gateway_create_token: Option<String>,
+    /// Token of the latest `create_internet_gateway` call, recorded before the call.
+    #[serde(default)]
+    pub(crate) internet_gateway_create_token: Option<String>,
+    /// Token of the latest `allocate_address` call, recorded before the call.
+    #[serde(default)]
+    pub(crate) eip_create_token: Option<String>,
 }
 
 /// A `create_subnet` call that may have created a subnet whose ID is not recorded yet.
@@ -1067,6 +1079,85 @@ impl AwsNetworkController {
             .find_map(|subnet| subnet.subnet_id))
     }
 
+    /// Find the internet gateway the `create_internet_gateway` call with this token made.
+    async fn find_internet_gateway_by_create_attempt(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        token: &str,
+        resource_id: &str,
+    ) -> Result<Option<String>> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+
+        let gateways = client
+            .describe_internet_gateways(
+                DescribeInternetGatewaysRequest::builder()
+                    .filters(create_attempt_filters(
+                        ctx.resource_prefix,
+                        resource_id,
+                        token,
+                    ))
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to look up the Internet Gateway of an earlier create attempt"
+                    .to_string(),
+                resource_id: Some(resource_id.to_string()),
+            })?
+            .internet_gateway_set
+            .map(|set| set.items)
+            .unwrap_or_default();
+
+        Ok(gateways
+            .into_iter()
+            .filter(|gateway| {
+                has_create_attempt_tags(
+                    gateway.tag_set.as_ref(),
+                    ctx.resource_prefix,
+                    resource_id,
+                    token,
+                )
+            })
+            .find_map(|gateway| gateway.internet_gateway_id))
+    }
+
+    /// Find the Elastic IP the `allocate_address` call with this token allocated.
+    ///
+    /// DescribeAddresses here takes no filters, so the token is matched on the returned tags.
+    async fn find_elastic_ip_by_create_attempt(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        token: &str,
+        resource_id: &str,
+    ) -> Result<Option<String>> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+
+        let addresses = client
+            .describe_addresses()
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to look up the Elastic IP of an earlier allocation".to_string(),
+                resource_id: Some(resource_id.to_string()),
+            })?
+            .addresses_set
+            .map(|set| set.items)
+            .unwrap_or_default();
+
+        Ok(addresses
+            .into_iter()
+            .filter(|address| {
+                has_create_attempt_tags(
+                    address.tag_set.as_ref(),
+                    ctx.resource_prefix,
+                    resource_id,
+                    token,
+                )
+            })
+            .find_map(|address| address.allocation_id))
+    }
+
     /// Find the NAT gateway tagged with this create-attempt token that is not yet deleted.
     async fn find_nat_gateway_by_create_attempt(
         &self,
@@ -1271,6 +1362,72 @@ impl AwsNetworkController {
                 }
             }
             self.subnet_create_attempt = None;
+        }
+
+        if self.internet_gateway_id.is_none() {
+            if let Some(token) = self.internet_gateway_create_token.clone() {
+                if let Some(igw_id) = self
+                    .find_internet_gateway_by_create_attempt(ctx, &token, resource_id)
+                    .await?
+                {
+                    info!(igw_id = %igw_id, "Recovered the Internet Gateway of a create whose response was lost");
+                    self.internet_gateway_id = Some(igw_id);
+                }
+            }
+        }
+
+        if self.eip_allocation_id.is_none() {
+            if let Some(token) = self.eip_create_token.clone() {
+                if let Some(allocation_id) = self
+                    .find_elastic_ip_by_create_attempt(ctx, &token, resource_id)
+                    .await?
+                {
+                    info!(allocation_id = %allocation_id, "Recovered the Elastic IP of an allocation whose response was lost");
+                    self.eip_allocation_id = Some(allocation_id);
+                }
+            }
+        }
+
+        // Route tables and the security group carry fixed names unique within our VPC, so the
+        // create handlers already rediscover them by name; delete does the same here.
+        if let Some(vpc_id) = self.vpc_id.clone() {
+            for (name, recorded) in [
+                (
+                    format!("{}-public-rt", ctx.resource_prefix),
+                    self.public_route_table_id.is_some(),
+                ),
+                (
+                    format!("{}-private-rt", ctx.resource_prefix),
+                    self.private_route_table_id.is_some(),
+                ),
+            ] {
+                if recorded {
+                    continue;
+                }
+                let route_table_id = self
+                    .find_existing_route_table_by_name(ctx, &vpc_id, &name, resource_id)
+                    .await?
+                    .and_then(|route_table| route_table.route_table_id);
+                if let Some(route_table_id) = route_table_id {
+                    info!(rt_id = %route_table_id, name = %name, "Recovered a route table whose ID was not recorded");
+                    if name.ends_with("-public-rt") {
+                        self.public_route_table_id = Some(route_table_id);
+                    } else {
+                        self.private_route_table_id = Some(route_table_id);
+                    }
+                }
+            }
+
+            if self.security_group_id.is_none() {
+                let group_name = format!("{}-sg", ctx.resource_prefix);
+                if let Some(sg_id) = self
+                    .find_security_group_id_by_name(ctx, &vpc_id, &group_name, resource_id)
+                    .await?
+                {
+                    info!(sg_id = %sg_id, "Recovered a security group whose ID was not recorded");
+                    self.security_group_id = Some(sg_id);
+                }
+            }
         }
 
         if self.nat_gateway_id.is_none() {
@@ -2008,16 +2165,36 @@ impl AwsNetworkController {
             });
         }
 
+        // A recorded token without an ID: the create may have succeeded and its response
+        // been lost. Only the gateway carrying that token is ours.
+        if let Some(token) = self.internet_gateway_create_token.clone() {
+            if let Some(igw_id) = self
+                .find_internet_gateway_by_create_attempt(ctx, &token, &config.id)
+                .await?
+            {
+                info!(igw_id = %igw_id, "Found the Internet Gateway created by an earlier attempt");
+                self.internet_gateway_id = Some(igw_id);
+                return Ok(HandlerAction::Continue {
+                    state: AttachingInternetGateway,
+                    suggested_delay: None,
+                });
+            }
+        }
+
+        let token = new_create_attempt_token();
+        self.internet_gateway_create_token = Some(token.clone());
         info!("Creating Internet Gateway");
 
         let igw_response = client
             .create_internet_gateway(
                 CreateInternetGatewayRequest::builder()
-                    .tag_specifications(self.create_tags(
+                    .tag_specifications(vec![self.create_tag_specification(
                         ctx.resource_prefix,
                         &config.id,
                         "internet-gateway",
-                    ))
+                        format!("{}-internet-gateway", ctx.resource_prefix),
+                        [create_attempt_tag(&token)],
+                    )])
                     .build(),
             )
             .await
@@ -2497,17 +2674,37 @@ impl AwsNetworkController {
             });
         }
 
+        // A recorded token without an allocation ID: the allocation may have succeeded and its
+        // response been lost. Only the address carrying that token is ours.
+        if let Some(token) = self.eip_create_token.clone() {
+            if let Some(allocation_id) = self
+                .find_elastic_ip_by_create_attempt(ctx, &token, &config.id)
+                .await?
+            {
+                info!(allocation_id = %allocation_id, "Found the Elastic IP allocated by an earlier attempt");
+                self.eip_allocation_id = Some(allocation_id);
+                return Ok(HandlerAction::Continue {
+                    state: CreatingNatGateway,
+                    suggested_delay: None,
+                });
+            }
+        }
+
+        let token = new_create_attempt_token();
+        self.eip_create_token = Some(token.clone());
         info!("Allocating Elastic IP for NAT Gateway");
 
         let eip_response = client
             .allocate_address(
                 AllocateAddressRequest::builder()
                     .domain("vpc".to_string())
-                    .tag_specifications(self.create_tags(
+                    .tag_specifications(vec![self.create_tag_specification(
                         ctx.resource_prefix,
                         &config.id,
                         "elastic-ip",
-                    ))
+                        format!("{}-elastic-ip", ctx.resource_prefix),
+                        [create_attempt_tag(&token)],
+                    )])
                     .build(),
             )
             .await
@@ -3746,6 +3943,8 @@ impl AwsNetworkController {
             vpc_create_token: None,
             subnet_create_attempt: None,
             nat_gateway_create_token: None,
+            internet_gateway_create_token: None,
+            eip_create_token: None,
             _internal_stay_count: None,
         }
     }
@@ -3787,6 +3986,8 @@ impl AwsNetworkController {
             vpc_create_token: None,
             subnet_create_attempt: None,
             nat_gateway_create_token: None,
+            internet_gateway_create_token: None,
+            eip_create_token: None,
             _internal_stay_count: None,
         }
     }
@@ -4586,6 +4787,15 @@ mod controller_state_tests {
 
     // ─────────────── Delete ───────────────
 
+    /// Delete looks up route tables and the security group by name when their IDs are not
+    /// recorded; these tests have none to find.
+    fn expect_no_named_leftovers(ec2: &mut MockEc2Api) {
+        ec2.expect_describe_route_tables()
+            .returning(|_| Ok(parse(json!({}))));
+        ec2.expect_describe_security_groups()
+            .returning(|_| Ok(parse(json!({}))));
+    }
+
     /// A failed create, as the executor hands it to delete when it replaces the resource.
     fn failed_create(controller: AwsNetworkController) -> AwsNetworkController {
         AwsNetworkController {
@@ -4597,6 +4807,7 @@ mod controller_state_tests {
     #[tokio::test]
     async fn delete_recovers_the_vpc_of_a_lost_create_response() {
         let mut ec2 = MockEc2Api::new();
+        expect_no_named_leftovers(&mut ec2);
         ec2.expect_describe_vpcs()
             .times(1)
             .withf(|request| {
@@ -4663,6 +4874,7 @@ mod controller_state_tests {
     async fn delete_recovers_the_subnet_of_a_lost_create_response() {
         let calls = Arc::new(Mutex::new(Vec::<String>::new()));
         let mut ec2 = MockEc2Api::new();
+        expect_no_named_leftovers(&mut ec2);
         ec2.expect_describe_subnets().times(1).returning(|request| {
             let filters = request.filters.expect("lookup by VPC, CIDR and token");
             assert!(filters
@@ -4713,6 +4925,7 @@ mod controller_state_tests {
     async fn delete_recovers_the_nat_gateway_of_a_lost_create_response() {
         let calls = Arc::new(Mutex::new(Vec::<String>::new()));
         let mut ec2 = MockEc2Api::new();
+        expect_no_named_leftovers(&mut ec2);
         let log = calls.clone();
         ec2.expect_describe_nat_gateways().returning(move |request| {
             if let Some(token) = filters_token(request.filters.as_ref()) {
@@ -4773,10 +4986,302 @@ mod controller_state_tests {
         );
     }
 
+    // ─────────────── Internet gateway and Elastic IP create attempts ───────────────
+
+    #[tokio::test]
+    async fn internet_gateway_retry_adopts_only_its_own_create_attempt() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_internet_gateways()
+            .times(1)
+            .withf(|request| {
+                filters_token(request.filters.as_ref()).as_deref() == Some("attempt-1")
+            })
+            .returning(|_| {
+                Ok(parse(json!({ "internetGatewaySet": { "item": [
+                    { "internetGatewayId": "igw-other", "tagSet": attempt_tags_json("attempt-0") },
+                    { "internetGatewayId": "igw-lost", "tagSet": attempt_tags_json("attempt-1") }
+                ]}})))
+            });
+        ec2.expect_create_internet_gateway().times(0);
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                internet_gateway_create_token: Some("attempt-1".to_string()),
+                ..after_vpc(AwsNetworkState::CreatingInternetGateway)
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor.step().await.expect("rediscovery succeeds");
+        let state = controller(&executor);
+        assert_eq!(state.internet_gateway_id.as_deref(), Some("igw-lost"));
+        assert_eq!(state.state, AwsNetworkState::AttachingInternetGateway);
+    }
+
+    #[tokio::test]
+    async fn internet_gateway_retry_without_a_match_creates_under_a_new_token() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_internet_gateways()
+            .times(1)
+            .returning(|_| {
+                Ok(parse(json!({ "internetGatewaySet": { "item": [
+                    { "internetGatewayId": "igw-other", "tagSet": attempt_tags_json("attempt-0") }
+                ]}})))
+            });
+        let token = Arc::new(Mutex::new(None));
+        let seen = token.clone();
+        ec2.expect_create_internet_gateway()
+            .times(1)
+            .returning(move |request| {
+                *seen.lock().unwrap() =
+                    tag_value(request.tag_specifications.as_ref(), CREATE_ATTEMPT_TAG);
+                Ok(parse(
+                    json!({ "internetGateway": { "internetGatewayId": "igw-new" } }),
+                ))
+            });
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                internet_gateway_create_token: Some("attempt-0-of-mine".to_string()),
+                ..after_vpc(AwsNetworkState::CreatingInternetGateway)
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor.step().await.expect("create succeeds");
+        let state = controller(&executor);
+        assert_eq!(state.internet_gateway_id.as_deref(), Some("igw-new"));
+        let token = token
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("tagged with its token");
+        assert_ne!(token, "attempt-0-of-mine");
+        assert_eq!(state.internet_gateway_create_token, Some(token));
+    }
+
+    #[tokio::test]
+    async fn elastic_ip_retry_adopts_only_its_own_allocation() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_addresses().times(1).returning(|| {
+            Ok(parse(json!({ "addressesSet": { "item": [
+                { "allocationId": "eipalloc-other", "tagSet": attempt_tags_json("attempt-0") },
+                { "allocationId": "eipalloc-untagged" },
+                { "allocationId": "eipalloc-lost", "tagSet": attempt_tags_json("attempt-1") }
+            ]}})))
+        });
+        ec2.expect_allocate_address().times(0);
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                eip_create_token: Some("attempt-1".to_string()),
+                ..after_route_tables(AwsNetworkState::AllocatingElasticIp)
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor.step().await.expect("rediscovery succeeds");
+        let state = controller(&executor);
+        assert_eq!(state.eip_allocation_id.as_deref(), Some("eipalloc-lost"));
+        assert_eq!(state.state, AwsNetworkState::CreatingNatGateway);
+    }
+
+    #[tokio::test]
+    async fn recorded_elastic_ip_is_used_without_a_lookup() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_addresses().times(0);
+        ec2.expect_allocate_address().times(0);
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                eip_allocation_id: Some("eipalloc-1".to_string()),
+                eip_create_token: Some("attempt-1".to_string()),
+                ..after_route_tables(AwsNetworkState::AllocatingElasticIp)
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor
+            .step()
+            .await
+            .expect("the recorded allocation is reused");
+        let state = controller(&executor);
+        assert_eq!(state.eip_allocation_id.as_deref(), Some("eipalloc-1"));
+        assert_eq!(state.state, AwsNetworkState::CreatingNatGateway);
+    }
+
+    #[tokio::test]
+    async fn delete_recovers_the_internet_gateway_and_elastic_ip_of_lost_responses() {
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut ec2 = MockEc2Api::new();
+        expect_no_named_leftovers(&mut ec2);
+        ec2.expect_describe_internet_gateways()
+            .times(1)
+            .returning(|_| {
+                Ok(parse(json!({ "internetGatewaySet": { "item": [
+                    { "internetGatewayId": "igw-lost", "tagSet": attempt_tags_json("igw-attempt") }
+                ]}})))
+            });
+        ec2.expect_describe_addresses().times(1).returning(|| {
+            Ok(parse(json!({ "addressesSet": { "item": [
+                { "allocationId": "eipalloc-lost", "tagSet": attempt_tags_json("eip-attempt") }
+            ]}})))
+        });
+        let log = calls.clone();
+        ec2.expect_release_address().times(1).returning(move |id| {
+            log.lock().unwrap().push(format!("release_address {id}"));
+            Ok(())
+        });
+        // Never attached: the lost response was the create's.
+        ec2.expect_detach_internet_gateway()
+            .times(1)
+            .returning(|_| {
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        message: "Gateway.NotAttached".to_string(),
+                        resource_type: "InternetGateway".to_string(),
+                        resource_name: "igw-lost".to_string(),
+                    },
+                ))
+            });
+        let log = calls.clone();
+        ec2.expect_delete_internet_gateway()
+            .times(1)
+            .returning(move |id| {
+                log.lock()
+                    .unwrap()
+                    .push(format!("delete_internet_gateway {id}"));
+                Ok(())
+            });
+        let log = calls.clone();
+        ec2.expect_delete_vpc().times(1).returning(move |id| {
+            log.lock().unwrap().push(format!("delete_vpc {id}"));
+            Ok(())
+        });
+
+        let mut executor = executor(
+            ec2,
+            failed_create(AwsNetworkController {
+                internet_gateway_create_token: Some("igw-attempt".to_string()),
+                eip_create_token: Some("eip-attempt".to_string()),
+                ..after_vpc(AwsNetworkState::CreatingInternetGateway)
+            }),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor.delete().expect("delete transition");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("delete completes");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                "release_address eipalloc-lost",
+                "delete_internet_gateway igw-lost",
+                "delete_vpc vpc-1",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_finds_route_tables_and_security_group_by_name_when_ids_were_not_recorded() {
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_route_tables()
+            .times(2)
+            .returning(|request| {
+                let filters = request.filters.expect("lookup by VPC and name");
+                assert!(filters
+                    .iter()
+                    .any(|f| f.name == "vpc-id" && f.values == ["vpc-1"]));
+                let name = filters
+                    .iter()
+                    .find(|f| f.name == "tag:Name")
+                    .map(|f| f.values[0].clone())
+                    .expect("name filter");
+                let id = if name == format!("{PREFIX}-public-rt") {
+                    "rtb-public"
+                } else {
+                    assert_eq!(name, format!("{PREFIX}-private-rt"));
+                    "rtb-private"
+                };
+                Ok(parse(
+                    json!({ "routeTableSet": { "item": [{ "routeTableId": id }] } }),
+                ))
+            });
+        ec2.expect_describe_security_groups()
+            .times(1)
+            .returning(|request| {
+                let filters = request.filters.expect("lookup by VPC and name");
+                assert!(filters
+                    .iter()
+                    .any(|f| f.name == "group-name" && f.values == [format!("{PREFIX}-sg")]));
+                Ok(parse(
+                    json!({ "securityGroupInfo": { "item": [{ "groupId": "sg-lost" }] } }),
+                ))
+            });
+        let log = calls.clone();
+        ec2.expect_delete_security_group()
+            .times(1)
+            .returning(move |id| {
+                log.lock()
+                    .unwrap()
+                    .push(format!("delete_security_group {id}"));
+                Ok(())
+            });
+        let log = calls.clone();
+        ec2.expect_delete_route_table()
+            .times(2)
+            .returning(move |id| {
+                log.lock().unwrap().push(format!("delete_route_table {id}"));
+                Ok(())
+            });
+        let log = calls.clone();
+        ec2.expect_delete_vpc().times(1).returning(move |id| {
+            log.lock().unwrap().push(format!("delete_vpc {id}"));
+            Ok(())
+        });
+
+        let mut executor = executor(
+            ec2,
+            failed_create(after_vpc(AwsNetworkState::CreatingRouteTables)),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor.delete().expect("delete transition");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("delete completes");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                "delete_security_group sg-lost",
+                "delete_route_table rtb-public",
+                "delete_route_table rtb-private",
+                "delete_vpc vpc-1",
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn delete_waits_for_nat_gateway_deletion_before_releasing_its_elastic_ip() {
         let calls = Arc::new(Mutex::new(Vec::<String>::new()));
         let mut ec2 = MockEc2Api::new();
+        expect_no_named_leftovers(&mut ec2);
         let log = calls.clone();
         ec2.expect_delete_nat_gateway()
             .times(1)
