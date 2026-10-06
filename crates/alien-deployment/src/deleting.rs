@@ -571,6 +571,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lost_controller_state_does_not_forget_evidence_of_existing_storage() {
+        for evidence in ["outputs", "failed-state", "previous-config"] {
+            let mut fixture = local_storage_fixture().await;
+            let resource = fixture.state.resources.get_mut("data").unwrap();
+            assert!(resource.outputs.is_some());
+            resource.internal_state = None;
+            resource.status = ResourceStatus::ProvisionFailed;
+            match evidence {
+                "outputs" => {}
+                "failed-state" => {
+                    resource.outputs = None;
+                    resource.last_failed_state = Some(serde_json::json!({"corrupt": true}));
+                }
+                "previous-config" => {
+                    resource.outputs = None;
+                    resource.previous_config = Some(resource.config.clone());
+                }
+                _ => unreachable!(),
+            }
+            let before = resource.clone();
+            fixture
+                .state
+                .prepare_for_destroy()
+                .expect_err("lost controller with evidence of prior creation must fail closed");
+            let retained = &fixture.state.resources["data"];
+            assert_eq!(retained.status, ResourceStatus::ProvisionFailed);
+            assert_eq!(retained.outputs, before.outputs);
+            assert_eq!(retained.last_failed_state, before.last_failed_state);
+            assert_eq!(retained.previous_config, before.previous_config);
+            for name in ["data", "evidence"] {
+                assert_eq!(
+                    std::fs::read(
+                        fixture
+                            .directory
+                            .path()
+                            .join("storage")
+                            .join(name)
+                            .join("retained.txt")
+                    )
+                    .unwrap(),
+                    b"stored data"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn missing_local_storage_services_fail_without_forgetting_stored_data() {
         let mut fixture = local_storage_fixture().await;
         fixture
