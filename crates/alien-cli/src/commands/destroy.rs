@@ -148,7 +148,6 @@ async fn resolve_destroy_target(
             .client
             .get_deployment()
             .id(&deployment_id)
-            .include(vec!["deploymentGroup".to_string()])
             .send()
             .await
             .into_sdk_error()
@@ -156,14 +155,20 @@ async fn resolve_destroy_target(
                 message: "Failed to resolve the deployment token's target".to_string(),
             })?
             .into_inner();
-        let group_name = deployment
-            .deployment_group
-            .as_ref()
-            .map(|group| format!("{}/{}", group.name, deployment.name));
-        if args.name != deployment_id
-            && args.name != deployment.name.as_str()
-            && group_name.as_deref() != Some(args.name.as_str())
-        {
+        let reference_matches = if args.name.contains('/') {
+            let requested =
+                crate::deployment_resolver::resolve(&manager.client, &args.name, ctx.is_dev())
+                    .await
+                    .context(ErrorData::ValidationError {
+                        field: "name".to_string(),
+                        message: "The supplied reference does not match the token's deployment"
+                            .to_string(),
+                    })?;
+            requested.id.as_str() == deployment_id
+        } else {
+            args.name == deployment_id || args.name == deployment.name.as_str()
+        };
+        if !reference_matches {
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "name".to_string(),
                 message: "The supplied token belongs to a different deployment".to_string(),
@@ -704,7 +709,11 @@ mod tests {
         if state.lock().unwrap().deleted {
             return StatusCode::NOT_FOUND.into_response();
         }
-        Json(serde_json::json!({
+        Json(deployment_record()).into_response()
+    }
+
+    fn deployment_record() -> serde_json::Value {
+        serde_json::json!({
             "id": "dep_test",
             "name": "test",
             "platform": "test",
@@ -716,8 +725,11 @@ mod tests {
             "workspaceId": "ws_test",
             "retryRequested": false,
             "createdAt": "2026-10-05T00:00:00Z"
-        }))
-        .into_response()
+        })
+    }
+
+    async fn list_token_deployment() -> Json<serde_json::Value> {
+        Json(serde_json::json!({ "items": [deployment_record()] }))
     }
 
     /// Mirrors the platform: sync acquire only accepts deployment-scoped tokens.
@@ -892,6 +904,7 @@ mod tests {
         let state = Shared::default();
         let app = Router::new()
             .route("/v1/whoami", get(whoami))
+            .route("/v1/deployments", get(list_token_deployment))
             .route("/v1/deployments/{id}", get(get_deployment))
             .route("/v1/sync/acquire", post(acquire))
             .with_state(state.clone());
@@ -934,6 +947,7 @@ mod tests {
         let state = Shared::default();
         let app = Router::new()
             .route("/v1/whoami", get(whoami))
+            .route("/v1/deployments", get(list_token_deployment))
             .route("/v1/deployments/{id}", get(get_deployment))
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
