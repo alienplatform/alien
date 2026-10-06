@@ -25,7 +25,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
@@ -375,7 +375,7 @@ pub struct LocalContainerManager {
     /// Tracked containers (container_id → metadata)
     containers: Arc<RwLock<HashMap<String, ContainerMetadata>>>,
     /// Serialize imports that share content or mutate the same registry reference.
-    image_load_locks: tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    image_load_locks: tokio::sync::Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>,
 }
 
 impl LocalContainerManager {
@@ -662,15 +662,7 @@ impl LocalContainerManager {
         lock_keys.dedup();
         let locks = {
             let mut locks = self.image_load_locks.lock().await;
-            lock_keys
-                .into_iter()
-                .map(|key| {
-                    locks
-                        .entry(key)
-                        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-                        .clone()
-                })
-                .collect::<Vec<_>>()
+            retain_image_load_locks(&mut locks, lock_keys)
         };
         let mut load_guards = Vec::with_capacity(locks.len());
         for lock in locks {
@@ -1747,6 +1739,24 @@ struct OciDescriptor {
     annotations: HashMap<String, String>,
 }
 
+/// Retain only imports with active owners or waiters, reusing their locks atomically.
+fn retain_image_load_locks(
+    locks: &mut HashMap<String, Weak<tokio::sync::Mutex<()>>>,
+    keys: Vec<String>,
+) -> Vec<Arc<tokio::sync::Mutex<()>>> {
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    keys.into_iter()
+        .map(|key| {
+            if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+                return lock;
+            }
+            let lock = Arc::new(tokio::sync::Mutex::new(()));
+            locks.insert(key, Arc::downgrade(&lock));
+            lock
+        })
+        .collect()
+}
+
 /// Digest of the first image an OCI archive's `index.json` lists: the same
 /// image whose config digest `dockdash::Image::from_tarball` reads.
 fn oci_archive_identity(tarball_path: &Path) -> std::io::Result<(String, Vec<String>)> {
@@ -1783,6 +1793,41 @@ fn oci_archive_identity(tarball_path: &Path) -> std::io::Result<(String, Vec<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn image_import_locks_preserve_waiters_and_prune_finished_imports() {
+        let mut locks = HashMap::new();
+        let mut first = retain_image_load_locks(&mut locks, vec!["shared".to_string()]);
+        let guard = first.pop().unwrap().lock_owned().await;
+        let mut second = retain_image_load_locks(&mut locks, vec!["shared".to_string()]);
+        let waiter = second.pop().unwrap().lock_owned();
+        tokio::pin!(waiter);
+        tokio::select! {
+            biased;
+            _ = &mut waiter => panic!("a waiting import must not bypass the active owner"),
+            _ = tokio::task::yield_now() => {}
+        }
+        for index in 0..100 {
+            let unrelated =
+                retain_image_load_locks(&mut locks, vec![format!("independent-{index}")]);
+            assert_eq!(locks.len(), 2, "finished image keys must not accumulate");
+            assert!(locks["shared"].upgrade().unwrap().try_lock().is_err());
+            drop(unrelated);
+        }
+        drop(guard);
+        let waiting_guard = waiter.await;
+        let shared = retain_image_load_locks(&mut locks, vec!["shared".to_string()]);
+        assert_eq!(locks.len(), 1);
+        assert!(
+            shared[0].try_lock().is_err(),
+            "the waiter still owns the same lock"
+        );
+        drop((waiting_guard, shared));
+        let final_import = retain_image_load_locks(&mut locks, vec!["last".to_string()]);
+        assert_eq!(locks.len(), 1);
+        assert!(!locks.contains_key("shared"));
+        assert!(final_import[0].try_lock().is_ok());
+    }
 
     fn test_bind_mount(shared_with_host_workloads: bool) -> BindMount {
         BindMount {
