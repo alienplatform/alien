@@ -239,8 +239,18 @@ pub(crate) async fn serve(
         .header_read_timeout(idle_timeout);
     let builder = Arc::new(builder);
 
+    let mut connections = JoinSet::new();
     loop {
-        let stream = match listener.accept().await {
+        let accepted = tokio::select! {
+            accepted = listener.accept() => accepted,
+            completed = connections.join_next(), if !connections.is_empty() => {
+                if let Some(Err(error)) = completed {
+                    return Err(std::io::Error::other(format!("Inbound connection task failed: {error}")));
+                }
+                continue;
+            }
+        };
+        let stream = match accepted {
             Ok((stream, _)) => stream,
             Err(error) => {
                 // Typically fd exhaustion; the listener is still valid, so keep serving.
@@ -251,7 +261,7 @@ pub(crate) async fn serve(
         };
         let service = TowerToHyperService::new(router.clone());
         let builder = builder.clone();
-        tokio::spawn(async move {
+        connections.spawn(async move {
             // `with_upgrades` keeps WebSocket upgrades (debug sessions) working.
             if let Err(error) = builder
                 .serve_connection(TokioIo::new(stream), service)
@@ -267,6 +277,7 @@ pub(crate) async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::standalone_config::ManagerTomlConfig;
     use axum::{routing::get, Router};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
@@ -299,6 +310,54 @@ mod tests {
                 return text.into_owned();
             }
         }
+    }
+
+    #[tokio::test]
+    async fn caller_shutdown_finishes_loops_and_closes_listener_and_connections() {
+        let directory = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let config = ManagerConfig {
+            db_path: Some(directory.path().join("manager.db")),
+            state_dir: Some(directory.path().to_path_buf()),
+            deployment_interval_secs: 3600,
+            heartbeat_interval_secs: 3600,
+            response_signing_key: b"test-response-signing-key".to_vec(),
+            ..Default::default()
+        };
+        let server = AlienManager::builder(config)
+            .with_standalone_defaults(&ManagerTomlConfig::default())
+            .await
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let (shutdown, receiver) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(server.start_with_listener_and_shutdown(listener, async {
+            let _ = receiver.await;
+        }));
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        stream.write_all(REQUEST).await.unwrap();
+        assert!(read_response(&mut stream).await.starts_with("HTTP/1.1 200"));
+        shutdown.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("shutdown must interrupt long loop intervals")
+            .unwrap()
+            .unwrap();
+        assert!(
+            TcpStream::connect(addr).await.is_err(),
+            "listener must close"
+        );
+        let mut byte = [0];
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), stream.read(&mut byte))
+                .await
+                .unwrap()
+                .unwrap(),
+            0,
+            "existing keep-alive connection must close"
+        );
     }
 
     #[tokio::test]

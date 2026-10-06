@@ -23,6 +23,7 @@ use alien_manager::{
         in_memory_telemetry::InMemoryTelemetryBackend, local_credentials::LocalCredentialResolver,
         permissive_auth::PermissiveAuthValidator,
     },
+    standalone_config::ManagerTomlConfig,
     stores::sqlite::{SqliteDatabase, SqliteDeploymentStore},
     traits::deployment_store::{DeploymentFilter, DeploymentStore},
     LogBuffer,
@@ -258,8 +259,6 @@ fn ensure_dev_port_available(port: u16) -> Result<()> {
 pub async fn build_embedded_dev_manager(
     port: u16,
 ) -> Result<(alien_manager::AlienManager, SocketAddr)> {
-    use alien_manager::standalone_config::ManagerTomlConfig;
-
     let state_dir = get_current_dir()?.join(".alien");
     std::fs::create_dir_all(&state_dir)
         .into_alien_error()
