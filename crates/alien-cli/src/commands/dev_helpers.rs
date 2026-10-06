@@ -481,6 +481,29 @@ pub(crate) async fn ensure_local_dev_deployment_group(port: u16) -> Result<()> {
     Ok(())
 }
 
+async fn local_dev_group_id(client: &AlienManagerClient) -> Result<String> {
+    let groups = client
+        .list_deployment_groups()
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Resolving the local development group".to_string(),
+            url: None,
+        })?;
+    groups
+        .items
+        .iter()
+        .find(|group| group.name == "local-dev")
+        .map(|group| group.id.clone())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ServerStartFailed {
+                reason: "The local development group is missing; restart the local manager"
+                    .to_string(),
+            })
+        })
+}
+
 /// Build and post a release to the dev server for the local `alien dev` flow.
 ///
 /// Always builds for the local platform — dev mode is local-only.
@@ -691,10 +714,12 @@ pub async fn create_initial_deployment(
     input_values: HashMap<String, serde_json::Value>,
 ) -> Result<String> {
     let client = local_dev_client(port);
+    let group_id = local_dev_group_id(&client).await?;
 
     // Check if deployment exists
     let list_response = client
         .list_deployments()
+        .deployment_group_id(&group_id)
         .send()
         .await
         .into_sdk_error()
@@ -706,7 +731,7 @@ pub async fn create_initial_deployment(
     if let Some(existing) = list_response
         .items
         .iter()
-        .find(|d| d.name == deployment_name)
+        .find(|d| d.name == deployment_name && d.deployment_group_id == group_id)
     {
         // Inputs are fixed when a deployment is created, and the manager doesn't return them
         // (they may be secrets), so a rerun can't tell whether they changed: say so instead of
@@ -753,6 +778,7 @@ pub async fn create_initial_deployment(
         .body_map(|body| {
             let mut b = body
                 .name(deployment_name)
+                .deployment_group_id(&group_id)
                 .platform(alien_manager_api::types::Platform::Local)
                 .input_values(input_values.into_iter().collect::<serde_json::Map<_, _>>());
             if let Some(ref vars) = env_vars {
@@ -1013,8 +1039,14 @@ pub async fn fetch_all_dev_deployment_live_states(
     port: u16,
 ) -> Result<Vec<DevDeploymentLiveState>> {
     let client = local_dev_client(port);
+    let group_id = local_dev_group_id(&client).await?;
 
-    let list_response = match client.list_deployments().send().await {
+    let list_response = match client
+        .list_deployments()
+        .deployment_group_id(group_id)
+        .send()
+        .await
+    {
         Ok(response) => response.into_inner(),
         Err(_) => return Ok(Vec::new()),
     };
@@ -1309,12 +1341,16 @@ mod tests {
         }
         type Created = Arc<Mutex<Vec<serde_json::Value>>>;
         async fn list(State(created): State<Created>) -> Json<serde_json::Value> {
-            let items: Vec<_> = created
+            let mut items: Vec<_> = created
                 .lock()
                 .unwrap()
                 .iter()
                 .map(|body| deployment(body["name"].as_str().unwrap()))
                 .collect();
+            let mut unrelated = deployment("api");
+            unrelated["id"] = serde_json::json!("dep_other");
+            unrelated["deploymentGroupId"] = serde_json::json!("dg_other");
+            items.insert(0, unrelated);
             Json(serde_json::json!({ "items": items }))
         }
         async fn create(
@@ -1333,8 +1369,17 @@ mod tests {
             )
         }
 
+        async fn groups() -> Json<serde_json::Value> {
+            Json(serde_json::json!({ "items": [
+                { "id":"dg_other", "name":"other", "deploymentCount":1, "maxDeployments":100,
+                  "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z" },
+                { "id":"dg_1", "name":"local-dev", "deploymentCount":0, "maxDeployments":100,
+                  "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z" }
+            ] }))
+        }
         let created: Created = Arc::default();
         let app = Router::new()
+            .route("/v1/deployment-groups", get(groups))
             .route("/v1/deployments", get(list).post(create))
             .with_state(created.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1345,6 +1390,7 @@ mod tests {
         create_initial_deployment("api", port, None, inputs.clone())
             .await
             .expect("the deployment is created");
+        assert_eq!(created.lock().unwrap()[0]["deploymentGroupId"], "dg_1");
         assert_eq!(
             created.lock().unwrap()[0]["inputValues"],
             serde_json::json!({ "managedKey": false })
