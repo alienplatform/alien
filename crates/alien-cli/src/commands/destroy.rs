@@ -785,7 +785,7 @@ mod tests {
             State(state): State<Shared>,
             headers: HeaderMap,
             Json(body): Json<serde_json::Value>,
-        ) -> StatusCode {
+        ) -> (StatusCode, Json<serde_json::Value>) {
             assert_eq!(headers["authorization"], "Bearer user-session");
             assert_eq!(body["action"], "cleanup");
             state
@@ -793,7 +793,12 @@ mod tests {
                 .unwrap()
                 .delete_authorizations
                 .push(headers["authorization"].to_str().unwrap().to_string());
-            StatusCode::NO_CONTENT
+            (
+                StatusCode::ACCEPTED,
+                Json(
+                    serde_json::json!({ "action": "cleanup", "cleanupRequired": true, "message": "Deployment deletion accepted" }),
+                ),
+            )
         }
         async fn token(
             headers: HeaderMap,
