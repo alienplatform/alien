@@ -850,21 +850,40 @@ async fn find_named_local_deployment(
     client: &AlienManagerClient,
     deployment_name: &str,
 ) -> Result<Option<alien_manager_api::types::DeploymentResponse>> {
-    let list_response = client
+    let group_id = local_dev_group_id(client).await?;
+    let response = client
         .list_deployments()
+        .deployment_group_id(&group_id)
+        .name(deployment_name)
         .send()
         .await
         .into_sdk_error()
         .context(ErrorData::ApiRequestFailed {
-            message: "Failed to list deployments".to_string(),
+            message: "Failed to list local development deployments".to_string(),
             url: None,
-        })?;
-
-    let inner = list_response.into_inner();
-    Ok(inner
-        .items
-        .into_iter()
-        .find(|deployment| deployment.name == deployment_name))
+        })?
+        .into_inner();
+    if response.next_cursor.is_some() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "name".to_string(),
+            message: "The manager returned an incomplete local deployment list".to_string(),
+        }));
+    }
+    let mut matches = response.items.into_iter().filter(|deployment| {
+        deployment.name == deployment_name
+            && deployment.deployment_group_id == group_id
+            && deployment.platform == alien_manager_api::types::Platform::Local
+    });
+    let first = matches.next();
+    if matches.next().is_some() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "name".to_string(),
+            message: format!(
+                "Multiple local development deployments are named '{deployment_name}'"
+            ),
+        }));
+    }
+    Ok(first)
 }
 
 async fn wait_for_local_deployment_absent(port: u16, deployment_name: &str) -> Result<()> {
@@ -1258,7 +1277,24 @@ mod tests {
         } else {
             serde_json::json!([])
         };
+        let mut items = items.as_array().unwrap().clone();
+        items.insert(
+            0,
+            serde_json::json!({
+                "id":"dep_other", "name":"api", "platform":"local", "status":"running",
+                "deploymentGroupId":"dg_other", "deploymentProtocolVersion":1,
+                "projectId":"default", "workspaceId":"default", "retryRequested":false,
+                "createdAt":"2026-01-01T00:00:00Z"
+            }),
+        );
         Json(serde_json::json!({ "items": items }))
+    }
+
+    async fn destroy_manager_groups() -> Json<serde_json::Value> {
+        Json(serde_json::json!({ "items": [{
+            "id":"dg_1", "name":"local-dev", "deploymentCount":1, "maxDeployments":100,
+            "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z"
+        }] }))
     }
 
     async fn destroy_manager_delete(
@@ -1283,6 +1319,7 @@ mod tests {
     async fn force_destroy_local_deployment_deletes_by_name_and_waits() {
         let manager: SharedDestroyManager = Arc::default();
         let app = Router::new()
+            .route("/v1/deployment-groups", get(destroy_manager_groups))
             .route("/v1/deployments", get(destroy_manager_list))
             .route("/v1/deployments/{id}/delete", post(destroy_manager_delete))
             .with_state(manager.clone());
