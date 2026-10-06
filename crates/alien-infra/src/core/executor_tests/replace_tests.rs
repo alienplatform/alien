@@ -2,7 +2,8 @@
 //!
 //! A config change on such a resource must delete those cloud resources, against the config
 //! they were created with, before creating it again. A fresh create would drop the saved IDs
-//! and leak everything the failed create made.
+//! and leak everything the failed create made. Resources whose delete destroys user data are
+//! the exception: they are created again in place and never deleted to be replaced.
 
 use std::collections::HashMap;
 
@@ -10,10 +11,14 @@ use super::helpers::*;
 use crate::core::state_utils::StackResourceStateExt;
 use crate::core::StackExecutor;
 use crate::error::Result;
+use crate::storage::{
+    test_storage_deletes_issued, TestStorageController, TestStorageState,
+    SIMULATE_STORAGE_CREATE_FAILURE_ORIGIN,
+};
 use crate::worker::{test_worker_deletes_issued, TestWorkerController, TestWorkerState};
 use alien_core::{
     ClientConfig, InitialSetupAuthority, Resource, ResourceLifecycle, ResourceRef, ResourceStatus,
-    Stack, StackState, StackStatus, Worker, WorkerCode,
+    Stack, StackResourceState, StackState, StackStatus, Storage, Worker, WorkerCode,
 };
 
 const CREATE_WORKER_FAILURE: (&str, &str) = ("SIMULATE_CREATE_WORKER_FAILURE", "true");
@@ -525,5 +530,138 @@ async fn setup_owned_failed_create_is_replaced_only_by_setup() -> Result<()> {
         images(&test_worker_deletes_issued(&identifier(id))),
         vec!["image-v1"]
     );
+    Ok(())
+}
+
+/// A data-holding resource is never deleted to be replaced: its create may have adopted a
+/// bucket that already holds data. With saved controller state and a config change it is
+/// created again in place, while a worker failed the same way in the same stack is still
+/// deleted and recreated.
+#[tokio::test]
+async fn failed_storage_create_is_created_again_in_place_instead_of_deleted() -> Result<()> {
+    let store_id = "replace-data-store";
+    let worker_id = "replace-data-worker";
+    let stack = |storage: Storage, worker: Worker| {
+        Stack::new("replace-test".to_owned())
+            .add(storage, ResourceLifecycle::Live)
+            .add(worker, ResourceLifecycle::Live)
+            .build()
+    };
+    let failing_store = Storage::new(store_id.to_string())
+        .cors_allowed_origins(vec![SIMULATE_STORAGE_CREATE_FAILURE_ORIGIN.to_string()])
+        .build();
+    let v1 = stack(
+        failing_store,
+        worker(worker_id, "image-v1", &[CREATE_WORKER_FAILURE]),
+    );
+
+    let executor = new_executor(&v1)?;
+    let mut state = new_test_state();
+    for _ in 0..40 {
+        if get_status(&state, store_id) == Some(ResourceStatus::ProvisionFailed)
+            && get_status(&state, worker_id) == Some(ResourceStatus::ProvisionFailed)
+        {
+            break;
+        }
+        state = executor.step(state).await?.next_state;
+    }
+    let failed_store = &state.resources[store_id];
+    assert_eq!(failed_store.status, ResourceStatus::ProvisionFailed);
+    let bucket = failed_store
+        .get_internal_controller_typed::<TestStorageController>()?
+        .bucket_name
+        .clone()
+        .expect("the failed create recorded its bucket");
+    assert!(failed_store.last_failed_state.is_some());
+    assert_eq!(
+        get_status(&state, worker_id),
+        Some(ResourceStatus::ProvisionFailed)
+    );
+
+    let fixed_store = Storage::new(store_id.to_string()).versioning(true).build();
+    let v2 = stack(fixed_store.clone(), worker(worker_id, "image-v2", &[]));
+    let executor = new_executor(&v2)?;
+    let plan = executor.plan(&state)?;
+    assert_eq!(plan.creates, vec![store_id.to_string()], "{plan:?}");
+    assert_eq!(plan.replaces, vec![worker_id.to_string()], "{plan:?}");
+    assert!(plan.deletes.is_empty(), "{plan:?}");
+
+    let state = executor.step(state).await?.next_state;
+    assert_eq!(
+        get_status(&state, store_id),
+        Some(ResourceStatus::Provisioning),
+        "the store goes straight to its create, not to a delete"
+    );
+    assert_eq!(
+        get_status(&state, worker_id),
+        Some(ResourceStatus::Deleting)
+    );
+
+    let state = run_to_synced(&executor, state).await?;
+    assert!(
+        test_storage_deletes_issued(store_id).is_empty(),
+        "the store's bucket must never be deleted"
+    );
+    let store = &state.resources[store_id];
+    assert_eq!(store.status, ResourceStatus::Running);
+    assert_eq!(store.config, Resource::new(fixed_store));
+    assert_eq!(
+        store
+            .get_internal_controller_typed::<TestStorageController>()?
+            .bucket_name,
+        Some(bucket),
+        "the new create finds the same bucket by its name"
+    );
+
+    assert_eq!(
+        images(&test_worker_deletes_issued(&identifier(worker_id))),
+        vec!["image-v1"]
+    );
+    assert_eq!(get_status(&state, worker_id), Some(ResourceStatus::Running));
+    assert_eq!(image(&state, worker_id), "image-v2");
+    Ok(())
+}
+
+/// A data-holding resource left DeleteFailed while still desired with a changed config is
+/// not handed to the replace path, which would finish deleting it.
+#[tokio::test]
+async fn delete_failed_storage_with_a_changed_config_is_not_replaced() -> Result<()> {
+    let store_id = "replace-data-delete-failed";
+    let mut state = new_test_state();
+    let mut failed = StackResourceState::new_pending(
+        Storage::RESOURCE_TYPE.to_string(),
+        Resource::new(Storage::new(store_id.to_string()).build()),
+        Some(ResourceLifecycle::Live),
+        vec![],
+    );
+    failed.status = ResourceStatus::DeleteFailed;
+    failed.set_internal_controller(Some(Box::new(TestStorageController {
+        state: TestStorageState::DeleteFailed,
+        bucket_name: Some(format!("{}-{store_id}", state.resource_prefix)),
+        ready_checks: 0,
+        convergence_reconciliation: false,
+        _internal_stay_count: None,
+    })))?;
+    state.resources.insert(store_id.to_string(), failed);
+
+    let executor = new_executor(
+        &Stack::new("replace-test".to_owned())
+            .add(
+                Storage::new(store_id.to_string()).versioning(true).build(),
+                ResourceLifecycle::Live,
+            )
+            .build(),
+    )?;
+    let plan = executor.plan(&state)?;
+    assert!(plan.replaces.is_empty(), "{plan:?}");
+    assert!(plan.creates.is_empty(), "{plan:?}");
+    assert!(plan.deletes.is_empty(), "{plan:?}");
+
+    let state = executor.step(state).await?.next_state;
+    assert_eq!(
+        get_status(&state, store_id),
+        Some(ResourceStatus::DeleteFailed)
+    );
+    assert!(test_storage_deletes_issued(store_id).is_empty());
     Ok(())
 }

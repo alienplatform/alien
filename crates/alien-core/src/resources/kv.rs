@@ -77,6 +77,11 @@ impl ResourceDefinition for Kv {
         &self.id
     }
 
+    fn delete_destroys_data(&self) -> bool {
+        // Stored items.
+        true
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         Vec::new()
     }

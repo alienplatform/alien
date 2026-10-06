@@ -73,6 +73,11 @@ impl ResourceDefinition for AzureResourceGroup {
         &self.id
     }
 
+    fn delete_destroys_data(&self) -> bool {
+        // Deleting a resource group deletes everything in it, including data resources.
+        true
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         Vec::new()
     }

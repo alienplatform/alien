@@ -78,6 +78,11 @@ impl ResourceDefinition for Vault {
         &self.id
     }
 
+    fn delete_destroys_data(&self) -> bool {
+        // Stored secrets.
+        true
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         Vec::new()
     }

@@ -79,6 +79,11 @@ impl ResourceDefinition for AzureServiceBusNamespace {
         &self.id
     }
 
+    fn delete_destroys_data(&self) -> bool {
+        // Messages not yet consumed.
+        true
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         Vec::new()
     }

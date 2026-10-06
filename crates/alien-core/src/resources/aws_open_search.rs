@@ -234,6 +234,11 @@ impl ResourceDefinition for AwsOpenSearch {
         &self.id
     }
 
+    fn delete_destroys_data(&self) -> bool {
+        // Indexed documents.
+        true
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         Vec::new()
     }

@@ -115,6 +115,11 @@ impl ResourceDefinition for Storage {
         &self.id
     }
 
+    fn delete_destroys_data(&self) -> bool {
+        // Objects in the bucket.
+        true
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         self.encryption_key.iter().cloned().collect()
     }

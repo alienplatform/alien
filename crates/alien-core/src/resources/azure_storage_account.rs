@@ -79,6 +79,11 @@ impl ResourceDefinition for AzureStorageAccount {
         &self.id
     }
 
+    fn delete_destroys_data(&self) -> bool {
+        // Blobs, tables and queues in the account.
+        true
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         Vec::new()
     }

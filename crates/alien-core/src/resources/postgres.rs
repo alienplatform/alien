@@ -125,6 +125,11 @@ impl ResourceDefinition for Postgres {
         &self.id
     }
 
+    fn delete_destroys_data(&self) -> bool {
+        // Database contents.
+        true
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         // The network dependency is added by infrastructure preflights on cloud platforms and
         // is irrelevant on Local; cloud controllers reach the network via

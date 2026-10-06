@@ -66,6 +66,11 @@ impl ResourceDefinition for Key {
         &self.id
     }
 
+    fn delete_destroys_data(&self) -> bool {
+        // Data encrypted with the key cannot be decrypted once it is gone.
+        true
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         Vec::new()
     }

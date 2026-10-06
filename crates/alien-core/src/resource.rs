@@ -105,6 +105,16 @@ pub trait ResourceDefinition: Debug + Send + Sync + 'static {
     /// Validates if an update from the current configuration to a new configuration is allowed
     fn validate_update(&self, new_config: &dyn ResourceDefinition) -> Result<()>;
 
+    /// Whether deleting this resource destroys data the user stored in it (objects,
+    /// rows, secrets, messages, volumes, or the key that decrypts them).
+    ///
+    /// The executor never deletes such a resource just to recreate it with a new
+    /// config: a failed create may have adopted an existing resource that already
+    /// holds data, so it is created again in place instead.
+    fn delete_destroys_data(&self) -> bool {
+        false
+    }
+
     /// Provides access to the underlying concrete type for downcasting
     fn as_any(&self) -> &dyn Any;
 
@@ -356,6 +366,12 @@ impl Resource {
     /// Validates if an update from the current configuration to a new configuration is allowed
     pub fn validate_update(&self, new_config: &Resource) -> Result<()> {
         self.inner.validate_update(new_config.inner.as_ref())
+    }
+
+    /// Whether deleting this resource destroys user data. See
+    /// [`ResourceDefinition::delete_destroys_data`].
+    pub fn delete_destroys_data(&self) -> bool {
+        self.inner.delete_destroys_data()
     }
 
     /// Provides access to the underlying ResourceDefinition trait object

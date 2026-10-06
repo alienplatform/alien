@@ -1151,6 +1151,19 @@ impl StackExecutor {
                                         resource_id
                                     );
                                     plan_result.setup_required.push(resource_id.clone());
+                                } else if current_resource_state.config.delete_destroys_data() {
+                                    // A create can adopt a resource that already holds data (an
+                                    // existing bucket, table or database with the same name), so
+                                    // deleting it to replace it could destroy that data. These
+                                    // creates find their resource again by its deterministic
+                                    // name, so creating again in place is safe.
+                                    info!(
+                                        "Restarting CREATE for data-holding resource '{}' after a config change during ProvisionFailed; not deleting it",
+                                        resource_id
+                                    );
+                                    plan_result.creates.push(resource_id.clone());
+                                    plan_result.updates.remove(resource_id);
+                                    plan_result.deletes.retain(|id| id != resource_id);
                                 } else {
                                     // The failed controller holds the IDs of whatever the create
                                     // already made. A fresh create would drop them and leak those
@@ -1167,9 +1180,12 @@ impl StackExecutor {
                             }
                             ResourceStatus::DeleteFailed => {
                                 // A replace whose delete failed: finish the delete, then the
-                                // create follows. Never create over what is left.
+                                // create follows. Never create over what is left. Data-holding
+                                // resources are never replaced, so this delete is not ours to
+                                // finish.
                                 if (current_resource_state.has_internal_state()
                                     || current_resource_state.has_last_failed_state())
+                                    && !current_resource_state.config.delete_destroys_data()
                                     && !self.replacement_requires_setup(
                                         desired_config,
                                         current_resource_state,

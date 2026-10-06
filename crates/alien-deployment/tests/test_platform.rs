@@ -2123,11 +2123,12 @@ async fn interrupted_sibling_with_changed_config_is_deleted_before_it_is_recreat
     assert!(alien_infra::test_worker_deletes_issued("test:worker:rejected-fn").is_empty());
 }
 
-/// A setup rerun with a corrected release replaces a setup-owned resource whose create failed
-/// after recording what it made: the retry deletes it against the config it was created
-/// with, then creates it with the new one, instead of resuming the old create checkpoint.
+/// A setup rerun with a corrected release does not resume the old create checkpoint of a
+/// setup-owned store whose create failed after recording its bucket. A store holds data, so
+/// it is not deleted to be replaced either: setup creates it again in place with the new
+/// config.
 #[tokio::test]
-async fn setup_retry_replaces_a_failed_setup_owned_create_whose_config_changed() {
+async fn setup_retry_creates_a_failed_setup_owned_store_again_with_the_new_config() {
     let _vault = test_vault_env().await;
     let config = create_test_config("hash_v1", false);
     let store_id = "setup-replaced-store";
@@ -2151,7 +2152,7 @@ async fn setup_retry_replaces_a_failed_setup_owned_create_whose_config_changed()
             alien_infra::SIMULATE_STORAGE_CREATE_FAILURE_ORIGIN.to_string()
         ])
         .build();
-    let state = create_initial_state(stack_with_store(failing_store.clone()));
+    let state = create_initial_state(stack_with_store(failing_store));
     let mut state = run_until_status(
         state,
         config.clone(),
@@ -2198,10 +2199,9 @@ async fn setup_retry_replaces_a_failed_setup_owned_create_whose_config_changed()
         state.stack_state.as_ref().unwrap().resources[store_id]
     );
 
-    assert_eq!(
-        alien_infra::test_storage_deletes_issued(store_id),
-        vec![failing_store],
-        "the failed create is deleted once, against the config it used"
+    assert!(
+        alien_infra::test_storage_deletes_issued(store_id).is_empty(),
+        "a data-holding store is never deleted to be replaced"
     );
     let store = &state.stack_state.as_ref().unwrap().resources[store_id];
     assert_eq!(store.status, alien_core::ResourceStatus::Running);
