@@ -1553,27 +1553,25 @@ mod tests {
             )
             .await
             .unwrap();
+        let parameters = CreateDeploymentParams {
+            name: "api".to_string(),
+            deployment_group_id: legacy.id,
+            platform: alien_core::Platform::Local,
+            deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            base_platform: None,
+            stack_settings: Default::default(),
+            stack_state: Some(StackState::with_resource_prefix(
+                alien_core::Platform::Local,
+                "retained".to_string(),
+            )),
+            environment_variables: None,
+            public_subdomain: None,
+            input_values: Default::default(),
+            setup_item: None,
+            deployment_token: None,
+        };
         let before = store
-            .create_deployment(
-                &subject,
-                CreateDeploymentParams {
-                    name: "api".to_string(),
-                    deployment_group_id: legacy.id,
-                    platform: alien_core::Platform::Local,
-                    deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
-                    base_platform: None,
-                    stack_settings: Default::default(),
-                    stack_state: Some(StackState::with_resource_prefix(
-                        alien_core::Platform::Local,
-                        "retained".to_string(),
-                    )),
-                    environment_variables: None,
-                    public_subdomain: None,
-                    input_values: Default::default(),
-                    setup_item: None,
-                    deployment_token: None,
-                },
-            )
+            .create_deployment(&subject, parameters.clone())
             .await
             .unwrap();
         drop(store);
@@ -1625,6 +1623,38 @@ mod tests {
                 .len(),
             1
         );
+        let conflicting = store.create_deployment(&subject, parameters).await.unwrap();
+        drop(store);
+        assert!(
+            refresh_local_deployment_environment(directory.path(), &conflicting.id, &variables)
+                .await
+                .is_err(),
+            "migration must not overwrite a same-name deployment in local-dev"
+        );
+        let store = SqliteDeploymentStore::new(Arc::new(
+            SqliteDatabase::new(&path.to_string_lossy()).await.unwrap(),
+        ));
+        let untouched = store
+            .get_deployment(&subject, &conflicting.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            untouched.deployment_group_id,
+            conflicting.deployment_group_id
+        );
+        assert_eq!(
+            untouched.user_environment_variables,
+            conflicting.user_environment_variables
+        );
+        assert_eq!(
+            serde_json::to_value(&untouched.stack_state).unwrap(),
+            serde_json::to_value(&conflicting.stack_state).unwrap()
+        );
+        drop(store);
+        refresh_local_deployment_environment(directory.path(), "local-dev/api", &[])
+            .await
+            .unwrap();
         drop(store);
         refresh_local_deployment_environment(directory.path(), "api", &[])
             .await
