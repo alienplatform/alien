@@ -476,7 +476,9 @@ fn prepare_for_destroy_matching(
                         }
                     }
                     Ok(None) => {
-                        if mode == DestroyPreparationMode::Teardown {
+                        if mode == DestroyPreparationMode::Teardown
+                            && resource_state.status != ResourceStatus::ProvisionFailed
+                        {
                             return Err(AlienError::new(
                                 ErrorData::ResourceStateSerializationFailed {
                                     resource_id: resource_id.clone(),
@@ -713,6 +715,28 @@ mod tests {
         stack_state
             .resources
             .insert("test-function".to_string(), resource_state);
+
+        let mut missing_update_state = stack_state.clone();
+        missing_update_state
+            .resources
+            .get_mut("test-function")
+            .unwrap()
+            .status = ResourceStatus::UpdateFailed;
+        assert!(missing_update_state.prepare_for_destroy().is_err());
+        assert_eq!(
+            missing_update_state.resources["test-function"].status,
+            ResourceStatus::UpdateFailed
+        );
+
+        let mut full_teardown = stack_state.clone();
+        assert_eq!(
+            full_teardown.prepare_for_destroy().unwrap(),
+            vec!["test-function"]
+        );
+        let deleted = &full_teardown.resources["test-function"];
+        assert_eq!(deleted.status, ResourceStatus::Deleted);
+        assert!(deleted.error.is_none());
+        assert!(deleted.outputs.is_none());
 
         let prepared = stack_state.prepare_for_runtime_cleanup_destroy().unwrap();
 
