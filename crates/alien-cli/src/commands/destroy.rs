@@ -426,13 +426,6 @@ async fn destroy_tracked_deployment(
         return Ok(());
     }
 
-    let manager_client = alien_manager_api::Client::new_with_client(
-        &manager_ctx.manager_url,
-        deployment_manager_http_client(
-            &tracked_deployment.api_key,
-            manager_ctx.workspace.as_deref(),
-        )?,
-    );
     let pre_delete_deployment = manager_client
         .get_deployment()
         .id(&tracked_deployment.deployment_id)
