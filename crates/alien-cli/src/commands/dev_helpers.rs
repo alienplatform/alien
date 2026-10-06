@@ -28,7 +28,9 @@ use alien_manager::{
     traits::deployment_store::{DeploymentFilter, DeploymentStore},
     LogBuffer,
 };
-use alien_manager_api::types::{CreateReleaseRequest, StackByPlatform};
+use alien_manager_api::types::{
+    CreateReleaseRequest, DeploymentInfoResponse, DeploymentResponse, StackByPlatform,
+};
 use alien_manager_api::Client as AlienManagerClient;
 use alien_manager_api::SdkResultExt;
 use chrono::Utc;
@@ -739,11 +741,7 @@ pub async fn destroy_local_deployment(port: u16, deployment_name: &str, force: b
         return super::destroy::destroy_local_target(port, existing).await;
     }
 
-    let action = if force {
-        alien_manager_api::types::DeleteDeploymentAction::Forget
-    } else {
-        alien_manager_api::types::DeleteDeploymentAction::Cleanup
-    };
+    let action = alien_manager_api::types::DeleteDeploymentAction::Forget;
     client
         .delete_deployment()
         .id(&existing.id)
@@ -800,8 +798,6 @@ async fn wait_for_local_deployment_absent(port: u16, deployment_name: &str) -> R
         ),
     }))
 }
-
-use alien_manager_api::types::{DeploymentInfoResponse, DeploymentResponse};
 
 pub async fn wait_for_dev_deployment_ready(
     port: u16,
@@ -1186,9 +1182,8 @@ mod tests {
         )
     }
 
-    /// `alien dev destroy` finds the deployment by name on the dev manager, asks for a cleanup
-    /// delete, and returns only once the deployment is gone from the list. A name the manager
-    /// doesn't know is an error.
+    /// Forced local deletion forgets the named record and waits until it is absent.
+    /// An unknown deployment name is an error.
     #[tokio::test]
     async fn force_destroy_local_deployment_deletes_by_name_and_waits() {
         let manager: SharedDestroyManager = Arc::default();
