@@ -568,6 +568,12 @@ impl Ec2Client {
                 resource_type: "EC2 Resource".into(),
                 resource_name: resource.into(),
             },
+            // A subnet whose CIDR overlaps an existing subnet in the VPC.
+            "InvalidSubnet.Conflict" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "Subnet".into(),
+                resource_name: resource.into(),
+            },
             // An Elastic IP still associated with a NAT gateway or network interface.
             "InvalidIPAddress.InUse" => ErrorData::RemoteResourceConflict {
                 message,
@@ -4121,6 +4127,10 @@ mod error_mapping_tests {
         ));
         assert!(matches!(
             mapped("Resource.AlreadyAssociated"),
+            Some(ErrorData::RemoteResourceConflict { .. })
+        ));
+        assert!(matches!(
+            mapped("InvalidSubnet.Conflict"),
             Some(ErrorData::RemoteResourceConflict { .. })
         ));
     }
