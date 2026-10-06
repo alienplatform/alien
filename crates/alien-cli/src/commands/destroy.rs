@@ -144,7 +144,7 @@ async fn destroy_tracked_deployment(
     // Manager discovery may authenticate as the user, but teardown drives the
     // manager's sync endpoints, which only accept the deployment's own token.
     let operator_client = manager_ctx.client;
-    let manager_client = if platform == Platform::Local {
+    let manager_client = if platform == Platform::Local && manager_ctx.auth_token.is_none() {
         operator_client.clone()
     } else {
         alien_manager_api::Client::new_with_client(
