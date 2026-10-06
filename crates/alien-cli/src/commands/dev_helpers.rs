@@ -1555,7 +1555,7 @@ mod tests {
             let error = refresh_local_deployment_environment(directory.path(), reference, &[])
                 .await
                 .expect_err("an explicit reference must select an existing deployment");
-            assert_eq!(error.code(), "VALIDATION_ERROR");
+            assert_eq!(error.code, "VALIDATION_ERROR");
             assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
         }
         refresh_local_deployment_environment(directory.path(), "api", &[])
