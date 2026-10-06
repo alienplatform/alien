@@ -16,11 +16,15 @@ use crate::{
     emitters::azure::helpers::{
         downcast, emit_remote_bindings_role_definitions, permission_context,
         remote_bindings_role_label, remote_stack_management_label, required_label,
+        sanitize_role_label, service_account_principal_id, setup_execution_role_label,
         setup_management_role_label, tags,
     },
     expr,
 };
-use alien_core::{import::EmitContext, ErrorData, RemoteBindings, Result, Sandbox, SandboxEgress};
+use alien_core::{
+    import::EmitContext, ErrorData, PermissionProfile, PermissionSetReference, RemoteBindings,
+    Result, Sandbox, SandboxEgress,
+};
 use alien_error::{AlienError, Context};
 use alien_permissions::{
     generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
@@ -120,6 +124,7 @@ impl TfEmitter for AzureSandboxEmitter {
 
         emit_remote_access(ctx, label, &mut fragment)?;
         emit_image_management(ctx, label, &mut fragment)?;
+        emit_workload_access(ctx, label, &mut fragment)?;
         Ok(fragment)
     }
 
@@ -361,6 +366,139 @@ fn emit_image_management(
     }
 
     Ok(())
+}
+
+/// Grants each workload identity its `sandbox/*` sets on this group.
+///
+/// `sandbox/execute` binds at resource scope alone — the role reaches inside a sandbox, and the
+/// only stack-wide scope Azure RBAC offers is the resource group — so the identity's stack-wide
+/// grants never carry it and this is the one place it lands. A profile keyed `"*"` counts the same
+/// as one keyed by the sandbox: the preflight that authors link grants trusts a `"*"` entry to
+/// cover the link. Custom role definitions are the setup-owned ones
+/// `emit_setup_resource_role_definitions` renders for the same profile and set.
+fn emit_workload_access(
+    ctx: &EmitContext<'_>,
+    label: &str,
+    fragment: &mut TfFragment,
+) -> Result<()> {
+    let group_scope_suffix = format!(
+        "/providers/Microsoft.App/sandboxGroups/{}",
+        sandbox_group_name(ctx)
+    );
+    for (profile_name, profile) in ctx.stack.permission_profiles() {
+        let Some(principal_id) = service_account_principal_id(ctx, profile_name) else {
+            continue;
+        };
+        for reference in sandbox_permission_refs(profile, ctx.resource_id) {
+            let permission_set = reference
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::GenericError {
+                        message: format!(
+                            "permission set '{}' referenced by sandbox '{}' is not registered",
+                            reference.id(),
+                            ctx.resource_id
+                        ),
+                    })
+                })?;
+            if permission_set.id.ends_with("/provision") || permission_set.platforms.azure.is_none()
+            {
+                continue;
+            }
+
+            let context = permission_context(label).with_resource_name(sandbox_group_name(ctx));
+            let plan = AzureRuntimePermissionsGenerator::new()
+                .generate_grant_plan(&permission_set, BindingTarget::Resource, &context)
+                .context(ErrorData::GenericError {
+                    message: format!(
+                        "failed to generate Azure sandbox grants for '{}'",
+                        permission_set.id
+                    ),
+                })?;
+
+            let set_segment = sanitize_role_label(&permission_set.id);
+            for (index, binding) in plan.bindings.iter().enumerate() {
+                // Each assignment below is scoped to the created group, so a set declaring any
+                // other resource scope is refused rather than rendered somewhere it did not ask for.
+                if !binding.scope.ends_with(&group_scope_suffix) {
+                    return Err(AlienError::new(ErrorData::GenericError {
+                        message: format!(
+                            "{} must bind on the sandbox group; it binds on '{}'",
+                            permission_set.id, binding.scope
+                        ),
+                    }));
+                }
+                let role_definition_id = match &binding.role_definition {
+                    AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+                        expr::template(role_definition_id.clone())
+                    }
+                    AzureRoleDefinitionRef::Custom { key } => {
+                        let custom_index = plan
+                            .custom_roles
+                            .iter()
+                            .position(|role| &role.key == key)
+                            .ok_or_else(|| {
+                                AlienError::new(ErrorData::GenericError {
+                                    message: format!("missing generated Azure role '{key}'"),
+                                })
+                            })?;
+                        let role_label = setup_execution_role_label(
+                            profile_name,
+                            &binding.role_name,
+                            custom_index,
+                        );
+                        expr::traversal([
+                            "azurerm_role_definition",
+                            role_label.as_str(),
+                            "role_definition_resource_id",
+                        ])
+                    }
+                };
+                fragment.resource_blocks.push(resource_block(
+                    "azurerm_role_assignment",
+                    &format!("{label}_{}_{set_segment}_{index}", sanitize_role_label(profile_name)),
+                    [
+                        attr(
+                            "name",
+                            expr::raw(format!(
+                                "uuidv5(\"oid\", \"deployment:azure:sandbox-workload:${{local.resource_prefix}}:{label}:{profile_name}:{}:{index}\")",
+                                permission_set.id
+                            )),
+                        ),
+                        // The created group, which orders the assignment after it as the remote
+                        // grant's does.
+                        attr("scope", expr::traversal(["azapi_resource", label, "id"])),
+                        attr("role_definition_id", role_definition_id),
+                        attr("principal_id", principal_id.clone()),
+                    ],
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// The profile's `sandbox/*` references for this sandbox, keyed by its id or by `"*"`, each set
+/// once.
+fn sandbox_permission_refs<'a>(
+    profile: &'a PermissionProfile,
+    resource_id: &str,
+) -> Vec<&'a PermissionSetReference> {
+    let mut refs: Vec<&PermissionSetReference> = Vec::new();
+    let keyed = profile.0.get(resource_id).into_iter().flatten();
+    let stack_wide = profile
+        .0
+        .get("*")
+        .into_iter()
+        .flatten()
+        .filter(|reference| reference.id().starts_with("sandbox/"));
+    for reference in keyed.chain(stack_wide) {
+        if !refs.iter().any(|seen| seen.id() == reference.id()) {
+            refs.push(reference);
+        }
+    }
+    refs
 }
 
 fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {

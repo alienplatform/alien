@@ -835,7 +835,7 @@ fn is_worker_command_transport_permission(resource_type: &str, permission_set_id
 
 /// Sanitise a permission-set id like `storage/object-admin` into a
 /// Terraform label segment (`storage_object_admin`).
-fn sanitize_role_label(input: &str) -> String {
+pub fn sanitize_role_label(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
         if ch.is_ascii_alphanumeric() {
