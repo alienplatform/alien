@@ -1646,13 +1646,6 @@ expression: schemas
         "description": "Cluster identifier used by the controller.",
         "type": "string"
       },
-      "isolatedServiceAccountEmail": {
-        "description": "Optional isolated node service account email.",
-        "type": [
-          "string",
-          "null"
-        ]
-      },
       "networkTag": {
         "description": "Tag applied to firewall rules targeting cluster nodes.",
         "type": "string"

@@ -10,7 +10,6 @@ import * as z from "zod";
  */
 export const GcpComputeClusterImportDataSchema = z.object({
     "clusterId": z.string().describe("Cluster identifier used by the controller."),
-"isolatedServiceAccountEmail": z.string().describe("Optional isolated node service account email.").nullish(),
 "networkTag": z.string().describe("Tag applied to firewall rules targeting cluster nodes."),
 "nodeServiceAccountEmail": z.string().describe("Service account email attached to cluster nodes.")
     }).describe("GCP ComputeCluster ImportData — GKE node pool identity + network.")
