@@ -10,7 +10,10 @@ use crate::{
     error::{ErrorData, Result},
     output,
 };
-use alien_core::{embedded_config::DeployCliConfig, ClientConfig, Platform};
+use alien_core::{
+    embedded_config::DeployCliConfig, ClientConfig, ExternalBinding, ExternalBindings, Platform,
+    StorageBinding,
+};
 use alien_deployment::manager_api_transport::AcquiredDeploymentPayload;
 use alien_error::{AlienError, Context, IntoAlienError};
 use serde::{Deserialize, Serialize};
@@ -265,6 +268,22 @@ fn manager_url(info: &SetupInfo) -> Result<&str> {
     Ok(&target.manager_url)
 }
 
+// Signing credentials travel through encrypted Secret inputs into workload
+// environment delivery; Machines setup bindings contain only store locators.
+pub(super) fn validate_machines_binding_credentials(bindings: &ExternalBindings) -> Result<()> {
+    for binding in bindings.0.values() {
+        if let ExternalBinding::Storage(StorageBinding::S3(storage)) = binding {
+            if storage.access_key_id.is_some() || storage.secret_access_key.is_some() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "externalBindings".into(),
+                    message: "Machines setup bindings must omit accessKeyId and secretAccessKey. Supply encrypted Secret inputs mapped to AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY instead.".into(),
+                }));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn patch_settings(
     target: &mut SetupUpdateTarget,
     args: &UpArgs,
@@ -315,7 +334,25 @@ fn patch_settings(
             let bindings = bindings
                 .as_object()
                 .ok_or_else(|| invalid_target("External bindings must be an object."))?;
-            existing.extend(bindings.clone());
+            for (resource, supplied) in bindings {
+                let supplied = supplied
+                    .as_object()
+                    .ok_or_else(|| invalid_target("Each external binding must be an object."))?;
+                let saved = existing
+                    .get_mut(resource)
+                    .and_then(Value::as_object_mut)
+                    .filter(|saved| {
+                        saved.get("type") == supplied.get("type")
+                            && saved.get("service") == supplied.get("service")
+                    });
+                if let Some(saved) = saved {
+                    // Omitted fields retain the exact saved locator and credential
+                    // references. A different type or service replaces the binding.
+                    saved.extend(supplied.clone());
+                } else {
+                    existing.insert(resource.clone(), Value::Object(supplied.clone()));
+                }
+            }
         }
     }
     if let Some(network) = settings.network {
@@ -351,6 +388,11 @@ fn patch_settings(
         }
     }
     target.stack_settings.extend(patch);
+    if let Some(bindings) = target.stack_settings.get("externalBindings") {
+        let bindings = serde_json::from_value::<ExternalBindings>(bindings.clone())
+            .map_err(|_| invalid_target("Invalid saved external bindings."))?;
+        validate_machines_binding_credentials(&bindings)?;
+    }
     Ok(())
 }
 
@@ -767,6 +809,98 @@ storageSecret = "canary-secret"
         assert_eq!(
             target.stack_settings["externalBindings"]["archive"]["bucketName"],
             "customer-archive"
+        );
+    }
+
+    #[tokio::test]
+    async fn binding_patch_preserves_saved_fields_in_prepare_request() {
+        let server = MockServer::start_async().await;
+        let binding = json!({
+            "type": "storage", "service": "s3", "bucketName": "old-archive",
+            "endpoint": "https://objects.example.com", "region": "us-east-1",
+            "forcePathStyle": true
+        });
+        let mut expected = binding.clone();
+        expected["bucketName"] = json!("new-archive");
+        let mut response = info(&server, "op_blocked");
+        response["setupUpdate"]["stackSettings"] =
+            json!({"externalBindings": {"archive": binding}});
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployment-info");
+                then.status(200).json_body(response);
+            })
+            .await;
+        let prepare = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/deployment-info/prepare-stack")
+                    .json_body(json!({
+                        "deploymentId": "dep_demo", "updateOperationId": "op_blocked",
+                        "platform": "machines", "setupMethod": "cli", "saveForSetup": true,
+                        "stackSettings": {"externalBindings": {"archive": expected}}
+                    }));
+                // Stop after capturing the real outgoing request, before acquisition.
+                then.status(503);
+            })
+            .await;
+        let config: DeployConfigFile = serde_json::from_value(json!({"externalBindings": {
+            "archive": {"type": "storage", "service": "s3", "bucketName": "new-archive"}
+        }}))
+        .unwrap();
+        assert!(run(&args(&server), None, Some(&config)).await.is_err());
+        prepare.assert_hits_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn binding_secret_values_are_refused_before_prepare_request() {
+        for from_saved_target in [false, true] {
+            let server = MockServer::start_async().await;
+            let binding = json!({"type": "storage", "service": "s3", "bucketName": "archive",
+                "secretAccessKey": "sensitive-signing-marker"});
+            let mut response = info(&server, "op_blocked");
+            if from_saved_target {
+                response["setupUpdate"]["stackSettings"] =
+                    json!({"externalBindings": {"archive": binding.clone()}});
+            }
+            server
+                .mock_async(|when, then| {
+                    when.method(GET).path("/v1/deployment-info");
+                    then.status(200).json_body(response);
+                })
+                .await;
+            let prepare = server
+                .mock_async(|when, then| {
+                    when.method(POST).path("/v1/deployment-info/prepare-stack");
+                    then.status(503);
+                })
+                .await;
+            let config: DeployConfigFile = serde_json::from_value(json!({"externalBindings": {
+                "archive": if from_saved_target {
+                    json!({"type": "storage", "service": "s3", "bucketName": "new-archive"})
+                } else { binding }
+            }}))
+            .unwrap();
+            let error = run(&args(&server), None, Some(&config)).await.unwrap_err();
+            prepare.assert_hits_async(0).await;
+            assert!(error.to_string().contains("encrypted Secret inputs"));
+            assert!(!format!("{error:?}").contains("sensitive-signing-marker"));
+        }
+    }
+
+    #[test]
+    fn binding_service_change_replaces_incompatible_saved_fields() {
+        let mut target = target("op_blocked");
+        target.stack_settings["externalBindings"]["existing"]["endpoint"] =
+            json!("https://objects.example.com");
+        let config: DeployConfigFile = serde_json::from_value(json!({"externalBindings": {
+            "existing": {"type": "storage", "service": "gcs", "bucketName": "archive"}
+        }}))
+        .unwrap();
+        patch_settings(&mut target, &UpArgs::parse_from(["democtl"]), Some(&config)).unwrap();
+        assert_eq!(
+            target.stack_settings["externalBindings"]["existing"],
+            json!({"type": "storage", "service": "gcs", "bucketName": "archive"})
         );
     }
 

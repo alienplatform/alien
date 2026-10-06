@@ -57,7 +57,9 @@ region = "us-east-1"
 forcePathStyle = true
 ```
 
-`archive` must identify a Storage resource in the target release. Keep secret credentials out of `externalBindings`; use declared secret stack inputs or the deployment's secret environment settings for workload credentials. Ordinary external bindings do not require `remoteAccess: true`, and setup does not create or delete their underlying storage.
+`archive` must identify a Storage resource in the target release. Machines bindings contain only the store locator: omit `accessKeyId` and `secretAccessKey`. The workload uses ambient AWS credentials. For static credentials, declare Secret stack inputs mapped to `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` and supply them through the supported encrypted input or secret-store delivery path. A Kubernetes `secretRef` is not a Machines credential source. Ordinary external bindings do not require `remoteAccess: true`, and setup does not create or delete their underlying storage.
+
+For the same binding type and service, omitted fields keep their saved values; explicit fields are patched. Changing the type or service replaces the binding entirely. The TOML configuration has no null-valued field-clearing syntax.
 
 The command preserves unrelated target settings, saves explicit choices, follows the returned operation ID, and verifies the acquired target before setup runs. It never initializes a new deployment. If setup is interrupted after saving, resume with the operation ID printed by the command; the old operation ID is deliberately refused. Explicit non-secret `--input` choices and `[inputs]` values are saved through the deployment input API with the same operation check before bindings are prepared. Deployer secret values are refused through `--input`, `--secret-input`, and `[secretInputs]`; write them directly into the deployment's configured secret store. Setup reports missing secrets until they are available. Existing gate answers remain fixed by setup policy, and omitted inputs retain their stored values.
 

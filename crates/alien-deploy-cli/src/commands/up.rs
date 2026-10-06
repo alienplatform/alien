@@ -549,6 +549,49 @@ mod tests {
         assert!(validate_push_environment_identity(&azure, &wrong_azure).is_err());
     }
 
+    #[test]
+    fn fresh_machines_settings_use_ambient_s3_credentials() {
+        for credentials in [
+            serde_json::json!({}),
+            serde_json::json!({"accessKeyId": "fixture-access-id"}),
+            serde_json::json!({"secretAccessKey": "sensitive-signing-marker"}),
+            serde_json::json!({"secretAccessKey": {"secretRef": {"name": "object-store", "key": "signing-key"}}}),
+        ] {
+            let mut binding =
+                serde_json::json!({"type": "storage", "service": "s3", "bucketName": "archive"});
+            binding
+                .as_object_mut()
+                .unwrap()
+                .extend(credentials.as_object().unwrap().clone());
+            let config: DeployConfigFile = serde_json::from_value(serde_json::json!({
+                "externalBindings": {"archive": binding.clone()}
+            }))
+            .unwrap();
+            let result = load_stack_settings(
+                &UpArgs::parse_from(["democtl"]),
+                Platform::Machines,
+                Platform::Machines,
+                Some(&config),
+            );
+            if credentials.as_object().unwrap().is_empty() {
+                let bindings = result.unwrap().external_bindings.unwrap();
+                assert_eq!(serde_json::to_value(bindings).unwrap()["archive"], binding);
+            } else {
+                let error = result.unwrap_err();
+                assert!(error.to_string().contains("encrypted Secret inputs"));
+                assert!(!format!("{error:?}").contains("sensitive-signing-marker"));
+            }
+            // Kubernetes retains its existing SecretRef resolution contract.
+            assert!(load_stack_settings(
+                &UpArgs::parse_from(["democtl"]),
+                Platform::Kubernetes,
+                Platform::Kubernetes,
+                Some(&config)
+            )
+            .is_ok());
+        }
+    }
+
     #[tokio::test]
     async fn machines_setup_does_not_require_cloud_credentials() {
         assert!(matches!(
@@ -3185,6 +3228,11 @@ fn load_stack_settings(
         }
         if let Some(telemetry) = config.telemetry {
             settings.telemetry = telemetry;
+        }
+        if platform == Platform::Machines {
+            if let Some(bindings) = &config.external_bindings {
+                setup_update::validate_machines_binding_credentials(bindings)?;
+            }
         }
         settings.external_bindings = config.external_bindings.clone();
         if let Some(compute) = config.compute.clone() {
