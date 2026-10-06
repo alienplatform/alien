@@ -143,17 +143,18 @@ async fn destroy_tracked_deployment(
 ) -> Result<()> {
     // Manager discovery may authenticate as the user, but teardown drives the
     // manager's sync endpoints, which only accept the deployment's own token.
+    let operator_client = manager_ctx.client;
     let manager_client = if platform == Platform::Local {
         operator_client.clone()
     } else {
         alien_manager_api::Client::new_with_client(
-        &manager_ctx.manager_url,
-        deployment_manager_http_client(
-            &tracked_deployment.api_key,
-            manager_ctx.workspace.as_deref(),
-        )?,
-    );
-    let operator_client = manager_ctx.client;
+            &manager_ctx.manager_url,
+            deployment_manager_http_client(
+                &tracked_deployment.api_key,
+                manager_ctx.workspace.as_deref(),
+            )?,
+        )
+    };
 
     // Step 3: Delete via manager
     steps.activate(2, Some(tracked_deployment.deployment_id.clone()));
