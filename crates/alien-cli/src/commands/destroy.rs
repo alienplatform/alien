@@ -467,7 +467,7 @@ async fn destroy_tracked_deployment(
 mod tests {
     use super::*;
     use axum::{
-        extract::State,
+        extract::{Path, State},
         http::{HeaderMap, StatusCode},
         response::{IntoResponse, Response},
         routing::{get, post},
@@ -479,14 +479,17 @@ mod tests {
 
     #[derive(Default)]
     struct ManagerState {
+        requested_deployment_ids: Vec<String>,
         acquire_authorizations: Vec<String>,
         deleted: bool,
     }
 
     type Shared = Arc<Mutex<ManagerState>>;
 
-    async fn get_deployment(State(state): State<Shared>) -> Response {
-        if state.lock().unwrap().deleted {
+    async fn get_deployment(State(state): State<Shared>, Path(id): Path<String>) -> Response {
+        let mut state = state.lock().unwrap();
+        state.requested_deployment_ids.push(id);
+        if state.deleted {
             return StatusCode::NOT_FOUND.into_response();
         }
         Json(serde_json::json!({
@@ -561,50 +564,28 @@ mod tests {
         let manager_url = format!("http://{}", listener.local_addr().expect("manager address"));
         tokio::spawn(async move { axum::serve(listener, app).await.expect("serve manager") });
 
-        // Discovery authenticated as the user, as `alien destroy` does with a CLI login.
-        let user_http_client =
-            crate::auth::client_with_auth_and_workspace("Bearer user-session", "ws-name")
-                .expect("user client");
-        let manager_ctx = ManagerContext {
-            manager_url: manager_url.clone(),
-            manager_name: None,
-            manager_is_system: None,
-            manager_cloud: None,
-            client: alien_manager_api::Client::new_with_client(
-                &manager_url,
-                user_http_client.clone(),
-            ),
-            http_client: user_http_client,
-            auth_token: Some("user-session".to_string()),
-            repository_name: None,
-            repository_uri: None,
-            workspace: Some("ws-name".to_string()),
-        };
-        let resolved = resolve_deployment("test", Some(DEPLOYMENT_TOKEN), &manager_url)
-            .await
-            .expect("the token alone should identify the deployment");
-        assert_eq!(resolved.deployment_id, "dep_test");
-        assert_eq!(resolved.project_id, "proj_test");
-        assert_eq!(resolved.workspace_id, "ws_test");
-        assert_eq!(resolved.api_key, DEPLOYMENT_TOKEN);
-
         let args = DestroyArgs {
             token: Some(DEPLOYMENT_TOKEN.to_string()),
             name: "test".to_string(),
             platform: Some("test".to_string()),
             force: false,
         };
+        // Manager discovery authenticates with the operator's key; only teardown may
+        // use the deployment token.
+        let ctx = ExecutionMode::Standalone {
+            server_url: manager_url.clone(),
+            api_key: "operator-key".to_string(),
+        };
 
-        destroy_tracked_deployment(
-            &args,
-            Platform::Test,
-            &resolved,
-            manager_ctx,
-            FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]),
-        )
-        .await
-        .expect("destroy should finish once the deployment is gone");
+        destroy_task(args, ctx)
+            .await
+            .expect("destroy should finish once the deployment is gone");
 
+        let requested = state.lock().unwrap().requested_deployment_ids.clone();
+        assert!(
+            !requested.is_empty() && requested.iter().all(|id| id == "dep_test"),
+            "only the deployment named by the token may be read from the manager, got {requested:?}"
+        );
         assert_eq!(
             state.lock().unwrap().acquire_authorizations,
             vec![format!("Bearer {DEPLOYMENT_TOKEN}")]

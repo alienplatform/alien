@@ -24,7 +24,9 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use tempfile::NamedTempFile;
 use tracing::warn;
 
 const TRACKED_DEPLOYMENTS_FILE: &str = "tracked-deployments.json";
@@ -101,8 +103,10 @@ impl DeploymentTracker {
             project_id: info.project_id,
         };
 
-        self.deployments.insert(name, tracked.clone());
-        save_registry(&self.path, &self.deployments)?;
+        let stored = tracked.clone();
+        self.update(move |deployments| {
+            deployments.insert(name, stored);
+        })?;
 
         Ok(tracked)
     }
@@ -144,11 +148,21 @@ impl DeploymentTracker {
 
     /// Remove a tracked deployment
     pub fn remove_deployment(&mut self, name: &str) -> Result<Option<TrackedDeployment>> {
-        let removed = self.deployments.remove(name);
-        if removed.is_some() {
-            save_registry(&self.path, &self.deployments)?;
-        }
-        Ok(removed)
+        self.update(|deployments| deployments.remove(name))
+    }
+
+    /// Apply `change` to the registry on disk as one read-modify-write.
+    ///
+    /// Another `alien` process may have changed the registry since this one loaded it,
+    /// so the change is applied to a fresh read taken under an exclusive lock, never to
+    /// this process's snapshot; otherwise its save would drop or resurrect their entries.
+    fn update<T>(&mut self, change: impl FnOnce(&mut TrackedDeployments) -> T) -> Result<T> {
+        let _lock = lock_registry(&self.path)?;
+        let mut deployments = load_registry(&self.path)?;
+        let outcome = change(&mut deployments);
+        save_registry(&self.path, &deployments)?;
+        self.deployments = deployments;
+        Ok(outcome)
     }
 }
 
@@ -357,25 +371,69 @@ pub async fn validate_deployment_api_key(
     }
 }
 
+/// Directory holding the registry file.
+fn registry_dir(path: &Path) -> Result<&Path> {
+    path.parent().ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "Tracked deployments path {} has no parent directory",
+                path.display()
+            ),
+        })
+    })
+}
+
+/// Take an exclusive, cross-process lock on the registry; released when dropped.
+///
+/// The lock lives on a sidecar file because the registry itself is replaced by
+/// rename on every save, which would leave a lock on the old file behind.
+fn lock_registry(path: &Path) -> Result<fs::File> {
+    let dir = registry_dir(path)?;
+    fs::create_dir_all(dir)
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "create directory".to_string(),
+            file_path: dir.display().to_string(),
+            reason: "Failed to create config directory".to_string(),
+        })?;
+    let lock_path = path.with_extension("json.lock");
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "open".to_string(),
+            file_path: lock_path.display().to_string(),
+            reason: "Failed to open the tracked deployments lock".to_string(),
+        })?;
+    lock.lock()
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "lock".to_string(),
+            file_path: lock_path.display().to_string(),
+            reason: "Failed to lock tracked deployments".to_string(),
+        })?;
+    Ok(lock)
+}
+
 /// Read the registry at `path`; a missing file means nothing is tracked yet.
 ///
 /// An unreadable or unparseable file is an error rather than an empty registry,
 /// because the next save would replace every deployment key it holds.
 fn load_registry(path: &Path) -> Result<TrackedDeployments> {
     let content = match fs::read_to_string(path) {
-        Ok(content) => content,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(TrackedDeployments::new())
+            return Ok(TrackedDeployments::new());
         }
-        Err(err) => {
-            return Err(err
-                .into_alien_error()
-                .context(ErrorData::FileOperationFailed {
-                    operation: "read".to_string(),
-                    file_path: path.display().to_string(),
-                    reason: "Failed to read tracked deployments".to_string(),
-                }))
-        }
+        read => read
+            .into_alien_error()
+            .context(ErrorData::FileOperationFailed {
+                operation: "read".to_string(),
+                file_path: path.display().to_string(),
+                reason: "Failed to read tracked deployments".to_string(),
+            })?,
     };
     serde_json::from_str(&content)
         .into_alien_error()
@@ -388,30 +446,39 @@ fn load_registry(path: &Path) -> Result<TrackedDeployments> {
         })
 }
 
-/// Write the registry to `path` with owner-only permissions.
+/// Replace the registry at `path` with `deployments`, readable only by the owner.
+///
+/// The new contents go to a temporary file in the same directory that is then renamed
+/// over the registry, so a failed or interrupted save leaves the previous registry intact.
 fn save_registry(path: &Path, deployments: &TrackedDeployments) -> Result<()> {
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "create directory".to_string(),
-                file_path: dir.display().to_string(),
-                reason: "Failed to create config directory".to_string(),
-            })?;
-    }
+    let dir = registry_dir(path)?;
     let json = serde_json::to_string_pretty(deployments)
         .into_alien_error()
         .context(ErrorData::JsonError {
             operation: "serialize".to_string(),
             reason: "Failed to serialize tracked deployments".to_string(),
         })?;
-    alien_core::file_utils::write_secret_file(path, json.as_bytes())
+    let write_failed = |reason: &str| ErrorData::FileOperationFailed {
+        operation: "write".to_string(),
+        file_path: path.display().to_string(),
+        reason: reason.to_string(),
+    };
+    // Created owner-only (0600) on unix.
+    let mut staged = NamedTempFile::new_in(dir)
         .into_alien_error()
-        .context(ErrorData::FileOperationFailed {
-            operation: "write".to_string(),
-            file_path: path.display().to_string(),
-            reason: "Failed to write tracked deployments".to_string(),
-        })
+        .context(write_failed(
+            "Failed to create a temporary file for tracked deployments",
+        ))?;
+    staged
+        .write_all(json.as_bytes())
+        .and_then(|()| staged.as_file().sync_all())
+        .into_alien_error()
+        .context(write_failed("Failed to write tracked deployments"))?;
+    staged
+        .persist(path)
+        .into_alien_error()
+        .context(write_failed("Failed to replace tracked deployments"))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -422,7 +489,7 @@ mod tests {
     };
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
-    use std::process::Command;
+    use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -685,58 +752,97 @@ mod tests {
         assert!(tracker_at(&path).get_deployment(NAME).is_none());
     }
 
-    /// Set only in the child process spawned by
-    /// `tracked_deployment_survives_into_a_new_process`, naming the registry to write.
+    /// Set only in the child processes spawned by
+    /// `entries_from_concurrent_processes_all_persist`: the registry to write and the
+    /// child's index.
     const CHILD_REGISTRY_ENV: &str = "ALIEN_CLI_TEST_TRACKER_CHILD_REGISTRY";
+    const CHILD_INDEX_ENV: &str = "ALIEN_CLI_TEST_TRACKER_CHILD_INDEX";
+    const CHILDREN: usize = 8;
+    const ENTRIES_PER_CHILD: usize = 5;
 
-    /// `deploy` and `destroy` run as separate processes, so an entry must outlive the
-    /// process that wrote it. A store that only lives in process memory passes every
-    /// same-process round trip and fails this one.
+    fn child_entry_name(child: usize, entry: usize) -> String {
+        format!("child-{child}-{entry}")
+    }
+
+    /// `deploy` and `destroy` run as separate processes, and several may run at once,
+    /// so every entry must outlive the process that wrote it and survive saves from
+    /// other processes. A store that only lives in process memory passes every
+    /// same-process round trip and fails this; so does an unlocked read-modify-write,
+    /// whose saves drop entries other processes added in between.
     #[test]
-    fn tracked_deployment_survives_into_a_new_process() {
+    fn entries_from_concurrent_processes_all_persist() {
         if let Ok(path) = std::env::var(CHILD_REGISTRY_ENV) {
-            tracker_at(Path::new(&path))
-                .track(
-                    NAME.to_string(),
-                    API_KEY.to_string(),
-                    validated(DEPLOYMENT_ID),
-                )
-                .expect("child should persist the entry");
+            let child: usize = std::env::var(CHILD_INDEX_ENV)
+                .expect("child index")
+                .parse()
+                .expect("numeric child index");
+            let mut tracker = tracker_at(Path::new(&path));
+            for entry in 0..ENTRIES_PER_CHILD {
+                tracker
+                    .track(
+                        child_entry_name(child, entry),
+                        format!("ax_dep_{child}_{entry}"),
+                        validated(DEPLOYMENT_ID),
+                    )
+                    .expect("child should persist its entry");
+            }
             return;
         }
 
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("alien").join(TRACKED_DEPLOYMENTS_FILE);
+        // An entry from an earlier run, which no child knows about when it starts.
+        let (_dir, path) = registry_with_entry();
 
-        let output = Command::new(std::env::current_exe().expect("test binary path"))
-            .args([
-                "deployment_tracking::tests::tracked_deployment_survives_into_a_new_process",
-                "--exact",
-                "--test-threads=1",
-            ])
-            .env(CHILD_REGISTRY_ENV, &path)
-            .output()
-            .expect("spawn child test process");
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            output.status.success(),
-            "child process failed: {stdout}\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            stdout.contains("1 passed"),
-            "the child must have run exactly this test, got: {stdout}"
-        );
+        let children: Vec<_> = (0..CHILDREN)
+            .map(|child| {
+                Command::new(std::env::current_exe().expect("test binary path"))
+                    .args([
+                        "deployment_tracking::tests::entries_from_concurrent_processes_all_persist",
+                        "--exact",
+                        "--test-threads=1",
+                    ])
+                    .env(CHILD_REGISTRY_ENV, &path)
+                    .env(CHILD_INDEX_ENV, child.to_string())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .expect("spawn child test process")
+            })
+            .collect();
+        for child in children {
+            let output = child.wait_with_output().expect("wait for child");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success(),
+                "child process failed: {stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                stdout.contains("1 passed"),
+                "each child must have run exactly this test, got: {stdout}"
+            );
+        }
 
         let reloaded = tracker_at(&path);
-        let entry = reloaded
+        assert_eq!(
+            reloaded.list_deployments().len(),
+            1 + CHILDREN * ENTRIES_PER_CHILD,
+            "no save may drop an entry another process wrote"
+        );
+        let original = reloaded
             .get_deployment(NAME)
-            .expect("the entry written by the child process must be visible here");
-        assert_eq!(entry.deployment_id, DEPLOYMENT_ID);
-        assert_eq!(entry.api_key, API_KEY);
-        assert_eq!(entry.workspace_id, WORKSPACE_ID);
-        assert_eq!(entry.project_id, PROJECT_ID);
-        assert_eq!(reloaded.list_deployments().len(), 1);
+            .expect("the entry from before the children ran must survive");
+        assert_eq!(original.api_key, API_KEY);
+        for child in 0..CHILDREN {
+            for entry in 0..ENTRIES_PER_CHILD {
+                let tracked = reloaded
+                    .get_deployment(&child_entry_name(child, entry))
+                    .expect("every entry a child wrote must be visible here");
+                assert_eq!(tracked.api_key, format!("ax_dep_{child}_{entry}"));
+                assert_eq!(tracked.deployment_id, DEPLOYMENT_ID);
+                assert_eq!(tracked.workspace_id, WORKSPACE_ID);
+                assert_eq!(tracked.project_id, PROJECT_ID);
+            }
+        }
     }
 
     #[cfg(unix)]
