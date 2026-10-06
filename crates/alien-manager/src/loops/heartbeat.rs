@@ -52,14 +52,25 @@ impl HeartbeatLoop {
 
     /// Run the heartbeat loop forever.
     pub async fn run(&self) {
+        let (_sender, shutdown) = tokio::sync::watch::channel(false);
+        self.run_until_shutdown(shutdown).await;
+    }
+
+    pub(crate) async fn run_until_shutdown(
+        &self,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) {
         debug!(
             interval_secs = self.config.heartbeat_interval_secs,
             "Starting heartbeat loop"
         );
 
-        loop {
+        while !*shutdown.borrow() {
             self.tick().await;
-            tokio::time::sleep(Duration::from_secs(self.config.heartbeat_interval_secs)).await;
+            tokio::select! {
+                _ = shutdown.changed() => break,
+                _ = tokio::time::sleep(Duration::from_secs(self.config.heartbeat_interval_secs)) => {}
+            }
         }
     }
 
