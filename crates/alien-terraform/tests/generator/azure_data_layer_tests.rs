@@ -13,10 +13,11 @@
 
 use super::helpers::{assert_terraform_valid, linter_files, render, snapshot_module, test_utils};
 use alien_core::{
-    Ai, AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Key, Kv, LifecycleRule,
-    PermissionProfile, Queue, RemoteBindings, RemoteStackManagement, ResourceLifecycle,
-    ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, ServiceAccount,
-    Stack, StackSettings, Storage, Vault,
+    Ai, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
+    AzureStorageAccount, Key, Kv, LifecycleRule, PermissionProfile, Queue, RemoteBindings,
+    RemoteStackManagement, ResourceLifecycle, ResourceRef, Sandbox, SandboxCode, SandboxEgress,
+    SandboxLifecyclePolicy, ServiceAccount, Stack, StackSettings, Storage, Vault, Worker,
+    WorkerCode,
 };
 use alien_permissions::{BindingTarget, PermissionContext};
 use alien_terraform::{
@@ -769,6 +770,112 @@ fn azure_sandbox_image_grant_reaches_the_manager_on_its_own_group_only() {
 
     snapshot_module("azure_sandbox_image_grant", &module);
     assert_terraform_valid(&module, "azure sandbox image grant");
+}
+
+/// A Worker's execution identity holds the sandbox data-plane role on the one group it is linked
+/// to, whether the profile names the sandbox or grants `sandbox/execute` stack-wide.
+///
+/// `sandbox/execute` binds at resource scope only, so the stack-wide path cannot deliver it, and
+/// the preflight that authors link grants trusts a `"*"` entry to cover the link. Without this
+/// assignment the data plane answers every `sandbox.create` with 403.
+#[test]
+fn azure_workload_execute_grant_reaches_the_execution_identity_on_its_own_group() {
+    const SANDBOX_DATA_PLANE_ROLE_ID: &str = "c24cf47c-5077-412d-a19c-45202126392c";
+
+    for (case, profile) in [
+        (
+            "stack-wide",
+            PermissionProfile::new().global(["sandbox/management", "sandbox/execute"]),
+        ),
+        (
+            "keyed by the sandbox",
+            PermissionProfile::new().resource("agents", ["sandbox/execute"]),
+        ),
+    ] {
+        let sandbox = Sandbox::new("agents".to_string())
+            .code(SandboxCode::Image {
+                image: "ubuntu".to_string(),
+            })
+            .egress(SandboxEgress::Allow)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: "acmeprod.azurecr.io/api:1".to_string(),
+            })
+            .permissions("execution".to_string())
+            .link(&sandbox)
+            .build();
+        let stack = Stack::new("byo-sandbox".to_string())
+            .permission("execution", profile)
+            .add(resource_group(), ResourceLifecycle::Frozen)
+            .add(
+                AzureContainerAppsEnvironment::new(
+                    "default-container-apps-environment".to_string(),
+                )
+                .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ServiceAccount::new("execution-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(sandbox, ResourceLifecycle::Frozen)
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
+        let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+        let rendered = module
+            .files
+            .iter()
+            .filter(|(name, _)| name.ends_with(".tf"))
+            .map(|(_, contents)| contents.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let body: hcl::Body = hcl::from_str(&rendered).expect("the module parses");
+
+        let attribute = |block: &hcl::Block, name: &str| {
+            block
+                .body()
+                .attributes()
+                .find(|attribute| attribute.key() == name)
+                .map(|attribute| attribute.expr().to_string())
+                .unwrap_or_default()
+        };
+        let execute_grants: Vec<&hcl::Block> = body
+            .blocks()
+            .filter(|block| {
+                block.identifier() == "resource"
+                    && block.labels().first().map(|label| label.as_str())
+                        == Some("azurerm_role_assignment")
+                    && attribute(block, "role_definition_id")
+                        .ends_with(&format!("roleDefinitions/{SANDBOX_DATA_PLANE_ROLE_ID}\""))
+            })
+            .collect();
+        assert_eq!(
+            execute_grants.len(),
+            1,
+            "{case}: the execution identity holds the data-plane role exactly once:\n{rendered}"
+        );
+        assert_eq!(
+            attribute(execute_grants[0], "scope"),
+            "azapi_resource.agents.id",
+            "{case}: the role reaches inside a sandbox, so it is scoped to this group and nothing wider"
+        );
+        assert_eq!(
+            attribute(execute_grants[0], "principal_id"),
+            "azurerm_user_assigned_identity.execution_sa.principal_id",
+            "{case}: the Worker's identity, not the manager's or a remote caller's"
+        );
+
+        if case == "stack-wide" {
+            snapshot_module("azure_sandbox_workload_grant", &module);
+        }
+        assert_terraform_valid(&module, &format!("azure sandbox workload grant, {case}"));
+    }
 }
 
 /// An AKS target is `Platform::Azure` but skips sandbox emission, so a note keyed off the platform
