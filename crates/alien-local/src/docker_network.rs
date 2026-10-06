@@ -12,31 +12,42 @@ use crate::{ErrorData, Result};
 /// Returns a Docker bridge gateway that belongs to the private range used by
 /// Local services and is bindable by this host.
 pub(crate) async fn bindable_docker_bridge_gateway() -> Result<Option<Ipv4Addr>> {
-    let docker = match crate::connect_docker() {
-        Ok(docker) => docker,
-        // A Docker engine is optional for native services. Configuration and
-        // unsupported transport errors still propagate; no other daemon is tried.
-        Err(error) if error.code == "DOCKER_CONNECTION_FAILED" => return Ok(None),
-        Err(error) => return Err(error),
+    let Some(docker) = crate::docker_connection::connect_optional_docker()? else {
+        return Ok(None);
     };
-    // Bridge discovery is optional on hosts without a local bridge (for
-    // example Docker Desktop). Endpoint selection errors above are mandatory.
-    let gateway = async {
-        let network = docker
-            .inspect_network("bridge", None::<InspectNetworkOptions<String>>)
-            .await
-            .ok()?;
-        let gateway = network
-            .ipam?
-            .config?
-            .into_iter()
-            .filter_map(|config| config.gateway)
-            .find_map(|gateway| docker_bridge_gateway(&gateway))?;
-        std::net::TcpListener::bind((gateway, 0)).ok()?;
-        Some(gateway)
+    // A bridge may be absent on a remote engine or unavailable for host binding
+    // on Docker Desktop. Unexpected API failures must still be visible.
+    let network = match docker
+        .inspect_network("bridge", None::<InspectNetworkOptions<String>>)
+        .await
+    {
+        Ok(network) => network,
+        Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 404, ..
+        }) => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .into_alien_error()
+                .context(ErrorData::DockerConnectionFailed {
+                    reason: "Cannot inspect the bridge network on the selected Docker engine"
+                        .into(),
+                })
+        }
+    };
+    let gateway = network
+        .ipam
+        .and_then(|ipam| ipam.config)
+        .into_iter()
+        .flatten()
+        .filter_map(|config| config.gateway)
+        .find_map(|gateway| docker_bridge_gateway(&gateway));
+    let Some(gateway) = gateway else {
+        return Ok(None);
+    };
+    if std::net::TcpListener::bind((gateway, 0)).is_err() {
+        return Ok(None);
     }
-    .await;
-    Ok(gateway)
+    Ok(Some(gateway))
 }
 
 /// Makes a loopback service reachable at the same port on Docker's private

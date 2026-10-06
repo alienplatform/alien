@@ -28,6 +28,22 @@ pub(crate) fn connect_docker_with_host() -> Result<(Docker, String)> {
     Ok((connect_endpoint(&endpoint)?, endpoint))
 }
 
+/// Native services can operate without an unconfigured default Docker socket.
+/// An explicitly selected host or named context must never be ignored.
+pub(crate) fn connect_optional_docker() -> Result<Option<Docker>> {
+    let environment = DockerEnvironment::capture()?;
+    let context = environment.selected_context()?;
+    let unconfigured_default = environment.context.is_none()
+        && environment.host.is_none()
+        && (context.is_empty() || context == "default");
+    let endpoint = environment.endpoint_for_context(&context)?;
+    match connect_endpoint(&endpoint) {
+        Ok(docker) => Ok(Some(docker)),
+        Err(error) if unconfigured_default && error.code == "DOCKER_CONNECTION_FAILED" => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 /// Build a CLI command pinned to an already validated, non-TLS endpoint.
 pub(crate) fn docker_command(endpoint: &str) -> tokio::process::Command {
     let mut command = tokio::process::Command::new("docker");
@@ -78,33 +94,38 @@ impl DockerEnvironment {
         })
     }
 
-    fn endpoint(&self) -> Result<String> {
+    fn selected_context(&self) -> Result<String> {
         // DOCKER_CONTEXT overrides DOCKER_HOST; a host override in turn bypasses
         // the persisted currentContext. Explicit "default" still honors HOST.
-        let context = if let Some(context) = &self.context {
-            context.clone()
-        } else if self.host.is_some() {
-            "default".into()
-        } else {
-            let path = self.config_dir.join("config.json");
-            match fs::read(&path) {
-                Ok(bytes) => {
-                    serde_json::from_slice::<CliConfig>(&bytes)
-                        .into_alien_error()
-                        .context(config_error(format!(
-                            "Invalid Docker configuration at {}",
-                            path.display()
-                        )))?
-                        .current_context
-                }
-                Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
-                Err(error) => {
-                    return Err(error)
-                        .into_alien_error()
-                        .context(config_error(format!("Cannot read {}", path.display())))
-                }
-            }
-        };
+        // Some CLI versions prefer HOST when both variables are set; pin our
+        // CLI subprocess endpoint rather than re-resolving that ambiguity.
+        if let Some(context) = &self.context {
+            return Ok(context.clone());
+        }
+        if self.host.is_some() {
+            return Ok("default".into());
+        }
+        let path = self.config_dir.join("config.json");
+        match fs::read(&path) {
+            Ok(bytes) => Ok(serde_json::from_slice::<CliConfig>(&bytes)
+                .into_alien_error()
+                .context(config_error(format!(
+                    "Invalid Docker configuration at {}",
+                    path.display()
+                )))?
+                .current_context),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(String::new()),
+            Err(error) => Err(error)
+                .into_alien_error()
+                .context(config_error(format!("Cannot read {}", path.display()))),
+        }
+    }
+
+    fn endpoint(&self) -> Result<String> {
+        self.endpoint_for_context(&self.selected_context()?)
+    }
+
+    fn endpoint_for_context(&self, context: &str) -> Result<String> {
         if context.is_empty() || context == "default" {
             if self.tls {
                 return Err(AlienError::new(unsupported("TLS", "Select a Unix/npipe or plaintext TCP endpoint, or use the Docker CLI for TLS operations")));
@@ -360,6 +381,22 @@ mod tests {
             environment.endpoint().unwrap_err().error,
             Some(ErrorData::DockerConfigurationInvalid { .. })
         ));
+        let path = environment
+            .config_dir
+            .join("contexts/meta")
+            .join(format!("{:x}", Sha256::digest(b"missing")))
+            .join("meta.json");
+        for metadata in [
+            "invalid json",
+            "null",
+            r#"{"Name":"other","Endpoints":{"docker":{"Host":"unix:///fixture.sock"}}}"#,
+            r#"{"Name":"missing","Endpoints":{"docker":{"Host":42}}}"#,
+        ] {
+            fs::write(&path, metadata).unwrap();
+            let error = environment.endpoint().unwrap_err();
+            assert_eq!(error.code, "DOCKER_CONFIGURATION_INVALID");
+            assert!(!error.retryable);
+        }
     }
 
     #[test]
@@ -484,6 +521,11 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires a dedicated Docker engine and isolated Docker environment"]
     async fn dedicated_engine_proof() {
+        let state = TempDir::new().unwrap();
+        crate::LocalContainerManager::new(state.path().join("containers"))
+            .expect("container client selects context");
+        crate::LocalSandboxManager::new(state.path().join("sandboxes"))
+            .expect("sandbox client selects context");
         let docker = connect_docker().expect("selected endpoint initializes");
         docker.ping().await.expect("selected engine responds");
         let version = docker.version().await.expect("engine version");
@@ -538,6 +580,16 @@ mod tests {
         let error = connect_docker().expect_err("invalid selection must fail");
         assert_eq!(error.code, expected);
         assert!(!error.retryable);
+        let state = TempDir::new().unwrap();
+        let container_error = crate::LocalContainerManager::new(state.path().join("containers"))
+            .expect_err("container client must reject invalid selection");
+        assert_eq!(container_error.code, expected);
+        let sandbox_error = crate::LocalSandboxManager::new(state.path().join("sandboxes"))
+            .expect_err("sandbox client must reject invalid selection");
+        assert_eq!(sandbox_error.code, expected);
+        let bridge_error =
+            connect_optional_docker().expect_err("bridge discovery must reject invalid selection");
+        assert_eq!(bridge_error.code, expected);
     }
 
     /// The old connector must fail to select the same isolated context engine.
