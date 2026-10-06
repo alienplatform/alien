@@ -254,6 +254,12 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
 // EC2 Client
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy)]
+enum Attempts {
+    Retried,
+    Once,
+}
+
 #[derive(Debug, Clone)]
 pub struct Ec2Client {
     client: Client,
@@ -298,6 +304,30 @@ impl Ec2Client {
         operation: &str,
         resource: &str,
     ) -> Result<T> {
+        self.send_form_with(Attempts::Retried, form_data, operation, resource)
+            .await
+    }
+
+    /// Sends a create that has no idempotency token in a single attempt. Retrying it after a
+    /// lost response (a timeout or a reset connection after EC2 acted on the call) would make a
+    /// second object; the caller finds the first one by its tags instead.
+    async fn send_create_once<T: DeserializeOwned + Send + 'static>(
+        &self,
+        form_data: HashMap<String, String>,
+        operation: &str,
+        resource: &str,
+    ) -> Result<T> {
+        self.send_form_with(Attempts::Once, form_data, operation, resource)
+            .await
+    }
+
+    async fn send_form_with<T: DeserializeOwned + Send + 'static>(
+        &self,
+        attempts: Attempts,
+        form_data: HashMap<String, String>,
+        operation: &str,
+        resource: &str,
+    ) -> Result<T> {
         self.credentials.ensure_fresh().await?;
         let url = self.get_base_url();
 
@@ -313,8 +343,15 @@ impl Ec2Client {
             .content_sha256(&form_body)
             .body(form_body.clone());
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await;
+        let result = match attempts {
+            Attempts::Retried => {
+                crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await
+            }
+            Attempts::Once => {
+                crate::aws::aws_request_utils::sign_send_xml_once(builder, &self.sign_config())
+                    .await
+            }
+        };
 
         Self::map_result(result, operation, resource, Some(&form_body))
     }
@@ -878,7 +915,7 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
-        self.send_form(form_data, "CreateVpc", &request.cidr_block)
+        self.send_create_once(form_data, "CreateVpc", &request.cidr_block)
             .await
     }
 
@@ -970,7 +1007,7 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
-        self.send_form(form_data, "CreateSubnet", &request.cidr_block)
+        self.send_create_once(form_data, "CreateSubnet", &request.cidr_block)
             .await
     }
 
@@ -1000,7 +1037,7 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
-        self.send_form(form_data, "CreateInternetGateway", "InternetGateway")
+        self.send_create_once(form_data, "CreateInternetGateway", "InternetGateway")
             .await
     }
 
@@ -1180,7 +1217,7 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
-        self.send_form(form_data, "AllocateAddress", "ElasticIP")
+        self.send_create_once(form_data, "AllocateAddress", "ElasticIP")
             .await
     }
 
@@ -1249,7 +1286,7 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
-        self.send_form(form_data, "CreateRouteTable", &request.vpc_id)
+        self.send_create_once(form_data, "CreateRouteTable", &request.vpc_id)
             .await
     }
 
@@ -1436,7 +1473,7 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
-        self.send_form(form_data, "CreateSecurityGroup", &request.group_name)
+        self.send_create_once(form_data, "CreateSecurityGroup", &request.group_name)
             .await
     }
 
@@ -4541,6 +4578,55 @@ impl GetConsoleOutputResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ServiceOverrides;
+    use alien_core::{AwsClientConfig, AwsCredentials};
+    use httpmock::prelude::*;
+
+    fn client(server: &MockServer) -> Ec2Client {
+        let config = AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-1".to_string(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "test-access-key".to_string(),
+                secret_access_key: "test-secret-key".to_string(),
+                session_token: None,
+            },
+            service_overrides: Some(ServiceOverrides {
+                endpoints: HashMap::from([("ec2".to_string(), server.base_url())]),
+            }),
+        };
+        Ec2Client::new(
+            reqwest::Client::new(),
+            AwsCredentialProvider::from_config_sync(config),
+        )
+    }
+
+    /// A create EC2 cannot make idempotent is sent once. EC2 may already have made the VPC
+    /// when it answers 5xx (or the response is lost); a second send would make another one.
+    #[tokio::test]
+    async fn a_failed_create_vpc_is_not_sent_again() {
+        let server = MockServer::start_async().await;
+        let create = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/").body_contains("Action=CreateVpc");
+                then.status(503).body(
+                    "<Response><Errors><Error><Code>Unavailable</Code><Message>try again</Message></Error></Errors></Response>",
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .create_vpc(
+                CreateVpcRequest::builder()
+                    .cidr_block("10.1.0.0/16".to_string())
+                    .build(),
+            )
+            .await
+            .expect_err("the create fails");
+
+        assert_eq!(create.hits_async().await, 1);
+        assert_eq!(error.code, "REMOTE_SERVICE_UNAVAILABLE");
+    }
 
     /// Body returned by AWS for `--location-type availability-zone` filtered to t4g.micro in
     /// us-east-1a and us-east-1e (us-east-1e does not offer the type, so it is absent).

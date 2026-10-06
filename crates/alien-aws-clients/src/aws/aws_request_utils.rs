@@ -345,6 +345,18 @@ pub async fn sign_send_xml<T: DeserializeOwned + Send + 'static>(
         .await
 }
 
+/// Sign the request and deserialize an XML response into `T`, in a single attempt.
+///
+/// For a create the service cannot make idempotent: when a response is lost after the service
+/// acted on the call, sending it again makes a second object. The caller looks the first one up
+/// instead.
+pub async fn sign_send_xml_once<T: DeserializeOwned + Send + 'static>(
+    builder: RequestBuilder,
+    config: &AwsSignConfig,
+) -> Result<T> {
+    builder.sign_aws_request(config)?.send_xml::<T>().await
+}
+
 /// Sign the request and expect no body, in a single attempt.
 ///
 /// For a create whose "already exists" answer is final, like [`sign_send_json_once`].
