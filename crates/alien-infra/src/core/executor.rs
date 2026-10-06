@@ -11,7 +11,7 @@
 //! * [`StackExecutor::step`] – advance every **ready** resource by one step.
 //! * [`StackExecutor::run_until_synced`] – test helper that runs until desired == current.
 
-use alien_error::{AlienError, Context, GenericError};
+use alien_error::{AlienError, Context, ContextError, GenericError};
 use futures::{stream, StreamExt, TryStreamExt};
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -1791,19 +1791,27 @@ impl StackExecutor {
             }
         }
 
-        // Surface why a setup-owned failed create is left as it is
+        // Surface why a setup-owned failed create is left as it is, keeping the create error
+        // as the cause. Every step plans this again, so wrap the create error only once.
         for resource_id in &plan_result.setup_required {
             if let Some(resource_state) = next_state.resources.get_mut(resource_id) {
-                resource_state.error = Some(
-                    AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: format!(
-                            "setup-owned resource '{}' failed to provision and its configuration changed; replacing it requires setup credentials, so rerun setup",
-                            resource_id
-                        ),
-                        resource_id: Some(resource_id.clone()),
-                    })
-                    .into_generic(),
-                );
+                let setup_required = ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "setup-owned resource '{}' failed to provision and its configuration changed; replacing it requires setup credentials, so rerun setup",
+                        resource_id
+                    ),
+                    resource_id: Some(resource_id.clone()),
+                };
+                let surfaced = AlienError::new(setup_required.clone()).into_generic();
+                resource_state.error = Some(match resource_state.error.take() {
+                    Some(error)
+                        if error.code == surfaced.code && error.message == surfaced.message =>
+                    {
+                        error
+                    }
+                    Some(create_error) => create_error.context(setup_required).into_generic(),
+                    None => surfaced,
+                });
             }
         }
 

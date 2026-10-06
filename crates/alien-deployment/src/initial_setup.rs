@@ -235,6 +235,7 @@ pub async fn handle_initial_setup(
             if !plan.creates.is_empty()
                 || !plan.updates.is_empty()
                 || !plan.deletes.is_empty()
+                || !plan.replaces.is_empty()
                 || removed_frozen.any(|(_, resource)| resource.status == ResourceStatus::Deleting)
             {
                 stack_status = StackStatus::InProgress;

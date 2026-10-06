@@ -2026,6 +2026,98 @@ async fn test_partial_failure_pending_resource_retries_from_pending() {
     );
 }
 
+fn add_live_worker(stack: &mut Stack, worker: Worker) {
+    stack.resources.insert(
+        worker.id.clone(),
+        ResourceEntry {
+            config: alien_core::Resource::new(worker),
+            lifecycle: ResourceLifecycle::Live,
+            dependencies: Vec::new(),
+            remote_access: false,
+            enabled_when: None,
+        },
+    );
+}
+
+fn image_worker(id: &str, image: &str, memory_mb: u32) -> Worker {
+    Worker::new(id.to_string())
+        .code(WorkerCode::Image {
+            image: image.to_string(),
+        })
+        .memory_mb(memory_mb)
+        .permissions("default".to_string())
+        .build()
+}
+
+/// A sibling interrupted mid-create keeps the IDs its create recorded. When the corrective
+/// release also changes that sibling, the update deletes what the interrupted create made,
+/// against the config it was created with, before creating it again.
+#[tokio::test]
+async fn interrupted_sibling_with_changed_config_is_deleted_before_it_is_recreated() {
+    let _vault = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let mut state = run_to_completion(
+        create_initial_state(create_test_stack("test-stack", "base-fn")),
+        config.clone(),
+    )
+    .await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    // Release 2 adds a worker that fails at once (the test controller rejects more than
+    // 4096 MB, without retries) and a sibling whose create is still in flight then.
+    let mut stack_v2 = create_test_stack("test-stack", "base-fn");
+    add_live_worker(&mut stack_v2, image_worker("rejected-fn", "test:v2", 5120));
+    add_live_worker(
+        &mut stack_v2,
+        image_worker("interrupted-sibling-fn", "test:v2", 1024),
+    );
+    start_update(&mut state, release_of("rel_v2", stack_v2));
+    let mut state = run_to_completion(state, config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+
+    let sibling = &state.stack_state.as_ref().unwrap().resources["interrupted-sibling-fn"];
+    assert_eq!(sibling.status, alien_core::ResourceStatus::ProvisionFailed);
+    assert_eq!(
+        sibling.error.as_ref().map(|error| error.code.as_str()),
+        Some("DEPLOYMENT_INTERRUPTED")
+    );
+    assert!(
+        sibling.internal_state.is_some() && sibling.last_failed_state.is_some(),
+        "the interrupted create keeps its controller state"
+    );
+    let sibling_identifier = "test:worker:interrupted-sibling-fn";
+    assert!(alien_infra::test_worker_deletes_issued(sibling_identifier).is_empty());
+
+    // Release 3 fixes the failing worker and changes the interrupted sibling.
+    let mut stack_v3 = create_test_stack("test-stack", "base-fn");
+    add_live_worker(&mut stack_v3, image_worker("rejected-fn", "test:v3", 1024));
+    add_live_worker(
+        &mut stack_v3,
+        image_worker("interrupted-sibling-fn", "test:v3", 1024),
+    );
+    start_update(&mut state, release_of("rel_v3", stack_v3));
+    let state = run_to_completion(state, config).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    let deletes = alien_infra::test_worker_deletes_issued(sibling_identifier);
+    assert_eq!(deletes.len(), 1, "the interrupted create is deleted once");
+    assert_eq!(
+        deletes[0].code,
+        WorkerCode::Image {
+            image: "test:v2".to_string()
+        },
+        "the delete runs against the config the sibling was created with"
+    );
+    assert_eq!(
+        deployed_worker_image(&state, "interrupted-sibling-fn"),
+        "test:v3"
+    );
+    assert_eq!(deployed_worker_image(&state, "rejected-fn"), "test:v3");
+    // The rejected worker failed before its create recorded anything, so it had nothing to
+    // delete remotely.
+    assert!(alien_infra::test_worker_deletes_issued("test:worker:rejected-fn").is_empty());
+}
+
 /// Dispatcher terminal sanity
 
 #[tokio::test]

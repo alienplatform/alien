@@ -340,7 +340,9 @@ async fn test_failure_state_preservation() -> Result<()> {
 }
 
 /// Tests config drift during failure recovery.
-/// ProvisionFailed with config change goes to creates (restart), not updates.
+/// A ProvisionFailed resource whose controller ran is replaced: deleted from its saved
+/// state, then created with the new config. The executor cannot tell whether the failed
+/// create made anything, so it always deletes first.
 #[tokio::test]
 async fn test_retry_with_config_drift() -> Result<()> {
     // Start with failing config
@@ -378,12 +380,13 @@ async fn test_retry_with_config_drift() -> Result<()> {
 
     let executor_v2 = new_executor(&stack_v2)?;
 
-    // Plan should show create (restart) for ProvisionFailed with config change
     let plan = executor_v2.plan(&state)?;
-    assert!(
-        plan.creates.contains(&"drift-func".to_string()),
-        "Should detect config drift and mark for create (restart)"
+    assert_eq!(
+        plan.replaces,
+        vec!["drift-func".to_string()],
+        "Should detect config drift and replace the failed create"
     );
+    assert!(plan.creates.is_empty(), "{plan:?}");
 
     // Run to completion
     let final_state = run_to_synced(&executor_v2, state).await?;
@@ -836,16 +839,16 @@ async fn test_stay_exhaustion_saves_last_failed_state() -> Result<()> {
     Ok(())
 }
 
-/// Config change during Provisioning triggers delete-then-recreate with new config.
+/// A config change during Provisioning does not interrupt the create that is in flight.
 ///
 /// Flow:
 /// 1. One step runs with image-v1 → func1 enters Provisioning (CreateStart executed).
-/// 2. We switch to image-v2 executor — plan() detects the config change and plans a delete.
-/// 3. step() transitions func1 to DeleteStart (unconditional, from Provisioning).
-/// 4. Executor runs to completion: delete finishes → func1 is recreated with image-v2.
-/// 5. Final state: func1 is Running with image-v2 config.
+/// 2. We switch to an image-v2 executor. plan() sees the config change and defers it,
+///    because the resource is still provisioning.
+/// 3. The create keeps going; its remaining handlers read the image-v2 desired config.
+/// 4. Final state: func1 is Running with image-v2 config.
 #[tokio::test]
-async fn test_config_change_during_provisioning_recreates_with_new_config() -> Result<()> {
+async fn test_config_change_during_provisioning_finishes_create_with_new_config() -> Result<()> {
     let func1_v1 = test_function_with_image("func1", "image-v1");
 
     let stack_v1 = Stack::new("provisioning-recreate-test".to_owned())
@@ -877,10 +880,10 @@ async fn test_config_change_during_provisioning_recreates_with_new_config() -> R
     assert_eq!(
         get_status(&final_state, "func1"),
         Some(ResourceStatus::Running),
-        "func1 should be Running after delete-then-recreate"
+        "func1 should be Running after the deferred config change"
     );
 
-    // Verify func1 was recreated with image-v2 config.
+    // Verify func1 finished with the image-v2 config.
     let func1_state = final_state.resources.get("func1").unwrap();
     let func1_final = func1_state.config.downcast_ref::<Worker>().unwrap();
     assert_eq!(
@@ -888,7 +891,7 @@ async fn test_config_change_during_provisioning_recreates_with_new_config() -> R
         WorkerCode::Image {
             image: "image-v2".to_string()
         },
-        "func1 must have been recreated with image-v2 config"
+        "func1 must finish provisioning with image-v2 config"
     );
 
     Ok(())
