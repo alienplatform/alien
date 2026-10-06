@@ -354,6 +354,31 @@ async fn resolve_untracked_name(
     crate::deployment_resolver::resolve(manager, &ids[0], ctx.is_dev()).await
 }
 
+/// Drive local cleanup through the same setup-authority handoff as cloud cleanup.
+pub(crate) async fn destroy_local_target(
+    port: u16,
+    deployment: alien_manager_api::types::DeploymentResponse,
+) -> Result<()> {
+    let manager = ExecutionMode::Dev { port }
+        .resolve_manager_metadata_only(&deployment.project_id, "local")
+        .await?;
+    let tracked = TrackedDeployment {
+        name: deployment.name,
+        deployment_id: deployment.id,
+        project_id: deployment.project_id,
+        workspace_id: deployment.workspace_id,
+        api_key: String::new(),
+    };
+    let args = DestroyArgs {
+        name: tracked.name.clone(),
+        platform: Some("local".to_string()),
+        token: None,
+        force: false,
+    };
+    let steps = FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]);
+    destroy_tracked_deployment(&args, Platform::Local, &tracked, manager, steps).await
+}
+
 /// Delete a tracked deployment through its resolved manager.
 async fn destroy_tracked_deployment(
     args: &DestroyArgs,
@@ -365,6 +390,17 @@ async fn destroy_tracked_deployment(
     // Manager discovery may authenticate as the user, but teardown drives the
     // manager's sync endpoints, which only accept the deployment's own token.
     let operator_client = manager_ctx.client;
+    let manager_client = if platform == Platform::Local {
+        operator_client.clone()
+    } else {
+        alien_manager_api::Client::new_with_client(
+            &manager_ctx.manager_url,
+            deployment_manager_http_client(
+                &tracked_deployment.api_key,
+                manager_ctx.workspace.as_deref(),
+            )?,
+        )
+    };
 
     // Step 3: Delete via manager
     steps.activate(2, Some(tracked_deployment.deployment_id.clone()));

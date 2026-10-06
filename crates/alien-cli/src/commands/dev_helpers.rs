@@ -735,6 +735,10 @@ pub async fn destroy_local_deployment(port: u16, deployment_name: &str, force: b
             })
         })?;
 
+    if !force {
+        return super::destroy::destroy_local_target(port, existing).await;
+    }
+
     let action = if force {
         alien_manager_api::types::DeleteDeploymentAction::Forget
     } else {
@@ -1186,7 +1190,7 @@ mod tests {
     /// delete, and returns only once the deployment is gone from the list. A name the manager
     /// doesn't know is an error.
     #[tokio::test]
-    async fn destroy_local_deployment_deletes_by_name_and_waits() {
+    async fn force_destroy_local_deployment_deletes_by_name_and_waits() {
         let manager: SharedDestroyManager = Arc::default();
         let app = Router::new()
             .route("/v1/deployments", get(destroy_manager_list))
@@ -1196,7 +1200,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-        destroy_local_deployment(port, "api", false)
+        destroy_local_deployment(port, "api", true)
             .await
             .expect("the named deployment is deleted");
         {
@@ -1205,7 +1209,7 @@ mod tests {
                 manager.deleted,
                 vec![(
                     "dep_1".to_string(),
-                    serde_json::json!({ "action": "cleanup" })
+                    serde_json::json!({ "action": "forget" })
                 )]
             );
             // One poll still saw the deployment while cleanup ran; the command kept waiting
