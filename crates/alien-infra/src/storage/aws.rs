@@ -1337,10 +1337,25 @@ mod tests {
             .build()
             .await
             .unwrap();
+        let original_bucket = executor
+            .outputs()
+            .unwrap()
+            .downcast_ref::<StorageOutputs>()
+            .unwrap()
+            .bucket_name
+            .clone();
         executor.update(storage).unwrap();
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
-        assert!(executor.outputs().is_some());
+        assert_eq!(
+            executor
+                .outputs()
+                .unwrap()
+                .downcast_ref::<StorageOutputs>()
+                .unwrap()
+                .bucket_name,
+            original_bucket
+        );
     }
 
     #[rstest]
