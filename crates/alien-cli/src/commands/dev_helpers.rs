@@ -236,12 +236,30 @@ async fn refresh_local_deployment_environment(
         },
     )?;
     let store = SqliteDeploymentStore::new(Arc::new(db));
-    let deployments = store
-        .list_deployments(&Subject::system(), &DeploymentFilter::default())
-        .await
-        .context(ErrorData::ServerStartFailed {
-            reason: "Failed to resolve local session deployment".to_string(),
-        })?;
+    let subject = Subject::system();
+    let groups =
+        store
+            .list_deployment_groups(&subject)
+            .await
+            .context(ErrorData::ServerStartFailed {
+                reason: "Failed to resolve the local development group".to_string(),
+            })?;
+    let Some(group) = groups.iter().find(|group| group.name == "local-dev") else {
+        return Ok(());
+    };
+    let filter = DeploymentFilter {
+        deployment_group_id: Some(group.id.clone()),
+        name: Some(name.to_string()),
+        platforms: Some(vec![alien_core::Platform::Local]),
+        ..Default::default()
+    };
+    let deployments =
+        store
+            .list_deployments(&subject, &filter)
+            .await
+            .context(ErrorData::ServerStartFailed {
+                reason: "Failed to resolve local session deployment".to_string(),
+            })?;
     let matches: Vec<_> = deployments
         .iter()
         .filter(|deployment| {
@@ -1384,25 +1402,44 @@ mod tests {
             )
             .await
             .unwrap();
+        let parameters = CreateDeploymentParams {
+            name: "api".to_string(),
+            deployment_group_id: group.id,
+            platform: alien_core::Platform::Local,
+            deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            base_platform: None,
+            stack_settings: Default::default(),
+            stack_state: Some(StackState::with_resource_prefix(
+                alien_core::Platform::Local,
+                "retained".to_string(),
+            )),
+            environment_variables: None,
+            public_subdomain: None,
+            input_values: Default::default(),
+            setup_item: None,
+            deployment_token: None,
+        };
         let before = store
+            .create_deployment(&subject, parameters.clone())
+            .await
+            .unwrap();
+        let other_group = store
+            .create_deployment_group(
+                &subject,
+                CreateDeploymentGroupParams {
+                    name: "another-group".to_string(),
+                    max_deployments: 100,
+                    setup: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let other = store
             .create_deployment(
                 &subject,
                 CreateDeploymentParams {
-                    name: "api".to_string(),
-                    deployment_group_id: group.id,
-                    platform: alien_core::Platform::Local,
-                    deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
-                    base_platform: None,
-                    stack_settings: Default::default(),
-                    stack_state: Some(StackState::with_resource_prefix(
-                        alien_core::Platform::Local,
-                        "retained".to_string(),
-                    )),
-                    environment_variables: None,
-                    public_subdomain: None,
-                    input_values: Default::default(),
-                    setup_item: None,
-                    deployment_token: None,
+                    deployment_group_id: other_group.id,
+                    ..parameters
                 },
             )
             .await
@@ -1447,6 +1484,16 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        let untouched = store
+            .get_deployment(&subject, &other.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            untouched.user_environment_variables,
+            other.user_environment_variables
+        );
+        assert_eq!(untouched.updated_at, other.updated_at);
         assert!(cleared.user_environment_variables.unwrap().is_empty());
         assert_eq!(cleared.stack_state.unwrap().resource_prefix, "retained");
     }
