@@ -675,11 +675,12 @@ async fn destroy_tracked_deployment(
             &session,
             execution_claim.as_ref(),
         )
-        .await
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to release deployment lock after preparation failed".to_string(),
-        });
-        return combine_operation_and_finalization(Err(error), release);
+        .await;
+        return combine_operation_and_finalization(Err(error), release).context(
+            ErrorData::ConfigurationError {
+                message: "Deployment teardown preparation failed".to_string(),
+            },
+        );
     }
 
     let transport = ManagerApiTransport::with_execution_claim(
