@@ -283,7 +283,7 @@ pub struct DevCommand {
     #[arg(long)]
     pub status_file: Option<PathBuf>,
 
-    /// Deployment name for the initial deployment
+    /// Deployment name, or an existing ID / group/name to migrate legacy local state
     #[arg(long, default_value = "default")]
     pub deployment_name: String,
 
