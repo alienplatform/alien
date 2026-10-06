@@ -20,7 +20,7 @@ use alien_core::{
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome};
 use alien_deployment::manager_api_transport::{
     acquire_setup_delete_deployment, combine_operation_and_finalization, final_reconcile,
-    ManagerApiTransport, SetupDeleteAcquireOutcome,
+    release_deployment, ManagerApiTransport, SetupDeleteAcquireOutcome,
 };
 use alien_deployment::runner::{preserve_semantic_failure, RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
@@ -542,17 +542,9 @@ async fn destroy_tracked_deployment(
                 message: format!("Failed to build client config for platform {:?}", platform),
             })?;
 
-    // Fetch deployment state
-    let deployment = manager_client
-        .get_deployment()
-        .id(&tracked_deployment.deployment_id)
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to get deployment from manager".to_string(),
-        })?
-        .into_inner();
+    // Prepare from the record read before requesting deletion. The runtime can
+    // remove it immediately after that request.
+    let deployment = pre_delete_deployment;
 
     let status: DeploymentStatus =
         serde_json::from_value(serde_json::Value::String(deployment.status.clone()))
@@ -645,31 +637,51 @@ async fn destroy_tracked_deployment(
         SetupDeleteAcquireOutcome::AlreadyDeleted => return Ok(()),
     };
 
-    // Re-fetch under lock
-    let deployment = manager_client
-        .get_deployment()
-        .id(&tracked_deployment.deployment_id)
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to re-fetch deployment under lock".to_string(),
-        })?
-        .into_inner();
+    let preparation: Result<()> = async {
+        // Re-fetch under lock
+        let deployment = manager_client
+            .get_deployment()
+            .id(&tracked_deployment.deployment_id)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to re-fetch deployment under lock".to_string(),
+            })?
+            .into_inner();
 
-    current.status = serde_json::from_value(serde_json::Value::String(deployment.status.clone()))
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: format!("Unknown deployment status: {}", deployment.status),
-        })?;
-    current.stack_state = deployment
-        .stack_state
-        .map(serde_json::from_value)
-        .transpose()
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to deserialize stack_state".to_string(),
-        })?;
+        current.status =
+            serde_json::from_value(serde_json::Value::String(deployment.status.clone()))
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: format!("Unknown deployment status: {}", deployment.status),
+                })?;
+        current.stack_state = deployment
+            .stack_state
+            .map(serde_json::from_value)
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to deserialize stack_state".to_string(),
+            })?;
+
+        Ok(())
+    }
+    .await;
+    if let Err(error) = preparation {
+        let release = release_deployment(
+            &manager_client,
+            &tracked_deployment.deployment_id,
+            &session,
+            execution_claim.as_ref(),
+        )
+        .await;
+        return combine_operation_and_finalization(Err(error), release).context(
+            ErrorData::ConfigurationError {
+                message: "Deployment teardown preparation failed".to_string(),
+            },
+        );
+    }
 
     let transport = ManagerApiTransport::with_execution_claim(
         manager_client.clone(),
@@ -914,6 +926,8 @@ mod tests {
         acquire_authorizations: Vec<String>,
         delete_authorizations: Vec<String>,
         deleted: bool,
+        invalid_after_acquire: bool,
+        release_count: usize,
     }
 
     type Shared = Arc<Mutex<ManagerState>>;
@@ -922,7 +936,12 @@ mod tests {
         if state.lock().unwrap().deleted {
             return StatusCode::NOT_FOUND.into_response();
         }
-        Json(deployment_record()).into_response()
+        let mut record = deployment_record();
+        let state = state.lock().unwrap();
+        if state.invalid_after_acquire && !state.acquire_authorizations.is_empty() {
+            record["status"] = serde_json::json!("invalid-status");
+        }
+        Json(record).into_response()
     }
 
     fn deployment_record() -> serde_json::Value {
@@ -957,8 +976,27 @@ mod tests {
         if authorization != format!("Bearer {DEPLOYMENT_TOKEN}") {
             return StatusCode::FORBIDDEN.into_response();
         }
+        if state.invalid_after_acquire {
+            return Json(
+                serde_json::json!({ "deployments": [{ "deployment": deployment_record() }] }),
+            )
+            .into_response();
+        }
         state.deleted = true;
         Json(serde_json::json!({ "deployments": [] })).into_response()
+    }
+
+    async fn release_after_preparation_failure(
+        State(state): State<Shared>,
+        Json(body): Json<serde_json::Value>,
+    ) -> StatusCode {
+        assert_eq!(body["deploymentId"], "dep_test");
+        assert!(body["session"]
+            .as_str()
+            .unwrap()
+            .starts_with("cli-destroy-"));
+        state.lock().unwrap().release_count += 1;
+        StatusCode::OK
     }
 
     async fn whoami() -> Json<serde_json::Value> {
@@ -1285,6 +1323,72 @@ mod tests {
         )
         .await
         .expect("destroy should finish once the deployment is gone");
+
+        assert_eq!(
+            state.lock().unwrap().acquire_authorizations,
+            vec![format!("Bearer {DEPLOYMENT_TOKEN}")]
+        );
+    }
+    #[tokio::test]
+    async fn failed_post_acquire_preparation_releases_the_deployment_lease() {
+        let state = Shared::default();
+        state.lock().unwrap().invalid_after_acquire = true;
+        let app = Router::new()
+            .route("/v1/deployments/{id}", get(get_deployment))
+            .route("/v1/sync/acquire", post(acquire))
+            .route("/v1/sync/release", post(release_after_preparation_failure))
+            .with_state(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind manager");
+        let manager_url = format!("http://{}", listener.local_addr().expect("manager address"));
+        tokio::spawn(async move { axum::serve(listener, app).await.expect("serve manager") });
+
+        // Discovery authenticated as the user, as `alien destroy` does with a CLI login.
+        let user_http_client =
+            crate::auth::client_with_auth_and_workspace("Bearer user-session", "ws-name")
+                .expect("user client");
+        let manager_ctx = ManagerContext {
+            manager_url: manager_url.clone(),
+            manager_name: None,
+            manager_is_system: None,
+            manager_cloud: None,
+            client: alien_manager_api::Client::new_with_client(
+                &manager_url,
+                user_http_client.clone(),
+            ),
+            http_client: user_http_client,
+            auth_token: Some("user-session".to_string()),
+            repository_name: None,
+            repository_uri: None,
+            workspace: Some("ws-name".to_string()),
+        };
+        let tracked = TrackedDeployment {
+            name: "test".to_string(),
+            deployment_id: "dep_test".to_string(),
+            api_key: DEPLOYMENT_TOKEN.to_string(),
+            workspace_id: "ws_test".to_string(),
+            project_id: "proj_test".to_string(),
+        };
+        let args = DestroyArgs {
+            token: None,
+            name: "test".to_string(),
+            platform: Some("local".to_string()),
+            force: false,
+        };
+
+        let error = destroy_tracked_deployment(
+            &args,
+            Platform::Local,
+            &tracked,
+            manager_ctx,
+            FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]),
+        )
+        .await
+        .expect_err("invalid state must fail after acquiring");
+        assert!(error.to_string().contains("invalid-status"));
+        assert_eq!(state.lock().unwrap().release_count, 1);
+        assert!(!state.lock().unwrap().deleted);
 
         assert_eq!(
             state.lock().unwrap().acquire_authorizations,

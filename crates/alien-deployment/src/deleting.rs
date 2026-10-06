@@ -2,10 +2,11 @@ use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
 use alien_core::{
-    ownership_policy_for_resource_type, ResourceLifecycle, ResourceStatus, StackState, StackStatus,
+    ownership_policy_for_resource_type, InitialSetupAuthority, Platform, ResourceLifecycle,
+    ResourceStatus, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
-use alien_infra::StackExecutor;
+use alien_infra::{state_utils::StackStateExt, PlatformServiceProvider, StackExecutor};
 use tracing::info;
 
 /// Handle DeletePending → Deleting transition.
@@ -17,7 +18,7 @@ pub async fn handle_delete_pending(
     current: DeploymentState,
     config: DeploymentConfig,
     client_config: alien_core::ClientConfig,
-    _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
+    service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling DeletePending status");
 
@@ -58,11 +59,11 @@ pub async fn handle_delete_pending(
         }
     }
 
-    let prepared = prepare_runtime_resources_for_destroy(&mut stack_state).context(
-        ErrorData::StackExecutionFailed {
+    let prepared =
+        prepare_resources_for_destroy(&mut stack_state, next.platform, service_provider.as_ref())
+            .context(ErrorData::StackExecutionFailed {
             message: "Failed to prepare runtime resources for destroy".to_string(),
-        },
-    )?;
+        })?;
 
     info!(
         "Prepared {} runtime resources for destroy: {:?}",
@@ -102,11 +103,21 @@ pub async fn handle_deleting(
         })
     })?;
 
-    let executor = StackExecutor::for_runtime_cleanup_deletion_with_service_provider(
-        client_config,
-        &config,
-        service_provider,
-    )
+    let owns_setup = owns_runtime_setup(current_cloned.platform, service_provider.as_ref());
+    let executor = if owns_setup {
+        StackExecutor::for_deletion_with_service_provider(
+            client_config,
+            &config,
+            service_provider,
+            None,
+        )
+    } else {
+        StackExecutor::for_runtime_cleanup_deletion_with_service_provider(
+            client_config,
+            &config,
+            service_provider,
+        )
+    }
     .context(ErrorData::StackExecutionFailed {
         message: "Failed to create stack executor for runtime cleanup".to_string(),
     })?;
@@ -119,11 +130,19 @@ pub async fn handle_deleting(
                 message: "Failed to execute runtime cleanup step".to_string(),
             })?;
 
-    let stack_status = compute_runtime_cleanup_status(&step_result.next_state).context(
-        ErrorData::StackExecutionFailed {
-            message: "Failed to compute runtime cleanup status".to_string(),
-        },
-    )?;
+    let stack_status = if owns_setup && !step_result.next_state.resources.is_empty() {
+        step_result
+            .next_state
+            .compute_stack_status()
+            .context(ErrorData::StackExecutionFailed {
+                message: "Failed to compute local teardown status".to_string(),
+            })
+    } else {
+        compute_runtime_cleanup_status(&step_result.next_state)
+    }
+    .context(ErrorData::StackExecutionFailed {
+        message: "Failed to compute runtime cleanup status".to_string(),
+    })?;
 
     let result = if stack_status == StackStatus::Deleted {
         let next_status = if has_remaining_setup_resources(&step_result.next_state)
@@ -265,7 +284,7 @@ pub async fn handle_delete_failed(
     current: DeploymentState,
     _config: DeploymentConfig,
     _client_config: alien_core::ClientConfig,
-    _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
+    service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling DeleteFailed status");
 
@@ -290,11 +309,11 @@ pub async fn handle_delete_failed(
         })
     })?;
 
-    let prepared = prepare_runtime_resources_for_destroy(&mut stack_state).context(
-        ErrorData::StackExecutionFailed {
+    let prepared =
+        prepare_resources_for_destroy(&mut stack_state, next.platform, service_provider.as_ref())
+            .context(ErrorData::StackExecutionFailed {
             message: "Failed to prepare runtime resources for delete retry".to_string(),
-        },
-    )?;
+        })?;
 
     info!(
         "Prepared {} runtime resources for delete retry: {:?}",
@@ -316,11 +335,20 @@ pub async fn handle_delete_failed(
     })
 }
 
-fn prepare_runtime_resources_for_destroy(
+fn owns_runtime_setup(platform: Platform, service_provider: &dyn PlatformServiceProvider) -> bool {
+    service_provider.runtime_setup_authority(platform) == Some(InitialSetupAuthority::DirectSetup)
+}
+
+fn prepare_resources_for_destroy(
     stack_state: &mut StackState,
+    platform: Platform,
+    service_provider: &dyn PlatformServiceProvider,
 ) -> alien_infra::Result<Vec<String>> {
-    use alien_infra::state_utils::StackStateExt;
-    stack_state.prepare_for_runtime_cleanup_destroy()
+    if owns_runtime_setup(platform, service_provider) {
+        stack_state.prepare_for_destroy()
+    } else {
+        stack_state.prepare_for_runtime_cleanup_destroy()
+    }
 }
 
 fn compute_runtime_cleanup_status(stack_state: &StackState) -> Result<StackStatus> {
@@ -387,16 +415,293 @@ mod tests {
     use std::sync::Arc;
 
     use alien_core::{
-        ComputeCluster, Daemon, DaemonCode, DeploymentConfig, DeploymentState, DeploymentStatus,
-        EnvironmentVariablesSnapshot, ExternalBindings, Platform, Resource, ResourceLifecycle,
-        ResourceStatus, StackResourceState, StackSettings, StackState, StackStatus, Storage,
+        ClientConfig, ComputeCluster, Daemon, DaemonCode, DeploymentConfig, DeploymentState,
+        DeploymentStatus, EnvironmentVariablesSnapshot, ExternalBindings, InitialSetupAuthority,
+        Platform, Resource, ResourceLifecycle, ResourceStatus, RuntimeMetadata, Stack,
+        StackResourceState, StackSettings, StackState, StackStatus, Storage,
     };
-    use alien_infra::DefaultPlatformServiceProvider;
+    use alien_infra::{state_utils::StackStateExt, DefaultPlatformServiceProvider, StackExecutor};
 
     use super::{
-        compute_runtime_cleanup_status, handle_delete_pending, handle_deleting,
-        has_remaining_setup_resources,
+        compute_runtime_cleanup_status, handle_delete_failed, handle_delete_pending,
+        handle_deleting, has_remaining_setup_resources,
     };
+
+    struct LocalStorageFixture {
+        directory: tempfile::TempDir,
+        state: StackState,
+        config: DeploymentConfig,
+        client: ClientConfig,
+        services: Arc<DefaultPlatformServiceProvider>,
+        prepared: Stack,
+    }
+
+    async fn local_storage_fixture() -> LocalStorageFixture {
+        let directory = tempfile::tempdir().expect("temporary state directory");
+        let bindings =
+            alien_local::LocalBindingsProvider::new(directory.path()).expect("local bindings");
+        let services = Arc::new(DefaultPlatformServiceProvider::with_local_bindings(
+            bindings,
+        ));
+        let client = ClientConfig::Local {
+            state_directory: directory.path().to_string_lossy().into_owned(),
+        };
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        let stack = Stack::new("local-storage".to_string())
+            .add(
+                Storage::new("data".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("evidence".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let initial = StackState::new(Platform::Local);
+        let prepared = alien_preflights::runner::PreflightRunner::new()
+            .run_deployment_time_preflights(
+                stack,
+                &initial,
+                &config,
+                &client,
+                None,
+                None,
+                Some(InitialSetupAuthority::DirectSetup),
+            )
+            .await
+            .expect("prepare local storage")
+            .0;
+        let executor = StackExecutor::builder(&prepared, client.clone())
+            .deployment_config(&config)
+            .service_provider(services.clone())
+            .build()
+            .expect("storage executor");
+        let created = executor.run_until_synced(initial).await;
+        assert!(created.success, "{:?}", created.error);
+        for name in ["data", "evidence"] {
+            let bucket = directory.path().join("storage").join(name);
+            assert!(bucket.is_dir());
+            std::fs::write(bucket.join("retained.txt"), b"stored data").expect("store marker");
+        }
+        LocalStorageFixture {
+            directory,
+            state: created.final_state,
+            config,
+            client,
+            services,
+            prepared,
+        }
+    }
+
+    #[tokio::test]
+    async fn local_manager_destroy_removes_frozen_storage_with_its_own_services() {
+        let mut fixture = local_storage_fixture().await;
+        let mut failed = StackResourceState::new_pending(
+            "storage".to_string(),
+            Resource::new(Storage::new("never-created".to_string()).build()),
+            None,
+            Vec::new(),
+        );
+        failed.lifecycle = Some(ResourceLifecycle::Frozen);
+        failed.status = ResourceStatus::ProvisionFailed;
+        fixture
+            .state
+            .resources
+            .insert("never-created".to_string(), failed);
+        let neighbor = fixture.directory.path().join("neighbor.txt");
+        std::fs::write(&neighbor, b"outside storage").expect("neighbor marker");
+        let current = DeploymentState::builder()
+            .status(DeploymentStatus::DeletePending)
+            .platform(Platform::Local)
+            .stack_state(fixture.state)
+            .runtime_metadata(RuntimeMetadata {
+                initial_setup_authority: InitialSetupAuthority::DirectSetup,
+                prepared_stack: Some(fixture.prepared),
+                ..Default::default()
+            })
+            .retry_requested(false)
+            .protocol_version(alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION)
+            .build();
+        let mut state = handle_delete_pending(
+            current,
+            fixture.config.clone(),
+            fixture.client.clone(),
+            fixture.services.clone(),
+        )
+        .await
+        .expect("prepare deletion")
+        .state;
+        for _ in 0..16 {
+            if state.status == DeploymentStatus::Deleted {
+                break;
+            }
+            state = handle_deleting(
+                state,
+                fixture.config.clone(),
+                fixture.client.clone(),
+                fixture.services.clone(),
+            )
+            .await
+            .expect("local deletion step")
+            .state;
+            assert_ne!(state.status, DeploymentStatus::DeleteFailed);
+            assert_ne!(state.status, DeploymentStatus::TeardownRequired);
+        }
+        assert_eq!(state.status, DeploymentStatus::Deleted);
+        assert!(state
+            .stack_state
+            .as_ref()
+            .unwrap()
+            .resources
+            .values()
+            .all(|resource| resource.status == ResourceStatus::Deleted));
+        for name in ["data", "evidence"] {
+            assert!(!fixture.directory.path().join("storage").join(name).exists());
+        }
+        assert_eq!(std::fs::read(neighbor).unwrap(), b"outside storage");
+    }
+
+    #[tokio::test]
+    async fn lost_controller_state_does_not_forget_evidence_of_existing_storage() {
+        for evidence in ["outputs", "failed-state", "previous-config"] {
+            let mut fixture = local_storage_fixture().await;
+            let resource = fixture.state.resources.get_mut("data").unwrap();
+            assert!(resource.outputs.is_some());
+            resource.internal_state = None;
+            resource.status = ResourceStatus::ProvisionFailed;
+            match evidence {
+                "outputs" => {}
+                "failed-state" => {
+                    resource.outputs = None;
+                    resource.last_failed_state = Some(serde_json::json!({"corrupt": true}));
+                }
+                "previous-config" => {
+                    resource.outputs = None;
+                    resource.previous_config = Some(resource.config.clone());
+                }
+                _ => unreachable!(),
+            }
+            let before = resource.clone();
+            fixture
+                .state
+                .prepare_for_destroy()
+                .expect_err("lost controller with evidence of prior creation must fail closed");
+            let retained = &fixture.state.resources["data"];
+            assert_eq!(retained.status, ResourceStatus::ProvisionFailed);
+            assert_eq!(retained.outputs, before.outputs);
+            assert_eq!(retained.last_failed_state, before.last_failed_state);
+            assert_eq!(retained.previous_config, before.previous_config);
+            for name in ["data", "evidence"] {
+                assert_eq!(
+                    std::fs::read(
+                        fixture
+                            .directory
+                            .path()
+                            .join("storage")
+                            .join(name)
+                            .join("retained.txt")
+                    )
+                    .unwrap(),
+                    b"stored data"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_local_storage_services_fail_without_forgetting_stored_data() {
+        let mut fixture = local_storage_fixture().await;
+        fixture
+            .state
+            .prepare_for_destroy()
+            .expect("prepare storage teardown");
+        let executor = StackExecutor::for_deletion_with_service_provider(
+            fixture.client.clone(),
+            &fixture.config,
+            Arc::new(DefaultPlatformServiceProvider::default()),
+            None,
+        )
+        .expect("teardown executor");
+        let step = executor
+            .step(fixture.state)
+            .await
+            .expect("controller failure is checkpointed");
+        for name in ["data", "evidence"] {
+            let resource = &step.next_state.resources[name];
+            assert_eq!(resource.status, ResourceStatus::DeleteFailed);
+            assert!(resource.error.is_some());
+            assert_eq!(
+                std::fs::read(
+                    fixture
+                        .directory
+                        .path()
+                        .join("storage")
+                        .join(name)
+                        .join("retained.txt")
+                )
+                .unwrap(),
+                b"stored data"
+            );
+        }
+        let mut retry_state = step.next_state;
+        let mut never_created = StackResourceState::new_pending(
+            "storage".to_string(),
+            Resource::new(Storage::new("never-created".to_string()).build()),
+            None,
+            Vec::new(),
+        );
+        never_created.lifecycle = Some(ResourceLifecycle::Frozen);
+        never_created.status = ResourceStatus::ProvisionFailed;
+        retry_state
+            .resources
+            .insert("never-created".to_string(), never_created);
+        let failed = DeploymentState::builder()
+            .status(DeploymentStatus::DeleteFailed)
+            .platform(Platform::Local)
+            .stack_state(retry_state)
+            .retry_requested(true)
+            .protocol_version(alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION)
+            .build();
+        let mut retry = handle_delete_failed(
+            failed,
+            fixture.config.clone(),
+            fixture.client.clone(),
+            fixture.services.clone(),
+        )
+        .await
+        .expect("retry with owning services")
+        .state;
+        assert!(!retry.retry_requested);
+        for _ in 0..16 {
+            if retry.status == DeploymentStatus::Deleted {
+                break;
+            }
+            retry = handle_deleting(
+                retry,
+                fixture.config.clone(),
+                fixture.client.clone(),
+                fixture.services.clone(),
+            )
+            .await
+            .expect("retry deletion step")
+            .state;
+            assert_ne!(retry.status, DeploymentStatus::DeleteFailed);
+            assert_ne!(retry.status, DeploymentStatus::TeardownRequired);
+        }
+        assert_eq!(retry.status, DeploymentStatus::Deleted);
+        for name in ["data", "evidence"] {
+            assert!(!fixture.directory.path().join("storage").join(name).exists());
+        }
+    }
 
     fn resource_state(
         resource: Resource,
