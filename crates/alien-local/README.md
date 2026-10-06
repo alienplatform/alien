@@ -51,3 +51,11 @@ containers. `dedicated_engine_baseline` verifies that Bollard's old local-defaul
 connector cannot select that engine. `dedicated_pinned_subprocess` verifies CLI
 selection after the persisted context changes. These fixtures perform read-only
 API operations and require no application builds or containers.
+
+Host overrides and native default selection work without `HOME`, `USERPROFILE`,
+or `DOCKER_CONFIG`. A configuration directory is required only to inspect a
+selected named context. Ordinary library tests inject context-inspection JSON
+fixtures and do not require Docker CLI or modify process environment. The ignored
+named-context integration proofs require Docker CLI, an isolated configuration,
+and a dedicated empty engine. Separate child-process proofs validate host and
+native default selection with a cleared environment and no Docker executable.

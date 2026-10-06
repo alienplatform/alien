@@ -623,7 +623,7 @@ mod tests {
     /// Run in a child process with an isolated Docker config and dedicated engine.
     /// This exercises the public production environment capture, not just inputs.
     #[tokio::test]
-    #[ignore = "requires a dedicated Docker engine and isolated Docker environment"]
+    #[ignore = "requires a dedicated empty engine; named contexts also require Docker CLI"]
     async fn dedicated_engine_proof() {
         let state = TempDir::new().unwrap();
         let containers = crate::LocalContainerManager::new(state.path().join("containers"))
@@ -728,7 +728,7 @@ mod tests {
 
     /// The old connector must fail to select the same isolated context engine.
     #[tokio::test]
-    #[ignore = "requires isolated config selecting a nondefault socket"]
+    #[ignore = "requires Docker CLI and isolated config selecting a dedicated nondefault socket"]
     async fn dedicated_engine_baseline() {
         let selected = connect_docker()
             .expect("selected endpoint")
