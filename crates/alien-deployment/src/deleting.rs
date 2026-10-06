@@ -2,10 +2,11 @@ use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
 use alien_core::{
-    ownership_policy_for_resource_type, ResourceLifecycle, ResourceStatus, StackState, StackStatus,
+    ownership_policy_for_resource_type, InitialSetupAuthority, Platform, ResourceLifecycle,
+    ResourceStatus, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
-use alien_infra::StackExecutor;
+use alien_infra::{state_utils::StackStateExt, PlatformServiceProvider, StackExecutor};
 use tracing::info;
 
 /// Handle DeletePending → Deleting transition.
@@ -17,7 +18,7 @@ pub async fn handle_delete_pending(
     current: DeploymentState,
     config: DeploymentConfig,
     client_config: alien_core::ClientConfig,
-    _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
+    service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling DeletePending status");
 
@@ -58,11 +59,11 @@ pub async fn handle_delete_pending(
         }
     }
 
-    let prepared = prepare_runtime_resources_for_destroy(&mut stack_state).context(
-        ErrorData::StackExecutionFailed {
+    let prepared =
+        prepare_resources_for_destroy(&mut stack_state, next.platform, service_provider.as_ref())
+            .context(ErrorData::StackExecutionFailed {
             message: "Failed to prepare runtime resources for destroy".to_string(),
-        },
-    )?;
+        })?;
 
     info!(
         "Prepared {} runtime resources for destroy: {:?}",
@@ -102,11 +103,21 @@ pub async fn handle_deleting(
         })
     })?;
 
-    let executor = StackExecutor::for_runtime_cleanup_deletion_with_service_provider(
-        client_config,
-        &config,
-        service_provider,
-    )
+    let owns_setup = owns_local_setup(current_cloned.platform, service_provider.as_ref());
+    let executor = if owns_setup {
+        StackExecutor::for_deletion_with_service_provider(
+            client_config,
+            &config,
+            service_provider,
+            None,
+        )
+    } else {
+        StackExecutor::for_runtime_cleanup_deletion_with_service_provider(
+            client_config,
+            &config,
+            service_provider,
+        )
+    }
     .context(ErrorData::StackExecutionFailed {
         message: "Failed to create stack executor for runtime cleanup".to_string(),
     })?;
@@ -119,11 +130,19 @@ pub async fn handle_deleting(
                 message: "Failed to execute runtime cleanup step".to_string(),
             })?;
 
-    let stack_status = compute_runtime_cleanup_status(&step_result.next_state).context(
-        ErrorData::StackExecutionFailed {
-            message: "Failed to compute runtime cleanup status".to_string(),
-        },
-    )?;
+    let stack_status = if owns_setup && !step_result.next_state.resources.is_empty() {
+        step_result
+            .next_state
+            .compute_stack_status()
+            .context(ErrorData::StackExecutionFailed {
+                message: "Failed to compute local teardown status".to_string(),
+            })
+    } else {
+        compute_runtime_cleanup_status(&step_result.next_state)
+    }
+    .context(ErrorData::StackExecutionFailed {
+        message: "Failed to compute runtime cleanup status".to_string(),
+    })?;
 
     let result = if stack_status == StackStatus::Deleted {
         let next_status = if has_remaining_setup_resources(&step_result.next_state)
@@ -265,7 +284,7 @@ pub async fn handle_delete_failed(
     current: DeploymentState,
     _config: DeploymentConfig,
     _client_config: alien_core::ClientConfig,
-    _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
+    service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling DeleteFailed status");
 
@@ -290,11 +309,11 @@ pub async fn handle_delete_failed(
         })
     })?;
 
-    let prepared = prepare_runtime_resources_for_destroy(&mut stack_state).context(
-        ErrorData::StackExecutionFailed {
+    let prepared =
+        prepare_resources_for_destroy(&mut stack_state, next.platform, service_provider.as_ref())
+            .context(ErrorData::StackExecutionFailed {
             message: "Failed to prepare runtime resources for delete retry".to_string(),
-        },
-    )?;
+        })?;
 
     info!(
         "Prepared {} runtime resources for delete retry: {:?}",
@@ -316,11 +335,22 @@ pub async fn handle_delete_failed(
     })
 }
 
-fn prepare_runtime_resources_for_destroy(
+fn owns_local_setup(platform: Platform, service_provider: &dyn PlatformServiceProvider) -> bool {
+    platform == Platform::Local
+        && service_provider.runtime_setup_authority(platform)
+            == Some(InitialSetupAuthority::DirectSetup)
+}
+
+fn prepare_resources_for_destroy(
     stack_state: &mut StackState,
+    platform: Platform,
+    service_provider: &dyn PlatformServiceProvider,
 ) -> alien_infra::Result<Vec<String>> {
-    use alien_infra::state_utils::StackStateExt;
-    stack_state.prepare_for_runtime_cleanup_destroy()
+    if owns_local_setup(platform, service_provider) {
+        stack_state.prepare_for_destroy()
+    } else {
+        stack_state.prepare_for_runtime_cleanup_destroy()
+    }
 }
 
 fn compute_runtime_cleanup_status(stack_state: &StackState) -> Result<StackStatus> {

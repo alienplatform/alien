@@ -137,16 +137,22 @@ impl LocalStorageController {
 
         // Delete storage directory if storage_path is set
         if self.storage_path.is_some() {
-            if let Some(storage_manager) = ctx.service_provider.get_local_storage_manager() {
-                storage_manager.delete_storage(&config.id).await.context(
-                    ErrorData::CloudPlatformError {
-                        message: format!("Failed to delete storage directory for '{}'", config.id),
-                        resource_id: Some(config.id.clone()),
-                    },
-                )?;
+            let storage_manager = ctx
+                .service_provider
+                .get_local_storage_manager()
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::LocalServicesNotAvailable {
+                        service_name: "storage_manager".to_string(),
+                    })
+                })?;
+            storage_manager.delete_storage(&config.id).await.context(
+                ErrorData::CloudPlatformError {
+                    message: format!("Failed to delete storage directory for '{}'", config.id),
+                    resource_id: Some(config.id.clone()),
+                },
+            )?;
 
-                info!(storage_id=%config.id, "Storage directory deleted");
-            }
+            info!(storage_id=%config.id, "Storage directory deleted");
         } else {
             info!(storage_id=%config.id, "No storage directory to delete (creation failed early)");
         }
