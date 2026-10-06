@@ -755,7 +755,6 @@ mod tests {
             "platform": "test",
             "status": "teardown-required",
             "deploymentGroupId": "dg_test",
-            "deploymentGroup": { "id": "dg_test", "name": "group" },
             "deploymentProtocolVersion": 1,
             "projectId": "proj_test",
             "workspaceId": "ws_test",
@@ -956,7 +955,7 @@ mod tests {
         };
         let args = DestroyArgs {
             token: Some(DEPLOYMENT_TOKEN.to_string()),
-            name: "group/test".to_string(),
+            name: "dep_test".to_string(),
             platform: Some("test".to_string()),
             force: false,
         };
@@ -999,6 +998,7 @@ mod tests {
         for (name, platform, field) in [
             ("another", "test", "name"),
             ("other/test", "test", "name"),
+            ("group/test", "test", "name"),
             ("dep_test", "aws", "platform"),
         ] {
             let args = DestroyArgs {
