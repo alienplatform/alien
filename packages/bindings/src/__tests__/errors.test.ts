@@ -70,6 +70,7 @@ describe("unwrapNapiError", () => {
       }),
     )
 
+    expect(err.cause).toBe(err.source)
     expect(err.source?.code).toBe("HTTP_RESPONSE_ERROR")
     expect(err.source?.message).toBe("Azure CreateSandbox failed: HTTP 403")
     expect(err.hasErrorCode("GENERIC_ERROR")).toBe(true)
