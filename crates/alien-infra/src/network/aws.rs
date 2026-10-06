@@ -26,11 +26,11 @@ use alien_aws_clients::ec2::{
     AuthorizeSecurityGroupEgressRequest, AuthorizeSecurityGroupIngressRequest,
     CreateInternetGatewayRequest, CreateNatGatewayRequest, CreateRouteRequest,
     CreateRouteTableRequest, CreateSecurityGroupRequest, CreateSubnetRequest, CreateVpcRequest,
-    DescribeAddressesResponse, DescribeAvailabilityZonesRequest, DescribeNatGatewaysRequest,
-    DescribeRouteTablesRequest, DescribeSecurityGroupsRequest, DescribeSubnetsRequest,
-    DescribeVpcsRequest, DetachInternetGatewayRequest, Filter, IpPermission, IpPermissionResponse,
-    IpRange, ModifyVpcAttributeRequest, RouteTable, RouteTableAssociation, SecurityGroup, Subnet,
-    Tag, TagSpecification,
+    DescribeAddressesResponse, DescribeAvailabilityZonesRequest, DescribeInternetGatewaysRequest,
+    DescribeNatGatewaysRequest, DescribeRouteTablesRequest, DescribeSecurityGroupsRequest,
+    DescribeSubnetsRequest, DescribeVpcsRequest, DetachInternetGatewayRequest, Filter,
+    IpPermission, IpPermissionResponse, IpRange, ModifyVpcAttributeRequest, NatGateway, RouteTable,
+    RouteTableAssociation, SecurityGroup, Subnet, Tag, TagSet, TagSpecification,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::aws::AwsFailureDomainSubnets;
@@ -58,6 +58,78 @@ fn is_security_group_duplicate(error: &AlienError<CloudClientErrorData>) -> bool
             if message.contains("InvalidGroup.Duplicate")
                 || message.contains("already exists")
     )
+}
+
+fn is_not_found(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+    )
+}
+
+/// EC2 reports `DependencyViolation`, `ResourceInUse`, `InvalidIPAddress.InUse` and
+/// `Resource.AlreadyAssociated` as conflicts.
+fn is_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(CloudClientErrorData::RemoteResourceConflict { .. })
+    )
+}
+
+/// `Gateway.NotAttached`: the internet gateway is already detached from the VPC.
+fn is_gateway_not_attached(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(CloudClientErrorData::RemoteResourceConflict { resource_type, .. })
+            if resource_type == "InternetGateway"
+    )
+}
+
+/// Polls of a NAT gateway in `deleting` (15 s apart). Deletion usually takes a few minutes.
+const NAT_GATEWAY_DELETION_MAX_POLLS: u32 = 60;
+/// Polls of an Elastic IP still associated after its NAT gateway is gone (15 s apart).
+const ELASTIC_IP_RELEASE_MAX_POLLS: u32 = 20;
+/// Polls of a security group or subnet that still holds network interfaces (30 s apart).
+/// Lambda network interfaces can take 20-40 minutes to go away after the function.
+const NETWORK_INTERFACE_DRAIN_MAX_POLLS: u32 = 90;
+/// Polls of a route table, internet gateway or VPC that still has dependents (15 s apart).
+const DEPENDENCY_DRAIN_MAX_POLLS: u32 = 40;
+
+/// Idempotency token for `CreateNatGateway`. EC2 allows up to 64 ASCII characters.
+fn nat_gateway_client_token(allocation_id: &str) -> String {
+    format!("alien-nat-{allocation_id}")
+}
+
+fn nat_gateway_failure_reason(nat_gateway: &NatGateway) -> String {
+    match (&nat_gateway.failure_code, &nat_gateway.failure_message) {
+        (Some(code), Some(message)) => format!("{code}: {message}"),
+        (Some(reason), None) | (None, Some(reason)) => reason.clone(),
+        (None, None) => "AWS reported no failure reason".to_string(),
+    }
+}
+
+/// Filters matching the ownership tags `create_tag_specification` puts on every object
+/// this controller creates for a resource.
+fn owned_tag_filters(resource_prefix: &str, resource_id: &str) -> Vec<Filter> {
+    let mut filters: Vec<Filter> = standard_resource_tags(resource_prefix, resource_id)
+        .into_iter()
+        .map(|(key, value)| Filter {
+            name: format!("tag:{key}"),
+            values: vec![value],
+        })
+        .collect();
+    filters.sort_by(|a, b| a.name.cmp(&b.name));
+    filters
+}
+
+fn has_owned_tags(tag_set: Option<&TagSet>, resource_prefix: &str, resource_id: &str) -> bool {
+    let tags = tag_set.map(|set| set.items.as_slice()).unwrap_or_default();
+    standard_resource_tags(resource_prefix, resource_id)
+        .iter()
+        .all(|(key, value)| {
+            tags.iter()
+                .any(|tag| &tag.key == key && &tag.value == value)
+        })
 }
 
 fn emit_aws_network_heartbeat(
@@ -808,6 +880,207 @@ impl AwsNetworkController {
             })
     }
 
+    /// Find the VPC an earlier attempt of this resource created, by its ownership tags.
+    ///
+    /// Returns its ID and CIDR. More than one match is an error: the tags identify one
+    /// network, so several VPCs mean leftovers that need a human to decide.
+    async fn find_owned_vpc(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_prefix: &str,
+        resource_id: &str,
+    ) -> Result<Option<(String, String)>> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+
+        let response = client
+            .describe_vpcs(
+                DescribeVpcsRequest::builder()
+                    .filters(owned_tag_filters(resource_prefix, resource_id))
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to look up a VPC created by an earlier attempt".to_string(),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+
+        let vpcs: Vec<_> = response
+            .vpc_set
+            .map(|set| set.items)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|vpc| has_owned_tags(vpc.tag_set.as_ref(), resource_prefix, resource_id))
+            .collect();
+
+        match vpcs.as_slice() {
+            [] => Ok(None),
+            [vpc] => {
+                let (Some(vpc_id), Some(cidr_block)) = (vpc.vpc_id.clone(), vpc.cidr_block.clone())
+                else {
+                    return Err(AlienError::new(ErrorData::CloudPlatformError {
+                        message: "Owned VPC is missing its ID or CIDR block".to_string(),
+                        resource_id: Some(resource_id.to_string()),
+                    }));
+                };
+                Ok(Some((vpc_id, cidr_block)))
+            }
+            _ => Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Found {} VPCs tagged for this network ({}); delete the extra VPCs and retry",
+                    vpcs.len(),
+                    vpcs.iter()
+                        .filter_map(|vpc| vpc.vpc_id.as_deref())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                resource_id: Some(resource_id.to_string()),
+            })),
+        }
+    }
+
+    /// Whether the internet gateway is attached (or attaching) to `vpc_id`.
+    async fn internet_gateway_attached_to(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        igw_id: &str,
+        vpc_id: &str,
+        resource_id: &str,
+    ) -> Result<bool> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+
+        let response = client
+            .describe_internet_gateways(
+                DescribeInternetGatewaysRequest::builder()
+                    .internet_gateway_ids(vec![igw_id.to_string()])
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to describe Internet Gateway '{igw_id}'"),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+
+        Ok(response
+            .internet_gateway_set
+            .map(|set| set.items)
+            .unwrap_or_default()
+            .iter()
+            .filter(|igw| igw.internet_gateway_id.as_deref() == Some(igw_id))
+            .flat_map(|igw| igw.attachment_set.iter().flat_map(|set| set.items.iter()))
+            .any(|attachment| {
+                attachment.vpc_id.as_deref() == Some(vpc_id)
+                    && !matches!(
+                        attachment.state.as_deref(),
+                        Some("detaching") | Some("detached")
+                    )
+            }))
+    }
+
+    /// Return the subnet with `cidr` in this network's VPC, creating it if it does not
+    /// exist. Subnet CIDRs are derived from the VPC CIDR, so a subnet with that CIDR in our
+    /// VPC is the one an earlier attempt created; it must also carry our ownership tags.
+    #[allow(clippy::too_many_arguments)]
+    async fn ensure_subnet(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        vpc_id: &str,
+        cidr: &str,
+        availability_zone: &str,
+        name: String,
+        subnet_type: &str,
+        resource_id: &str,
+    ) -> Result<String> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+
+        let existing = client
+            .describe_subnets(
+                DescribeSubnetsRequest::builder()
+                    .filters(vec![
+                        Filter {
+                            name: "vpc-id".to_string(),
+                            values: vec![vpc_id.to_string()],
+                        },
+                        Filter {
+                            name: "cidr-block".to_string(),
+                            values: vec![cidr.to_string()],
+                        },
+                    ])
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to look up subnet {cidr} in VPC '{vpc_id}'"),
+                resource_id: Some(resource_id.to_string()),
+            })?
+            .subnet_set
+            .and_then(|set| set.items.into_iter().next());
+
+        if let Some(subnet) = existing {
+            let subnet_id = subnet.subnet_id.clone().ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!("Subnet {cidr} in VPC '{vpc_id}' has no ID"),
+                    resource_id: Some(resource_id.to_string()),
+                })
+            })?;
+            if !has_owned_tags(subnet.tag_set.as_ref(), ctx.resource_prefix, resource_id) {
+                return Err(AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Subnet '{subnet_id}' ({cidr}) in VPC '{vpc_id}' was not created by this network"
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                }));
+            }
+            info!(subnet_id = %subnet_id, cidr = %cidr, "Found the subnet created by an earlier attempt");
+            return Ok(subnet_id);
+        }
+
+        let response = client
+            .create_subnet(
+                CreateSubnetRequest::builder()
+                    .vpc_id(vpc_id.to_string())
+                    .cidr_block(cidr.to_string())
+                    .availability_zone(availability_zone.to_string())
+                    .tag_specifications(vec![self.create_tag_specification(
+                        ctx.resource_prefix,
+                        resource_id,
+                        "subnet",
+                        name,
+                        [("Type".to_string(), subnet_type.to_string())],
+                    )])
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to create {} subnet in {availability_zone}",
+                    subnet_type.to_lowercase()
+                ),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+
+        response.subnet.and_then(|s| s.subnet_id).ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: format!("Subnet {cidr} created but no subnet ID returned"),
+                resource_id: Some(resource_id.to_string()),
+            })
+        })
+    }
+
+    fn forget_subnet(&mut self, subnet_id: &str) {
+        self.public_subnet_ids.retain(|id| id != subnet_id);
+        self.private_subnet_ids.retain(|id| id != subnet_id);
+        for subnets in self.subnets_by_failure_domain.values_mut() {
+            subnets.public_subnet_ids.retain(|id| id != subnet_id);
+            subnets.private_subnet_ids.retain(|id| id != subnet_id);
+        }
+        self.subnets_by_failure_domain.retain(|_, subnets| {
+            !subnets.public_subnet_ids.is_empty() || !subnets.private_subnet_ids.is_empty()
+        });
+    }
+
     /// Find an available CIDR block for the VPC.
     ///
     /// This method queries existing VPCs and finds a non-overlapping CIDR block.
@@ -1316,7 +1589,7 @@ impl AwsNetworkController {
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Network>()?;
 
-        let (cidr, availability_zones) = match &config.settings {
+        let (requested_cidr, availability_zones) = match &config.settings {
             NetworkSettings::Create {
                 cidr,
                 availability_zones,
@@ -1329,15 +1602,73 @@ impl AwsNetworkController {
             }
         };
 
-        // Determine CIDR block
-        let vpc_cidr = match cidr {
-            Some(c) => c,
-            None => self.find_available_cidr(ctx, &config.id).await?,
+        // Reads first: everything this handler learns before `create_vpc` is recorded, so a
+        // retry never repeats the lookups with different answers.
+        if self.availability_zones.is_empty() {
+            let az_response = client
+                .describe_availability_zones(DescribeAvailabilityZonesRequest::builder().build())
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to describe availability zones".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+
+            let zones: Vec<String> = az_response
+                .availability_zone_info
+                .map(|set| set.items)
+                .unwrap_or_default()
+                .into_iter()
+                .take(availability_zones as usize)
+                .filter_map(|az| az.zone_name)
+                .collect();
+
+            if zones.is_empty() {
+                return Err(AlienError::new(ErrorData::CloudPlatformError {
+                    message: "No availability zones found in region".to_string(),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+            self.availability_zones = zones;
+        }
+
+        if let Some(vpc_id) = &self.vpc_id {
+            info!(vpc_id = %vpc_id, "VPC already recorded, configuring DNS");
+            return Ok(HandlerAction::Continue {
+                state: ConfiguringVpcDns,
+                suggested_delay: None,
+            });
+        }
+
+        // A previous attempt may have created the VPC and lost the response. Only a VPC
+        // carrying this deployment's and this resource's ownership tags counts. This runs
+        // before the CIDR choice, which would otherwise see that VPC's range as taken.
+        if let Some((vpc_id, vpc_cidr)) = self
+            .find_owned_vpc(ctx, ctx.resource_prefix, &config.id)
+            .await?
+        {
+            info!(vpc_id = %vpc_id, cidr = %vpc_cidr, "Found the VPC created by an earlier attempt");
+            self.vpc_id = Some(vpc_id);
+            self.cidr_block = Some(vpc_cidr);
+            return Ok(HandlerAction::Continue {
+                state: ConfiguringVpcDns,
+                suggested_delay: None,
+            });
+        }
+
+        let vpc_cidr = match &self.cidr_block {
+            Some(cidr) => cidr.clone(),
+            None => {
+                let cidr = match requested_cidr {
+                    Some(cidr) => cidr,
+                    None => self.find_available_cidr(ctx, &config.id).await?,
+                };
+                self.cidr_block = Some(cidr.clone());
+                cidr
+            }
         };
 
         info!(cidr = %vpc_cidr, "Creating VPC");
 
-        // Create the VPC
         let create_response = client
             .create_vpc(
                 CreateVpcRequest::builder()
@@ -1358,9 +1689,37 @@ impl AwsNetworkController {
             })
         })?;
 
-        info!(vpc_id = %vpc_id, "VPC created, enabling DNS support");
+        info!(vpc_id = %vpc_id, azs = ?self.availability_zones, "VPC created");
+        self.vpc_id = Some(vpc_id);
 
-        // Enable DNS support
+        Ok(HandlerAction::Continue {
+            state: ConfiguringVpcDns,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = ConfiguringVpcDns,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn configuring_vpc_dns(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let config = ctx.desired_resource_config::<Network>()?;
+
+        let vpc_id = self.vpc_id.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "VPC ID not set in state".to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
+
+        // Setting an attribute to the value it already has succeeds, so a retry may repeat
+        // both calls.
         client
             .modify_vpc_attribute(
                 ModifyVpcAttributeRequest::builder()
@@ -1374,7 +1733,6 @@ impl AwsNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        // Enable DNS hostnames
         client
             .modify_vpc_attribute(
                 ModifyVpcAttributeRequest::builder()
@@ -1388,36 +1746,7 @@ impl AwsNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        self.vpc_id = Some(vpc_id);
-        self.cidr_block = Some(vpc_cidr);
-
-        // Get availability zones
-        let az_response = client
-            .describe_availability_zones(DescribeAvailabilityZonesRequest::builder().build())
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to describe availability zones".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
-
-        // Take the requested number of AZs
-        self.availability_zones = az_response
-            .availability_zone_info
-            .map(|set| set.items)
-            .unwrap_or_default()
-            .iter()
-            .take(availability_zones as usize)
-            .filter_map(|az| az.zone_name.clone())
-            .collect();
-
-        if self.availability_zones.is_empty() {
-            return Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: "No availability zones found in region".to_string(),
-                resource_id: Some(config.id.clone()),
-            }));
-        }
-
-        info!(azs = ?self.availability_zones, "VPC created successfully, proceeding to create Internet Gateway");
+        info!(vpc_id = %vpc_id, "VPC DNS configured, proceeding to create Internet Gateway");
 
         Ok(HandlerAction::Continue {
             state: CreatingInternetGateway,
@@ -1438,16 +1767,16 @@ impl AwsNetworkController {
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Network>()?;
 
-        let vpc_id = self.vpc_id.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "VPC ID not set in state".to_string(),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
+        if let Some(igw_id) = &self.internet_gateway_id {
+            info!(igw_id = %igw_id, "Internet Gateway already recorded");
+            return Ok(HandlerAction::Continue {
+                state: AttachingInternetGateway,
+                suggested_delay: None,
+            });
+        }
 
         info!("Creating Internet Gateway");
 
-        // Create Internet Gateway
         let igw_response = client
             .create_internet_gateway(
                 CreateInternetGatewayRequest::builder()
@@ -1474,10 +1803,42 @@ impl AwsNetworkController {
                 })
             })?;
 
-        info!(igw_id = %igw_id, "Internet Gateway created, attaching to VPC");
+        info!(igw_id = %igw_id, "Internet Gateway created");
+        self.internet_gateway_id = Some(igw_id);
 
-        // Attach Internet Gateway to VPC
-        client
+        Ok(HandlerAction::Continue {
+            state: AttachingInternetGateway,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = AttachingInternetGateway,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn attaching_internet_gateway(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let config = ctx.desired_resource_config::<Network>()?;
+
+        let vpc_id = self.vpc_id.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "VPC ID not set in state".to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
+        let igw_id = self.internet_gateway_id.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Internet Gateway ID not set in state".to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
+
+        match client
             .attach_internet_gateway(
                 AttachInternetGatewayRequest::builder()
                     .internet_gateway_id(igw_id.clone())
@@ -1485,14 +1846,33 @@ impl AwsNetworkController {
                     .build(),
             )
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to attach Internet Gateway to VPC".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
-
-        self.internet_gateway_id = Some(igw_id);
-
-        info!("Internet Gateway attached, proceeding to create subnets");
+        {
+            Ok(()) => {
+                info!(igw_id = %igw_id, vpc_id = %vpc_id, "Internet Gateway attached");
+            }
+            // An earlier attempt may have attached it before its response was lost. That is
+            // only success when the gateway is attached to this network's VPC.
+            Err(error) if is_conflict(&error) => {
+                if !self
+                    .internet_gateway_attached_to(ctx, igw_id, vpc_id, &config.id)
+                    .await?
+                {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Internet Gateway '{igw_id}' could not be attached to VPC '{vpc_id}'"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+                info!(igw_id = %igw_id, vpc_id = %vpc_id, "Internet Gateway was already attached");
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: "Failed to attach Internet Gateway to VPC".to_string(),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+        }
 
         Ok(HandlerAction::Continue {
             state: CreatingSubnets,
@@ -1509,18 +1889,16 @@ impl AwsNetworkController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Network>()?;
 
-        let vpc_id = self.vpc_id.as_ref().ok_or_else(|| {
+        let vpc_id = self.vpc_id.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "VPC ID not set in state".to_string(),
                 resource_id: Some(config.id.clone()),
             })
         })?;
 
-        let cidr_block = self.cidr_block.as_ref().ok_or_else(|| {
+        let cidr_block = self.cidr_block.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "CIDR block not set in state".to_string(),
                 resource_id: Some(config.id.clone()),
@@ -1531,8 +1909,9 @@ impl AwsNetworkController {
         // For now, always create public subnets
         let include_public = true;
 
+        let availability_zones = self.availability_zones.clone();
         let (public_cidrs, private_cidrs) =
-            self.calculate_subnet_cidrs(cidr_block, self.availability_zones.len(), include_public);
+            self.calculate_subnet_cidrs(&cidr_block, availability_zones.len(), include_public);
 
         info!(
             public_cidrs = ?public_cidrs,
@@ -1540,82 +1919,52 @@ impl AwsNetworkController {
             "Creating subnets"
         );
 
-        // Create public subnets
-        for (i, (cidr, az)) in public_cidrs
-            .iter()
-            .zip(&self.availability_zones)
-            .enumerate()
-        {
-            let subnet_name = format!("{}-public-{}", ctx.resource_prefix, i + 1);
-
-            let subnet_response = client
-                .create_subnet(
-                    CreateSubnetRequest::builder()
-                        .vpc_id(vpc_id.clone())
-                        .cidr_block(cidr.clone())
-                        .availability_zone(az.clone())
-                        .tag_specifications(vec![self.create_tag_specification(
-                            ctx.resource_prefix,
-                            &config.id,
-                            "subnet",
-                            subnet_name,
-                            [("Type".to_string(), "Public".to_string())],
-                        )])
-                        .build(),
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to create public subnet in {}", az),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-            if let Some(subnet_id) = subnet_response.subnet.and_then(|s| s.subnet_id) {
-                self.public_subnet_ids.push(subnet_id.clone());
-                self.subnets_by_failure_domain
-                    .entry(az.clone())
-                    .or_default()
-                    .public_subnet_ids
-                    .push(subnet_id);
+        // Each subnet ID is recorded before the next call, and subnets are created in a
+        // fixed order, so index `i` already in state means that subnet exists.
+        for (i, (cidr, az)) in public_cidrs.iter().zip(&availability_zones).enumerate() {
+            if i < self.public_subnet_ids.len() {
+                continue;
             }
+            let subnet_id = self
+                .ensure_subnet(
+                    ctx,
+                    &vpc_id,
+                    cidr,
+                    az,
+                    format!("{}-public-{}", ctx.resource_prefix, i + 1),
+                    "Public",
+                    &config.id,
+                )
+                .await?;
+            self.public_subnet_ids.push(subnet_id.clone());
+            self.subnets_by_failure_domain
+                .entry(az.clone())
+                .or_default()
+                .public_subnet_ids
+                .push(subnet_id);
         }
 
-        // Create private subnets
-        for (i, (cidr, az)) in private_cidrs
-            .iter()
-            .zip(&self.availability_zones)
-            .enumerate()
-        {
-            let subnet_name = format!("{}-private-{}", ctx.resource_prefix, i + 1);
-
-            let subnet_response = client
-                .create_subnet(
-                    CreateSubnetRequest::builder()
-                        .vpc_id(vpc_id.clone())
-                        .cidr_block(cidr.clone())
-                        .availability_zone(az.clone())
-                        .tag_specifications(vec![self.create_tag_specification(
-                            ctx.resource_prefix,
-                            &config.id,
-                            "subnet",
-                            subnet_name,
-                            [("Type".to_string(), "Private".to_string())],
-                        )])
-                        .build(),
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to create private subnet in {}", az),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-            if let Some(subnet_id) = subnet_response.subnet.and_then(|s| s.subnet_id) {
-                self.private_subnet_ids.push(subnet_id.clone());
-                self.subnets_by_failure_domain
-                    .entry(az.clone())
-                    .or_default()
-                    .private_subnet_ids
-                    .push(subnet_id);
+        for (i, (cidr, az)) in private_cidrs.iter().zip(&availability_zones).enumerate() {
+            if i < self.private_subnet_ids.len() {
+                continue;
             }
+            let subnet_id = self
+                .ensure_subnet(
+                    ctx,
+                    &vpc_id,
+                    cidr,
+                    az,
+                    format!("{}-private-{}", ctx.resource_prefix, i + 1),
+                    "Private",
+                    &config.id,
+                )
+                .await?;
+            self.private_subnet_ids.push(subnet_id.clone());
+            self.subnets_by_failure_domain
+                .entry(az.clone())
+                .or_default()
+                .private_subnet_ids
+                .push(subnet_id);
         }
 
         info!(
@@ -1885,17 +2234,17 @@ impl AwsNetworkController {
 
         // Create always provisions a NAT gateway for private subnet egress
         Ok(HandlerAction::Continue {
-            state: CreatingNatGateway,
+            state: AllocatingElasticIp,
             suggested_delay: None,
         })
     }
 
     #[handler(
-        state = CreatingNatGateway,
+        state = AllocatingElasticIp,
         on_failure = CreateFailed,
         status = ResourceStatus::Provisioning,
     )]
-    async fn creating_nat_gateway(
+    async fn allocating_elastic_ip(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
@@ -1903,16 +2252,16 @@ impl AwsNetworkController {
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Network>()?;
 
-        let public_subnet_id = self.public_subnet_ids.first().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "No public subnet available for NAT Gateway".to_string(),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
+        if let Some(allocation_id) = &self.eip_allocation_id {
+            info!(allocation_id = %allocation_id, "Elastic IP already allocated");
+            return Ok(HandlerAction::Continue {
+                state: CreatingNatGateway,
+                suggested_delay: None,
+            });
+        }
 
         info!("Allocating Elastic IP for NAT Gateway");
 
-        // Allocate Elastic IP
         let eip_response = client
             .allocate_address(
                 AllocateAddressRequest::builder()
@@ -1937,22 +2286,67 @@ impl AwsNetworkController {
             })
         })?;
 
-        self.eip_allocation_id = Some(allocation_id.clone());
+        info!(allocation_id = %allocation_id, "Elastic IP allocated");
+        self.eip_allocation_id = Some(allocation_id);
+
+        Ok(HandlerAction::Continue {
+            state: CreatingNatGateway,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = CreatingNatGateway,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn creating_nat_gateway(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let config = ctx.desired_resource_config::<Network>()?;
+
+        if let Some(nat_gateway_id) = &self.nat_gateway_id {
+            info!(nat_gateway_id = %nat_gateway_id, "NAT Gateway already recorded");
+            return Ok(HandlerAction::Continue {
+                state: WaitingForNatGateway,
+                suggested_delay: None,
+            });
+        }
+
+        let Some(allocation_id) = self.eip_allocation_id.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: AllocatingElasticIp,
+                suggested_delay: None,
+            });
+        };
+
+        let public_subnet_id = self.public_subnet_ids.first().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "No public subnet available for NAT Gateway".to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
 
         info!(allocation_id = %allocation_id, "Creating NAT Gateway");
 
-        // Create NAT Gateway
+        // An Elastic IP backs at most one NAT gateway, so a token derived from it is unique
+        // to this gateway. When a retry repeats the call after a lost response, AWS returns
+        // the gateway the first call created.
         let nat_response = client
             .create_nat_gateway(
                 CreateNatGatewayRequest::builder()
                     .subnet_id(public_subnet_id.clone())
-                    .allocation_id(allocation_id)
+                    .allocation_id(allocation_id.clone())
                     .connectivity_type("public".to_string())
                     .tag_specifications(self.create_tags(
                         ctx.resource_prefix,
                         &config.id,
                         "natgateway",
                     ))
+                    .client_token(nat_gateway_client_token(&allocation_id))
                     .build(),
             )
             .await
@@ -2084,9 +2478,14 @@ impl AwsNetworkController {
                     suggested_delay: Some(Duration::from_secs(15)),
                 })
             }
-            Some("failed") | Some("deleted") => {
+            // Terminal for this gateway, so retrying the wait cannot help. The ID stays in
+            // state so delete cleans the gateway and its Elastic IP up.
+            Some(state @ ("failed" | "deleted")) => {
                 Err(AlienError::new(ErrorData::CloudPlatformError {
-                    message: format!("NAT Gateway in failed state: {:?}", nat_gateway.state),
+                    message: format!(
+                        "NAT Gateway '{nat_gateway_id}' is {state}: {}",
+                        nat_gateway_failure_reason(&nat_gateway)
+                    ),
                     resource_id: Some(config.id.clone()),
                 }))
             }
@@ -2540,6 +2939,11 @@ impl AwsNetworkController {
         })
     }
 
+    // Every delete handler below consumes NotFound itself: a NotFound returned from a
+    // delete step ends the whole delete, which would skip the remaining children. An ID
+    // leaves state only once AWS reports the object deleted or missing. While AWS reports
+    // it in use, the ID stays and the handler polls, then fails with the ID still recorded.
+
     #[handler(
         state = DeletingNatGateway,
         on_failure = DeleteFailed,
@@ -2551,59 +2955,147 @@ impl AwsNetworkController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
-        let _config = ctx.desired_resource_config::<Network>()?;
+        let config = ctx.desired_resource_config::<Network>()?;
 
-        // Delete NAT Gateway if it exists
-        if let Some(nat_gateway_id) = &self.nat_gateway_id {
-            info!(nat_gateway_id = %nat_gateway_id, "Deleting NAT Gateway");
+        let Some(nat_gateway_id) = self.nat_gateway_id.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: ReleasingElasticIp,
+                suggested_delay: None,
+            });
+        };
 
-            match client.delete_nat_gateway(nat_gateway_id).await {
-                Ok(_) => {
-                    info!(nat_gateway_id = %nat_gateway_id, "NAT Gateway deletion initiated");
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    warn!(nat_gateway_id = %nat_gateway_id, "NAT Gateway already deleted");
-                }
-                Err(e) => {
-                    warn!(nat_gateway_id = %nat_gateway_id, error = ?e, "Failed to delete NAT Gateway, continuing");
-                }
+        info!(nat_gateway_id = %nat_gateway_id, "Deleting NAT Gateway");
+
+        match client.delete_nat_gateway(&nat_gateway_id).await {
+            Ok(_) => Ok(HandlerAction::Continue {
+                state: WaitingForNatGatewayDeletion,
+                suggested_delay: Some(Duration::from_secs(15)),
+            }),
+            Err(error) if is_not_found(&error) => {
+                info!(nat_gateway_id = %nat_gateway_id, "NAT Gateway already deleted");
+                self.nat_gateway_id = None;
+                Ok(HandlerAction::Continue {
+                    state: ReleasingElasticIp,
+                    suggested_delay: None,
+                })
             }
+            Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to delete NAT Gateway '{nat_gateway_id}'"),
+                resource_id: Some(config.id.clone()),
+            })),
+        }
+    }
 
-            self.nat_gateway_id = None;
+    #[handler(
+        state = WaitingForNatGatewayDeletion,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn waiting_for_nat_gateway_deletion(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let config = ctx.desired_resource_config::<Network>()?;
+
+        let Some(nat_gateway_id) = self.nat_gateway_id.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: ReleasingElasticIp,
+                suggested_delay: None,
+            });
+        };
+
+        // The gateway holds its Elastic IP and its network interface in the public subnet
+        // until it reaches `deleted`; releasing or deleting those earlier fails.
+        let state = match client
+            .describe_nat_gateways(
+                DescribeNatGatewaysRequest::builder()
+                    .nat_gateway_ids(vec![nat_gateway_id.clone()])
+                    .build(),
+            )
+            .await
+        {
+            Ok(response) => response
+                .nat_gateway_set
+                .and_then(|set| set.items.into_iter().next())
+                .and_then(|nat_gateway| nat_gateway.state),
+            Err(error) if is_not_found(&error) => None,
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to describe NAT Gateway '{nat_gateway_id}'"),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+        };
+
+        match state.as_deref() {
+            None | Some("deleted") | Some("failed") => {
+                info!(nat_gateway_id = %nat_gateway_id, "NAT Gateway deleted");
+                self.nat_gateway_id = None;
+                Ok(HandlerAction::Continue {
+                    state: ReleasingElasticIp,
+                    suggested_delay: None,
+                })
+            }
+            Some(state) => {
+                debug!(nat_gateway_id = %nat_gateway_id, state = %state, "Waiting for NAT Gateway deletion");
+                Ok(HandlerAction::Stay {
+                    max_times: Some(NAT_GATEWAY_DELETION_MAX_POLLS),
+                    suggested_delay: Some(Duration::from_secs(15)),
+                })
+            }
+        }
+    }
+
+    #[handler(
+        state = ReleasingElasticIp,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn releasing_elastic_ip(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let config = ctx.desired_resource_config::<Network>()?;
+
+        let Some(allocation_id) = self.eip_allocation_id.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: DeletingSecurityGroup,
+                suggested_delay: None,
+            });
+        };
+
+        info!(allocation_id = %allocation_id, "Releasing Elastic IP");
+
+        match client.release_address(&allocation_id).await {
+            Ok(()) => {
+                info!(allocation_id = %allocation_id, "Elastic IP released");
+            }
+            Err(error) if is_not_found(&error) => {
+                info!(allocation_id = %allocation_id, "Elastic IP already released");
+            }
+            Err(error) if is_conflict(&error) => {
+                debug!(allocation_id = %allocation_id, "Elastic IP still in use");
+                return Ok(HandlerAction::Stay {
+                    max_times: Some(ELASTIC_IP_RELEASE_MAX_POLLS),
+                    suggested_delay: Some(Duration::from_secs(15)),
+                });
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to release Elastic IP '{allocation_id}'"),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
         }
 
-        // Release Elastic IP if it exists
-        if let Some(allocation_id) = &self.eip_allocation_id {
-            info!(allocation_id = %allocation_id, "Releasing Elastic IP");
-
-            match client.release_address(allocation_id).await {
-                Ok(_) => {
-                    info!(allocation_id = %allocation_id, "Elastic IP released");
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    warn!(allocation_id = %allocation_id, "Elastic IP already released");
-                }
-                Err(e) => {
-                    warn!(allocation_id = %allocation_id, error = ?e, "Failed to release Elastic IP, continuing");
-                }
-            }
-
-            self.eip_allocation_id = None;
-        }
-
+        self.eip_allocation_id = None;
         Ok(HandlerAction::Continue {
             state: DeletingSecurityGroup,
-            suggested_delay: Some(Duration::from_secs(5)),
+            suggested_delay: None,
         })
     }
 
@@ -2618,31 +3110,42 @@ impl AwsNetworkController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let config = ctx.desired_resource_config::<Network>()?;
 
-        // Delete security group if it exists
-        if let Some(sg_id) = &self.security_group_id {
-            info!(sg_id = %sg_id, "Deleting security group");
+        let Some(sg_id) = self.security_group_id.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: DeletingSubnets,
+                suggested_delay: None,
+            });
+        };
 
-            match client.delete_security_group(sg_id).await {
-                Ok(_) => {
-                    info!(sg_id = %sg_id, "Security group deleted");
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    warn!(sg_id = %sg_id, "Security group already deleted");
-                }
-                Err(e) => {
-                    warn!(sg_id = %sg_id, error = ?e, "Failed to delete security group, continuing");
-                }
+        info!(sg_id = %sg_id, "Deleting security group");
+
+        match client.delete_security_group(&sg_id).await {
+            Ok(()) => {
+                info!(sg_id = %sg_id, "Security group deleted");
             }
-
-            self.security_group_id = None;
+            Err(error) if is_not_found(&error) => {
+                info!(sg_id = %sg_id, "Security group already deleted");
+            }
+            // Network interfaces of dependents (Lambda, ECS, EC2) can stay in the group for
+            // a long time after those dependents are deleted.
+            Err(error) if is_conflict(&error) => {
+                debug!(sg_id = %sg_id, "Security group still in use");
+                return Ok(HandlerAction::Stay {
+                    max_times: Some(NETWORK_INTERFACE_DRAIN_MAX_POLLS),
+                    suggested_delay: Some(Duration::from_secs(30)),
+                });
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to delete security group '{sg_id}'"),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
         }
 
+        self.security_group_id = None;
         Ok(HandlerAction::Continue {
             state: DeletingSubnets,
             suggested_delay: None,
@@ -2660,31 +3163,48 @@ impl AwsNetworkController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let config = ctx.desired_resource_config::<Network>()?;
 
-        // Delete all subnets
-        for subnet_id in self
+        let subnet_ids: Vec<String> = self
             .public_subnet_ids
-            .drain(..)
-            .chain(self.private_subnet_ids.drain(..))
-        {
+            .iter()
+            .chain(&self.private_subnet_ids)
+            .cloned()
+            .collect();
+        let mut in_use = Vec::new();
+
+        // Each deleted subnet leaves state immediately, so an error part-way keeps exactly
+        // the subnets that still exist.
+        for subnet_id in subnet_ids {
             info!(subnet_id = %subnet_id, "Deleting subnet");
 
             match client.delete_subnet(&subnet_id).await {
-                Ok(_) => {
+                Ok(()) => {
                     info!(subnet_id = %subnet_id, "Subnet deleted");
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    warn!(subnet_id = %subnet_id, "Subnet already deleted");
+                Err(error) if is_not_found(&error) => {
+                    info!(subnet_id = %subnet_id, "Subnet already deleted");
                 }
-                Err(e) => {
-                    warn!(subnet_id = %subnet_id, error = ?e, "Failed to delete subnet, continuing");
+                Err(error) if is_conflict(&error) => {
+                    debug!(subnet_id = %subnet_id, "Subnet still in use");
+                    in_use.push(subnet_id);
+                    continue;
+                }
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to delete subnet '{subnet_id}'"),
+                        resource_id: Some(config.id.clone()),
+                    }));
                 }
             }
+            self.forget_subnet(&subnet_id);
+        }
+
+        if !in_use.is_empty() {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(NETWORK_INTERFACE_DRAIN_MAX_POLLS),
+                suggested_delay: Some(Duration::from_secs(30)),
+            });
         }
 
         Ok(HandlerAction::Continue {
@@ -2704,63 +3224,70 @@ impl AwsNetworkController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let config = ctx.desired_resource_config::<Network>()?;
 
-        // Disassociate and delete route tables
-        for assoc_id in self.route_table_association_ids.drain(..) {
-            info!(assoc_id = %assoc_id, "Disassociating route table");
-
+        // Deleting a subnet removes its associations, so most of these are already gone.
+        for assoc_id in self.route_table_association_ids.clone() {
             match client.disassociate_route_table(&assoc_id).await {
-                Ok(_) => {
+                Ok(()) => {
                     info!(assoc_id = %assoc_id, "Route table disassociated");
                 }
-                Err(e) => {
-                    warn!(assoc_id = %assoc_id, error = ?e, "Failed to disassociate route table, continuing");
+                Err(error) if is_not_found(&error) => {
+                    debug!(assoc_id = %assoc_id, "Route table association already removed");
                 }
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to disassociate route table '{assoc_id}'"),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            }
+            self.route_table_association_ids
+                .retain(|id| id != &assoc_id);
+        }
+
+        let mut in_use = false;
+        for route_table_id in [
+            self.public_route_table_id.clone(),
+            self.private_route_table_id.clone(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            info!(rt_id = %route_table_id, "Deleting route table");
+
+            match client.delete_route_table(&route_table_id).await {
+                Ok(()) => {
+                    info!(rt_id = %route_table_id, "Route table deleted");
+                }
+                Err(error) if is_not_found(&error) => {
+                    info!(rt_id = %route_table_id, "Route table already deleted");
+                }
+                Err(error) if is_conflict(&error) => {
+                    debug!(rt_id = %route_table_id, "Route table still in use");
+                    in_use = true;
+                    continue;
+                }
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to delete route table '{route_table_id}'"),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            }
+            if self.public_route_table_id.as_ref() == Some(&route_table_id) {
+                self.public_route_table_id = None;
+            }
+            if self.private_route_table_id.as_ref() == Some(&route_table_id) {
+                self.private_route_table_id = None;
             }
         }
 
-        // Delete public route table
-        if let Some(rt_id) = self.public_route_table_id.take() {
-            info!(rt_id = %rt_id, "Deleting public route table");
-
-            match client.delete_route_table(&rt_id).await {
-                Ok(_) => {
-                    info!(rt_id = %rt_id, "Public route table deleted");
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    warn!(rt_id = %rt_id, "Public route table already deleted");
-                }
-                Err(e) => {
-                    warn!(rt_id = %rt_id, error = ?e, "Failed to delete public route table, continuing");
-                }
-            }
-        }
-
-        // Delete private route table
-        if let Some(rt_id) = self.private_route_table_id.take() {
-            info!(rt_id = %rt_id, "Deleting private route table");
-
-            match client.delete_route_table(&rt_id).await {
-                Ok(_) => {
-                    info!(rt_id = %rt_id, "Private route table deleted");
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    warn!(rt_id = %rt_id, "Private route table already deleted");
-                }
-                Err(e) => {
-                    warn!(rt_id = %rt_id, error = ?e, "Failed to delete private route table, continuing");
-                }
-            }
+        if in_use {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(DEPENDENCY_DRAIN_MAX_POLLS),
+                suggested_delay: Some(Duration::from_secs(15)),
+            });
         }
 
         Ok(HandlerAction::Continue {
@@ -2780,52 +3307,77 @@ impl AwsNetworkController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let config = ctx.desired_resource_config::<Network>()?;
 
-        // Detach and delete Internet Gateway
-        if let Some(igw_id) = &self.internet_gateway_id {
-            if let Some(vpc_id) = &self.vpc_id {
-                info!(igw_id = %igw_id, vpc_id = %vpc_id, "Detaching Internet Gateway");
+        let Some(igw_id) = self.internet_gateway_id.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: DeletingVpc,
+                suggested_delay: None,
+            });
+        };
 
-                match client
-                    .detach_internet_gateway(
-                        DetachInternetGatewayRequest::builder()
-                            .internet_gateway_id(igw_id.clone())
-                            .vpc_id(vpc_id.clone())
-                            .build(),
-                    )
-                    .await
-                {
-                    Ok(_) => {
-                        info!(igw_id = %igw_id, "Internet Gateway detached");
-                    }
-                    Err(e) => {
-                        warn!(igw_id = %igw_id, error = ?e, "Failed to detach Internet Gateway, continuing");
-                    }
+        // Detach and delete in one handler: a repeated detach reports the gateway as not
+        // attached, so a retry after either call is safe.
+        if let Some(vpc_id) = self.vpc_id.clone() {
+            info!(igw_id = %igw_id, vpc_id = %vpc_id, "Detaching Internet Gateway");
+
+            match client
+                .detach_internet_gateway(
+                    DetachInternetGatewayRequest::builder()
+                        .internet_gateway_id(igw_id.clone())
+                        .vpc_id(vpc_id.clone())
+                        .build(),
+                )
+                .await
+            {
+                Ok(()) => {
+                    info!(igw_id = %igw_id, "Internet Gateway detached");
+                }
+                Err(error) if is_not_found(&error) || is_gateway_not_attached(&error) => {
+                    debug!(igw_id = %igw_id, "Internet Gateway is not attached");
+                }
+                // AWS refuses the detach while the VPC still has mapped public addresses.
+                Err(error) if is_conflict(&error) => {
+                    debug!(igw_id = %igw_id, "Internet Gateway detach blocked by mapped public addresses");
+                    return Ok(HandlerAction::Stay {
+                        max_times: Some(DEPENDENCY_DRAIN_MAX_POLLS),
+                        suggested_delay: Some(Duration::from_secs(15)),
+                    });
+                }
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to detach Internet Gateway '{igw_id}'"),
+                        resource_id: Some(config.id.clone()),
+                    }));
                 }
             }
-
-            info!(igw_id = %igw_id, "Deleting Internet Gateway");
-
-            match client.delete_internet_gateway(igw_id).await {
-                Ok(_) => {
-                    info!(igw_id = %igw_id, "Internet Gateway deleted");
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    warn!(igw_id = %igw_id, "Internet Gateway already deleted");
-                }
-                Err(e) => {
-                    warn!(igw_id = %igw_id, error = ?e, "Failed to delete Internet Gateway, continuing");
-                }
-            }
-
-            self.internet_gateway_id = None;
         }
 
+        info!(igw_id = %igw_id, "Deleting Internet Gateway");
+
+        match client.delete_internet_gateway(&igw_id).await {
+            Ok(()) => {
+                info!(igw_id = %igw_id, "Internet Gateway deleted");
+            }
+            Err(error) if is_not_found(&error) => {
+                info!(igw_id = %igw_id, "Internet Gateway already deleted");
+            }
+            Err(error) if is_conflict(&error) => {
+                debug!(igw_id = %igw_id, "Internet Gateway still in use");
+                return Ok(HandlerAction::Stay {
+                    max_times: Some(DEPENDENCY_DRAIN_MAX_POLLS),
+                    suggested_delay: Some(Duration::from_secs(15)),
+                });
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to delete Internet Gateway '{igw_id}'"),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+        }
+
+        self.internet_gateway_id = None;
         Ok(HandlerAction::Continue {
             state: DeletingVpc,
             suggested_delay: None,
@@ -2840,31 +3392,40 @@ impl AwsNetworkController {
     async fn deleting_vpc(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let config = ctx.desired_resource_config::<Network>()?;
 
-        // Delete VPC
-        if let Some(vpc_id) = &self.vpc_id {
-            info!(vpc_id = %vpc_id, "Deleting VPC");
+        let Some(vpc_id) = self.vpc_id.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        };
 
-            match client.delete_vpc(vpc_id).await {
-                Ok(_) => {
-                    info!(vpc_id = %vpc_id, "VPC deleted");
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    warn!(vpc_id = %vpc_id, "VPC already deleted");
-                }
-                Err(e) => {
-                    warn!(vpc_id = %vpc_id, error = ?e, "Failed to delete VPC, continuing");
-                }
+        info!(vpc_id = %vpc_id, "Deleting VPC");
+
+        match client.delete_vpc(&vpc_id).await {
+            Ok(()) => {
+                info!(vpc_id = %vpc_id, "VPC deleted");
             }
-
-            self.vpc_id = None;
+            Err(error) if is_not_found(&error) => {
+                info!(vpc_id = %vpc_id, "VPC already deleted");
+            }
+            Err(error) if is_conflict(&error) => {
+                debug!(vpc_id = %vpc_id, "VPC still has dependencies");
+                return Ok(HandlerAction::Stay {
+                    max_times: Some(DEPENDENCY_DRAIN_MAX_POLLS),
+                    suggested_delay: Some(Duration::from_secs(15)),
+                });
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to delete VPC '{vpc_id}'"),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
         }
 
+        self.vpc_id = None;
         Ok(HandlerAction::Continue {
             state: Deleted,
             suggested_delay: None,
@@ -2974,5 +3535,1362 @@ impl AwsNetworkController {
             is_byo_vpc: true,
             _internal_stay_count: None,
         }
+    }
+}
+
+/// Retry, rediscovery and delete-ordering behavior of the managed (Create) network. Each
+/// test drives the real handlers through `SingleControllerExecutor` with a mocked EC2 API.
+/// `SingleControllerExecutor::step` keeps what a failed handler wrote to `self`, like the
+/// real executor, so a failed step followed by another step is a retry.
+#[cfg(test)]
+mod controller_state_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use alien_aws_clients::ec2::{CreateNatGatewayRequest, MockEc2Api};
+    use alien_aws_clients::service_quotas::{
+        GetServiceQuotaResponse, MockServiceQuotasApi, ServiceQuota,
+    };
+    use alien_core::{Network, Platform};
+    use serde::de::DeserializeOwned;
+    use serde_json::json;
+
+    use super::*;
+    use crate::core::{
+        controller_test::{assert_polling_delays, SingleControllerExecutor},
+        MockPlatformServiceProvider, ResourceController,
+    };
+
+    const PREFIX: &str = "test";
+    const NETWORK_ID: &str = "net";
+
+    fn network(cidr: Option<&str>) -> Network {
+        Network::new(NETWORK_ID.to_string())
+            .settings(NetworkSettings::Create {
+                cidr: cidr.map(str::to_string),
+                availability_zones: 2,
+            })
+            .build()
+    }
+
+    fn parse<T: DeserializeOwned>(value: serde_json::Value) -> T {
+        serde_json::from_value(value).expect("fixture should deserialize")
+    }
+
+    fn owned_tags_json() -> serde_json::Value {
+        let tags: Vec<_> = standard_resource_tags(PREFIX, NETWORK_ID)
+            .into_iter()
+            .map(|(key, value)| json!({ "key": key, "value": value }))
+            .collect();
+        json!({ "item": tags })
+    }
+
+    fn not_found() -> AlienError<CloudClientErrorData> {
+        AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+            resource_type: "EC2 Resource".to_string(),
+            resource_name: "x".to_string(),
+        })
+    }
+
+    fn in_use() -> AlienError<CloudClientErrorData> {
+        AlienError::new(CloudClientErrorData::RemoteResourceConflict {
+            message: "DependencyViolation".to_string(),
+            resource_type: "EC2 Resource".to_string(),
+            resource_name: "x".to_string(),
+        })
+    }
+
+    fn unavailable() -> AlienError<CloudClientErrorData> {
+        AlienError::new(CloudClientErrorData::RemoteServiceUnavailable {
+            message: "connection reset".to_string(),
+        })
+    }
+
+    async fn executor(
+        ec2: MockEc2Api,
+        controller: AwsNetworkController,
+        cidr: Option<&str>,
+    ) -> SingleControllerExecutor {
+        let ec2 = Arc::new(ec2);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_ec2_client()
+            .returning(move |_| Ok(ec2.clone()));
+        SingleControllerExecutor::builder()
+            .resource(network(cidr))
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .resource_prefix(PREFIX)
+            .with_test_dependencies()
+            .build()
+            .await
+            .expect("executor should build")
+    }
+
+    fn controller(executor: &SingleControllerExecutor) -> &AwsNetworkController {
+        executor
+            .internal_state::<AwsNetworkController>()
+            .expect("network controller state")
+    }
+
+    fn expect_two_zones(ec2: &mut MockEc2Api) {
+        ec2.expect_describe_availability_zones().returning(|_| {
+            Ok(parse(json!({
+                "availabilityZoneInfo": { "item": [
+                    { "zoneName": "us-east-1a" },
+                    { "zoneName": "us-east-1b" },
+                    { "zoneName": "us-east-1c" }
+                ]}
+            })))
+        });
+    }
+
+    fn is_owned_tag_lookup(filters: Option<&Vec<Filter>>) -> bool {
+        filters.is_some_and(|filters| {
+            filters
+                .iter()
+                .any(|f| f.name == "tag:resource" && f.values == [NETWORK_ID])
+                && filters
+                    .iter()
+                    .any(|f| f.name == "tag:deployment" && f.values == [PREFIX])
+        })
+    }
+
+    // ─────────────── VPC ───────────────
+
+    #[tokio::test]
+    async fn vpc_id_survives_a_dns_failure_and_the_retry_does_not_create_another_vpc() {
+        let mut ec2 = MockEc2Api::new();
+        expect_two_zones(&mut ec2);
+        ec2.expect_describe_vpcs()
+            .times(1)
+            .withf(|request| is_owned_tag_lookup(request.filters.as_ref()))
+            .returning(|_| Ok(parse(json!({}))));
+        ec2.expect_create_vpc()
+            .times(1)
+            .withf(|request| request.cidr_block == "10.0.0.0/16")
+            .returning(|_| Ok(parse(json!({ "vpc": { "vpcId": "vpc-1" } }))));
+        let dns_calls = Arc::new(AtomicUsize::new(0));
+        let calls = dns_calls.clone();
+        ec2.expect_modify_vpc_attribute().returning(move |request| {
+            assert_eq!(request.vpc_id, "vpc-1");
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(unavailable())
+            } else {
+                Ok(())
+            }
+        });
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::CreatingVpc,
+                ..Default::default()
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor.step().await.expect("VPC creation should succeed");
+        assert_eq!(controller(&executor).vpc_id.as_deref(), Some("vpc-1"));
+        assert_eq!(
+            controller(&executor).state,
+            AwsNetworkState::ConfiguringVpcDns
+        );
+
+        executor
+            .step()
+            .await
+            .expect_err("the first DNS attribute call fails");
+        assert_eq!(controller(&executor).vpc_id.as_deref(), Some("vpc-1"));
+        assert_eq!(
+            controller(&executor).state,
+            AwsNetworkState::ConfiguringVpcDns
+        );
+
+        executor.step().await.expect("DNS retry should succeed");
+        let state = controller(&executor);
+        assert_eq!(state.state, AwsNetworkState::CreatingInternetGateway);
+        assert_eq!(state.vpc_id.as_deref(), Some("vpc-1"));
+        assert_eq!(state.cidr_block.as_deref(), Some("10.0.0.0/16"));
+        assert_eq!(state.availability_zones, ["us-east-1a", "us-east-1b"]);
+        assert_eq!(dns_calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn creating_vpc_records_the_owned_vpc_left_by_a_lost_response() {
+        let mut ec2 = MockEc2Api::new();
+        expect_two_zones(&mut ec2);
+        // Only the ownership-tag lookup runs: no CIDR search (it would see the owned VPC's
+        // range as taken) and no create.
+        ec2.expect_describe_vpcs()
+            .times(1)
+            .withf(|request| is_owned_tag_lookup(request.filters.as_ref()))
+            .returning(|_| {
+                Ok(parse(json!({ "vpcSet": { "item": [{
+                    "vpcId": "vpc-lost",
+                    "cidrBlock": "100.70.0.0/16",
+                    "tagSet": owned_tags_json()
+                }]}})))
+            });
+        ec2.expect_create_vpc().times(0);
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::CreatingVpc,
+                ..Default::default()
+            },
+            None,
+        )
+        .await;
+
+        executor.step().await.expect("rediscovery should succeed");
+        let state = controller(&executor);
+        assert_eq!(state.state, AwsNetworkState::ConfiguringVpcDns);
+        assert_eq!(state.vpc_id.as_deref(), Some("vpc-lost"));
+        assert_eq!(state.cidr_block.as_deref(), Some("100.70.0.0/16"));
+    }
+
+    #[tokio::test]
+    async fn creating_vpc_refuses_to_pick_between_several_owned_vpcs() {
+        let mut ec2 = MockEc2Api::new();
+        expect_two_zones(&mut ec2);
+        ec2.expect_describe_vpcs().times(1).returning(|_| {
+            Ok(parse(json!({ "vpcSet": { "item": [
+                { "vpcId": "vpc-a", "cidrBlock": "100.70.0.0/16", "tagSet": owned_tags_json() },
+                { "vpcId": "vpc-b", "cidrBlock": "100.71.0.0/16", "tagSet": owned_tags_json() }
+            ]}})))
+        });
+        ec2.expect_create_vpc().times(0);
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::CreatingVpc,
+                ..Default::default()
+            },
+            None,
+        )
+        .await;
+
+        let error = executor
+            .step()
+            .await
+            .expect_err("two owned VPCs must not be adopted");
+        assert!(error.to_string().contains("vpc-a, vpc-b"), "{error}");
+        assert_eq!(controller(&executor).vpc_id, None);
+        assert_eq!(controller(&executor).state, AwsNetworkState::CreatingVpc);
+    }
+
+    #[tokio::test]
+    async fn retry_after_a_failed_vpc_create_reuses_the_chosen_cidr() {
+        let mut ec2 = MockEc2Api::new();
+        expect_two_zones(&mut ec2);
+        let unfiltered_lookups = Arc::new(AtomicUsize::new(0));
+        let lookups = unfiltered_lookups.clone();
+        ec2.expect_describe_vpcs().returning(move |request| {
+            if request.filters.is_none() {
+                lookups.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok(parse(json!({})))
+        });
+        let cidrs = Arc::new(Mutex::new(Vec::new()));
+        let seen = cidrs.clone();
+        ec2.expect_create_vpc().times(2).returning(move |request| {
+            let mut seen = seen.lock().unwrap();
+            seen.push(request.cidr_block);
+            if seen.len() == 1 {
+                Err(unavailable())
+            } else {
+                Ok(parse(json!({ "vpc": { "vpcId": "vpc-1" } })))
+            }
+        });
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::CreatingVpc,
+                ..Default::default()
+            },
+            None,
+        )
+        .await;
+
+        executor.step().await.expect_err("first create fails");
+        executor.step().await.expect("retry succeeds");
+
+        let cidrs = cidrs.lock().unwrap();
+        assert_eq!(cidrs.len(), 2);
+        assert_eq!(cidrs[0], cidrs[1], "a retry must not move to another /16");
+        assert_eq!(unfiltered_lookups.load(Ordering::SeqCst), 1);
+        assert_eq!(controller(&executor).vpc_id.as_deref(), Some("vpc-1"));
+    }
+
+    // ─────────────── Internet gateway ───────────────
+
+    fn after_vpc(state: AwsNetworkState) -> AwsNetworkController {
+        AwsNetworkController {
+            state,
+            vpc_id: Some("vpc-1".to_string()),
+            cidr_block: Some("10.0.0.0/16".to_string()),
+            availability_zones: vec!["us-east-1a".to_string(), "us-east-1b".to_string()],
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn internet_gateway_is_recorded_before_attach_and_a_failed_attach_only_retries_attach() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_create_internet_gateway()
+            .times(1)
+            .returning(|_| {
+                Ok(parse(
+                    json!({ "internetGateway": { "internetGatewayId": "igw-1" } }),
+                ))
+            });
+        let attaches = Arc::new(AtomicUsize::new(0));
+        let count = attaches.clone();
+        ec2.expect_attach_internet_gateway()
+            .returning(move |request| {
+                assert_eq!(request.internet_gateway_id, "igw-1");
+                assert_eq!(request.vpc_id, "vpc-1");
+                if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(unavailable())
+                } else {
+                    Ok(())
+                }
+            });
+
+        let mut executor = executor(
+            ec2,
+            after_vpc(AwsNetworkState::CreatingInternetGateway),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor.step().await.expect("create succeeds");
+        assert_eq!(
+            controller(&executor).internet_gateway_id.as_deref(),
+            Some("igw-1")
+        );
+        executor.step().await.expect_err("attach fails");
+        assert_eq!(
+            controller(&executor).internet_gateway_id.as_deref(),
+            Some("igw-1")
+        );
+        assert_eq!(
+            controller(&executor).state,
+            AwsNetworkState::AttachingInternetGateway
+        );
+        executor.step().await.expect("attach retry succeeds");
+        assert_eq!(
+            controller(&executor).state,
+            AwsNetworkState::CreatingSubnets
+        );
+        assert_eq!(attaches.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn already_associated_attach_is_success_only_when_attached_to_our_vpc() {
+        for (attached_vpc, expect_ok) in [("vpc-1", true), ("vpc-other", false)] {
+            let mut ec2 = MockEc2Api::new();
+            ec2.expect_attach_internet_gateway()
+                .times(1)
+                .returning(|_| Err(in_use()));
+            ec2.expect_describe_internet_gateways()
+                .times(1)
+                .withf(|request| {
+                    request.internet_gateway_ids.as_deref() == Some(&["igw-1".to_string()][..])
+                })
+                .returning(move |_| {
+                    Ok(parse(json!({ "internetGatewaySet": { "item": [{
+                        "internetGatewayId": "igw-1",
+                        "attachmentSet": { "item": [{ "vpcId": attached_vpc, "state": "available" }] }
+                    }]}})))
+                });
+
+            let mut executor = executor(
+                ec2,
+                AwsNetworkController {
+                    internet_gateway_id: Some("igw-1".to_string()),
+                    ..after_vpc(AwsNetworkState::AttachingInternetGateway)
+                },
+                Some("10.0.0.0/16"),
+            )
+            .await;
+
+            let result = executor.step().await;
+            assert_eq!(result.is_ok(), expect_ok, "attached to {attached_vpc}");
+            let expected_state = if expect_ok {
+                AwsNetworkState::CreatingSubnets
+            } else {
+                AwsNetworkState::AttachingInternetGateway
+            };
+            assert_eq!(controller(&executor).state, expected_state);
+        }
+    }
+
+    // ─────────────── Subnets ───────────────
+
+    fn subnet_id_for(cidr: &str) -> String {
+        format!("subnet-{}", cidr.split('.').nth(2).expect("third octet"))
+    }
+
+    #[tokio::test]
+    async fn subnet_retry_creates_only_the_subnet_that_failed() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_subnets()
+            .returning(|_| Ok(parse(json!({}))));
+        let created = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log = created.clone();
+        let private_2_attempts = Arc::new(AtomicUsize::new(0));
+        let attempts = private_2_attempts.clone();
+        ec2.expect_create_subnet().returning(move |request| {
+            // private-2 (10.0.144.0/20) fails on its first attempt.
+            if request.cidr_block == "10.0.144.0/20" && attempts.fetch_add(1, Ordering::SeqCst) == 0
+            {
+                return Err(unavailable());
+            }
+            log.lock().unwrap().push(request.cidr_block.clone());
+            Ok(parse(
+                json!({ "subnet": { "subnetId": subnet_id_for(&request.cidr_block) } }),
+            ))
+        });
+
+        let mut executor = executor(
+            ec2,
+            after_vpc(AwsNetworkState::CreatingSubnets),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor.step().await.expect_err("private-2 fails");
+        assert_eq!(
+            controller(&executor).public_subnet_ids,
+            ["subnet-0", "subnet-16"]
+        );
+        assert_eq!(controller(&executor).private_subnet_ids, ["subnet-128"]);
+
+        executor.step().await.expect("retry succeeds");
+        let state = controller(&executor);
+        assert_eq!(state.state, AwsNetworkState::CreatingRouteTables);
+        assert_eq!(state.public_subnet_ids, ["subnet-0", "subnet-16"]);
+        assert_eq!(state.private_subnet_ids, ["subnet-128", "subnet-144"]);
+        assert_eq!(
+            *created.lock().unwrap(),
+            [
+                "10.0.0.0/20",
+                "10.0.16.0/20",
+                "10.0.128.0/20",
+                "10.0.144.0/20"
+            ],
+            "each subnet is created exactly once"
+        );
+        assert_eq!(
+            state.subnets_by_failure_domain["us-east-1a"],
+            AwsFailureDomainSubnets {
+                public_subnet_ids: vec!["subnet-0".to_string()],
+                private_subnet_ids: vec!["subnet-128".to_string()],
+            }
+        );
+        assert_eq!(
+            state.subnets_by_failure_domain["us-east-1b"],
+            AwsFailureDomainSubnets {
+                public_subnet_ids: vec!["subnet-16".to_string()],
+                private_subnet_ids: vec!["subnet-144".to_string()],
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn subnet_created_by_a_lost_response_is_recorded_not_recreated() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_subnets().returning(|request| {
+            let filters = request.filters.expect("lookup by VPC and CIDR");
+            assert!(filters
+                .iter()
+                .any(|f| f.name == "vpc-id" && f.values == ["vpc-1"]));
+            let cidr = filters
+                .iter()
+                .find(|f| f.name == "cidr-block")
+                .map(|f| f.values[0].clone())
+                .expect("cidr filter");
+            if cidr == "10.0.0.0/20" {
+                Ok(parse(json!({ "subnetSet": { "item": [{
+                    "subnetId": "subnet-lost",
+                    "vpcId": "vpc-1",
+                    "cidrBlock": cidr,
+                    "tagSet": owned_tags_json()
+                }]}})))
+            } else {
+                Ok(parse(json!({})))
+            }
+        });
+        ec2.expect_create_subnet().times(3).returning(|request| {
+            assert_ne!(request.cidr_block, "10.0.0.0/20");
+            Ok(parse(
+                json!({ "subnet": { "subnetId": subnet_id_for(&request.cidr_block) } }),
+            ))
+        });
+
+        let mut executor = executor(
+            ec2,
+            after_vpc(AwsNetworkState::CreatingSubnets),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor.step().await.expect("subnets should be ensured");
+        let state = controller(&executor);
+        assert_eq!(state.public_subnet_ids, ["subnet-lost", "subnet-16"]);
+        assert_eq!(state.private_subnet_ids, ["subnet-128", "subnet-144"]);
+    }
+
+    #[tokio::test]
+    async fn subnet_in_our_vpc_without_our_tags_is_an_error() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_subnets().times(1).returning(|_| {
+            Ok(parse(json!({ "subnetSet": { "item": [{
+                "subnetId": "subnet-foreign",
+                "cidrBlock": "10.0.0.0/20",
+                "tagSet": { "item": [{ "key": "resource", "value": "someone-else" }] }
+            }]}})))
+        });
+        ec2.expect_create_subnet().times(0);
+
+        let mut executor = executor(
+            ec2,
+            after_vpc(AwsNetworkState::CreatingSubnets),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        let error = executor.step().await.expect_err("foreign subnet");
+        assert!(error.to_string().contains("subnet-foreign"), "{error}");
+        assert!(controller(&executor).public_subnet_ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn subnet_create_response_without_an_id_is_an_error() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_subnets()
+            .returning(|_| Ok(parse(json!({}))));
+        ec2.expect_create_subnet()
+            .times(1)
+            .returning(|_| Ok(parse(json!({ "subnet": {} }))));
+
+        let mut executor = executor(
+            ec2,
+            after_vpc(AwsNetworkState::CreatingSubnets),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        let error = executor.step().await.expect_err("missing subnet ID");
+        assert!(error.to_string().contains("no subnet ID"), "{error}");
+        assert!(controller(&executor).public_subnet_ids.is_empty());
+        assert_eq!(
+            controller(&executor).state,
+            AwsNetworkState::CreatingSubnets
+        );
+    }
+
+    // ─────────────── NAT gateway ───────────────
+
+    fn after_route_tables(state: AwsNetworkState) -> AwsNetworkController {
+        AwsNetworkController {
+            internet_gateway_id: Some("igw-1".to_string()),
+            public_subnet_ids: vec!["subnet-pub-a".to_string(), "subnet-pub-b".to_string()],
+            private_subnet_ids: vec!["subnet-priv-a".to_string(), "subnet-priv-b".to_string()],
+            public_route_table_id: Some("rtb-pub".to_string()),
+            private_route_table_id: Some("rtb-priv".to_string()),
+            ..after_vpc(state)
+        }
+    }
+
+    #[tokio::test]
+    async fn nat_create_retry_reuses_the_elastic_ip_and_client_token() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_allocate_address()
+            .times(1)
+            .returning(|_| Ok(parse(json!({ "allocationId": "eipalloc-1" }))));
+        let requests = Arc::new(Mutex::new(Vec::<CreateNatGatewayRequest>::new()));
+        let seen = requests.clone();
+        ec2.expect_create_nat_gateway()
+            .times(2)
+            .returning(move |request| {
+                let mut seen = seen.lock().unwrap();
+                seen.push(request);
+                if seen.len() == 1 {
+                    Err(unavailable())
+                } else {
+                    Ok(parse(json!({ "natGateway": { "natGatewayId": "nat-1" } })))
+                }
+            });
+
+        let mut executor = executor(
+            ec2,
+            after_route_tables(AwsNetworkState::AllocatingElasticIp),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor.step().await.expect("allocation succeeds");
+        assert_eq!(
+            controller(&executor).eip_allocation_id.as_deref(),
+            Some("eipalloc-1")
+        );
+        executor.step().await.expect_err("first NAT create fails");
+        assert_eq!(
+            controller(&executor).eip_allocation_id.as_deref(),
+            Some("eipalloc-1")
+        );
+        executor.step().await.expect("NAT create retry succeeds");
+
+        let state = controller(&executor);
+        assert_eq!(state.state, AwsNetworkState::WaitingForNatGateway);
+        assert_eq!(state.nat_gateway_id.as_deref(), Some("nat-1"));
+        let requests = requests.lock().unwrap();
+        for request in requests.iter() {
+            assert_eq!(request.allocation_id.as_deref(), Some("eipalloc-1"));
+            assert_eq!(request.subnet_id, "subnet-pub-a");
+            assert_eq!(
+                request.client_token.as_deref(),
+                Some("alien-nat-eipalloc-1")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_nat_gateway_surfaces_the_aws_reason_and_keeps_ids_for_delete() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_nat_gateways().times(1).returning(|_| {
+            Ok(parse(json!({ "natGatewaySet": { "item": [{
+                "natGatewayId": "nat-1",
+                "state": "failed",
+                "failureCode": "InsufficientFreeAddressesInSubnet",
+                "failureMessage": "Subnet has insufficient free addresses to create this NAT gateway"
+            }]}})))
+        });
+        ec2.expect_create_route().times(0);
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                nat_gateway_id: Some("nat-1".to_string()),
+                eip_allocation_id: Some("eipalloc-1".to_string()),
+                ..after_route_tables(AwsNetworkState::WaitingForNatGateway)
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        let error = executor.step().await.expect_err("failed NAT");
+        assert!(
+            error.to_string().contains(
+                "InsufficientFreeAddressesInSubnet: Subnet has insufficient free addresses"
+            ),
+            "{error}"
+        );
+        assert!(
+            !error.retryable,
+            "re-reading a failed NAT gateway cannot succeed"
+        );
+        assert_eq!(
+            controller(&executor).nat_gateway_id.as_deref(),
+            Some("nat-1")
+        );
+        assert_eq!(
+            controller(&executor).eip_allocation_id.as_deref(),
+            Some("eipalloc-1")
+        );
+    }
+
+    // ─────────────── Delete ───────────────
+
+    #[tokio::test]
+    async fn delete_waits_for_nat_gateway_deletion_before_releasing_its_elastic_ip() {
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut ec2 = MockEc2Api::new();
+        let log = calls.clone();
+        ec2.expect_delete_nat_gateway()
+            .times(1)
+            .returning(move |id| {
+                log.lock().unwrap().push(format!("delete_nat_gateway {id}"));
+                Ok(parse(json!({ "natGatewayId": id })))
+            });
+        let log = calls.clone();
+        ec2.expect_describe_nat_gateways().returning(move |_| {
+            let mut log = log.lock().unwrap();
+            let polls = log.iter().filter(|c| c.starts_with("describe")).count();
+            let state = if polls < 2 { "deleting" } else { "deleted" };
+            log.push(format!("describe_nat_gateways {state}"));
+            Ok(parse(json!({ "natGatewaySet": { "item": [{ "natGatewayId": "nat-1", "state": state }] } })))
+        });
+        let log = calls.clone();
+        ec2.expect_release_address().times(1).returning(move |id| {
+            log.lock().unwrap().push(format!("release_address {id}"));
+            Ok(())
+        });
+        let log = calls.clone();
+        ec2.expect_delete_vpc().times(1).returning(move |id| {
+            log.lock().unwrap().push(format!("delete_vpc {id}"));
+            Ok(())
+        });
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::Ready,
+                vpc_id: Some("vpc-1".to_string()),
+                nat_gateway_id: Some("nat-1".to_string()),
+                eip_allocation_id: Some("eipalloc-1".to_string()),
+                ..Default::default()
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor.delete().expect("delete transition");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("delete completes");
+
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                "delete_nat_gateway nat-1",
+                "describe_nat_gateways deleting",
+                "describe_nat_gateways deleting",
+                "describe_nat_gateways deleted",
+                "release_address eipalloc-1",
+                "delete_vpc vpc-1",
+            ]
+        );
+        assert_polling_delays(
+            &executor.take_suggested_delays(),
+            Duration::from_secs(15),
+            "delete",
+        );
+        let state = controller(&executor);
+        assert_eq!(state.nat_gateway_id, None);
+        assert_eq!(state.eip_allocation_id, None);
+        assert_eq!(state.vpc_id, None);
+    }
+
+    #[tokio::test]
+    async fn elastic_ip_still_in_use_keeps_its_id_and_polls() {
+        let mut ec2 = MockEc2Api::new();
+        let releases = Arc::new(AtomicUsize::new(0));
+        let count = releases.clone();
+        ec2.expect_release_address().returning(move |id| {
+            assert_eq!(id, "eipalloc-1");
+            if count.fetch_add(1, Ordering::SeqCst) < 2 {
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        message: "InvalidIPAddress.InUse".to_string(),
+                        resource_type: "ElasticIP".to_string(),
+                        resource_name: id.to_string(),
+                    },
+                ))
+            } else {
+                Ok(())
+            }
+        });
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::ReleasingElasticIp,
+                vpc_id: Some("vpc-1".to_string()),
+                eip_allocation_id: Some("eipalloc-1".to_string()),
+                ..Default::default()
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        for _ in 0..2 {
+            let result = executor
+                .step()
+                .await
+                .expect("in-use is a wait, not a failure");
+            assert_eq!(result.suggested_delay, Some(Duration::from_secs(15)));
+            assert_eq!(
+                controller(&executor).state,
+                AwsNetworkState::ReleasingElasticIp
+            );
+            assert_eq!(
+                controller(&executor).eip_allocation_id.as_deref(),
+                Some("eipalloc-1")
+            );
+        }
+        executor.step().await.expect("release succeeds");
+        assert_eq!(controller(&executor).eip_allocation_id, None);
+        assert_eq!(
+            controller(&executor).state,
+            AwsNetworkState::DeletingSecurityGroup
+        );
+    }
+
+    #[tokio::test]
+    async fn subnet_in_use_stays_in_state_while_the_others_are_forgotten() {
+        let mut ec2 = MockEc2Api::new();
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log = calls.clone();
+        ec2.expect_delete_subnet().returning(move |id| {
+            let mut log = log.lock().unwrap();
+            let first_try_of_b = id == "subnet-b" && !log.iter().any(|c| c == "subnet-b");
+            log.push(id.to_string());
+            if first_try_of_b {
+                Err(in_use())
+            } else {
+                Ok(())
+            }
+        });
+
+        let mut subnets_by_failure_domain = BTreeMap::new();
+        subnets_by_failure_domain.insert(
+            "us-east-1a".to_string(),
+            AwsFailureDomainSubnets {
+                public_subnet_ids: vec!["subnet-a".to_string()],
+                private_subnet_ids: vec!["subnet-c".to_string()],
+            },
+        );
+        subnets_by_failure_domain.insert(
+            "us-east-1b".to_string(),
+            AwsFailureDomainSubnets {
+                public_subnet_ids: vec!["subnet-b".to_string()],
+                private_subnet_ids: vec![],
+            },
+        );
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::DeletingSubnets,
+                vpc_id: Some("vpc-1".to_string()),
+                public_subnet_ids: vec!["subnet-a".to_string(), "subnet-b".to_string()],
+                private_subnet_ids: vec!["subnet-c".to_string()],
+                subnets_by_failure_domain,
+                ..Default::default()
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        let result = executor.step().await.expect("in-use subnet is a wait");
+        assert_eq!(result.suggested_delay, Some(Duration::from_secs(30)));
+        let state = controller(&executor);
+        assert_eq!(state.state, AwsNetworkState::DeletingSubnets);
+        assert_eq!(state.public_subnet_ids, ["subnet-b"]);
+        assert!(state.private_subnet_ids.is_empty());
+        assert_eq!(
+            state.subnets_by_failure_domain.keys().collect::<Vec<_>>(),
+            ["us-east-1b"]
+        );
+
+        executor.step().await.expect("subnet-b drains");
+        assert_eq!(
+            controller(&executor).state,
+            AwsNetworkState::DeletingRouteTables
+        );
+        assert!(controller(&executor).public_subnet_ids.is_empty());
+        assert_eq!(
+            *calls.lock().unwrap(),
+            ["subnet-a", "subnet-b", "subnet-c", "subnet-b"]
+        );
+    }
+
+    #[tokio::test]
+    async fn vpc_with_dependencies_polls_then_fails_with_its_id_still_recorded() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_delete_vpc()
+            .times(DEPENDENCY_DRAIN_MAX_POLLS as usize)
+            .returning(|_| Err(in_use()));
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::DeletingVpc,
+                vpc_id: Some("vpc-1".to_string()),
+                ..Default::default()
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        for _ in 1..DEPENDENCY_DRAIN_MAX_POLLS {
+            executor.step().await.expect("dependency drain is a wait");
+            assert_eq!(executor.status(), ResourceStatus::Deleting);
+        }
+        let error = executor
+            .step()
+            .await
+            .expect_err("the poll budget is bounded");
+        assert_eq!(error.code, "RESOURCE_POLLING_TIMEOUT");
+        assert!(!error.retryable);
+
+        let mut failed = controller(&executor).clone();
+        failed.transition_to_failure();
+        assert_eq!(failed.state, AwsNetworkState::DeleteFailed);
+        assert_eq!(failed.vpc_id.as_deref(), Some("vpc-1"));
+    }
+
+    #[tokio::test]
+    async fn not_found_from_every_child_walks_the_whole_chain_to_deleted() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_delete_nat_gateway()
+            .times(1)
+            .returning(|_| Err(not_found()));
+        ec2.expect_describe_nat_gateways().times(0);
+        ec2.expect_release_address()
+            .times(1)
+            .returning(|_| Err(not_found()));
+        ec2.expect_delete_security_group()
+            .times(1)
+            .returning(|_| Err(not_found()));
+        ec2.expect_delete_subnet()
+            .times(4)
+            .returning(|_| Err(not_found()));
+        ec2.expect_disassociate_route_table()
+            .times(1)
+            .returning(|_| Err(not_found()));
+        ec2.expect_delete_route_table()
+            .times(2)
+            .returning(|_| Err(not_found()));
+        ec2.expect_detach_internet_gateway()
+            .times(1)
+            .returning(|_| Err(not_found()));
+        ec2.expect_delete_internet_gateway()
+            .times(1)
+            .returning(|_| Err(not_found()));
+        ec2.expect_delete_vpc()
+            .times(1)
+            .returning(|_| Err(not_found()));
+
+        let mut ready = AwsNetworkController::mock_ready("vpc-1", 2);
+        ready.route_table_association_ids = vec!["rtbassoc-1".to_string()];
+        let mut executor = executor(ec2, ready, Some("10.0.0.0/16")).await;
+
+        executor.delete().expect("delete transition");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("delete completes");
+
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        let state = controller(&executor);
+        assert_eq!(state.vpc_id, None);
+        assert_eq!(state.nat_gateway_id, None);
+        assert_eq!(state.eip_allocation_id, None);
+        assert_eq!(state.security_group_id, None);
+        assert_eq!(state.internet_gateway_id, None);
+        assert_eq!(state.public_route_table_id, None);
+        assert_eq!(state.private_route_table_id, None);
+        assert!(state.public_subnet_ids.is_empty());
+        assert!(state.private_subnet_ids.is_empty());
+        assert!(state.route_table_association_ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn internet_gateway_that_was_never_attached_is_still_deleted() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_detach_internet_gateway()
+            .times(1)
+            .returning(|_| {
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        message: "resource igw-1 is not attached to network vpc-1".to_string(),
+                        resource_type: "InternetGateway".to_string(),
+                        resource_name: "igw-1".to_string(),
+                    },
+                ))
+            });
+        ec2.expect_delete_internet_gateway()
+            .times(1)
+            .withf(|id| id == "igw-1")
+            .returning(|_| Ok(()));
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::DeletingInternetGateway,
+                vpc_id: Some("vpc-1".to_string()),
+                internet_gateway_id: Some("igw-1".to_string()),
+                ..Default::default()
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor
+            .step()
+            .await
+            .expect("not-attached is not a failure");
+        assert_eq!(controller(&executor).state, AwsNetworkState::DeletingVpc);
+        assert_eq!(controller(&executor).internet_gateway_id, None);
+    }
+
+    #[tokio::test]
+    async fn unexpected_delete_error_is_propagated_and_keeps_the_id() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_delete_security_group()
+            .times(1)
+            .returning(|_| Err(unavailable()));
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::DeletingSecurityGroup,
+                vpc_id: Some("vpc-1".to_string()),
+                security_group_id: Some("sg-1".to_string()),
+                ..Default::default()
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        let error = executor
+            .step()
+            .await
+            .expect_err("5xx must not be swallowed");
+        assert!(error.retryable, "the executor retries transient failures");
+        assert_eq!(
+            controller(&executor).security_group_id.as_deref(),
+            Some("sg-1")
+        );
+        assert_eq!(
+            controller(&executor).state,
+            AwsNetworkState::DeletingSecurityGroup
+        );
+    }
+
+    // ─────────────── Persisted state ───────────────
+
+    fn persisted(fields: serde_json::Value) -> AwsNetworkController {
+        let mut value =
+            serde_json::to_value(AwsNetworkController::default()).expect("serialize default");
+        for (key, field) in fields.as_object().expect("object").clone() {
+            value[key] = field;
+        }
+        serde_json::from_value(value).expect("persisted controller should deserialize")
+    }
+
+    #[tokio::test]
+    async fn persisted_creating_vpc_with_a_recorded_vpc_does_not_create_another() {
+        // Written by a version that recorded the VPC and then failed to list availability
+        // zones in the same handler.
+        let controller_state = persisted(json!({
+            "state": "creatingVpc",
+            "vpcId": "vpc-old",
+            "cidrBlock": "10.0.0.0/16",
+            "availabilityZones": []
+        }));
+        let mut ec2 = MockEc2Api::new();
+        expect_two_zones(&mut ec2);
+        ec2.expect_describe_vpcs().times(0);
+        ec2.expect_create_vpc().times(0);
+
+        let mut executor = executor(ec2, controller_state, Some("10.0.0.0/16")).await;
+
+        executor.step().await.expect("resume should succeed");
+        let state = controller(&executor);
+        assert_eq!(state.state, AwsNetworkState::ConfiguringVpcDns);
+        assert_eq!(state.vpc_id.as_deref(), Some("vpc-old"));
+        assert_eq!(state.availability_zones, ["us-east-1a", "us-east-1b"]);
+    }
+
+    #[tokio::test]
+    async fn persisted_creating_nat_gateway_without_an_elastic_ip_allocates_one_first() {
+        let controller_state = persisted(json!({
+            "state": "creatingNatGateway",
+            "vpcId": "vpc-1",
+            "publicSubnetIds": ["subnet-pub-a"]
+        }));
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_allocate_address()
+            .times(1)
+            .returning(|_| Ok(parse(json!({ "allocationId": "eipalloc-1" }))));
+        ec2.expect_create_nat_gateway()
+            .times(1)
+            .returning(|_| Ok(parse(json!({ "natGateway": { "natGatewayId": "nat-1" } }))));
+
+        let mut executor = executor(ec2, controller_state, Some("10.0.0.0/16")).await;
+
+        executor.step().await.expect("route to allocation");
+        assert_eq!(
+            controller(&executor).state,
+            AwsNetworkState::AllocatingElasticIp
+        );
+        executor.step().await.expect("allocate");
+        executor.step().await.expect("create NAT");
+        assert_eq!(
+            controller(&executor).nat_gateway_id.as_deref(),
+            Some("nat-1")
+        );
+        assert_eq!(
+            controller(&executor).eip_allocation_id.as_deref(),
+            Some("eipalloc-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn persisted_deleting_internet_gateway_still_detaches_before_deleting() {
+        let controller_state = persisted(json!({
+            "state": "deletingInternetGateway",
+            "vpcId": "vpc-1",
+            "internetGatewayId": "igw-1"
+        }));
+        let calls = Arc::new(Mutex::new(Vec::<&str>::new()));
+        let mut ec2 = MockEc2Api::new();
+        let log = calls.clone();
+        ec2.expect_detach_internet_gateway()
+            .times(1)
+            .returning(move |_| {
+                log.lock().unwrap().push("detach");
+                Ok(())
+            });
+        let log = calls.clone();
+        ec2.expect_delete_internet_gateway()
+            .times(1)
+            .returning(move |_| {
+                log.lock().unwrap().push("delete");
+                Ok(())
+            });
+
+        let mut executor = executor(ec2, controller_state, Some("10.0.0.0/16")).await;
+
+        executor.step().await.expect("detach and delete");
+        assert_eq!(*calls.lock().unwrap(), ["detach", "delete"]);
+        assert_eq!(controller(&executor).state, AwsNetworkState::DeletingVpc);
+    }
+
+    // ─────────────── Full lifecycle ───────────────
+
+    #[tokio::test]
+    async fn full_create_then_delete_leaves_nothing_recorded() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_addresses()
+            .returning(|| Ok(parse(json!({}))));
+        expect_two_zones(&mut ec2);
+        ec2.expect_describe_vpcs()
+            .times(1)
+            .returning(|_| Ok(parse(json!({}))));
+        ec2.expect_create_vpc()
+            .times(1)
+            .returning(|_| Ok(parse(json!({ "vpc": { "vpcId": "vpc-1" } }))));
+        ec2.expect_modify_vpc_attribute()
+            .times(2)
+            .returning(|_| Ok(()));
+        ec2.expect_create_internet_gateway()
+            .times(1)
+            .returning(|_| {
+                Ok(parse(
+                    json!({ "internetGateway": { "internetGatewayId": "igw-1" } }),
+                ))
+            });
+        ec2.expect_attach_internet_gateway()
+            .times(1)
+            .returning(|_| Ok(()));
+        ec2.expect_describe_subnets()
+            .times(4)
+            .returning(|_| Ok(parse(json!({}))));
+        ec2.expect_create_subnet().times(4).returning(|request| {
+            Ok(parse(
+                json!({ "subnet": { "subnetId": subnet_id_for(&request.cidr_block) } }),
+            ))
+        });
+        ec2.expect_describe_route_tables()
+            .times(2)
+            .returning(|_| Ok(parse(json!({}))));
+        let route_tables = Arc::new(AtomicUsize::new(0));
+        ec2.expect_create_route_table()
+            .times(2)
+            .returning(move |_| {
+                let id = if route_tables.fetch_add(1, Ordering::SeqCst) == 0 {
+                    "rtb-pub"
+                } else {
+                    "rtb-priv"
+                };
+                Ok(parse(json!({ "routeTable": { "routeTableId": id } })))
+            });
+        ec2.expect_create_route().times(2).returning(|_| Ok(()));
+        let associations = Arc::new(AtomicUsize::new(0));
+        ec2.expect_associate_route_table()
+            .times(4)
+            .returning(move |_| {
+                let n = associations.fetch_add(1, Ordering::SeqCst);
+                Ok(parse(json!({ "associationId": format!("rtbassoc-{n}") })))
+            });
+        ec2.expect_allocate_address()
+            .times(1)
+            .returning(|_| Ok(parse(json!({ "allocationId": "eipalloc-1" }))));
+        ec2.expect_create_nat_gateway()
+            .times(1)
+            .returning(|_| Ok(parse(json!({ "natGateway": { "natGatewayId": "nat-1" } }))));
+        let nat_states = Arc::new(Mutex::new(
+            vec!["pending", "available", "deleting", "deleted"].into_iter(),
+        ));
+        ec2.expect_describe_nat_gateways()
+            .times(4)
+            .returning(move |_| {
+                let state = nat_states.lock().unwrap().next().expect("NAT state");
+                Ok(parse(json!({ "natGatewaySet": { "item": [{ "natGatewayId": "nat-1", "state": state }] } })))
+            });
+        ec2.expect_describe_security_groups().returning(|request| {
+            if request.group_ids.is_some() {
+                Ok(parse(
+                    json!({ "securityGroupInfo": { "item": [{ "groupId": "sg-1" }] } }),
+                ))
+            } else {
+                Ok(parse(json!({})))
+            }
+        });
+        ec2.expect_create_security_group()
+            .times(1)
+            .returning(|_| Ok(parse(json!({ "groupId": "sg-1" }))));
+        ec2.expect_authorize_security_group_ingress()
+            .times(1)
+            .returning(|_| Ok(()));
+        ec2.expect_authorize_security_group_egress()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let deleted = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log = deleted.clone();
+        ec2.expect_delete_nat_gateway()
+            .times(1)
+            .returning(move |id| {
+                log.lock().unwrap().push(id.to_string());
+                Ok(parse(json!({ "natGatewayId": id })))
+            });
+        let log = deleted.clone();
+        ec2.expect_release_address().times(1).returning(move |id| {
+            log.lock().unwrap().push(id.to_string());
+            Ok(())
+        });
+        let log = deleted.clone();
+        ec2.expect_delete_security_group()
+            .times(1)
+            .returning(move |id| {
+                log.lock().unwrap().push(id.to_string());
+                Ok(())
+            });
+        let log = deleted.clone();
+        ec2.expect_delete_subnet().times(4).returning(move |id| {
+            log.lock().unwrap().push(id.to_string());
+            Ok(())
+        });
+        ec2.expect_disassociate_route_table()
+            .times(4)
+            .returning(|_| Err(not_found()));
+        let log = deleted.clone();
+        ec2.expect_delete_route_table()
+            .times(2)
+            .returning(move |id| {
+                log.lock().unwrap().push(id.to_string());
+                Ok(())
+            });
+        ec2.expect_detach_internet_gateway()
+            .times(1)
+            .returning(|_| Ok(()));
+        let log = deleted.clone();
+        ec2.expect_delete_internet_gateway()
+            .times(1)
+            .returning(move |id| {
+                log.lock().unwrap().push(id.to_string());
+                Ok(())
+            });
+        let log = deleted.clone();
+        ec2.expect_delete_vpc().times(1).returning(move |id| {
+            log.lock().unwrap().push(id.to_string());
+            Ok(())
+        });
+
+        let ec2 = Arc::new(ec2);
+        let mut quotas = MockServiceQuotasApi::new();
+        quotas.expect_get_service_quota().returning(|_, _| {
+            Ok(GetServiceQuotaResponse {
+                quota: Some(ServiceQuota {
+                    quota_code: Some(EC2_VPC_EIP_QUOTA_CODE.to_string()),
+                    service_code: Some("ec2".to_string()),
+                    quota_name: None,
+                    value: Some(5.0),
+                }),
+            })
+        });
+        let quotas = Arc::new(quotas);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_ec2_client()
+            .returning(move |_| Ok(ec2.clone()));
+        provider
+            .expect_get_aws_service_quotas_client()
+            .returning(move |_| Ok(quotas.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(network(Some("10.0.0.0/16")))
+            .controller(AwsNetworkController::default())
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .resource_prefix(PREFIX)
+            .with_test_dependencies()
+            .build()
+            .await
+            .expect("executor should build");
+
+        executor
+            .run_until_terminal()
+            .await
+            .expect("create completes");
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_polling_delays(
+            &executor.take_suggested_delays(),
+            Duration::from_secs(15),
+            "create",
+        );
+        let ready = controller(&executor).clone();
+        assert_eq!(ready.vpc_id.as_deref(), Some("vpc-1"));
+        assert_eq!(ready.internet_gateway_id.as_deref(), Some("igw-1"));
+        assert_eq!(ready.nat_gateway_id.as_deref(), Some("nat-1"));
+        assert_eq!(ready.eip_allocation_id.as_deref(), Some("eipalloc-1"));
+        assert_eq!(ready.security_group_id.as_deref(), Some("sg-1"));
+        assert_eq!(ready.public_subnet_ids, ["subnet-0", "subnet-16"]);
+        assert_eq!(ready.private_subnet_ids, ["subnet-128", "subnet-144"]);
+        assert_eq!(ready.route_table_association_ids.len(), 4);
+
+        executor.delete().expect("delete transition");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("delete completes");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_polling_delays(
+            &executor.take_suggested_delays(),
+            Duration::from_secs(15),
+            "delete",
+        );
+        assert_eq!(
+            *deleted.lock().unwrap(),
+            [
+                "nat-1",
+                "eipalloc-1",
+                "sg-1",
+                "subnet-0",
+                "subnet-16",
+                "subnet-128",
+                "subnet-144",
+                "rtb-pub",
+                "rtb-priv",
+                "igw-1",
+                "vpc-1",
+            ]
+        );
+        let state = controller(&executor);
+        assert_eq!(state.vpc_id, None);
+        assert!(state.route_table_association_ids.is_empty());
     }
 }

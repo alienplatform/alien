@@ -562,6 +562,18 @@ impl Ec2Client {
                 resource_type: "InternetGateway".into(),
                 resource_name: resource.into(),
             },
+            // An internet gateway that is already attached to a VPC.
+            "Resource.AlreadyAssociated" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "EC2 Resource".into(),
+                resource_name: resource.into(),
+            },
+            // An Elastic IP still associated with a NAT gateway or network interface.
+            "InvalidIPAddress.InUse" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "ElasticIP".into(),
+                resource_name: resource.into(),
+            },
             "RouteAlreadyExists" => ErrorData::RemoteResourceConflict {
                 message,
                 resource_type: "Route".into(),
@@ -1092,6 +1104,10 @@ impl Ec2Api for Ec2Client {
 
         if let Some(tag_specs) = &request.tag_specifications {
             Self::add_tag_specifications(&mut form_data, tag_specs);
+        }
+
+        if let Some(client_token) = &request.client_token {
+            form_data.insert("ClientToken".to_string(), client_token.clone());
         }
 
         self.send_form(form_data, "CreateNatGateway", &request.subnet_id)
@@ -2634,6 +2650,10 @@ pub struct CreateNatGatewayRequest {
     pub private_ip_address: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tag_specifications: Option<Vec<TagSpecification>>,
+    /// Idempotency token (up to 64 ASCII characters). Repeating a request with the same
+    /// token returns the NAT gateway the first request created instead of a new one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_token: Option<String>,
 }
 
 /// Response from creating a NAT gateway.
@@ -2653,6 +2673,10 @@ pub struct NatGateway {
     pub vpc_id: Option<String>,
     pub state: Option<String>,
     pub connectivity_type: Option<String>,
+    /// Set when the gateway is `failed`, e.g. `Gateway.NotAttached`.
+    pub failure_code: Option<String>,
+    /// Set when the gateway is `failed`; explains why AWS could not create it.
+    pub failure_message: Option<String>,
     #[serde(rename = "natGatewayAddressSet")]
     pub nat_gateway_address_set: Option<NatGatewayAddressSet>,
     #[serde(rename = "tagSet")]
@@ -4083,6 +4107,48 @@ mod error_mapping_tests {
             mapped("InvalidPermission.Duplicate"),
             Some(ErrorData::RemoteResourceConflict { .. })
         ));
+    }
+
+    // Callers wait on these instead of failing: the address or gateway is still
+    // held by another resource.
+    #[test]
+    fn in_use_and_already_associated_codes_map_to_conflict() {
+        assert!(matches!(
+            mapped("InvalidIPAddress.InUse"),
+            Some(ErrorData::RemoteResourceConflict { .. })
+        ));
+        assert!(matches!(
+            mapped("Resource.AlreadyAssociated"),
+            Some(ErrorData::RemoteResourceConflict { .. })
+        ));
+    }
+
+    #[test]
+    fn failed_nat_gateway_carries_the_aws_failure_reason() {
+        let body = r#"<DescribeNatGatewaysResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+            <requestId>r</requestId>
+            <natGatewaySet>
+                <item>
+                    <natGatewayId>nat-1</natGatewayId>
+                    <state>failed</state>
+                    <failureCode>InsufficientFreeAddressesInSubnet</failureCode>
+                    <failureMessage>Subnet has insufficient free addresses</failureMessage>
+                </item>
+            </natGatewaySet>
+        </DescribeNatGatewaysResponse>"#;
+
+        let response: DescribeNatGatewaysResponse =
+            quick_xml::de::from_str(body).expect("NAT gateway response should parse");
+        let nat = &response.nat_gateway_set.expect("set").items[0];
+        assert_eq!(nat.state.as_deref(), Some("failed"));
+        assert_eq!(
+            nat.failure_code.as_deref(),
+            Some("InsufficientFreeAddressesInSubnet")
+        );
+        assert_eq!(
+            nat.failure_message.as_deref(),
+            Some("Subnet has insufficient free addresses")
+        );
     }
 }
 

@@ -1,4 +1,5 @@
 use alien_error::{AlienError, Context};
+use std::sync::Mutex;
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -11,6 +12,23 @@ pub(crate) const CREATE_POLL_COUNT: u32 = 3; // Reduced from 5 for faster tests
 pub(crate) const UPDATE_POLL_COUNT: u32 = 2; // Reduced from 3
 pub(crate) const DELETE_POLL_COUNT: u32 = 2; // Reduced from 3
 pub(crate) const POLL_DELAY_MS: u64 = 50; // Short delay for tests
+
+/// Every delete the test controller issued against a created worker: its identifier and the
+/// config the delete handler saw.
+static ISSUED_DELETES: Mutex<Vec<(String, Worker)>> = Mutex::new(Vec::new());
+
+/// The configs seen by each delete issued against the worker with this identifier, in order.
+///
+/// Process-wide, so tests that read it should give their workers unique ids.
+pub fn test_worker_deletes_issued(identifier: &str) -> Vec<Worker> {
+    ISSUED_DELETES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .filter(|(issued_for, _)| issued_for == identifier)
+        .map(|(_, config)| config.clone())
+        .collect()
+}
 
 #[controller]
 pub struct TestWorkerController {
@@ -54,6 +72,9 @@ pub struct TestWorkerController {
     /// Polling counter for delete
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(crate) delete_poll_count: u32,
+    /// Delete attempts failed so far under SIMULATE_DELETE_FAILURE_COUNT.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) delete_failures_count: u32,
 }
 
 #[controller]
@@ -211,6 +232,19 @@ impl TestWorkerController {
                 message: "Identifier missing in CreateWorker state".to_string(),
             })
         })?;
+
+        // Fails after CreateStart recorded the identifier, at a checkpoint the Update flow
+        // does not start from: a partly created resource that only a delete can clean up.
+        if target_func
+            .environment
+            .get("SIMULATE_CREATE_WORKER_FAILURE")
+            .is_some_and(|v| v == "true")
+        {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!("Simulated CreateWorker failure for `{}`", identifier),
+                resource_id: Some(target_func.id.clone()),
+            }));
+        }
 
         info!(
             "→ [test-create] Start polling (0/{}) for worker readiness `{}`",
@@ -493,20 +527,38 @@ impl TestWorkerController {
         on_failure = DeleteFailed,
         status = ResourceStatus::Deleting,
     )]
-    async fn delete_start(
-        &mut self,
-        _ctx: &ResourceControllerContext<'_>,
-    ) -> Result<HandlerAction> {
+    async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         // If no identifier exists, the resource was never created, go directly to deleted
-        if self.identifier.is_none() {
+        let Some(identifier) = self.identifier.clone() else {
             info!("Resource failed before creation, marking as Deleted.");
             return Ok(HandlerAction::Continue {
                 state: Deleted,
                 suggested_delay: None,
             });
+        };
+        let target_func = ctx.desired_resource_config::<Worker>()?;
+
+        if let Some(target_failures) = target_func
+            .environment
+            .get("SIMULATE_DELETE_FAILURE_COUNT")
+            .and_then(|count| count.parse::<u32>().ok())
+        {
+            if self.delete_failures_count < target_failures {
+                self.delete_failures_count += 1;
+                return Err(AlienError::new(ErrorData::ExecutionStepFailed {
+                    message: format!(
+                        "Simulated delete failure {}/{}",
+                        self.delete_failures_count, target_failures
+                    ),
+                    resource_id: Some(target_func.id.clone()),
+                }));
+            }
         }
 
-        let identifier = self.identifier.as_ref().unwrap();
+        ISSUED_DELETES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push((identifier.clone(), target_func.clone()));
         info!(
             "→ [test-delete] Start Delete polling (0/{}) `{}`",
             DELETE_POLL_COUNT, identifier
