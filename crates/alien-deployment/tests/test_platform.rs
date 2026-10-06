@@ -2123,6 +2123,74 @@ async fn interrupted_sibling_with_changed_config_is_deleted_before_it_is_recreat
     assert!(alien_infra::test_worker_deletes_issued("test:worker:rejected-fn").is_empty());
 }
 
+/// A runtime retry does not resume a failed create whose config changed since it failed: that
+/// would finish the create with a mix of both configs and never delete what the failed one
+/// made. The retry leaves it failed, and the executor deletes it against the config it was
+/// created with before creating it with the new one.
+#[tokio::test]
+async fn provisioning_retry_replaces_a_failed_create_whose_config_changed() {
+    let _vault = test_vault_env().await;
+    let worker_id = "retry-changed-fn";
+    let worker_identifier = "test:worker:retry-changed-fn";
+    let mut stack = create_test_stack("test-stack", "base-fn");
+    add_live_worker(&mut stack, image_worker(worker_id, "test:v1", 1024));
+
+    // The first attempt injects a variable that makes the worker's create fail right after
+    // it recorded the worker.
+    let mut failing_config = create_test_config("hash_v1", false);
+    failing_config
+        .environment_variables
+        .variables
+        .push(EnvironmentVariable {
+            name: "SIMULATE_CREATE_WORKER_FAILURE".to_string(),
+            value: "true".to_string(),
+            var_type: EnvironmentVariableType::Plain,
+            target_resources: Some(vec![worker_id.to_string()]),
+        });
+    let mut state = run_to_completion(create_initial_state(stack), failing_config).await;
+    assert_eq!(state.status, DeploymentStatus::ProvisioningFailed);
+    let failed = &state.stack_state.as_ref().unwrap().resources[worker_id];
+    assert_eq!(failed.status, alien_core::ResourceStatus::ProvisionFailed);
+    assert!(failed.internal_state.is_some() && failed.last_failed_state.is_some());
+    assert!(alien_infra::test_worker_deletes_issued(worker_identifier).is_empty());
+
+    // The retry runs with the variable gone.
+    let fixed_config = create_test_config("hash_v2", false);
+    request_retry(&mut state);
+    let state = alien_deployment::step(state, fixed_config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("the retry step should succeed")
+        .state;
+    assert_eq!(state.status, DeploymentStatus::Provisioning);
+    assert_eq!(
+        state.stack_state.as_ref().unwrap().resources[worker_id].status,
+        alien_core::ResourceStatus::ProvisionFailed,
+        "the retry leaves the changed create to the planner"
+    );
+    let state = run_to_completion(state, fixed_config).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    let deletes = alien_infra::test_worker_deletes_issued(worker_identifier);
+    assert_eq!(deletes.len(), 1, "the failed create is deleted once");
+    assert_eq!(
+        deletes[0]
+            .environment
+            .get("SIMULATE_CREATE_WORKER_FAILURE")
+            .map(String::as_str),
+        Some("true"),
+        "the delete runs against the config the worker was created with"
+    );
+    let worker = &state.stack_state.as_ref().unwrap().resources[worker_id];
+    assert_eq!(worker.status, alien_core::ResourceStatus::Running);
+    let deployed = worker
+        .config
+        .downcast_ref::<Worker>()
+        .expect("worker config");
+    assert!(!deployed
+        .environment
+        .contains_key("SIMULATE_CREATE_WORKER_FAILURE"));
+}
+
 /// A setup rerun with a corrected release does not resume the old create checkpoint of a
 /// setup-owned store whose create failed after recording its bucket. A store holds data, so
 /// it is not deleted to be replaced either: setup creates it again in place with the new

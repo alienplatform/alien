@@ -7,12 +7,13 @@ use alien_core::{
     DeployerSecretEnv, DeployerSecretLocationContext, DeployerSecretReport, DeployerSecretStatus,
     DeploymentConfig, EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType,
     EnvironmentVariablesSnapshot, GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform,
-    ResourceLifecycle, ResourceStatus, SecretDelivery, Stack, StackState, TestEnvironmentInfo,
-    Vault, VaultBinding, Worker, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_DEPLOYER_SECRETS,
-    ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, SECRETS_VAULT_ID,
+    ResourceLifecycle, ResourceStatus, RuntimeMetadata, SecretDelivery, Stack, StackResourceState,
+    StackState, TestEnvironmentInfo, Vault, VaultBinding, Worker, ENV_ALIEN_COMMANDS_TOKEN,
+    ENV_ALIEN_DEPLOYER_SECRETS, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, SECRETS_VAULT_ID,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
+use alien_infra::StackResourceStateExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -30,6 +31,113 @@ const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 const RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_logs_auth_header";
 const RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_metrics_auth_header";
 const SECRETS_SYNC_SCHEMA_VERSION: &[u8] = b"\0vault-sync:vault-backed-consumers:v3\0";
+
+/// The stack the executor reconciles once the deployment is prepared: the prepared stack from
+/// runtime metadata, with the deployment's environment variables and monitoring injected.
+pub(crate) fn injected_target_stack(
+    runtime_metadata: &RuntimeMetadata,
+    config: &DeploymentConfig,
+    platform: Platform,
+) -> Result<Stack> {
+    let mut target_stack = runtime_metadata.prepared_stack.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::MissingConfiguration {
+            message: "Prepared stack not found in runtime metadata".to_string(),
+        })
+    })?;
+
+    // Inject all environment variables — plain AND secrets.
+    //
+    // Worker wrappers that consume vault pointers receive the secrets vault as
+    // a dependency from SecretsVaultMutation. Native-projected workloads do
+    // not need workload vault access.
+    inject_environment_variables(
+        &mut target_stack,
+        config,
+        platform,
+        &runtime_metadata.deployer_secrets,
+    )?;
+
+    if let Some(monitoring) = &config.monitoring {
+        inject_monitoring_environment_variables(&mut target_stack, monitoring, platform)?;
+    }
+    Ok(target_stack)
+}
+
+/// Resumes the saved checkpoint of each failed resource that `eligible` accepts and that
+/// `target_stack` still declares with the config and dependencies it failed with.
+///
+/// A resource whose config changed stays failed, so the executor plans its update or replaces
+/// it: resuming a failed create with a new config would finish it with a mix of both. One
+/// the stack no longer declares stays failed too, and the executor deletes it. Failed deletes
+/// always resume, because the planner does not restart a delete that has failed.
+pub(crate) fn resume_unchanged_failed_resources(
+    stack_state: &mut StackState,
+    target_stack: &Stack,
+    eligible: impl Fn(&StackResourceState) -> bool,
+) -> Result<Vec<String>> {
+    let mut retried = Vec::new();
+    for (resource_id, resource_state) in &mut stack_state.resources {
+        if !eligible(resource_state) {
+            continue;
+        }
+        let unchanged = target_stack
+            .resources
+            .get(resource_id)
+            .is_some_and(|entry| {
+                entry.config == resource_state.config
+                    && entry.combined_dependencies() == resource_state.dependencies
+            });
+        if resource_state.status != ResourceStatus::DeleteFailed && !unchanged {
+            continue;
+        }
+        if resource_state
+            .retry_failed()
+            .context(ErrorData::StackExecutionFailed {
+                message: format!("Failed to retry failed resource '{resource_id}'"),
+            })?
+        {
+            retried.push(resource_id.clone());
+        }
+    }
+    Ok(retried)
+}
+
+/// Prepares the failed runtime-owned resources of `stack_state` for a retry of provisioning
+/// or of a running deployment, against the stack prepared in `runtime_metadata`.
+///
+/// Like [`crate::retry_failed_setup_resources`], only failures whose config is unchanged
+/// (and failed deletes) resume their saved checkpoint. A setup-owned resource is never
+/// resumed into a create, update or delete with runtime credentials; only its failed
+/// refresh is retried, which reads it again.
+pub(crate) fn retry_failed_runtime_resources(
+    stack_state: &mut StackState,
+    runtime_metadata: Option<&RuntimeMetadata>,
+    config: &DeploymentConfig,
+) -> Result<Vec<String>> {
+    let has_failures = stack_state.resources.values().any(|resource| {
+        matches!(
+            resource.status,
+            ResourceStatus::ProvisionFailed
+                | ResourceStatus::UpdateFailed
+                | ResourceStatus::DeleteFailed
+                | ResourceStatus::RefreshFailed
+        )
+    });
+    if !has_failures {
+        return Ok(Vec::new());
+    }
+    let runtime_metadata = runtime_metadata.ok_or_else(|| {
+        AlienError::new(ErrorData::MissingConfiguration {
+            message: "Runtime metadata with prepared stack required to retry failed resources"
+                .to_string(),
+        })
+    })?;
+    let target_stack = injected_target_stack(runtime_metadata, config, stack_state.platform)?;
+    resume_unchanged_failed_resources(stack_state, &target_stack, |resource| {
+        resource.lifecycle != Some(ResourceLifecycle::Frozen)
+            || resource.status == ResourceStatus::RefreshFailed
+    })
+}
 
 /// Collect environment information from cloud platforms
 pub async fn collect_environment_info(

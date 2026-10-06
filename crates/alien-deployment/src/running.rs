@@ -150,7 +150,7 @@ pub async fn handle_running(
 ///
 /// This step:
 /// 1. Continues observation when no retry is requested, preserving controller state
-/// 2. Calls retry_failed() on stack state to recover failed resources
+/// 2. Resumes the failed resources whose config is unchanged (see `retry_failed_runtime_resources`)
 /// 3. Transitions back to Running status
 /// 4. Sets clear_retry_requested flag to clear the retry marker
 pub async fn handle_refresh_failed(
@@ -179,13 +179,13 @@ pub async fn handle_refresh_failed(
         })
     })?;
 
-    // Retry failed resources using alien-infra
-    use alien_infra::state_utils::StackStateExt;
-    let retried = stack_state
-        .retry_failed()
-        .context(ErrorData::StackExecutionFailed {
-            message: "Failed to retry failed resources".to_string(),
-        })?;
+    // Resume only failures the retry can finish as they started; a resource whose config
+    // changed is left to the planner, which updates or replaces it.
+    let retried = crate::helpers::retry_failed_runtime_resources(
+        &mut stack_state,
+        current.runtime_metadata.as_ref(),
+        &config,
+    )?;
 
     info!("Retried {} failed resources: {:?}", retried.len(), retried);
 
