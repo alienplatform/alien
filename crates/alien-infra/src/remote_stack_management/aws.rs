@@ -39,6 +39,10 @@ pub struct AwsRemoteStackManagementController {
     pub(crate) role_name: Option<String>,
     /// Whether management permissions have been applied
     pub(crate) management_permissions_applied: bool,
+    /// Revision of the management permissions last applied. Missing on
+    /// controllers from before revisions were recorded.
+    #[serde(default)]
+    pub(crate) management_permissions_revision: Option<String>,
 }
 
 #[controller]
@@ -168,6 +172,7 @@ impl AwsRemoteStackManagementController {
         }
 
         self.management_permissions_applied = true;
+        self.management_permissions_revision = super::management_permissions_revision(ctx)?;
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -258,6 +263,7 @@ impl AwsRemoteStackManagementController {
             self.reconcile_owned_management_policies(ctx, client.as_ref(), role_name, &[])
                 .await?;
         }
+        self.management_permissions_revision = super::management_permissions_revision(ctx)?;
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -480,6 +486,13 @@ impl AwsRemoteStackManagementController {
         state = RefreshFailed,
         status = ResourceStatus::RefreshFailed
     );
+
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        super::management_permissions_need_refresh(
+            ctx,
+            self.management_permissions_revision.as_deref(),
+        )
+    }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         if let (Some(role_arn), Some(_role_name)) = (&self.role_arn, &self.role_name) {
@@ -1093,6 +1106,7 @@ impl AwsRemoteStackManagementController {
             role_arn: Some(format!("arn:aws:iam::123456789012:role/{}", role_name)),
             role_name: Some(role_name.to_string()),
             management_permissions_applied: true,
+            management_permissions_revision: None,
             _internal_stay_count: None,
         }
     }
