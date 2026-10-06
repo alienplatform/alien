@@ -103,7 +103,7 @@ pub async fn handle_deleting(
         })
     })?;
 
-    let owns_setup = owns_local_setup(current_cloned.platform, service_provider.as_ref());
+    let owns_setup = owns_runtime_setup(current_cloned.platform, service_provider.as_ref());
     let executor = if owns_setup {
         StackExecutor::for_deletion_with_service_provider(
             client_config,
@@ -335,10 +335,8 @@ pub async fn handle_delete_failed(
     })
 }
 
-fn owns_local_setup(platform: Platform, service_provider: &dyn PlatformServiceProvider) -> bool {
-    platform == Platform::Local
-        && service_provider.runtime_setup_authority(platform)
-            == Some(InitialSetupAuthority::DirectSetup)
+fn owns_runtime_setup(platform: Platform, service_provider: &dyn PlatformServiceProvider) -> bool {
+    service_provider.runtime_setup_authority(platform) == Some(InitialSetupAuthority::DirectSetup)
 }
 
 fn prepare_resources_for_destroy(
@@ -346,7 +344,7 @@ fn prepare_resources_for_destroy(
     platform: Platform,
     service_provider: &dyn PlatformServiceProvider,
 ) -> alien_infra::Result<Vec<String>> {
-    if owns_local_setup(platform, service_provider) {
+    if owns_runtime_setup(platform, service_provider) {
         stack_state.prepare_for_destroy()
     } else {
         stack_state.prepare_for_runtime_cleanup_destroy()
@@ -425,8 +423,8 @@ mod tests {
     use alien_infra::{state_utils::StackStateExt, DefaultPlatformServiceProvider, StackExecutor};
 
     use super::{
-        compute_runtime_cleanup_status, handle_delete_pending, handle_deleting,
-        has_remaining_setup_resources,
+        compute_runtime_cleanup_status, handle_delete_failed, handle_delete_pending,
+        handle_deleting, has_remaining_setup_resources,
     };
 
     struct LocalStorageFixture {
@@ -568,7 +566,7 @@ mod tests {
             .prepare_for_destroy()
             .expect("prepare storage teardown");
         let executor = StackExecutor::for_deletion_with_service_provider(
-            fixture.client,
+            fixture.client.clone(),
             &fixture.config,
             Arc::new(DefaultPlatformServiceProvider::default()),
             None,
@@ -594,6 +592,43 @@ mod tests {
                 .unwrap(),
                 b"stored data"
             );
+        }
+        let failed = DeploymentState::builder()
+            .status(DeploymentStatus::DeleteFailed)
+            .platform(Platform::Local)
+            .stack_state(step.next_state)
+            .retry_requested(true)
+            .protocol_version(alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION)
+            .build();
+        let mut retry = handle_delete_failed(
+            failed,
+            fixture.config.clone(),
+            fixture.client.clone(),
+            fixture.services.clone(),
+        )
+        .await
+        .expect("retry with owning services")
+        .state;
+        assert!(!retry.retry_requested);
+        for _ in 0..16 {
+            if retry.status == DeploymentStatus::Deleted {
+                break;
+            }
+            retry = handle_deleting(
+                retry,
+                fixture.config.clone(),
+                fixture.client.clone(),
+                fixture.services.clone(),
+            )
+            .await
+            .expect("retry deletion step")
+            .state;
+            assert_ne!(retry.status, DeploymentStatus::DeleteFailed);
+            assert_ne!(retry.status, DeploymentStatus::TeardownRequired);
+        }
+        assert_eq!(retry.status, DeploymentStatus::Deleted);
+        for name in ["data", "evidence"] {
+            assert!(!fixture.directory.path().join("storage").join(name).exists());
         }
     }
 
