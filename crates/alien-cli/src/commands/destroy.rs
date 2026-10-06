@@ -199,13 +199,40 @@ async fn resolve_destroy_target(
     }
 
     let (project_id, _) = ctx.resolve_project(None, true).await?;
-    let manager = ctx
-        .resolve_manager_metadata_only(&project_id, platform)
-        .await?;
-    let deployment = if args.name.starts_with("dep_") || args.name.contains('/') {
-        crate::deployment_resolver::resolve(&manager.client, &args.name, ctx.is_dev()).await?
+    #[cfg(feature = "platform")]
+    let platform_target = if ctx.is_platform() {
+        let reference = if args.name.starts_with("dep_") || args.name.contains('/') {
+            args.name.clone()
+        } else {
+            resolve_platform_name(ctx, &args.name, &project_id).await?
+        };
+        Some(
+            crate::platform_deployment_resolver::resolve_with_manager(ctx, &reference, None, true)
+                .await?,
+        )
     } else {
-        resolve_untracked_name(ctx, &manager.client, &args.name, &project_id).await?
+        None
+    };
+    #[cfg(feature = "platform")]
+    let (manager, reference) = if let Some(target) = platform_target {
+        (target.manager, String::from(target.detail.id))
+    } else {
+        (
+            ctx.resolve_manager_metadata_only(&project_id, platform)
+                .await?,
+            args.name.clone(),
+        )
+    };
+    #[cfg(not(feature = "platform"))]
+    let (manager, reference) = (
+        ctx.resolve_manager_metadata_only(&project_id, platform)
+            .await?,
+        args.name.clone(),
+    );
+    let deployment = if reference.starts_with("dep_") || reference.contains('/') {
+        crate::deployment_resolver::resolve(&manager.client, &reference, ctx.is_dev()).await?
+    } else {
+        resolve_untracked_name(ctx, &manager.client, &reference, &project_id).await?
     };
     if deployment.project_id.as_str() != project_id {
         return Err(AlienError::new(ErrorData::ValidationError {
@@ -275,6 +302,52 @@ async fn resolve_destroy_target(
         },
         manager,
     ))
+}
+
+#[cfg(feature = "platform")]
+async fn resolve_platform_name(
+    ctx: &ExecutionMode,
+    name: &str,
+    project_id: &str,
+) -> Result<String> {
+    let mut ids: Vec<String> = Vec::new();
+    let client = ctx.sdk_client().await?;
+    let workspace = ctx.resolve_workspace_query_with_bootstrap(true).await?;
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut request = client.list_deployments().project(project_id);
+        if let Some(workspace) = workspace.as_deref() {
+            request = request.workspace(workspace);
+        }
+        if let Some(cursor) = cursor.as_deref() {
+            request = request.cursor(cursor);
+        }
+        let page = request
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Failed to resolve deployment '{name}'"),
+            })?
+            .into_inner();
+        ids.extend(
+            page.items
+                .into_iter()
+                .filter(|d| d.name.as_str() == name)
+                .map(|d| d.id.to_string()),
+        );
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    if ids.len() != 1 {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "name".to_string(),
+            message: format!("Expected one deployment named '{name}' in the selected project; found {}. Supply an ID or <group>/<name>", ids.len()),
+        }));
+    }
+    Ok(ids.remove(0))
 }
 
 /// Legacy `--name` remains usable, but only for an exact, unique match in the project.
@@ -806,7 +879,7 @@ mod tests {
                 "teardown-required"
             };
             Json(
-                serde_json::json!({ "id": ID, "name": "example", "platform": "test", "status": status, "deploymentGroupId": "dg_test", "deploymentProtocolVersion": 1, "projectId": PROJECT, "workspaceId": "ws_test", "retryRequested": false, "createdAt": "2026-01-01T00:00:00Z" }),
+                serde_json::json!({ "id": ID, "name": "example", "platform": "test", "status": status, "deploymentGroupId": "dg_test", "deploymentProtocolVersion": 1, "projectId": PROJECT, "workspaceId": "ws_000000000000000000000000", "managerId":"mgr_000000000000000000000000", "purpose":"application", "releaseChannel":"stable", "stackSettings":{}, "updatedAt":"2026-01-01T00:00:00Z", "retryRequested": false, "createdAt": "2026-01-01T00:00:00Z" }),
             ).into_response()
         }
         async fn request_delete(
@@ -845,12 +918,16 @@ mod tests {
         let manager_url = server_url.clone();
         let app = Router::new()
             .route("/v1/projects/{id}", get(project))
-            .route(
-                "/v1/resolve",
-                get(move || async move {
-                    Json(serde_json::json!({ "managerUrl": manager_url, "projectId": PROJECT }))
-                }),
-            )
+            // Current project routing is unrelated to the deployment's recorded manager.
+            .route("/v1/resolve", get(|| async { StatusCode::BAD_GATEWAY }))
+            .route("/v1/managers/{id}", get(move || async move {
+                Json(serde_json::json!({
+                    "id":"mgr_000000000000000000000000", "name":"original", "url":manager_url,
+                    "workspaceId":"ws_000000000000000000000000", "createdAt":"2026-01-01T00:00:00Z",
+                    "defaultProjectCount":0, "managedDeploymentCount":1, "managementConfigs":{},
+                    "isSystem":false, "status":"healthy", "targets":["test"]
+                }))
+            }))
             .route("/v1/deployments/{id}", get(deployment))
             .route("/v1/deployments/{id}/delete", post(request_delete))
             .route("/v1/sync/acquire", post(acquire))
