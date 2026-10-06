@@ -139,6 +139,10 @@ export type HorizonMachineImageConfigGcpUnion =
  */
 export type TargetDeploymentHorizondArtifacts = {
   /**
+   * Runtime isolation capability generation of the immutable artifact, not live readiness.
+   */
+  runtimeIsolationGeneration?: number | undefined;
+  /**
    * SHA-256 digest for the artifact payload.
    */
   sha256: string;
@@ -187,6 +191,10 @@ export type TargetDeploymentHorizonMachineImage = {
    * Published immutable machine image version.
    */
   machineImageVersion: string;
+  /**
+   * Runtime isolation capability generation of the immutable artifact, not live readiness.
+   */
+  runtimeIsolationGeneration?: number | undefined;
 };
 
 export type TargetDeploymentHorizonMachineImageUnion =
@@ -2041,6 +2049,7 @@ export type TargetDeploymentConfig = {
    *
    * @remarks
    * Trusted presence metadata only: never values, gate answers, or authority.
+   * Absent on legacy targets; an explicit empty list means no stored secrets.
    */
   storedSecretInputIds?: Array<string> | undefined;
 };
@@ -2283,6 +2292,7 @@ export const TargetDeploymentHorizondArtifacts$inboundSchema: z.ZodType<
   TargetDeploymentHorizondArtifacts,
   unknown
 > = z.object({
+  runtimeIsolationGeneration: z.int().optional(),
   sha256: z.string(),
   url: z.string(),
 });
@@ -2330,6 +2340,7 @@ export const TargetDeploymentHorizonMachineImage$inboundSchema: z.ZodType<
   ),
   horizondVersion: z.string(),
   machineImageVersion: z.string(),
+  runtimeIsolationGeneration: z.int().optional(),
 });
 
 export function targetDeploymentHorizonMachineImageFromJSON(
