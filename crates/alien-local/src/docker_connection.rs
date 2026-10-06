@@ -53,7 +53,7 @@ pub(crate) fn docker_command(endpoint: &str) -> tokio::process::Command {
 
 #[derive(Default)]
 struct DockerEnvironment {
-    config_dir: PathBuf,
+    config_dir: Option<PathBuf>,
     context: Option<String>,
     host: Option<String>,
     tls: bool,
@@ -70,27 +70,31 @@ impl DockerEnvironment {
                     .context(config_error(format!("{key} must contain Unicode"))),
             }
         };
-        let config_dir = match value("DOCKER_CONFIG")? {
-            Some(path) => PathBuf::from(path),
-            None => {
-                // Docker CLI uses os.UserHomeDir: HOME on Unix, USERPROFILE on Windows.
-                let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-                PathBuf::from(
-                    env::var_os(key)
+        let host = value("DOCKER_HOST")?;
+        // HOST wins before CONTEXT and does not need any configuration directory.
+        let context = if host.is_none() {
+            value("DOCKER_CONTEXT")?
+        } else {
+            None
+        };
+        let config_dir = if host.is_some() || context.as_deref() == Some("default") {
+            None
+        } else {
+            // Docker CLI uses os.UserHomeDir: HOME on Unix, USERPROFILE on Windows.
+            let home_key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+            env::var_os("DOCKER_CONFIG")
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from)
+                .or_else(|| {
+                    env::var_os(home_key)
                         .filter(|home| !home.is_empty())
-                        .ok_or_else(|| {
-                            AlienError::new(config_error(
-                                "Set DOCKER_CONFIG: home directory is unavailable".into(),
-                            ))
-                        })?,
-                )
-                .join(".docker")
-            }
+                        .map(|home| PathBuf::from(home).join(".docker"))
+                })
         };
         Ok(Self {
             config_dir,
-            context: value("DOCKER_CONTEXT")?,
-            host: value("DOCKER_HOST")?,
+            context,
+            host,
             tls: value("DOCKER_TLS")?.is_some() || value("DOCKER_TLS_VERIFY")?.is_some(),
         })
     }
@@ -104,7 +108,10 @@ impl DockerEnvironment {
         if let Some(context) = &self.context {
             return Ok(context.clone());
         }
-        let path = self.config_dir.join("config.json");
+        let Some(config_dir) = &self.config_dir else {
+            return Ok(String::new());
+        };
+        let path = config_dir.join("config.json");
         match fs::read(&path) {
             Ok(bytes) => Ok(serde_json::from_slice::<CliConfig>(&bytes)
                 .into_alien_error()
@@ -137,8 +144,11 @@ impl DockerEnvironment {
         }
         // Let the CLI own its context-store format and TLS material discovery.
         // Native services using the default endpoint need no Docker executable.
+        let config_dir = self.config_dir.as_ref().ok_or_else(|| AlienError::new(config_error(
+            "Set DOCKER_CONFIG to inspect the selected named context when the home directory is unavailable".into(),
+        )))?;
         let output = Command::new("docker")
-            .env("DOCKER_CONFIG", &self.config_dir)
+            .env("DOCKER_CONFIG", config_dir)
             .env_remove("DOCKER_HOST")
             .env_remove("DOCKER_CONTEXT")
             .env_remove("DOCKER_TLS")
@@ -303,10 +313,26 @@ mod tests {
     fn fixture() -> (TempDir, DockerEnvironment) {
         let directory = TempDir::new().expect("temporary Docker config");
         let environment = DockerEnvironment {
-            config_dir: directory.path().into(),
+            config_dir: Some(directory.path().into()),
             ..Default::default()
         };
         (directory, environment)
+    }
+
+    #[test]
+    fn absent_configuration_does_not_block_host_or_native_default() {
+        let mut environment = DockerEnvironment::default();
+        assert_eq!(environment.endpoint().unwrap(), default_host());
+        environment.host = Some("tcp://localhost:1234".into());
+        environment.context = Some("missing".into());
+        assert_eq!(environment.endpoint().unwrap(), "tcp://localhost:1234");
+        environment.host = None;
+        assert_eq!(
+            environment.endpoint().unwrap_err().code,
+            "DOCKER_CONFIGURATION_INVALID"
+        );
+        environment.context = Some("default".into());
+        assert_eq!(environment.endpoint().unwrap(), default_host());
     }
 
     // Fixture directory names from Docker's public SHA256 context-store format.
@@ -323,7 +349,12 @@ mod tests {
 
     fn write_context(environment: &DockerEnvironment, name: &str, host: &str) {
         let id = context_id(name);
-        let directory = environment.config_dir.join("contexts/meta").join(id);
+        let directory = environment
+            .config_dir
+            .as_ref()
+            .unwrap()
+            .join("contexts/meta")
+            .join(id);
         fs::create_dir_all(&directory).unwrap();
         fs::write(directory.join("meta.json"), serde_json::to_vec(&serde_json::json!({"Name": name, "Endpoints": {"docker": {"Host": host, "SkipTLSVerify": false}}})).unwrap()).unwrap();
     }
@@ -334,7 +365,7 @@ mod tests {
         write_context(&environment, "stored", "unix:///stored.sock");
         write_context(&environment, "explicit", "unix:///explicit.sock");
         fs::write(
-            environment.config_dir.join("config.json"),
+            environment.config_dir.as_ref().unwrap().join("config.json"),
             r#"{"currentContext":"stored"}"#,
         )
         .unwrap();
@@ -357,14 +388,18 @@ mod tests {
         environment.host = None;
         assert_eq!(environment.endpoint().unwrap(), default_host());
         environment.context = None;
-        fs::remove_file(environment.config_dir.join("config.json")).unwrap();
+        fs::remove_file(environment.config_dir.as_ref().unwrap().join("config.json")).unwrap();
         assert_eq!(environment.endpoint().unwrap(), default_host());
     }
 
     #[test]
     fn invalid_selected_configuration_never_falls_back() {
         let (_directory, mut environment) = fixture();
-        fs::write(environment.config_dir.join("config.json"), b"invalid json").unwrap();
+        fs::write(
+            environment.config_dir.as_ref().unwrap().join("config.json"),
+            b"invalid json",
+        )
+        .unwrap();
         let error = environment.endpoint().unwrap_err();
         assert!(matches!(
             error.error,
@@ -388,6 +423,8 @@ mod tests {
         fs::write(
             environment
                 .config_dir
+                .as_ref()
+                .unwrap()
                 .join("contexts/meta")
                 .join(id)
                 .join("meta.json"),
@@ -400,6 +437,8 @@ mod tests {
         ));
         let path = environment
             .config_dir
+            .as_ref()
+            .unwrap()
             .join("contexts/meta")
             .join(context_id("missing"))
             .join("meta.json");
@@ -424,6 +463,8 @@ mod tests {
         let id = context_id("secure");
         let directory = environment
             .config_dir
+            .as_ref()
+            .unwrap()
             .join("contexts/tls")
             .join(id)
             .join("docker");
@@ -459,6 +500,8 @@ mod tests {
         environment.tls = true;
         let path = environment
             .config_dir
+            .as_ref()
+            .unwrap()
             .join("contexts/meta")
             .join(context_id("secure"))
             .join("meta.json");
@@ -478,7 +521,7 @@ mod tests {
     #[tokio::test]
     async fn selected_unix_context_sends_real_api_request() {
         let (_directory, environment) = fixture();
-        let socket = environment.config_dir.join("engine.sock");
+        let socket = environment.config_dir.as_ref().unwrap().join("engine.sock");
         let listener = UnixListener::bind(&socket).unwrap();
         write_context(
             &environment,
@@ -486,7 +529,7 @@ mod tests {
             &format!("unix://{}", socket.display()),
         );
         fs::write(
-            environment.config_dir.join("config.json"),
+            environment.config_dir.as_ref().unwrap().join("config.json"),
             r#"{"currentContext":"fixture"}"#,
         )
         .unwrap();
