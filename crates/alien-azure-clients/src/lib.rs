@@ -15,6 +15,7 @@ pub use azure::cognitive_services::{AzureCognitiveServicesClient, CognitiveServi
 pub use azure::compute::{AzureVmssClient, VirtualMachineScaleSetsApi};
 pub use azure::container_apps::{AzureContainerAppsClient, ContainerAppsApi};
 pub use azure::containerregistry::{AzureContainerRegistryClient, ContainerRegistryApi};
+pub use azure::data_protection::{AzureDataProtectionClient, DataProtectionApi};
 pub use azure::disks::{AzureManagedDisksClient, ManagedDisksApi};
 pub use azure::event_grid::{AzureEventGridClient, EventGridApi};
 pub use azure::flexible_server::{AzureFlexibleServerClient, FlexibleServerApi};
@@ -41,6 +42,7 @@ pub use azure::service_bus::{
     AzureServiceBusDataPlaneClient, AzureServiceBusManagementClient, ServiceBusDataPlaneApi,
     ServiceBusManagementApi,
 };
+pub use azure::snapshots::{AzureSnapshotsClient, SnapshotsApi};
 pub use azure::storage_accounts::{AzureStorageAccountsClient, StorageAccountsApi};
 pub use azure::tables::{
     AzureTableManagementClient, AzureTableStorageClient, TableManagementApi, TableStorageApi,

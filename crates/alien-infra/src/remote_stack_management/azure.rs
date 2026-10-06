@@ -175,6 +175,10 @@ pub struct AzureRemoteStackManagementController {
     pub(crate) role_assignment_ids: Vec<String>,
     /// Deadline for Azure RBAC propagation after management assignments.
     pub(crate) role_assignment_wait_until_epoch_secs: Option<u64>,
+    /// Revision of the management permissions last assigned. Missing on
+    /// controllers from before revisions were recorded.
+    #[serde(default)]
+    pub(crate) management_permissions_revision: Option<String>,
 }
 
 #[controller]
@@ -567,6 +571,7 @@ impl AzureRemoteStackManagementController {
         }
 
         self.role_assignment_wait_until_epoch_secs = None;
+        self.management_permissions_revision = super::management_permissions_revision(ctx)?;
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -972,6 +977,13 @@ impl AzureRemoteStackManagementController {
         state = RefreshFailed,
         status = ResourceStatus::RefreshFailed
     );
+
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        super::management_permissions_need_refresh(
+            ctx,
+            self.management_permissions_revision.as_deref(),
+        )
+    }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         if let (Some(client_id), Some(uami_resource_id), Some(tenant_id)) = (
@@ -1695,6 +1707,7 @@ impl AzureRemoteStackManagementController {
             )),
             role_assignment_ids: vec![],
             role_assignment_wait_until_epoch_secs: None,
+            management_permissions_revision: None,
             _internal_stay_count: None,
         }
     }
