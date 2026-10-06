@@ -872,7 +872,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explicit_token_cannot_destroy_a_different_name() {
+    async fn explicit_token_rejects_mismatched_name_and_platform() {
         let state = Shared::default();
         let app = Router::new()
             .route("/v1/whoami", get(whoami))
@@ -885,16 +885,23 @@ mod tests {
             server_url,
             api_key: "operator".to_string(),
         };
-        let args = DestroyArgs {
-            token: Some(DEPLOYMENT_TOKEN.to_string()),
-            name: "another".to_string(),
-            platform: Some("test".to_string()),
-            force: false,
-        };
-        let result = resolve_destroy_target(&args, &ctx, "test", None).await;
-        assert!(result.is_err());
-        assert!(!state.lock().unwrap().deleted);
-        assert!(state.lock().unwrap().acquire_authorizations.is_empty());
+        for (name, platform, field) in
+            [("another", "test", "name"), ("dep_test", "aws", "platform")]
+        {
+            let args = DestroyArgs {
+                token: Some(DEPLOYMENT_TOKEN.to_string()),
+                name: name.to_string(),
+                platform: Some(platform.to_string()),
+                force: false,
+            };
+            let error = resolve_destroy_target(&args, &ctx, platform, None)
+                .await
+                .expect_err("mismatched target must fail before mutation");
+            assert_eq!(error.code, "VALIDATION_ERROR");
+            assert!(error.message.contains(field));
+            assert!(!state.lock().unwrap().deleted);
+            assert!(state.lock().unwrap().acquire_authorizations.is_empty());
+        }
     }
 
     #[tokio::test]
