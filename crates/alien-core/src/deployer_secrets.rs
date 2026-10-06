@@ -204,6 +204,10 @@ pub struct DeployerSecretLocation {
     pub console_url: Option<String>,
     /// Command that writes the value, with `<VALUE>` in place of the secret.
     pub cli_command: String,
+    /// Command that deletes the secret. Deleting a deployment keeps the
+    /// secrets the deployer wrote, since Alien never owned their values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delete_command: Option<String>,
 }
 
 /// What a location needs beyond the vault binding.
@@ -248,6 +252,9 @@ pub fn deployer_secret_location(
                 cli_command: format!(
                     "aws ssm put-parameter{region_flag} --name '{name}' --type SecureString --overwrite --value '{placeholder}'"
                 ),
+                delete_command: Some(format!(
+                    "aws ssm delete-parameter{region_flag} --name '{name}'"
+                )),
                 name,
             }
         }
@@ -271,6 +278,9 @@ pub fn deployer_secret_location(
                 cli_command: format!(
                     "(gcloud secrets describe {name}{project_flag} >/dev/null 2>&1 || gcloud secrets create {name}{project_flag} --replication-policy=automatic) && printf '%s' '{placeholder}' | gcloud secrets versions add {name}{project_flag} --data-file=-"
                 ),
+                delete_command: Some(format!(
+                    "gcloud secrets delete {name}{project_flag} --quiet"
+                )),
                 name,
             }
         }
@@ -292,6 +302,9 @@ pub fn deployer_secret_location(
                 cli_command: format!(
                     "az keyvault secret set --vault-name {vault_name} --name {name} --value '{placeholder}'"
                 ),
+                delete_command: Some(format!(
+                    "az keyvault secret delete --vault-name {vault_name} --name {name}"
+                )),
                 name,
             }
         }
@@ -307,6 +320,9 @@ pub fn deployer_secret_location(
                     "kubectl create secret generic {name} --namespace {namespace} --from-literal={}='{placeholder}'",
                     vault_naming::KUBERNETES_SECRET_VALUE_KEY
                 ),
+                delete_command: Some(format!(
+                    "kubectl delete secret {name} --namespace {namespace}"
+                )),
                 name,
             }
         }
@@ -324,6 +340,10 @@ pub fn deployer_secret_location(
                     "alien dev vault{deployment_flag} set {} {vault_key} '{placeholder}'",
                     binding.vault_name
                 ),
+                delete_command: Some(format!(
+                    "alien dev vault{deployment_flag} delete {} {vault_key}",
+                    binding.vault_name
+                )),
                 name: vault_key.to_string(),
             }
         }
@@ -366,6 +386,10 @@ pub struct DeployerSecretReport {
     /// Why the slot is invalid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// The secret store's version of the present value (never the value or a
+    /// hash of it). A new version reaches workloads with the next update.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     /// Where the deployer writes the value.
     pub location: DeployerSecretLocation,
 }
@@ -415,6 +439,11 @@ pub struct DeployerSecretEnv {
     pub label: String,
     /// Whether the workload must not start without it.
     pub required: bool,
+    /// The secret store's version of the value when the workload was
+    /// configured. Overwriting the secret changes it, so the next update
+    /// restarts the workload, which then reads the new value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 /// The environment variables workloads read from vault-native deployer
@@ -463,6 +492,7 @@ pub fn deployer_secret_environment(
                     vault_name: report.location.vault_name.clone(),
                     label: slot.input.label.clone(),
                     required: slot.input.required,
+                    version: report.version.clone(),
                 },
                 mapping.target_resources.clone(),
             )
@@ -701,6 +731,10 @@ mod tests {
         assert_eq!(aws.store, DeployerSecretStore::AwsParameterStore);
         assert!(aws.cli_command.contains("--type SecureString"));
         assert!(aws.cli_command.contains("'<VALUE>'"));
+        assert_eq!(
+            aws.delete_command.as_deref(),
+            Some("aws ssm delete-parameter --region us-east-1 --name 'stack-secrets-input-database-password'")
+        );
 
         let gcp = deployer_secret_location(
             &VaultBinding::secret_manager("stack-secrets"),
@@ -711,6 +745,10 @@ mod tests {
         assert_eq!(gcp.name, "stack-secrets-input-database-password");
         assert_eq!(gcp.vault_name, None);
         assert!(gcp.console_url.unwrap().contains("project=acme-prod"));
+        assert_eq!(
+            gcp.delete_command.as_deref(),
+            Some("gcloud secrets delete stack-secrets-input-database-password --project acme-prod --quiet")
+        );
 
         // A Key Vault secret name alone does not say which vault holds it, so
         // the location carries the vault for whoever reads the slot.
@@ -720,6 +758,13 @@ mod tests {
         assert_eq!(azure.store, DeployerSecretStore::AzureKeyVault);
         assert_eq!(azure.vault_name.as_deref(), Some("stacksecrets7f3a"));
         assert!(azure.cli_command.contains("--vault-name stacksecrets7f3a"));
+        assert_eq!(
+            azure.delete_command,
+            Some(format!(
+                "az keyvault secret delete --vault-name stacksecrets7f3a --name {}",
+                azure.name
+            ))
+        );
 
         let kubernetes = deployer_secret_location(
             &VaultBinding::kubernetes_secret("apps", "Stack-Secrets"),
@@ -729,6 +774,10 @@ mod tests {
         .unwrap();
         assert_eq!(kubernetes.name, "stack-secrets-input-database-password");
         assert!(kubernetes.cli_command.contains("--namespace apps"));
+        assert_eq!(
+            kubernetes.delete_command.as_deref(),
+            Some("kubectl delete secret stack-secrets-input-database-password --namespace apps")
+        );
 
         let local =
             deployer_secret_location(&VaultBinding::local("secrets", "/tmp/x"), key, &context)
@@ -736,6 +785,10 @@ mod tests {
         assert_eq!(
             local.cli_command,
             "alien dev vault --deployment default set secrets input-database-password '<VALUE>'"
+        );
+        assert_eq!(
+            local.delete_command.as_deref(),
+            Some("alien dev vault --deployment default delete secrets input-database-password")
         );
     }
 
@@ -766,6 +819,7 @@ mod tests {
             required: true,
             status: DeployerSecretStatus::Missing,
             message: None,
+            version: None,
             location,
         };
         assert!(report.blocks_start());
@@ -786,12 +840,14 @@ mod tests {
             required: true,
             status,
             message: None,
+            version: None,
             location: DeployerSecretLocation {
                 store: DeployerSecretStore::AwsParameterStore,
                 name: "stack-secrets-input-database-password".to_string(),
                 vault_name: None,
                 console_url: None,
                 cli_command: String::new(),
+                delete_command: None,
             },
         }
     }

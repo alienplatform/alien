@@ -93,7 +93,9 @@ impl crate::traits::Vault for AwsParameterStoreVault {
             return Ok(SecretPresence::Missing);
         };
         match parameter.parameter_type.as_deref() {
-            Some("SecureString") => Ok(SecretPresence::Present),
+            Some("SecureString") => Ok(SecretPresence::Present {
+                version: parameter.version.map(|version| version.to_string()),
+            }),
             other => Ok(SecretPresence::Invalid {
                 reason: format!(
                     "parameter '{full_name}' is a {} parameter; it must be a SecureString",

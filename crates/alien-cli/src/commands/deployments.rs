@@ -2,6 +2,7 @@ use std::future::Future;
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
+use crate::commands::destroy::{kept_deployer_secrets, print_kept_deployer_secrets};
 use crate::commands::event_display::{print_event_table, EventDisplayRow};
 use crate::deployment_tracking::DeploymentTracker;
 use crate::error::{ErrorData, Result};
@@ -1646,6 +1647,15 @@ async fn delete_deployment_task(
     let confirmation_mode = delete_confirmation_mode(yes)?;
     let deployment = resolve_deployment_reference(client, reference).await?;
     let forget = matches!(action, DeleteDeploymentAction::Forget);
+    let runtime_metadata: Option<alien_core::RuntimeMetadata> = deployment
+        .runtime_metadata
+        .as_ref()
+        .map(|metadata| serde_json::to_value(metadata).and_then(serde_json::from_value))
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize runtime_metadata".to_string(),
+        })?;
 
     println!(
         "{}",
@@ -1698,6 +1708,7 @@ async fn delete_deployment_task(
     println!("{}", success_line(&format!("{}.", accepted.message)));
     // A forgotten deployment has no record left to read.
     if !forget {
+        print_kept_deployer_secrets(&kept_deployer_secrets(runtime_metadata.as_ref()));
         println!(
             "{} {}",
             dim_label("Next"),
@@ -1865,41 +1876,50 @@ async fn wait_for_platform_update_operation(
     operation: DeploymentUpdateOperationSummaryInner,
     options: UpdateOperationWaitOptions<'_>,
 ) -> Result<()> {
-    let (operation, elapsed) = await_update_operation(operation, options, || async {
-        client
-            .get_deployment_update_operation()
-            .id(options.deployment_id)
-            .operation_id(options.operation_id)
-            .workspace(options.workspace)
-            .send()
-            .await
-            .into_sdk_error()
-            .context(ErrorData::ApiRequestFailed {
-                message: format!(
-                    "reading redeploy operation {} for deployment {}",
-                    options.operation_id, options.deployment_id
-                ),
-                url: None,
-            })?
-            .into_inner()
-            .0
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ApiRequestFailed {
+    let mut print_progress = |progress: &str| {
+        if !options.json {
+            eprintln!("{} {progress}", dim_label("Redeploy operation:"));
+        }
+    };
+    let (operation, elapsed) =
+        await_update_operation(operation, options, &mut print_progress, || async {
+            client
+                .get_deployment_update_operation()
+                .id(options.deployment_id)
+                .operation_id(options.operation_id)
+                .workspace(options.workspace)
+                .send()
+                .await
+                .into_sdk_error()
+                .context(ErrorData::ApiRequestFailed {
                     message: format!(
-                        "Platform returned an empty redeploy operation {} for deployment {}",
+                        "reading redeploy operation {} for deployment {}",
                         options.operation_id, options.deployment_id
                     ),
                     url: None,
+                })?
+                .into_inner()
+                .0
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ApiRequestFailed {
+                        message: format!(
+                            "Platform returned an empty redeploy operation {} for deployment {}",
+                            options.operation_id, options.deployment_id
+                        ),
+                        url: None,
+                    })
                 })
-            })
-    })
-    .await?;
+        })
+        .await?;
     print_redeploy_result(options.deployment_id, &operation, elapsed, options.json)
 }
 
+/// Polls an update operation until it finishes, reporting each change of its
+/// status or of the action it waits for through `on_progress`.
 async fn await_update_operation<F, Fut>(
     mut operation: DeploymentUpdateOperationSummaryInner,
     options: UpdateOperationWaitOptions<'_>,
+    on_progress: &mut dyn FnMut(&str),
     mut poll: F,
 ) -> Result<(DeploymentUpdateOperationSummaryInner, Duration)>
 where
@@ -1908,11 +1928,12 @@ where
 {
     let started = Instant::now();
     let deadline = tokio::time::Instant::now() + options.timeout;
-    let mut last_status = None;
+    let mut last_progress = None;
     loop {
-        if !options.json && last_status != Some(operation.status) {
-            eprintln!("{} {}", dim_label("Redeploy operation:"), operation.status);
-            last_status = Some(operation.status);
+        let progress = update_operation_progress(&operation);
+        if last_progress.as_ref() != Some(&progress) {
+            on_progress(&progress);
+            last_progress = Some(progress);
         }
 
         match update_operation_disposition(operation.status) {
@@ -1939,22 +1960,41 @@ where
         }
 
         if tokio::time::Instant::now() >= deadline {
-            return Err(redeploy_wait_timeout_error(options, operation.status));
+            return Err(redeploy_wait_timeout_error(options, &operation));
         }
         tokio::time::sleep_until((tokio::time::Instant::now() + options.interval).min(deadline))
             .await;
         if tokio::time::Instant::now() >= deadline {
-            return Err(redeploy_wait_timeout_error(options, operation.status));
+            return Err(redeploy_wait_timeout_error(options, &operation));
         }
         operation = tokio::time::timeout_at(deadline, poll())
             .await
-            .map_err(|_| redeploy_wait_timeout_error(options, operation.status))??;
+            .map_err(|_| redeploy_wait_timeout_error(options, &operation))??;
     }
+}
+
+/// One line saying where an update operation is and, while it waits on
+/// someone, what it waits for: `queued (redeploy): <action required>`.
+fn update_operation_progress(operation: &DeploymentUpdateOperationSummaryInner) -> String {
+    let reasons = operation
+        .reasons
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut progress = operation.status.to_string();
+    if !reasons.is_empty() {
+        progress.push_str(&format!(" ({reasons})"));
+    }
+    if let Some(action) = operation.action_required.as_deref() {
+        progress.push_str(&format!(": {action}"));
+    }
+    progress
 }
 
 fn redeploy_wait_timeout_error(
     options: UpdateOperationWaitOptions<'_>,
-    status: DeploymentUpdateOperationStatus,
+    operation: &DeploymentUpdateOperationSummaryInner,
 ) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::ApiRequestFailed {
         message: format!(
@@ -1962,7 +2002,7 @@ fn redeploy_wait_timeout_error(
             options.timeout.as_secs_f64(),
             options.operation_id,
             options.deployment_id,
-            status
+            update_operation_progress(operation)
         ),
         url: None,
     })
@@ -3669,7 +3709,7 @@ mod tests {
         ]);
         let initial = redeploy_operation(&operation_id, DeploymentUpdateOperationStatus::Queued);
 
-        let (completed, _) = await_update_operation(initial, options, || {
+        let (completed, _) = await_update_operation(initial, options, &mut |_| {}, || {
             std::future::ready(Ok(observations
                 .pop_front()
                 .expect("wait should consume the next exact operation observation")))
@@ -3679,6 +3719,97 @@ mod tests {
 
         assert_eq!(completed.status, DeploymentUpdateOperationStatus::Succeeded);
         assert!(observations.is_empty(), "wait must poll through applying");
+    }
+
+    #[tokio::test]
+    async fn correlated_wait_reports_what_the_operation_is_waiting_for() {
+        let operation_id = format!("duop_{}", "a".repeat(28));
+        let options = UpdateOperationWaitOptions {
+            workspace: "test-workspace",
+            deployment_id: "dep_test",
+            operation_id: &operation_id,
+            timeout: Duration::from_secs(1),
+            interval: Duration::from_millis(1),
+            json: true,
+        };
+        let waiting = "Write deployer secret 'Database password'";
+        let mut observations = std::collections::VecDeque::from([
+            update_operation(
+                &operation_id,
+                DeploymentUpdateOperationStatus::Queued,
+                Some(waiting),
+            ),
+            update_operation(
+                &operation_id,
+                DeploymentUpdateOperationStatus::Queued,
+                Some(waiting),
+            ),
+            update_operation(
+                &operation_id,
+                DeploymentUpdateOperationStatus::Applying,
+                None,
+            ),
+            update_operation(
+                &operation_id,
+                DeploymentUpdateOperationStatus::Succeeded,
+                None,
+            ),
+        ]);
+        let initial =
+            update_operation(&operation_id, DeploymentUpdateOperationStatus::Queued, None);
+        let mut progress = Vec::new();
+
+        await_update_operation(
+            initial,
+            options,
+            &mut |line| progress.push(line.to_string()),
+            || std::future::ready(Ok(observations.pop_front().expect("next observation"))),
+        )
+        .await
+        .expect("operation should succeed");
+
+        assert_eq!(
+            progress,
+            vec![
+                "queued (release)".to_string(),
+                format!("queued (release): {waiting}"),
+                "applying (release)".to_string(),
+                "succeeded (release)".to_string(),
+            ],
+            "each change is reported once, with the action the operation waits for"
+        );
+    }
+
+    #[tokio::test]
+    async fn correlated_wait_timeout_names_what_the_operation_waits_for() {
+        let operation_id = format!("duop_{}", "a".repeat(28));
+        let options = UpdateOperationWaitOptions {
+            workspace: "test-workspace",
+            deployment_id: "dep_test",
+            operation_id: &operation_id,
+            timeout: Duration::from_millis(20),
+            interval: Duration::from_millis(1),
+            json: true,
+        };
+        let waiting = "Write deployer secret 'Database password'";
+        let initial = update_operation(
+            &operation_id,
+            DeploymentUpdateOperationStatus::Queued,
+            Some(waiting),
+        );
+
+        let error = await_update_operation(initial, options, &mut |_| {}, || {
+            std::future::ready(Ok(update_operation(
+                &operation_id,
+                DeploymentUpdateOperationStatus::Queued,
+                Some(waiting),
+            )))
+        })
+        .await
+        .expect_err("a queued operation must time out");
+
+        assert!(error.message.contains("Timed out"), "{}", error.message);
+        assert!(error.message.contains(waiting), "{}", error.message);
     }
 
     #[tokio::test]
@@ -3696,7 +3827,7 @@ mod tests {
         let initial = redeploy_operation(&operation_id, DeploymentUpdateOperationStatus::Queued);
         let started = Instant::now();
 
-        let error = await_update_operation(initial, options, || async {
+        let error = await_update_operation(initial, options, &mut |_| {}, || async {
             tokio::time::sleep(Duration::from_secs(5)).await;
             Ok(redeploy_operation(
                 &operation_id,

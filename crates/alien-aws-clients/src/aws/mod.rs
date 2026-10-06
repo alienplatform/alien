@@ -53,6 +53,7 @@ pub mod bedrock;
 pub mod cloudcontrol;
 pub mod cloudformation;
 pub mod cloudwatch;
+pub mod cloudwatch_logs;
 pub mod codebuild;
 pub mod credential_provider;
 pub mod dlm;

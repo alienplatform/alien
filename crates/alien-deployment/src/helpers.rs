@@ -779,10 +779,12 @@ pub async fn check_deployer_secrets(
                     vault_name: SECRETS_VAULT_ID.to_string(),
                     reason: format!("Failed to check deployer secret '{}'", location.name),
                 })?;
-        let (status, message) = match presence {
-            SecretPresence::Present => (DeployerSecretStatus::Present, None),
-            SecretPresence::Missing => (DeployerSecretStatus::Missing, None),
-            SecretPresence::Invalid { reason } => (DeployerSecretStatus::Invalid, Some(reason)),
+        let (status, message, version) = match presence {
+            SecretPresence::Present { version } => (DeployerSecretStatus::Present, None, version),
+            SecretPresence::Missing => (DeployerSecretStatus::Missing, None, None),
+            SecretPresence::Invalid { reason } => {
+                (DeployerSecretStatus::Invalid, Some(reason), None)
+            }
         };
         reports.push(DeployerSecretReport {
             input_id: slot.input.id.clone(),
@@ -790,6 +792,7 @@ pub async fn check_deployer_secrets(
             required: slot.input.required,
             status,
             message,
+            version,
             location,
         });
     }
@@ -1283,12 +1286,14 @@ mod tests {
             required: true,
             status: DeployerSecretStatus::Missing,
             message: None,
+            version: None,
             location: alien_core::DeployerSecretLocation {
                 store: alien_core::DeployerSecretStore::LocalVault,
                 name: "input-api-key".to_string(),
                 vault_name: None,
                 console_url: None,
                 cli_command: String::new(),
+                delete_command: None,
             },
         };
         assert!(deployer_secrets_blocking_start(

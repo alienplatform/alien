@@ -5,10 +5,10 @@ use tracing::{debug, info};
 use crate::core::kubernetes_errors::is_remote_resource_conflict;
 use crate::core::{
     delete_environment_secret, direct_monitoring_auth_headers, kubernetes_branded_resource_labels,
-    kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, projected_env_vars,
-    reconcile_environment_secret_with_additional_secrets, EnvSecretRotationTracker,
-    EnvironmentVariableBuilder, KubernetesEnvSecretPlan, ResourceController,
-    ResourceControllerContext,
+    kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, pod_template_annotations,
+    projected_env_vars, reconcile_environment_secret_with_additional_secrets,
+    EnvSecretRotationTracker, EnvironmentVariableBuilder, KubernetesEnvSecretPlan,
+    ResourceController, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
@@ -2107,9 +2107,7 @@ impl KubernetesContainerController {
                 ctx,
             )
             .await?;
-        let pod_annotations = env_secret_plan.map(|plan| {
-            BTreeMap::from([("env-secret-checksum".to_string(), plan.checksum.clone())])
-        });
+        let pod_annotations = pod_template_annotations(env_secret_plan, &config.environment)?;
 
         let deployment = Deployment {
             metadata: ObjectMeta {
@@ -2163,9 +2161,7 @@ impl KubernetesContainerController {
                 ctx,
             )
             .await?;
-        let pod_annotations = env_secret_plan.map(|plan| {
-            BTreeMap::from([("env-secret-checksum".to_string(), plan.checksum.clone())])
-        });
+        let pod_annotations = pod_template_annotations(env_secret_plan, &config.environment)?;
 
         // Build volume claim templates for persistent storage
         let mut volume_claim_templates = Vec::new();
@@ -2864,9 +2860,9 @@ mod tests {
     };
     use alien_core::{
         ContainerSecurity, ContainerSecurityProfile, KubernetesHttpProbe, KubernetesSecretMount,
-        OtlpConfig, Resource, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_LAMBDA_MODE,
-        ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_RUNTIME_SEND_OTLP, ENV_ALIEN_SECRETS,
-        ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
+        OtlpConfig, Resource, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_DEPLOYER_SECRETS,
+        ENV_ALIEN_LAMBDA_MODE, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_RUNTIME_SEND_OTLP,
+        ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
     };
     fn manifest_test_container(environment: &[(&str, &str)], stateful: bool) -> Container {
         let mut config = Container::new("web".to_string())
@@ -3170,6 +3166,75 @@ mod tests {
             pod_template_checksum_annotation(&templates[0]),
             pod_template_checksum_annotation(&templates[2]),
             "rotating a secret value must change the pod template (rollout)"
+        );
+    }
+
+    #[tokio::test]
+    async fn deployer_secret_overwrite_changes_the_rendered_pod_template() {
+        let controller = manifest_test_controller();
+
+        let mut templates = Vec::new();
+        for version in ["7", "7", "8"] {
+            let deployer_secrets = serde_json::json!([{
+                "name": "DATABASE_PASSWORD",
+                "vaultKey": "input-database-password",
+                "secretName": "stack-secrets-input-database-password",
+                "label": "Database password",
+                "required": true,
+                "version": version,
+            }])
+            .to_string();
+            let config = manifest_test_container(
+                &[(ENV_ALIEN_DEPLOYER_SECRETS, deployer_secrets.as_str())],
+                false,
+            );
+            let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+            let deployment = controller
+                .build_deployment(
+                    &config,
+                    "web",
+                    "test-ns",
+                    "web-sa",
+                    None,
+                    None,
+                    &harness.ctx(),
+                )
+                .await
+                .expect("deployment manifest");
+            let template = deployment.spec.expect("spec").template;
+            let env = template.spec.as_ref().expect("pod spec").containers[0]
+                .env
+                .clone()
+                .expect("container env");
+            let reference = env
+                .iter()
+                .find(|var| var.name == "DATABASE_PASSWORD")
+                .and_then(|var| var.value_from.as_ref()?.secret_key_ref.as_ref())
+                .expect("DATABASE_PASSWORD is a secretKeyRef");
+            assert_eq!(reference.name, "stack-secrets-input-database-password");
+            templates.push(template);
+        }
+
+        let sorted_env = |template: &PodTemplateSpec| {
+            let mut env = template.spec.as_ref().expect("pod spec").containers[0]
+                .env
+                .clone()
+                .expect("container env");
+            env.sort_by(|left, right| left.name.cmp(&right.name));
+            env
+        };
+        assert_eq!(
+            templates[0].metadata, templates[1].metadata,
+            "the same secret version must render the same pod template metadata"
+        );
+        assert_eq!(
+            sorted_env(&templates[0]),
+            sorted_env(&templates[2]),
+            "the containers only reference the Secret, so their env cannot change"
+        );
+        assert_ne!(
+            templates[0].metadata, templates[2].metadata,
+            "a new secret version must change the pod template (rollout)"
         );
     }
 

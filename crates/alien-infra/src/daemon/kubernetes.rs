@@ -5,9 +5,10 @@ use tracing::{debug, info};
 use crate::core::kubernetes_errors::is_remote_resource_conflict;
 use crate::core::{
     delete_environment_secret, direct_monitoring_auth_headers, kubernetes_branded_resource_labels,
-    kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, projected_env_vars,
-    reconcile_environment_secret_with_additional_secrets, EnvSecretRotationTracker,
-    EnvironmentVariableBuilder, KubernetesEnvSecretPlan, ResourceControllerContext,
+    kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, pod_template_annotations,
+    projected_env_vars, reconcile_environment_secret_with_additional_secrets,
+    EnvSecretRotationTracker, EnvironmentVariableBuilder, KubernetesEnvSecretPlan,
+    ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
@@ -1107,9 +1108,7 @@ impl KubernetesDaemonController {
         let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
         // Roll pods when the env Secret changes (e.g. token rotation) by stamping
         // its checksum onto the pod template — matches the container controller.
-        let pod_annotations = env_secret_plan.map(|plan| {
-            BTreeMap::from([("env-secret-checksum".to_string(), plan.checksum.clone())])
-        });
+        let pod_annotations = pod_template_annotations(env_secret_plan, &config.environment)?;
 
         Ok(DaemonSet {
             metadata: ObjectMeta {

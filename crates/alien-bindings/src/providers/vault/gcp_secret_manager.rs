@@ -77,7 +77,11 @@ impl crate::traits::Vault for GcpSecretManagerVault {
         };
 
         match version.state {
-            Some(SecretVersionState::Enabled) => Ok(SecretPresence::Present),
+            // `name` resolves the `latest` alias to the concrete version
+            // (`.../versions/3`), which changes on every new version.
+            Some(SecretVersionState::Enabled) => Ok(SecretPresence::Present {
+                version: version.name,
+            }),
             Some(SecretVersionState::Disabled) => Ok(SecretPresence::Invalid {
                 reason: format!("the latest version of secret '{full_name}' is disabled"),
             }),

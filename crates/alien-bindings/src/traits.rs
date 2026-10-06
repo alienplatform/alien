@@ -457,7 +457,14 @@ pub trait Vault: Binding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretPresence {
     /// The secret exists and a workload with read access can use it.
-    Present,
+    Present {
+        /// The store's identifier for the value a workload reads now (an SSM
+        /// parameter version, a Secret Manager version name, a Key Vault
+        /// version id, a Kubernetes resourceVersion). It changes when the
+        /// value is overwritten, so a workload can be restarted to pick the
+        /// new value up. Metadata only: never derived from the value.
+        version: Option<String>,
+    },
     /// No secret by that name exists.
     Missing,
     /// The secret exists but cannot be used as is.

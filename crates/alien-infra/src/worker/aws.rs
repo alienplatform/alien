@@ -22,6 +22,7 @@ use alien_aws_clients::apigatewayv2::{
     CreateApiMappingRequest, CreateApiRequest, CreateDomainNameRequest, CreateIntegrationRequest,
     CreateRouteRequest, CreateStageRequest, DomainNameConfiguration,
 };
+use alien_aws_clients::cloudwatch_logs::{CreateLogGroupRequest, PutRetentionPolicyRequest};
 use alien_aws_clients::ec2::{DescribeNetworkInterfacesRequest, Filter};
 use alien_aws_clients::eventbridge::{
     EventBridgeTag, EventBridgeTarget, PutRuleRequest, PutTargetsRequest,
@@ -44,6 +45,10 @@ use alien_macros::controller;
 use chrono::Utc;
 
 const AWS_LAMBDA_ACTIVE_MAX_POLLS: u32 = 60;
+
+/// Days a worker's CloudWatch log group keeps events. Matches the log group
+/// the CloudFormation template declares for the same worker.
+const LAMBDA_LOG_RETENTION_DAYS: i32 = 30;
 
 /// Generates the full, prefixed AWS resource name.
 fn get_aws_worker_name(prefix: &str, name: &str) -> String {
@@ -82,6 +87,13 @@ fn is_remote_resource_conflict(error: &AlienError<CloudClientErrorData>) -> bool
     matches!(
         &error.error,
         Some(CloudClientErrorData::RemoteResourceConflict { .. })
+    )
+}
+
+fn is_remote_access_denied(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(CloudClientErrorData::RemoteAccessDenied { .. })
     )
 }
 
@@ -483,6 +495,8 @@ impl AwsWorkerController {
         if vpc_config.is_some() {
             info!(name=%aws_worker_name, "Configuring Lambda worker to run inside VPC");
         }
+
+        Self::ensure_log_group(ctx, aws_cfg, &aws_worker_name, &cfg.id).await?;
 
         let request = CreateFunctionRequest::builder()
             .function_name(aws_worker_name.clone())
@@ -2281,6 +2295,17 @@ impl AwsWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
+
+        // A worker created while the management role could not manage its
+        // log group gets the retention period once setup grants it.
+        let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
+        Self::ensure_log_group(
+            ctx,
+            ctx.get_aws_config()?,
+            &aws_worker_name,
+            &worker_config.id,
+        )
+        .await?;
 
         if worker_config.public_endpoints.is_empty() || self.uses_custom_domain {
             return Ok(HandlerAction::Continue {
@@ -4567,6 +4592,85 @@ impl AwsWorkerController {
 
 // Separate impl block for helper methods
 impl AwsWorkerController {
+    /// Creates the function's log group with a retention period before the
+    /// function exists. Otherwise Lambda creates `/aws/lambda/<name>` on the
+    /// first invocation and keeps its logs forever. A group that already
+    /// exists (an earlier attempt, or a worker recreated under the same name)
+    /// gets the retention period too.
+    ///
+    /// Deleting the worker keeps the group, as the CloudFormation template's
+    /// `Retain` policy does: its logs outlive the function for debugging and
+    /// expire on their own.
+    ///
+    /// The management role's permissions are fixed at setup, and a setup that
+    /// predates these log permissions lacks them. Access denied therefore only
+    /// warns: the worker is still created, and Lambda creates the group on
+    /// first invoke without a retention period. Re-running setup grants them,
+    /// and the worker's next update sets the retention period.
+    ///
+    /// To verify against AWS: deploy an AWS worker with the push model, run
+    /// `aws logs describe-log-groups --log-group-name-prefix /aws/lambda/<prefix>-<worker>`
+    /// and check `retentionInDays` is 30 before the first invocation.
+    async fn ensure_log_group(
+        ctx: &ResourceControllerContext<'_>,
+        aws_cfg: &alien_aws_clients::AwsClientConfig,
+        function_name: &str,
+        resource_id: &str,
+    ) -> Result<()> {
+        let logs = ctx.service_provider.get_aws_logs_client(aws_cfg).await?;
+        let log_group_name = format!("/aws/lambda/{function_name}");
+
+        match logs
+            .create_log_group(
+                CreateLogGroupRequest::builder()
+                    .log_group_name(log_group_name.clone())
+                    .build(),
+            )
+            .await
+        {
+            Ok(()) => info!(log_group = %log_group_name, "Created worker log group"),
+            Err(error) if is_remote_resource_conflict(&error) => {
+                info!(log_group = %log_group_name, "Worker log group already exists")
+            }
+            Err(error) if is_remote_access_denied(&error) => {
+                warn!(
+                    log_group = %log_group_name,
+                    "Not allowed to create the worker log group; Lambda creates it on first invoke without a retention period. Re-run setup to grant logs:CreateLogGroup."
+                );
+                return Ok(());
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create log group '{log_group_name}'"),
+                    resource_id: Some(resource_id.to_string()),
+                }))
+            }
+        }
+
+        match logs
+            .put_retention_policy(
+                PutRetentionPolicyRequest::builder()
+                    .log_group_name(log_group_name.clone())
+                    .retention_in_days(LAMBDA_LOG_RETENTION_DAYS)
+                    .build(),
+            )
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(error) if is_remote_access_denied(&error) => {
+                warn!(
+                    log_group = %log_group_name,
+                    "Not allowed to set the worker log group's retention; its logs do not expire. Re-run setup to grant logs:PutRetentionPolicy."
+                );
+                Ok(())
+            }
+            Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to set the retention of log group '{log_group_name}'"),
+                resource_id: Some(resource_id.to_string()),
+            })),
+        }
+    }
+
     /// Rewrite an ECR image URI to use the given region if it points to a different one.
     ///
     /// Lambda requires container images in the same region as the worker.
@@ -4883,6 +4987,7 @@ mod tests {
         Api, ApiMapping, DomainName, DomainNameConfiguration, Integration, MockApiGatewayV2Api,
         Route, Stage,
     };
+    use alien_aws_clients::cloudwatch_logs::MockCloudWatchLogsApi;
     use alien_aws_clients::ec2::{DescribeNetworkInterfacesResponse, MockEc2Api};
     use alien_aws_clients::iam::MockIamApi;
     use alien_aws_clients::lambda::{AddPermissionResponse, FunctionConfiguration, MockLambdaApi};
@@ -5265,16 +5370,43 @@ mod tests {
         Arc::new(mock_iam)
     }
 
+    /// CloudWatch Logs mock that accepts the log group a create makes.
+    fn create_logs_mock_accepting_log_groups() -> Arc<MockCloudWatchLogsApi> {
+        let mut mock_logs = MockCloudWatchLogsApi::new();
+        mock_logs.expect_create_log_group().returning(|_| Ok(()));
+        mock_logs
+            .expect_put_retention_policy()
+            .returning(|_| Ok(()));
+        Arc::new(mock_logs)
+    }
+
     fn setup_mock_service_provider(
         mock_lambda: Arc<MockLambdaApi>,
         mock_acm: Option<Arc<MockAcmApi>>,
         mock_apigw: Option<Arc<MockApiGatewayV2Api>>,
+    ) -> Arc<MockPlatformServiceProvider> {
+        setup_mock_service_provider_with_logs(
+            mock_lambda,
+            mock_acm,
+            mock_apigw,
+            create_logs_mock_accepting_log_groups(),
+        )
+    }
+
+    fn setup_mock_service_provider_with_logs(
+        mock_lambda: Arc<MockLambdaApi>,
+        mock_acm: Option<Arc<MockAcmApi>>,
+        mock_apigw: Option<Arc<MockApiGatewayV2Api>>,
+        mock_logs: Arc<MockCloudWatchLogsApi>,
     ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
         mock_provider
             .expect_get_aws_lambda_client()
             .returning(move |_| Ok(mock_lambda.clone()));
+        mock_provider
+            .expect_get_aws_logs_client()
+            .returning(move |_| Ok(mock_logs.clone()));
 
         // Mock IAM client for resource-scoped permissions (ApplyingResourcePermissions state)
         let mock_iam = create_aws_iam_mock_for_resource_permissions();
@@ -5440,6 +5572,76 @@ mod tests {
     }
 
     // ─────────────── UPDATE FLOW TESTS ────────────────────────────────
+
+    /// A worker created while the management role could not set its log
+    /// group's retention gets it on the next update.
+    #[tokio::test]
+    async fn test_update_sets_log_retention_on_the_existing_group() {
+        let worker_id = "test-update-worker".to_string();
+        let mut from_function = basic_function();
+        from_function.id = worker_id.clone();
+        let mut to_function = function_with_env_vars();
+        to_function.id = worker_id.clone();
+        let worker_name = format!("test-{worker_id}");
+        let calls = Arc::new(Mutex::new(Vec::new()));
+
+        let mut mock_logs = MockCloudWatchLogsApi::new();
+        let create_calls = calls.clone();
+        mock_logs
+            .expect_create_log_group()
+            .times(1)
+            .returning(move |request| {
+                create_calls
+                    .lock()
+                    .unwrap()
+                    .push(format!("CreateLogGroup {}", request.log_group_name));
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "CloudWatch Logs log group".to_string(),
+                        resource_name: request.log_group_name,
+                        message: "The specified log group already exists".to_string(),
+                    },
+                ))
+            });
+        let retention_calls = calls.clone();
+        mock_logs
+            .expect_put_retention_policy()
+            .times(1)
+            .returning(move |request| {
+                retention_calls.lock().unwrap().push(format!(
+                    "PutRetentionPolicy {} {}",
+                    request.log_group_name, request.retention_in_days
+                ));
+                Ok(())
+            });
+        let mock_provider = setup_mock_service_provider_with_logs(
+            setup_mock_client_for_creation_and_update(&worker_name, false),
+            None,
+            None,
+            Arc::new(mock_logs),
+        );
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(from_function)
+            .controller(AwsWorkerController::mock_ready(&worker_name))
+            .platform(Platform::Aws)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.update(to_function).unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                format!("CreateLogGroup /aws/lambda/{worker_name}"),
+                format!("PutRetentionPolicy /aws/lambda/{worker_name} 30"),
+            ]
+        );
+    }
 
     #[rstest]
     #[case::basic_to_env(basic_function(), function_with_env_vars())]
@@ -5985,6 +6187,239 @@ mod tests {
         let outputs = executor.outputs().unwrap();
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
         assert!(function_outputs.public_endpoints.is_empty());
+    }
+
+    /// Lambda mock for a private worker's create flow that records when the
+    /// function is created.
+    fn lambda_mock_recording_create(
+        worker_name: &str,
+        calls: Arc<Mutex<Vec<String>>>,
+    ) -> MockLambdaApi {
+        let mut mock_lambda = MockLambdaApi::new();
+        let worker_name_for_create = worker_name.to_string();
+        mock_lambda.expect_create_function().returning(move |_| {
+            calls.lock().unwrap().push("CreateFunction".to_string());
+            Ok(create_successful_function_response(&worker_name_for_create))
+        });
+        let worker_name_for_get = worker_name.to_string();
+        mock_lambda
+            .expect_get_function_configuration()
+            .returning(move |_, _| Ok(create_successful_function_response(&worker_name_for_get)));
+        mock_lambda
+    }
+
+    #[tokio::test]
+    async fn test_create_makes_the_log_group_with_retention_before_the_function() {
+        let worker = function_private_ingress();
+        let worker_name = format!("test-{}", worker.id);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+
+        let mut mock_logs = MockCloudWatchLogsApi::new();
+        let create_calls = calls.clone();
+        mock_logs
+            .expect_create_log_group()
+            .times(1)
+            .returning(move |request| {
+                assert!(request.tags.is_none());
+                create_calls
+                    .lock()
+                    .unwrap()
+                    .push(format!("CreateLogGroup {}", request.log_group_name));
+                Ok(())
+            });
+        let retention_calls = calls.clone();
+        mock_logs
+            .expect_put_retention_policy()
+            .times(1)
+            .returning(move |request| {
+                retention_calls.lock().unwrap().push(format!(
+                    "PutRetentionPolicy {} {}",
+                    request.log_group_name, request.retention_in_days
+                ));
+                Ok(())
+            });
+        let mock_provider = setup_mock_service_provider_with_logs(
+            Arc::new(lambda_mock_recording_create(&worker_name, calls.clone())),
+            None,
+            None,
+            Arc::new(mock_logs),
+        );
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(AwsWorkerController::default())
+            .platform(Platform::Aws)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                format!("CreateLogGroup /aws/lambda/{worker_name}"),
+                format!("PutRetentionPolicy /aws/lambda/{worker_name} 30"),
+                "CreateFunction".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_sets_retention_on_an_existing_log_group() {
+        let worker = function_private_ingress();
+        let worker_name = format!("test-{}", worker.id);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+
+        let mut mock_logs = MockCloudWatchLogsApi::new();
+        mock_logs
+            .expect_create_log_group()
+            .times(1)
+            .returning(|request| {
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "CloudWatch Logs log group".to_string(),
+                        resource_name: request.log_group_name,
+                        message: "The specified log group already exists".to_string(),
+                    },
+                ))
+            });
+        let retention_calls = calls.clone();
+        mock_logs
+            .expect_put_retention_policy()
+            .times(1)
+            .returning(move |request| {
+                retention_calls
+                    .lock()
+                    .unwrap()
+                    .push(format!("PutRetentionPolicy {}", request.retention_in_days));
+                Ok(())
+            });
+        let mock_provider = setup_mock_service_provider_with_logs(
+            Arc::new(lambda_mock_recording_create(&worker_name, calls.clone())),
+            None,
+            None,
+            Arc::new(mock_logs),
+        );
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(AwsWorkerController::default())
+            .platform(Platform::Aws)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                "PutRetentionPolicy 30".to_string(),
+                "CreateFunction".to_string()
+            ]
+        );
+    }
+
+    /// Mock CloudWatch Logs whose create and retention calls answer with the
+    /// given results, recording each call.
+    fn logs_mock_answering(
+        calls: Arc<Mutex<Vec<String>>>,
+        create: fn(String) -> alien_client_core::Result<()>,
+        retention: fn(String) -> alien_client_core::Result<()>,
+    ) -> MockCloudWatchLogsApi {
+        let mut mock_logs = MockCloudWatchLogsApi::new();
+        let create_calls = calls.clone();
+        mock_logs
+            .expect_create_log_group()
+            .returning(move |request| {
+                create_calls
+                    .lock()
+                    .unwrap()
+                    .push("CreateLogGroup".to_string());
+                create(request.log_group_name)
+            });
+        mock_logs
+            .expect_put_retention_policy()
+            .returning(move |request| {
+                calls.lock().unwrap().push("PutRetentionPolicy".to_string());
+                retention(request.log_group_name)
+            });
+        mock_logs
+    }
+
+    fn log_group_access_denied(log_group_name: String) -> alien_client_core::Result<()> {
+        Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+            resource_type: "CloudWatch Logs log group".to_string(),
+            resource_name: log_group_name,
+        }))
+    }
+
+    fn throttled(_: String) -> alien_client_core::Result<()> {
+        Err(AlienError::new(CloudClientErrorData::RateLimitExceeded {
+            message: "Rate exceeded".to_string(),
+        }))
+    }
+
+    async fn run_private_worker_create(
+        logs: MockCloudWatchLogsApi,
+        calls: Arc<Mutex<Vec<String>>>,
+    ) -> (ResourceStatus, crate::error::Result<()>) {
+        let worker = function_private_ingress();
+        let worker_name = format!("test-{}", worker.id);
+        let mock_provider = setup_mock_service_provider_with_logs(
+            Arc::new(lambda_mock_recording_create(&worker_name, calls)),
+            None,
+            None,
+            Arc::new(logs),
+        );
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(AwsWorkerController::default())
+            .platform(Platform::Aws)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        let result = executor.run_until_terminal().await;
+        (executor.status(), result)
+    }
+
+    /// A setup from before the log permissions existed leaves the management
+    /// role without them; the worker must still be created.
+    #[rstest]
+    #[case::create_denied(log_group_access_denied as fn(String) -> alien_client_core::Result<()>, &["CreateLogGroup", "CreateFunction"][..])]
+    #[case::retention_denied(|_: String| Ok(()), &["CreateLogGroup", "PutRetentionPolicy", "CreateFunction"][..])]
+    #[tokio::test]
+    async fn test_create_continues_when_log_group_access_is_denied(
+        #[case] create: fn(String) -> alien_client_core::Result<()>,
+        #[case] expected_calls: &[&str],
+    ) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let logs = logs_mock_answering(calls.clone(), create, log_group_access_denied);
+
+        let (status, result) = run_private_worker_create(logs, calls.clone()).await;
+
+        result.expect("access denied on the log group does not fail the worker");
+        assert_eq!(status, ResourceStatus::Running);
+        assert_eq!(*calls.lock().unwrap(), expected_calls);
+    }
+
+    #[tokio::test]
+    async fn test_create_fails_on_other_log_group_errors() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let logs = logs_mock_answering(calls.clone(), throttled, |_| Ok(()));
+
+        let (_, result) = run_private_worker_create(logs, calls.clone()).await;
+
+        let error = result.expect_err("a throttled log group create fails the worker");
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+        assert_eq!(*calls.lock().unwrap(), vec!["CreateLogGroup".to_string()]);
     }
 
     #[tokio::test]

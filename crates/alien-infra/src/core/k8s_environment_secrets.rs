@@ -372,6 +372,64 @@ pub async fn reconcile_environment_secret_with_additional_secrets(
     Ok(Some(plan))
 }
 
+/// Annotations stamped onto a workload's pod template so the pods restart
+/// when a value they read at start changes outside the manifest:
+///
+/// - `env-secret-checksum`: the per-workload environment Secret's values.
+/// - `deployer-secret-checksum`: the versions of the vault-native deployer
+///   secrets the pods reference. Those are `secretKeyRef`s whose names never
+///   change, so overwriting a deployer secret leaves the pod spec unchanged;
+///   the version recorded in `ALIEN_DEPLOYER_SECRETS` is what rolls the pods.
+pub(crate) fn pod_template_annotations(
+    plan: Option<&KubernetesEnvSecretPlan>,
+    environment: &HashMap<String, String>,
+) -> Result<Option<BTreeMap<String, String>>> {
+    let mut annotations = BTreeMap::new();
+    if let Some(plan) = plan {
+        annotations.insert("env-secret-checksum".to_string(), plan.checksum.clone());
+    }
+    if let Some(checksum) = deployer_secret_checksum(environment)? {
+        annotations.insert("deployer-secret-checksum".to_string(), checksum);
+    }
+    Ok((!annotations.is_empty()).then_some(annotations))
+}
+
+/// Checksum of the deployer secret versions in `ALIEN_DEPLOYER_SECRETS`, or
+/// `None` when no referenced secret carries a version.
+fn deployer_secret_checksum(environment: &HashMap<String, String>) -> Result<Option<String>> {
+    use sha2::{Digest, Sha256};
+
+    let Some(deployer_secrets) = environment.get(ENV_ALIEN_DEPLOYER_SECRETS) else {
+        return Ok(None);
+    };
+    let deployer_secrets = parse_deployer_secrets(deployer_secrets)?;
+    let versions = deployer_secrets
+        .iter()
+        .filter_map(|secret| Some((secret.name.as_str(), secret.version.as_deref()?)))
+        .collect::<BTreeMap<_, _>>();
+    if versions.is_empty() {
+        return Ok(None);
+    }
+
+    let mut hasher = Sha256::new();
+    for (name, version) in versions {
+        hasher.update(name.as_bytes());
+        hasher.update(b"=");
+        hasher.update(version.as_bytes());
+        hasher.update(b"\n");
+    }
+    Ok(Some(format!("{:x}", hasher.finalize())))
+}
+
+fn parse_deployer_secrets(deployer_secrets: &str) -> Result<Vec<DeployerSecretEnv>> {
+    serde_json::from_str(deployer_secrets)
+        .into_alien_error()
+        .context(ErrorData::ResourceConfigInvalid {
+            message: format!("{ENV_ALIEN_DEPLOYER_SECRETS} is not a deployer secret list"),
+            resource_id: None,
+        })
+}
+
 /// Builds an `EnvVar` that resolves from a Kubernetes Secret key at pod start.
 fn secret_key_ref_env_var(name: &str, secret_name: &str, secret_key: &str) -> EnvVar {
     optional_secret_key_ref_env_var(name, secret_name, secret_key, false)
@@ -428,13 +486,7 @@ pub fn projected_env_vars(
     // namespace; reference them directly. The kubelet then holds a pod whose
     // required Secret is missing, so the workload does not start without it.
     if let Some(deployer_secrets) = env_map.remove(ENV_ALIEN_DEPLOYER_SECRETS) {
-        let deployer_secrets: Vec<DeployerSecretEnv> = serde_json::from_str(&deployer_secrets)
-            .into_alien_error()
-            .context(ErrorData::ResourceConfigInvalid {
-                message: format!("{ENV_ALIEN_DEPLOYER_SECRETS} is not a deployer secret list"),
-                resource_id: None,
-            })?;
-        for secret in deployer_secrets {
+        for secret in parse_deployer_secrets(&deployer_secrets)? {
             env_vars.push(optional_secret_key_ref_env_var(
                 &secret.name,
                 &secret.secret_name,

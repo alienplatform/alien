@@ -2751,14 +2751,121 @@ async fn test_missing_deployer_secret_blocks_workloads_until_written() {
             "secretName": "input-database-password",
             "label": "Database password",
             "required": true,
+            "version": deployer_reports(&running)[0].version,
         }])
     );
+    assert!(deployer_reports(&running)[0].version.is_some());
     assert!(
         !serde_json::to_string(&running)
             .unwrap()
             .contains("customer-only-value"),
         "the deployment state never carries the deployer's secret"
     );
+}
+
+/// Runs an update to Running and returns the final state together with
+/// whether the worker went through an update on the way.
+async fn run_update_and_watch_worker(
+    mut state: DeploymentState,
+    config: DeploymentConfig,
+    worker_id: &str,
+) -> (DeploymentState, bool) {
+    let mut worker_updated = false;
+    for _ in 0..MAX_STEPS {
+        if state.status == DeploymentStatus::Running {
+            return (state, worker_updated);
+        }
+        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .expect("Step should not fail")
+            .state;
+        worker_updated |= state
+            .stack_state
+            .as_ref()
+            .and_then(|stack_state| stack_state.resources.get(worker_id))
+            .is_some_and(|worker| worker.status == alien_core::ResourceStatus::Updating);
+    }
+    panic!(
+        "Update did not reach Running after {MAX_STEPS} steps. Final status: {:?}",
+        state.status
+    );
+}
+
+fn deployer_secret_version(state: &DeploymentState, worker_id: &str) -> serde_json::Value {
+    let alien_secrets: serde_json::Value =
+        serde_json::from_str(&worker_environment(state, worker_id)[alien_core::ENV_ALIEN_SECRETS])
+            .unwrap();
+    alien_secrets["deployerSecrets"][0]["version"].clone()
+}
+
+#[tokio::test]
+async fn test_redeploy_after_deployer_secret_overwrite_restarts_workloads() {
+    use alien_bindings::Vault as _;
+
+    let vault_env = test_vault_env().await;
+    let mut stack = create_test_stack("test-stack", "test-function");
+    stack.inputs = vec![database_password_input()];
+    let config = create_test_config("hash_v1", false);
+    vault_env
+        .customer_vault()
+        .set_secret("input-database-password", "customer-value-v1")
+        .await
+        .unwrap();
+
+    let running = run_until_status(
+        create_initial_state(stack),
+        config.clone(),
+        &[DeploymentStatus::Running],
+    )
+    .await;
+    let v1 = deployer_secret_version(&running, "test-function");
+    assert!(
+        v1.is_string(),
+        "the worker records the version it started with"
+    );
+    assert_eq!(
+        deployer_reports(&running)[0].version.as_ref(),
+        v1.as_str().map(str::to_string).as_ref()
+    );
+
+    // The deployer overwrites the secret with their cloud's CLI, then
+    // redeploys the same release with the same config.
+    vault_env
+        .customer_vault()
+        .set_secret("input-database-password", "customer-value-v2")
+        .await
+        .unwrap();
+    let mut redeploy = running;
+    let release = redeploy.current_release.clone().unwrap();
+    start_update(&mut redeploy, release.clone());
+    let (rotated, worker_updated) =
+        run_update_and_watch_worker(redeploy, config.clone(), "test-function").await;
+
+    let v2 = deployer_secret_version(&rotated, "test-function");
+    assert!(v2.is_string());
+    assert_ne!(v1, v2, "the overwrite reaches the worker's config");
+    assert!(
+        worker_updated,
+        "the worker is updated so it restarts and reads the new value"
+    );
+    assert!(
+        !serde_json::to_string(&rotated)
+            .unwrap()
+            .contains("customer-value-v2"),
+        "the deployment state never carries the deployer's secret"
+    );
+
+    // Redeploying again without a new write changes nothing.
+    let mut again = rotated.clone();
+    start_update(&mut again, release);
+    let (unchanged, worker_updated) =
+        run_update_and_watch_worker(again, config, "test-function").await;
+
+    assert_eq!(
+        worker_environment(&unchanged, "test-function"),
+        worker_environment(&rotated, "test-function")
+    );
+    assert!(!worker_updated, "no new version, no restart");
 }
 
 #[tokio::test]

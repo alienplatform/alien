@@ -20,7 +20,8 @@ get "location"(){
 "required": z.boolean().describe("Whether the workload cannot start without it."),
 get "status"(){
                 return DeployerSecretStatusSchema.describe("Whether a deployer secret slot holds a usable value. Alien learns this from\nmetadata only and never reads the value.")
-              }
+              },
+"version": z.string().describe("The secret store's version of the present value (never the value or a\nhash of it). A new version reaches workloads with the next update.").nullish()
     }).describe("The state of one deployer secret slot, reported with the deployment.")
 
 export type DeployerSecretReport = z.infer<typeof DeployerSecretReportSchema>
