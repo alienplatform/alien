@@ -382,7 +382,7 @@ fn emit_image_management(
 /// definitions are the setup-owned ones `emit_setup_resource_role_definitions` renders for the
 /// same profile and set.
 ///
-/// Each assignment is addressed by sandbox, profile and role, a predefined role by its GUID and a
+/// Each assignment is addressed by sandbox, identity and role, a predefined role by its GUID and a
 /// custom role by its set and key, so reordering a profile, swapping two sets that resolve to one
 /// predefined role, or rewording a role's display name keeps the same Terraform address and Azure
 /// name: a changed address would destroy and recreate an assignment Azure still holds, which it
@@ -403,7 +403,10 @@ fn emit_workload_access(
     let context = permission_context(label).with_resource_name(sandbox_group_name(ctx));
     let published = ctx.resource.has_remote_bindings();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
-        let Some(principal_id) = service_account_principal_id(ctx, profile_name) else {
+        let (Some(principal_id), Some(identity_label)) = (
+            service_account_principal_id(ctx, profile_name),
+            ctx.name_for(&format!("{profile_name}-sa")),
+        ) else {
             continue;
         };
         // `sandbox/execute` and `sandbox/remote-execute` both resolve to the data-plane role, and
@@ -545,10 +548,11 @@ fn emit_workload_access(
                         )
                     }
                 };
-                let profile_segment = sanitize_role_label(profile_name);
                 fragment.resource_blocks.push(resource_block(
                     "azurerm_role_assignment",
-                    &format!("{label}_{profile_segment}_{role_segment}"),
+                    // Every segment is `[a-z0-9_]`, and the two labels are unique in the stack, so
+                    // `-` keeps two (sandbox, identity) pairs from joining into one address.
+                    &format!("{label}-{identity_label}-{role_segment}"),
                     [
                         attr(
                             "name",

@@ -967,14 +967,14 @@ fn a_keyed_management_grant_uses_the_setup_owned_role_on_that_sandbox_group() {
     // the address.
     let addresses = assignment_addresses(&rendered)
         .into_iter()
-        .filter(|(label, _, _)| label.starts_with("agents_execution_"))
+        .filter(|(label, _, _)| label.starts_with("agents-execution_sa-"))
         .collect::<Vec<_>>();
     assert_eq!(
         addresses
             .iter()
             .map(|(label, _, _)| label.as_str())
             .collect::<Vec<_>>(),
-        ["agents_execution_sandbox_management_microsoft_app_sandbox_groups_sandboxes_write_permissions"],
+        ["agents-execution_sa-sandbox_management_microsoft_app_sandbox_groups_sandboxes_write_permissions"],
         "{rendered}"
     );
     assert!(
@@ -1285,7 +1285,7 @@ fn a_workload_assignment_keeps_its_address_when_the_profile_is_reordered() {
     assert_eq!(
         label,
         &format!(
-            "agents_execution_{}",
+            "agents-execution_sa-{}",
             SANDBOX_DATA_PLANE_ROLE_ID.replace('-', "_")
         )
     );
@@ -1310,7 +1310,7 @@ fn execute_and_remote_execute_alone_render_the_same_assignment() {
         let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
         assignment_addresses(&rendered_tf(&module))
             .into_iter()
-            .filter(|(label, _, _)| label.starts_with("agents_execution_"))
+            .filter(|(label, _, _)| label.starts_with("agents-execution_sa-"))
             .collect::<Vec<_>>()
     };
 
@@ -1643,4 +1643,52 @@ fn a_keyed_grant_on_a_sandbox_published_for_remote_access_is_refused() {
             && message.contains("published for remote access"),
         "{message}"
     );
+}
+
+/// Two (sandbox, profile) pairs whose names join into the same string still render two
+/// assignments: profile `b` on sandbox `agents-a` and profile `a-b` on sandbox `agents`.
+#[test]
+fn grants_whose_names_join_alike_get_their_own_addresses() {
+    let profile = || PermissionProfile::new();
+    let b = profile().resource("agents-a", ["sandbox/execute"]);
+    let a_b = profile().resource("agents", ["sandbox/execute"]);
+    let identity = |id: &str, profile: &PermissionProfile| {
+        ServiceAccount::from_permission_profile(id.to_string(), profile, |name| {
+            alien_permissions::get_permission_set(name).cloned()
+        })
+        .expect("built-in permission sets resolve")
+    };
+    let stack = Stack::new("byo-sandbox".to_string())
+        .permission("b", b.clone())
+        .permission("a-b", a_b.clone())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            AzureContainerAppsEnvironment::new("default-container-apps-environment".to_string())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(identity("b-sa", &b), ResourceLifecycle::Frozen)
+        .add(identity("a-b-sa", &a_b), ResourceLifecycle::Frozen)
+        .add(frozen_sandbox("agents-a"), ResourceLifecycle::Frozen)
+        .add(frozen_sandbox("agents"), ResourceLifecycle::Frozen)
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = rendered_tf(&module);
+
+    let mut on_groups: Vec<String> = assignment_addresses(&rendered)
+        .into_iter()
+        .map(|(label, _, _)| label)
+        .filter(|label| label.starts_with("agents"))
+        .collect();
+    on_groups.sort();
+    let role = SANDBOX_DATA_PLANE_ROLE_ID.replace('-', "_");
+    assert_eq!(
+        on_groups,
+        [
+            format!("agents-a_b_sa-{role}"),
+            format!("agents_a-b_sa-{role}")
+        ],
+        "{rendered}"
+    );
+    assert_terraform_valid(&module, "azure sandbox grants whose names join alike");
 }

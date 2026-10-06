@@ -363,7 +363,7 @@ resource "azapi_resource" "agents" {
   ]
 }
 
-resource "azurerm_role_assignment" "agents_execution_c24cf47c_5077_412d_a19c_45202126392c" {
+resource "azurerm_role_assignment" "agents-execution_sa-c24cf47c_5077_412d_a19c_45202126392c" {
   name               = uuidv5("oid", "deployment:azure:sandbox-workload:${local.resource_prefix}:agents:execution:c24cf47c_5077_412d_a19c_45202126392c")
   scope              = azapi_resource.agents.id
   role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/c24cf47c-5077-412d-a19c-45202126392c"
@@ -393,7 +393,7 @@ resource "azapi_resource" "other" {
   ]
 }
 
-resource "azurerm_role_assignment" "other_execution_c24cf47c_5077_412d_a19c_45202126392c" {
+resource "azurerm_role_assignment" "other-execution_sa-c24cf47c_5077_412d_a19c_45202126392c" {
   name               = uuidv5("oid", "deployment:azure:sandbox-workload:${local.resource_prefix}:other:execution:c24cf47c_5077_412d_a19c_45202126392c")
   scope              = azapi_resource.other.id
   role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/c24cf47c-5077-412d-a19c-45202126392c"
@@ -430,9 +430,9 @@ resource "terraform_data" "deployment_registration" {
     azurerm_role_definition.execution_sa_custom_microsoft_app_sandbox_groups_sandboxes_write_permissions,
     azurerm_role_assignment.execution_sa_sandbox_management_microsoft_app_sandbox_groups_sandboxes_write_permissions_assignment,
     azapi_resource.agents,
-    azurerm_role_assignment.agents_execution_c24cf47c_5077_412d_a19c_45202126392c,
+    azurerm_role_assignment.agents-execution_sa-c24cf47c_5077_412d_a19c_45202126392c,
     azapi_resource.other,
-    azurerm_role_assignment.other_execution_c24cf47c_5077_412d_a19c_45202126392c
+    azurerm_role_assignment.other-execution_sa-c24cf47c_5077_412d_a19c_45202126392c
   ]
 }
 
