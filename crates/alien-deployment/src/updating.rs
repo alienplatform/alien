@@ -94,7 +94,7 @@ pub async fn handle_update_pending(
     target_stack: Stack,
     config: DeploymentConfig,
     client_config: alien_core::ClientConfig,
-    _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
+    service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling UpdatePending status");
 
@@ -169,7 +169,7 @@ pub async fn handle_update_pending(
             &client_config,
             old_stack_for_comparison, // Pass old mutated stack for compatibility checks
             setup_update_authorization,
-            None,
+            service_provider.runtime_setup_authority(current.platform),
         )
         .await
         .context(ErrorData::PreflightChecksFailed)?;
@@ -685,6 +685,128 @@ fn prune_deprovisioned_resources(
 mod tests {
     use super::*;
     use alien_core::{Kv, Resource, ResourceLifecycle, StackResourceState, Worker, WorkerCode};
+
+    #[tokio::test]
+    async fn local_frozen_update_preserves_existing_storage() {
+        use alien_core::{
+            ClientConfig, EnvironmentVariablesSnapshot, ExternalBindings, RuntimeMetadata,
+            StackSettings, Storage,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let bindings = alien_local::LocalBindingsProvider::new(directory.path()).unwrap();
+        let services = std::sync::Arc::new(
+            alien_infra::DefaultPlatformServiceProvider::with_local_bindings(bindings.clone()),
+        );
+        let client = ClientConfig::Local {
+            state_directory: directory.path().to_string_lossy().into_owned(),
+        };
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        let installed = Stack::new("local-update".to_string())
+            .add(
+                Storage::new("existing".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let initial_state =
+            StackState::with_resource_prefix(Platform::Local, "persistent".to_string());
+        let prepared = alien_preflights::runner::PreflightRunner::new()
+            .run_deployment_time_preflights(
+                installed.clone(),
+                &initial_state,
+                &config,
+                &client,
+                None,
+                None,
+                Some(InitialSetupAuthority::DirectSetup),
+            )
+            .await
+            .unwrap()
+            .0;
+        let executor = StackExecutor::builder(&prepared, client.clone())
+            .deployment_config(&config)
+            .service_provider(services.clone())
+            .build()
+            .unwrap();
+        let created = executor.run_until_synced(initial_state).await;
+        assert!(created.success, "{:?}", created.error);
+        let marker = bindings
+            .storage_manager()
+            .get_storage_path("existing")
+            .unwrap()
+            .join("retained.txt");
+        std::fs::write(&marker, b"retained across setup changes").unwrap();
+        let target = Stack::new("local-update".to_string())
+            .add(
+                Storage::new("existing".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("added".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let release = |stack: Stack, id: &str| ReleaseInfo {
+            release_id: Some(id.to_string()),
+            version: None,
+            description: None,
+            stack,
+        };
+        let current = DeploymentState {
+            status: DeploymentStatus::UpdatePending,
+            platform: Platform::Local,
+            current_release: Some(release(installed, "rel_installed")),
+            target_release: Some(release(target.clone(), "rel_target")),
+            stack_state: Some(created.final_state),
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(RuntimeMetadata {
+                initial_setup_authority: InitialSetupAuthority::DirectSetup,
+                prepared_stack: Some(prepared),
+                ..Default::default()
+            }),
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let mut current = handle_update_pending(
+            current,
+            target,
+            config.clone(),
+            client.clone(),
+            services.clone(),
+        )
+        .await
+        .unwrap()
+        .state;
+        for _ in 0..20 {
+            if current.status == DeploymentStatus::Running {
+                break;
+            }
+            current = handle_updating(current, config.clone(), client.clone(), services.clone())
+                .await
+                .unwrap()
+                .state;
+        }
+        assert_eq!(current.status, DeploymentStatus::Running);
+        assert_eq!(
+            std::fs::read(marker).unwrap(),
+            b"retained across setup changes"
+        );
+        assert!(bindings
+            .storage_manager()
+            .get_storage_path("added")
+            .unwrap()
+            .is_dir());
+        assert_eq!(current.stack_state.unwrap().resource_prefix, "persistent");
+    }
 
     mod setup_scaffolding_drift {
         use super::super::*;

@@ -68,6 +68,26 @@ impl SqliteDeploymentStore {
         Self { db }
     }
 
+    /// Replace user environment variables without deleting the deployment or its resources.
+    /// Callers must own the standalone database and stop its execution loop first.
+    pub async fn replace_environment_variables(
+        &self,
+        id: &str,
+        variables: &[EnvironmentVariable],
+    ) -> Result<(), AlienError> {
+        let json = serde_json::to_string(variables)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize deployment environment variables".to_string(),
+            })?;
+        let sql = Query::update()
+            .table(Deployments::Table)
+            .value(Deployments::EnvironmentVariables, json)
+            .and_where(Expr::col(Deployments::Id).eq(id))
+            .to_string(SqliteQueryBuilder);
+        self.db.execute(&sql).await
+    }
+
     fn should_preserve_retry_requested(
         deployment: &DeploymentRecord,
         reported_state: &alien_core::DeploymentState,
