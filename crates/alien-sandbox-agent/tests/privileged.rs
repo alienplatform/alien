@@ -8,10 +8,13 @@
 //! Needs to run as root, so it is ignored by default and never runs in CI:
 //!
 //! ```text
-//! docker run --rm --platform linux/arm64 -v "$PWD:/work" -e CARGO_TARGET_DIR=/tmp/target \
-//!   -w /work rust:1-bookworm \
+//! docker run --rm --platform linux/arm64 --cap-add NET_ADMIN -v "$PWD:/work" \
+//!   -e CARGO_TARGET_DIR=/tmp/target -w /work rust:1-bookworm \
 //!   cargo test -p alien-sandbox-agent --test privileged -- --ignored
 //! ```
+//!
+//! NET_ADMIN because `restrict_supervisor` keeps it, and a capset cannot keep what the process
+//! does not hold.
 #![cfg(target_os = "linux")]
 
 use std::collections::BTreeMap;
@@ -19,6 +22,7 @@ use std::path::{Path, PathBuf};
 
 use alien_sandbox_agent::exec::{stream, ExecIdentity, ExecRequest, Frame};
 use alien_sandbox_agent::files;
+use alien_sandbox_agent::privilege::{drop_to, restrict_supervisor};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use tempfile::TempDir;
@@ -229,5 +233,202 @@ async fn a_working_directory_the_command_cannot_enter_refuses_the_spawn() {
         refused,
         "entering a directory the command cannot use must fail the spawn, not hand back an \
          opaque command failure: {frames:?}"
+    );
+}
+
+/// In Docker's default capability set, and the one `restrict_supervisor` keeps.
+const CAP_KILL: u32 = 5;
+
+#[repr(C)]
+struct CapHeader {
+    version: u32,
+    pid: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CapData {
+    effective: u32,
+    permitted: u32,
+    inheritable: u32,
+}
+
+/// Puts `cap` in the ambient set. The kernel wants it in the inheritable set first, beside the
+/// permitted one. Returns 0, or an exit code naming the step that failed.
+unsafe fn raise_ambient(cap: u32) -> i32 {
+    let header = CapHeader {
+        version: 0x20080522,
+        pid: 0,
+    };
+    let mut data = [CapData {
+        effective: 0,
+        permitted: 0,
+        inheritable: 0,
+    }; 2];
+    if libc::syscall(libc::SYS_capget, &header, data.as_mut_ptr()) != 0 {
+        return 11;
+    }
+    data[0].inheritable |= 1 << cap;
+    if libc::syscall(libc::SYS_capset, &header, data.as_ptr()) != 0 {
+        return 12;
+    }
+    if libc::prctl(libc::PR_CAP_AMBIENT, libc::PR_CAP_AMBIENT_RAISE, cap, 0, 0) != 0
+        || ambient_is_set(cap) != 1
+    {
+        return 13;
+    }
+    0
+}
+
+unsafe fn ambient_is_set(cap: u32) -> libc::c_int {
+    libc::prctl(libc::PR_CAP_AMBIENT, libc::PR_CAP_AMBIENT_IS_SET, cap, 0, 0)
+}
+
+/// Makes PR_CAP_AMBIENT_CLEAR_ALL fail with EINVAL, as on a kernel without ambient capabilities,
+/// while PR_CAP_AMBIENT_IS_SET keeps answering. Returns 0, or an exit code naming the failure.
+unsafe fn reject_clear_all() -> i32 {
+    #[cfg(target_arch = "x86_64")]
+    const ARCH: u32 = 0xc000003e;
+    #[cfg(target_arch = "aarch64")]
+    const ARCH: u32 = 0xc00000b7;
+    let stmt = |code, k| libc::sock_filter {
+        code,
+        jt: 0,
+        jf: 0,
+        k,
+    };
+    let jump = |k, jt, jf| libc::sock_filter {
+        code: 0x15,
+        jt,
+        jf,
+        k,
+    };
+    // BPF LD W ABS / JMP JEQ K / RET K. Offsets are from Linux's struct seccomp_data: arch, nr,
+    // args[0], args[1].
+    let mut filter = [
+        stmt(0x20, 4),
+        jump(ARCH, 0, 7),
+        stmt(0x20, 0),
+        jump(libc::SYS_prctl as u32, 0, 5),
+        stmt(0x20, 16),
+        jump(libc::PR_CAP_AMBIENT as u32, 0, 3),
+        stmt(0x20, 24),
+        jump(libc::PR_CAP_AMBIENT_CLEAR_ALL as u32, 0, 1),
+        stmt(0x06, 0x00050000 | libc::EINVAL as u32),
+        stmt(0x06, 0x7fff0000),
+    ];
+    let program = libc::sock_fprog {
+        len: filter.len() as u16,
+        filter: filter.as_mut_ptr(),
+    };
+    if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+        || libc::prctl(libc::PR_SET_SECCOMP, 2, &program, 0, 0) != 0
+    {
+        return 14;
+    }
+    if libc::prctl(
+        libc::PR_CAP_AMBIENT,
+        libc::PR_CAP_AMBIENT_CLEAR_ALL,
+        0,
+        0,
+        0,
+    ) != -1
+        || *libc::__errno_location() != libc::EINVAL
+    {
+        return 15;
+    }
+    0
+}
+
+fn child_exit_code(pid: libc::pid_t) -> i32 {
+    let mut status = 0;
+    // SAFETY: waits on a pid this process forked.
+    unsafe {
+        assert_eq!(libc::waitpid(pid, &mut status, 0), pid);
+    }
+    assert!(libc::WIFEXITED(status), "child was killed: {status}");
+    libc::WEXITSTATUS(status)
+}
+
+/// Where the kernel rejects clearing the ambient set, the capset that zeroes the inheritable set
+/// is what empties it. The child becomes the exec identity before raising the capability, keeping
+/// its permitted set: the kernel empties the ambient set on any root-to-user switch, so a drop
+/// that changed the uid would hide whether the capset does.
+#[test]
+#[ignore = "requires running as root, e.g. inside a container"]
+fn the_drop_empties_the_ambient_set_even_when_clearing_it_is_rejected() {
+    let identity = exec_identity();
+    // SAFETY: fork, then only async-signal-safe syscalls in the child, which never returns.
+    let pid = unsafe { libc::fork() };
+    assert!(pid >= 0, "fork must succeed");
+    if pid == 0 {
+        unsafe {
+            if libc::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0) != 0
+                || libc::setgid(identity.gid) != 0
+                || libc::setuid(identity.uid) != 0
+            {
+                libc::_exit(10);
+            }
+            let code = raise_ambient(CAP_KILL);
+            if code != 0 {
+                libc::_exit(code);
+            }
+            let code = reject_clear_all();
+            if code != 0 {
+                libc::_exit(code);
+            }
+            if ambient_is_set(CAP_KILL) != 1 {
+                libc::_exit(16);
+            }
+            if drop_to(identity).is_err() {
+                libc::_exit(1);
+            }
+            if ambient_is_set(CAP_KILL) != 0 {
+                libc::_exit(2);
+            }
+            libc::_exit(0);
+        }
+    }
+    assert_eq!(
+        child_exit_code(pid),
+        0,
+        "the ambient set must be empty after the drop"
+    );
+}
+
+/// `restrict_supervisor` keeps CAP_KILL, so only its capset zeroing the inheritable set can take
+/// an ambient CAP_KILL away. It must, even where clearing the ambient set is rejected.
+#[test]
+#[ignore = "requires running as root, e.g. inside a container"]
+fn restricting_the_supervisor_empties_the_ambient_set_even_when_clearing_it_is_rejected() {
+    // SAFETY: fork, then only async-signal-safe syscalls in the child, which never returns.
+    let pid = unsafe { libc::fork() };
+    assert!(pid >= 0, "fork must succeed");
+    if pid == 0 {
+        unsafe {
+            let code = raise_ambient(CAP_KILL);
+            if code != 0 {
+                libc::_exit(code);
+            }
+            let code = reject_clear_all();
+            if code != 0 {
+                libc::_exit(code);
+            }
+            if ambient_is_set(CAP_KILL) != 1 {
+                libc::_exit(16);
+            }
+            if restrict_supervisor().is_err() {
+                libc::_exit(1);
+            }
+            if ambient_is_set(CAP_KILL) != 0 {
+                libc::_exit(2);
+            }
+            libc::_exit(0);
+        }
+    }
+    assert_eq!(
+        child_exit_code(pid),
+        0,
+        "the ambient set must be empty after the supervisor is restricted"
     );
 }
