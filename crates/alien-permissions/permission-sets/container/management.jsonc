@@ -11,7 +11,8 @@
             "elasticloadbalancing:DescribeTargetGroups",
             "elasticloadbalancing:DescribeTargetHealth",
             "elasticloadbalancing:DescribeListeners",
-            "ec2:DescribeVolumes"
+            "ec2:DescribeVolumes",
+            "ec2:DescribeSnapshots"
           ]
         },
         "binding": {
@@ -136,9 +137,38 @@
             "scope": "projects/${projectName}"
           }
         }
+      },
+      // Volume backups: report each volume's latest snapshot (status only; schedule
+      // changes, snapshots and restores use container/provision).
+      {
+        "grant": {
+          "permissions": ["compute.snapshots.list"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
       }
     ],
     "azure": [
+      // Volume backup status: list the container's snapshots to report the newest one per replica
+      {
+        "grant": {
+          "actions": ["Microsoft.Compute/snapshots/read"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      },
       // Read-only inspection of LB and disk resources
       {
         "grant": {

@@ -1075,6 +1075,7 @@ async fn apply_render_mutations_with_management_config(
         manager_url: None,
         deployment_token: None,
         native_image_host: None,
+        volume_restores: Vec::new(),
     };
 
     runner
@@ -1964,6 +1965,7 @@ async fn terraform_kubernetes_stack_for_target(
         manager_url: None,
         deployment_token: None,
         native_image_host: None,
+        volume_restores: Vec::new(),
     };
 
     runner

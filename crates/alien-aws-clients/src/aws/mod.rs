@@ -55,6 +55,7 @@ pub mod cloudformation;
 pub mod cloudwatch;
 pub mod codebuild;
 pub mod credential_provider;
+pub mod dlm;
 pub mod dynamodb;
 pub mod ec2;
 pub mod ecr;

@@ -725,6 +725,7 @@ impl DeploymentLoop {
                 manager_url: Some(self.config.base_url()),
                 deployment_token: deployment.deployment_token.clone(),
                 native_image_host,
+                volume_restores: Vec::new(),
             }
         };
 

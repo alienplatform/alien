@@ -1,0 +1,1 @@
+{"type":"string","description":"State of a container's snapshot schedule.","enum":["active","disabled","setupRequired"],"x-readme-ref-name":"VolumeBackupsState"}

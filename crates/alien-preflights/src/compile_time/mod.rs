@@ -28,6 +28,7 @@ pub mod stack_inputs;
 pub mod trigger_edge_ownership;
 pub mod unique_endpoint_host_labels;
 pub mod unique_resources;
+pub mod volume_backups;
 pub mod valid_resource_dependencies;
 pub mod worker_memory;
 
@@ -58,6 +59,7 @@ pub use unique_endpoint_host_labels::{
     endpoint_host_label_conflicts, UniqueEndpointHostLabelsCheck,
 };
 pub use unique_resources::UniqueResourcesCheck;
+pub use volume_backups::VolumeBackupsCheck;
 pub use valid_resource_dependencies::{
     validate_stack_dependencies, ValidResourceDependenciesCheck,
 };

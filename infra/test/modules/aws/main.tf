@@ -18,6 +18,7 @@ locals {
   e2e_eks_cluster_name      = var.e2e_eks_cluster_name != "" ? var.e2e_eks_cluster_name : "alien-e2e-${random_id.suffix.hex}"
   e2e_eks_cluster_role_name = "alien-e2e-eks-cluster-${random_id.suffix.hex}"
   e2e_eks_node_role_name    = "alien-e2e-eks-node-${random_id.suffix.hex}"
+  e2e_terraform_state_name  = "alien-e2e-terraform-state-${random_id.suffix.hex}"
 }
 
 data "aws_availability_zones" "target" {
@@ -606,6 +607,78 @@ resource "aws_s3_bucket_public_access_block" "test" {
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
+}
+
+# ── Target: Terraform state for end-to-end test runs ─────────────────────────
+# Test runs that deploy with Terraform keep their state and a copy of their
+# initialized working directory here, so a run that dies before its own
+# teardown can still be destroyed later. Objects can hold deployment tokens:
+# the bucket is private and objects expire after 30 days.
+
+resource "aws_s3_bucket" "e2e_terraform_state" {
+  provider = aws.target
+  bucket   = local.e2e_terraform_state_name
+
+  # Reject teardown before it removes protections from retained test state.
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_s3_bucket_versioning" "e2e_terraform_state" {
+  provider = aws.target
+  bucket   = aws_s3_bucket.e2e_terraform_state.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "e2e_terraform_state" {
+  provider = aws.target
+  bucket   = aws_s3_bucket.e2e_terraform_state.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "e2e_terraform_state" {
+  provider                = aws.target
+  bucket                  = aws_s3_bucket.e2e_terraform_state.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_ownership_controls" "e2e_terraform_state" {
+  provider = aws.target
+  bucket   = aws_s3_bucket.e2e_terraform_state.id
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "e2e_terraform_state" {
+  provider = aws.target
+  bucket   = aws_s3_bucket.e2e_terraform_state.id
+
+  rule {
+    id     = "expire-test-run-state"
+    status = "Enabled"
+    filter {}
+
+    expiration {
+      days = 30
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 7
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
+    }
+  }
 }
 
 # ── Management: DynamoDB table for command KV ─────────────────────────────────

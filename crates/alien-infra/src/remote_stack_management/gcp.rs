@@ -42,6 +42,10 @@ pub struct GcpRemoteStackManagementController {
     /// How the deployment names its custom roles, recorded with the service
     /// account. `None` for a service account created before it was recorded.
     pub(crate) custom_role_naming: Option<GcpCustomRoleNaming>,
+    /// Revision of the management permissions last bound. Missing on
+    /// controllers from before revisions were recorded.
+    #[serde(default)]
+    pub(crate) management_permissions_revision: Option<String>,
 }
 
 #[controller]
@@ -295,6 +299,7 @@ impl GcpRemoteStackManagementController {
         }
 
         self.role_bound = true;
+        self.management_permissions_revision = super::management_permissions_revision(ctx)?;
 
         Ok(HandlerAction::Continue {
             state: GrantingImpersonation,
@@ -612,6 +617,13 @@ impl GcpRemoteStackManagementController {
         status = ResourceStatus::RefreshFailed
     );
 
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        super::management_permissions_need_refresh(
+            ctx,
+            self.management_permissions_revision.as_deref(),
+        )
+    }
+
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         if let Some(email) = &self.service_account_email {
             Some(ResourceOutputs::new(RemoteStackManagementOutputs {
@@ -823,6 +835,7 @@ impl GcpRemoteStackManagementController {
             role_bound: true,
             impersonation_granted: true,
             custom_role_naming: Some(GcpCustomRoleNaming::HashedLongPrefix),
+            management_permissions_revision: None,
             _internal_stay_count: None,
         }
     }

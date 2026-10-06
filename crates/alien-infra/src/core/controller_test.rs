@@ -186,7 +186,7 @@
 //! #[tokio::test]
 //! async fn test_create_and_delete_flow_succeeds(#[case] role: Role) {
 //!     let mock_provider = setup_happy_path_mocks(&role.id);
-//!
+//!     
 //!     let mut executor = SingleControllerExecutor::builder()
 //!         .resource(role)
 //!         .controller(AwsRoleController::default())
@@ -195,10 +195,10 @@
 //!         .build()
 //!         .await
 //!         .unwrap();
-//!
+//!     
 //!     executor.run_until_terminal().await.unwrap();
 //!     assert_eq!(executor.status(), ResourceStatus::Running);
-//!
+//!     
 //!     executor.delete().unwrap();
 //!     executor.run_until_terminal().await.unwrap();
 //!     assert_eq!(executor.status(), ResourceStatus::Deleted);
@@ -214,7 +214,7 @@
 //!     mock_iam
 //!         .expect_delete_role()
 //!         .returning(|_| Ok(()));
-//!
+//!     
 //!     // Should succeed even though policy deletion failed
 //!     // ... rest of test
 //! }
@@ -230,7 +230,7 @@
 //!             request.assume_role_policy_document.contains("sts:AssumeRole")
 //!         })
 //!         .returning(|_| Ok(success_response()));
-//!
+//!     
 //!     // ... rest of test
 //! }
 //! ```
@@ -347,6 +347,8 @@ pub struct SingleControllerExecutor {
     monitoring: Option<alien_core::OtlpConfig>,
     // Domain metadata for public resources (certificates, DNS)
     domain_metadata: Option<DomainMetadata>,
+    // Volume restore requests carried in the deployment config
+    volume_restores: Vec<alien_core::VolumeRestoreRequest>,
     // Public endpoint URL overrides for testing.
     public_endpoints: Option<alien_core::PublicEndpointUrls>,
     // Stack and state
@@ -396,7 +398,6 @@ impl SingleControllerExecutor {
                 .clone()
         };
 
-        let deployment_config = self.deployment_config();
         let context = ResourceControllerContext {
             desired_config: &desired_config,
             platform: self.platform,
@@ -406,7 +407,20 @@ impl SingleControllerExecutor {
             registry: &self.registry,
             desired_stack: &self.desired_stack,
             service_provider: &self.service_provider,
-            deployment_config: &deployment_config,
+            deployment_config: &DeploymentConfig::builder()
+                .stack_settings(self.stack_settings.clone())
+                .maybe_management_config(self.management_config.clone())
+                .maybe_compute_backend(self.compute_backend.clone())
+                .environment_variables(self.environment_variables.clone())
+                .maybe_monitoring(self.monitoring.clone())
+                .external_bindings(self.external_bindings.clone())
+                .allow_frozen_changes(false)
+                .maybe_domain_metadata(self.domain_metadata.clone())
+                .maybe_public_endpoints(self.public_endpoints.clone())
+                .volume_restores(self.volume_restores.clone())
+                .manager_url("https://test-manager.alien.dev".to_string())
+                .deployment_token("test-deployment-token".to_string())
+                .build(),
             initial_setup_authority: self.initial_setup_authority,
             heartbeat_collector: HeartbeatCollector::default(),
         };
@@ -425,52 +439,6 @@ impl SingleControllerExecutor {
         }
 
         Ok(step_result)
-    }
-
-    /// Asks the controller whether the executor should schedule an update for it while its
-    /// config is unchanged, as the stack executor does for a stable resource.
-    pub fn needs_update(&self) -> Result<bool> {
-        let entry = self
-            .desired_stack
-            .resources
-            .get(&self.resource_id)
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceNotFound {
-                    resource_id: self.resource_id.clone(),
-                    available_resources: self.desired_stack.resources.keys().cloned().collect(),
-                })
-            })?;
-        let deployment_config = self.deployment_config();
-        let context = ResourceControllerContext {
-            desired_config: &entry.config,
-            platform: self.platform,
-            client_config: self.client_config.clone(),
-            state: &self.stack_state,
-            resource_prefix: &self.resource_prefix,
-            registry: &self.registry,
-            desired_stack: &self.desired_stack,
-            service_provider: &self.service_provider,
-            deployment_config: &deployment_config,
-            initial_setup_authority: self.initial_setup_authority,
-            heartbeat_collector: HeartbeatCollector::default(),
-        };
-        self.controller.needs_update(&context)
-    }
-
-    fn deployment_config(&self) -> DeploymentConfig {
-        DeploymentConfig::builder()
-            .stack_settings(self.stack_settings.clone())
-            .maybe_management_config(self.management_config.clone())
-            .maybe_compute_backend(self.compute_backend.clone())
-            .environment_variables(self.environment_variables.clone())
-            .maybe_monitoring(self.monitoring.clone())
-            .external_bindings(self.external_bindings.clone())
-            .allow_frozen_changes(false)
-            .maybe_domain_metadata(self.domain_metadata.clone())
-            .maybe_public_endpoints(self.public_endpoints.clone())
-            .manager_url("https://test-manager.alien.dev".to_string())
-            .deployment_token("test-deployment-token".to_string())
-            .build()
     }
 
     /// Every delay the controller suggested between steps, in order. Tests assert on these
@@ -684,6 +652,55 @@ impl SingleControllerExecutor {
     }
 
     /// Gets the current status of the controller.
+    /// Runs `f` with the controller context the next step would see, for
+    /// checks that are not steps (for example `needs_update`).
+    pub fn with_context<T>(&self, f: impl FnOnce(&ResourceControllerContext<'_>) -> T) -> T {
+        let desired_config = self
+            .desired_stack
+            .resources
+            .get(&self.resource_id)
+            .map(|entry| entry.config.clone())
+            .expect("the resource is in the desired stack");
+        let deployment_config = DeploymentConfig::builder()
+            .stack_settings(self.stack_settings.clone())
+            .maybe_management_config(self.management_config.clone())
+            .maybe_compute_backend(self.compute_backend.clone())
+            .environment_variables(self.environment_variables.clone())
+            .maybe_monitoring(self.monitoring.clone())
+            .external_bindings(self.external_bindings.clone())
+            .allow_frozen_changes(false)
+            .maybe_domain_metadata(self.domain_metadata.clone())
+            .maybe_public_endpoints(self.public_endpoints.clone())
+            .volume_restores(self.volume_restores.clone())
+            .manager_url("https://test-manager.alien.dev".to_string())
+            .deployment_token("test-deployment-token".to_string())
+            .build();
+        let context = ResourceControllerContext {
+            desired_config: &desired_config,
+            platform: self.platform,
+            client_config: self.client_config.clone(),
+            state: &self.stack_state,
+            resource_prefix: &self.resource_prefix,
+            registry: &self.registry,
+            desired_stack: &self.desired_stack,
+            service_provider: &self.service_provider,
+            deployment_config: &deployment_config,
+            initial_setup_authority: self.initial_setup_authority,
+            heartbeat_collector: HeartbeatCollector::default(),
+        };
+        f(&context)
+    }
+
+    /// Whether the controller asks for an update with an unchanged config.
+    pub fn needs_update(&self) -> Result<bool> {
+        self.with_context(|ctx| self.controller.needs_update(ctx))
+    }
+
+    /// Replaces the volume restore requests the next steps see in the deployment config.
+    pub fn set_volume_restores(&mut self, requests: Vec<alien_core::VolumeRestoreRequest>) {
+        self.volume_restores = requests;
+    }
+
     pub fn status(&self) -> ResourceStatus {
         self.controller.get_status()
     }
@@ -723,6 +740,8 @@ pub struct SingleControllerExecutorBuilder {
     external_bindings: ExternalBindings,
     monitoring: Option<alien_core::OtlpConfig>,
     domain_metadata: Option<DomainMetadata>,
+    // Volume restore requests carried in the deployment config
+    volume_restores: Vec<alien_core::VolumeRestoreRequest>,
     public_endpoints: Option<alien_core::PublicEndpointUrls>,
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
     stack_resources: Vec<(Resource, ResourceLifecycle)>,
@@ -752,6 +771,7 @@ impl SingleControllerExecutorBuilder {
             external_bindings: ExternalBindings::default(),
             monitoring: None,
             domain_metadata: None,
+            volume_restores: Vec::new(),
             public_endpoints: None,
             dependencies: Vec::new(),
             stack_resources: Vec::new(),
@@ -841,6 +861,12 @@ impl SingleControllerExecutorBuilder {
     /// Sets the domain metadata for public resources (certificates, DNS).
     pub fn domain_metadata(mut self, metadata: DomainMetadata) -> Self {
         self.domain_metadata = Some(metadata);
+        self
+    }
+
+    /// Sets the volume restore requests in the deployment config.
+    pub fn volume_restores(mut self, requests: Vec<alien_core::VolumeRestoreRequest>) -> Self {
+        self.volume_restores = requests;
         self
     }
 
@@ -1339,6 +1365,7 @@ impl SingleControllerExecutorBuilder {
             external_bindings: self.external_bindings,
             monitoring: self.monitoring,
             domain_metadata: self.domain_metadata,
+            volume_restores: self.volume_restores,
             public_endpoints: self.public_endpoints,
             desired_stack: stack,
             stack_state,

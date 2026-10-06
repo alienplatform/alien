@@ -140,7 +140,36 @@
       },
       {
         "grant": {
-          "actions": ["ec2:DeleteVolume"]
+          "actions": ["ec2:DeleteVolume", "ec2:ModifyVolume"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // Volume backups: a snapshot of an owned volume (final snapshot on delete,
+      // and of the replaced volume on restore). AWS authorizes CreateSnapshot against
+      // both the source volume and the new snapshot.
+      {
+        "grant": {
+          "actions": ["ec2:CreateSnapshot"]
         },
         "binding": {
           "stack": {
@@ -165,10 +194,328 @@
         }
       },
       {
+        "grant": {
+          "actions": ["ec2:CreateSnapshot"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime",
+                "ec2:CreateAction": "CreateSnapshot"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:RequestTag/${managedByTag}": "runtime",
+                "ec2:CreateAction": "CreateSnapshot"
+              }
+            }
+          }
+        }
+      },
+      // Scheduled snapshots copy the volume's tags, so they carry the same boundary tags.
+      {
+        "grant": {
+          "actions": ["ec2:DeleteSnapshot"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // Restore: a new volume made from one of this stack's snapshots.
+      {
+        "grant": {
+          "actions": ["ec2:CreateVolume"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // Restore: the restored volume's marker tag is removed once it replaces the old one.
+      {
+        "grant": {
+          "actions": ["ec2:DeleteTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              },
+              "ForAllValues:StringEquals": {
+                "aws:TagKeys": "alien-restore-request"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              },
+              "ForAllValues:StringEquals": {
+                "aws:TagKeys": "alien-restore-request"
+              }
+            }
+          }
+        }
+      },
+      // Scheduled snapshots: one Data Lifecycle Manager policy per container.
+      // AWS authorizes CreateLifecyclePolicy against no resource type, so only the
+      // request tags can bound it. Its implicit TagResource is authorized on the policy.
+      {
+        "grant": {
+          "actions": ["dlm:CreateLifecyclePolicy"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["dlm:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:dlm:${awsRegion}:${awsAccountId}:policy/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:dlm:${awsRegion}:${awsAccountId}:policy/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "dlm:GetLifecyclePolicy",
+            "dlm:UpdateLifecyclePolicy",
+            "dlm:DeleteLifecyclePolicy"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:dlm:${awsRegion}:${awsAccountId}:policy/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:dlm:${awsRegion}:${awsAccountId}:policy/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // The policy's execution role `${stackPrefix}-dlm-{hash of prefix and container}`,
+      // trusted by dlm.amazonaws.com, with only the AWS managed DLM service policy
+      // attached. The calls on an existing role are scoped by name, not tags: IAM
+      // answers a tag-conditioned call on a role that does not exist with
+      // AccessDenied, and cleanup must see NoSuchEntity to treat it as already gone.
+      {
+        "grant": {
+          "actions": ["iam:CreateRole", "iam:TagRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["iam:GetRole", "iam:DetachRolePolicy", "iam:DeleteRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["iam:AttachRolePolicy"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["iam:PassRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PassedToService": "dlm.amazonaws.com"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PassedToService": "dlm.amazonaws.com"
+              }
+            }
+          }
+        }
+      },
+      {
         // AWS requires Resource: "*" for these read APIs.
         "grant": {
           "actions": [
             "ec2:DescribeVolumes",
+            "ec2:DescribeSnapshots",
+            "dlm:GetLifecyclePolicies",
             "elasticloadbalancing:DescribeLoadBalancers",
             "elasticloadbalancing:DescribeTargetGroups",
             "elasticloadbalancing:DescribeTargetHealth",
@@ -462,6 +809,39 @@
             "scope": "projects/${projectName}"
           }
         }
+      },
+      // Volume backups: a snapshot schedule (regional resource policy) attached to
+      // each disk, a final snapshot of each disk on delete, cleanup of scheduled
+      // snapshots, and restoring a disk from a snapshot.
+      {
+        "grant": {
+          "permissions": [
+            "compute.resourcePolicies.create",
+            "compute.resourcePolicies.delete",
+            "compute.resourcePolicies.get",
+            "compute.resourcePolicies.use",
+            "compute.disks.addResourcePolicies",
+            "compute.disks.removeResourcePolicies",
+            "compute.disks.createSnapshot",
+            "compute.snapshots.create",
+            "compute.snapshots.delete",
+            "compute.snapshots.get",
+            "compute.snapshots.list",
+            "compute.snapshots.setLabels",
+            "compute.snapshots.useReadOnly",
+            "compute.regionOperations.get",
+            "compute.zoneOperations.get"
+          ]
+        },
+        // Compute Engine uses project NAME in resource.name (not number).
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
       }
     ],
     "azure": [
@@ -505,6 +885,47 @@
             "Microsoft.Compute/disks/write",
             "Microsoft.Compute/disks/read",
             "Microsoft.Compute/disks/delete"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      },
+      // Volume backups and restores: an Azure Disk Backup vault per container with its policy and
+      // one backup instance per disk (suspended, not deleted, when backups are turned off), the
+      // final snapshot taken on delete, and the snapshot of a disk replaced by a restore. The
+      // restored disk itself uses the Managed Disks grant above. The vault identity's role
+      // assignments (Disk Backup Reader on each disk, Disk Snapshot Contributor on the resource
+      // group) use the roleAssignments grants above. The vault identity reads disk contents;
+      // this identity never does, so no beginGetAccess.
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.DataProtection/backupVaults/read",
+            "Microsoft.DataProtection/backupVaults/write",
+            "Microsoft.DataProtection/backupVaults/delete",
+            "Microsoft.DataProtection/backupVaults/operationResults/read",
+            "Microsoft.DataProtection/backupVaults/operationStatus/read",
+            "Microsoft.DataProtection/backupVaults/backupPolicies/read",
+            "Microsoft.DataProtection/backupVaults/backupPolicies/write",
+            "Microsoft.DataProtection/backupVaults/backupPolicies/delete",
+            "Microsoft.DataProtection/backupVaults/validateForBackup/action",
+            "Microsoft.DataProtection/backupVaults/backupInstances/read",
+            "Microsoft.DataProtection/backupVaults/backupInstances/write",
+            "Microsoft.DataProtection/backupVaults/backupInstances/delete",
+            "Microsoft.DataProtection/backupVaults/backupInstances/suspendBackups/action",
+            "Microsoft.DataProtection/backupVaults/backupInstances/resumeBackups/action",
+            "Microsoft.DataProtection/backupVaults/backupInstances/operationResults/read",
+            "Microsoft.DataProtection/locations/operationStatus/read",
+            "Microsoft.DataProtection/locations/operationResults/read",
+            "Microsoft.Compute/snapshots/read",
+            "Microsoft.Compute/snapshots/write",
+            "Microsoft.Compute/snapshots/delete"
           ]
         },
         "binding": {
