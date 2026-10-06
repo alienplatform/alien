@@ -1262,9 +1262,8 @@ fn an_inline_stack_wide_set_bound_only_at_the_group_is_refused() {
 
 /// Each assignment is addressed by sandbox, profile and role, so the order a profile lists its
 /// sets in, and which of two sets resolving to one role comes first, change nothing in the
-/// rendered block: neither the Terraform address and Azure name (a changed address would destroy
-/// and recreate an assignment Azure still holds, which it refuses) nor the description (a changed
-/// attribute is a plan diff on a stack nobody changed).
+/// rendered block: not the Terraform address or Azure name (see the emitter doc), nor the
+/// description (a changed attribute is a plan diff on a stack nobody changed).
 #[test]
 fn a_workload_assignment_keeps_its_address_when_the_profile_is_reordered() {
     let addresses = |sets: [&str; 2]| {
@@ -1553,4 +1552,95 @@ fn azure_explicit_resource_grant_fragments_validate() {
     );
     test_utils::terraform_fmt_and_validate(&linter_files(&module))
         .assert_ok("explicit resource grant fragments: fmt, provider init, validate");
+}
+
+/// A stack with `agents` published for remote access beside an unpublished `other`, which the
+/// Worker links, and `execution` holding `profile`.
+fn published_sandbox_stack(profile: PermissionProfile) -> Stack {
+    let execution_sa =
+        ServiceAccount::from_permission_profile("execution-sa".to_string(), &profile, |name| {
+            alien_permissions::get_permission_set(name).cloned()
+        })
+        .expect("built-in permission sets resolve");
+    let worker = Worker::new("api".to_string())
+        .code(WorkerCode::Image {
+            image: "acmeprod.azurecr.io/api:1".to_string(),
+        })
+        .permissions("execution".to_string())
+        .link(&frozen_sandbox("other"))
+        .build();
+    Stack::new("byo-sandbox".to_string())
+        .permission("execution", profile)
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            AzureContainerAppsEnvironment::new("default-container-apps-environment".to_string())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(execution_sa, ResourceLifecycle::Frozen)
+        .add_with_remote_access(frozen_sandbox("agents"), ResourceLifecycle::Frozen)
+        .add(frozen_sandbox("other"), ResourceLifecycle::Frozen)
+        .add(worker, ResourceLifecycle::Live)
+        .build()
+}
+
+/// A sandbox published for remote access belongs to its remote caller, so a `"*"` grant fans out
+/// to every other sandbox group and skips that one. `sandbox/images` is the case that matters: the
+/// single-tenant preflight does not count it as reaching a sandbox, and on a published group it
+/// would let the deployment replace the image remote sessions boot from.
+#[test]
+fn a_stack_wide_grant_skips_a_sandbox_published_for_remote_access() {
+    let profile = PermissionProfile::new().global(["sandbox/images"]);
+    let stack = published_sandbox_stack(profile);
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = rendered_tf(&module);
+
+    let execution_scopes: Vec<String> = role_assignments(&rendered)
+        .into_iter()
+        .filter(|(_, _, principal)| {
+            principal == "azurerm_user_assigned_identity.execution_sa.principal_id"
+        })
+        .map(|(scope, _, _)| scope)
+        .collect();
+    assert!(
+        !execution_scopes
+            .iter()
+            .any(|scope| scope == "azapi_resource.agents.id"),
+        "{rendered}"
+    );
+    assert!(
+        execution_scopes
+            .iter()
+            .any(|scope| scope == "azapi_resource.other.id"),
+        "the unpublished group still gets the grant:\n{rendered}"
+    );
+    assert_terraform_valid(
+        &module,
+        "azure sandbox stack-wide grant beside a published one",
+    );
+}
+
+/// A grant keyed by a published sandbox is refused rather than rendered: the single-tenant preflight
+/// counts only grants that reach a session, and a disk-image write changes what remote sessions
+/// boot without reaching one. A set with nothing on Azure, from a profile shared across clouds,
+/// still renders nothing and is not refused.
+#[test]
+fn a_keyed_grant_on_a_sandbox_published_for_remote_access_is_refused() {
+    let shared =
+        published_sandbox_stack(PermissionProfile::new().resource("agents", ["sandbox/templates"]));
+    render(&shared, TerraformTarget::Azure, StackSettings::default());
+
+    let stack =
+        published_sandbox_stack(PermissionProfile::new().resource("agents", ["sandbox/images"]));
+    let error =
+        super::helpers::try_render(&stack, TerraformTarget::Azure, StackSettings::default())
+            .expect_err("the module is refused");
+    assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+    assert!(!error.retryable, "{error}");
+    let message = error.to_string();
+    assert!(
+        message.contains("grant sandbox/images to profile execution on sandbox agents")
+            && message.contains("published for remote access"),
+        "{message}"
+    );
 }

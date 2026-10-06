@@ -375,9 +375,10 @@ fn emit_image_management(
 /// The service-account emitter delivers a profile's `"*"` sets at the resource group, which is as
 /// narrow as an Azure stack binding gets, so from `"*"` only sets with no stack binding land here:
 /// `sandbox/execute`, `sandbox/remote-execute` and `sandbox/images`, whose roles belong to one
-/// group. Such a holder gets one assignment per sandbox group in the deployment and never one at
-/// the resource group. An entry keyed by this sandbox grants every resource-bound set it names on
-/// this group alone. The profile is the grant; a Worker link is not checked. Custom role
+/// group. Such a holder gets one assignment per sandbox group in the deployment, except a group
+/// published for remote access, and never one at the resource group. An entry keyed by this
+/// sandbox grants every resource-bound set it names on this group alone, and is refused when the
+/// group is published. The profile is the grant; a Worker link is not checked. Custom role
 /// definitions are the setup-owned ones `emit_setup_resource_role_definitions` renders for the
 /// same profile and set.
 ///
@@ -400,6 +401,7 @@ fn emit_workload_access(
         sandbox_group_name(ctx)
     );
     let context = permission_context(label).with_resource_name(sandbox_group_name(ctx));
+    let published = ctx.resource.has_remote_bindings();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
         let Some(principal_id) = service_account_principal_id(ctx, profile_name) else {
             continue;
@@ -439,6 +441,18 @@ fn emit_workload_access(
                 ));
             }
 
+            // A group published for remote access belongs to its remote caller, so a `"*"` holder
+            // gets nothing on it and a keyed entry is refused: the single-tenant preflight counts
+            // only grants that reach a session, and a disk-image write does not, yet it changes
+            // what remote sessions boot.
+            if published {
+                if stack_wide {
+                    continue;
+                }
+                return Err(refuse(
+                    "the sandbox is published for remote access and belongs to its remote caller; no workload identity can hold a grant on it",
+                ));
+            }
             let plan = AzureRuntimePermissionsGenerator::new()
                 .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
                 .context(ErrorData::GenericError {
