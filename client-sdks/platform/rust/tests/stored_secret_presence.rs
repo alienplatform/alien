@@ -2,7 +2,7 @@
 #![cfg(feature = "full-api")]
 
 use alien_platform_api::types::{DeploymentConfig, SyncAcquireResponseDeployment};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn config() -> Value {
     json!({
@@ -120,8 +120,66 @@ fn null_presence_decodes_like_legacy_omission() {
     original["storedSecretInputIds"] = Value::Null;
     let acquired: SyncAcquireResponseDeployment =
         serde_json::from_value(acquired_deployment(original)).unwrap();
-    assert!(serde_json::to_value(acquired.config)
-        .unwrap()
-        .get("storedSecretInputIds")
-        .is_none());
+    assert!(
+        serde_json::to_value(acquired.config)
+            .unwrap()
+            .get("storedSecretInputIds")
+            .is_none()
+    );
+}
+
+#[test]
+fn acquired_catalog_preserves_runtime_isolation_generation_through_core() {
+    for generation in [None, Some(1_u32)] {
+        let mut catalog = json!({
+            "channel": "stable",
+            "machineImageVersion": "1",
+            "horizondVersion": "1",
+            "gitSha": "abc123",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "baseImage": { "name": "linux", "version": "1" },
+            "horizondArtifacts": {
+                "linux-arm64": { "url": "https://example.com/arm64", "sha256": "a".repeat(64) },
+                "linux-amd64": { "url": "https://example.com/amd64", "sha256": "b".repeat(64) }
+            },
+            "aws": { "amis": { "arm64": { "us-east-1": "ami-example" } } },
+            "gcp": { "images": { "arm64": { "sourceImage": "example-image" } } },
+            "azure": { "images": { "arm64": { "imageVersionId": "example-version" } } }
+        });
+        if let Some(generation) = generation {
+            catalog["runtimeIsolationGeneration"] = json!(generation);
+            for artifact in catalog["horizondArtifacts"]
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+            {
+                artifact["runtimeIsolationGeneration"] = json!(generation);
+            }
+        }
+        let expected: alien_core::HorizonMachineImage =
+            serde_json::from_value(catalog.clone()).unwrap();
+        let mut original = config();
+        original["computeBackend"] = json!({
+            "type": "horizon",
+            "url": "https://example.com",
+            "clusters": {},
+            "horizonMachineImage": catalog
+        });
+        let acquired: SyncAcquireResponseDeployment =
+            serde_json::from_value(acquired_deployment(original)).unwrap();
+        let encoded = serde_json::to_value(acquired).unwrap();
+        let core: alien_core::DeploymentConfig =
+            serde_json::from_value(encoded["config"].clone()).unwrap();
+        let alien_core::ComputeBackend::Horizon(backend) = core.compute_backend.unwrap();
+        let actual = backend.horizon_machine_image.unwrap();
+        assert_eq!(actual.runtime_isolation_generation, generation.unwrap_or(0));
+        assert_eq!(actual.horizond_artifacts.len(), 2);
+        for artifact in actual.horizond_artifacts.values() {
+            assert_eq!(
+                artifact.runtime_isolation_generation,
+                generation.unwrap_or(0)
+            );
+        }
+        assert_eq!(actual, expected);
+    }
 }
