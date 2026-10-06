@@ -745,7 +745,7 @@ mod tests {
         serde_json::json!({
             "id": "dep_test",
             "name": "test",
-            "platform": "local",
+            "platform": "test",
             "status": "teardown-required",
             "deploymentGroupId": "dg_test",
             "deploymentProtocolVersion": 1,
