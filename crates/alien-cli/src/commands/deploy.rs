@@ -25,7 +25,7 @@ use alien_core::{
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::manager_api_transport::{
     acquire_deployment_with_payload, acquire_setup_run_deployment,
-    combine_operation_and_finalization, final_reconcile, ManagerApiTransport,
+    combine_operation_and_finalization, final_reconcile, finalize_step_loop, ManagerApiTransport,
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
@@ -2020,18 +2020,15 @@ async fn deploy_task_with_environment(
             .then(|| result.loop_result.final_status.clone())
     });
 
-    // Always reconcile + release, even on error
-    let runner_result = combine_operation_and_finalization(
-        alien_deployment::runner::preserve_semantic_failure(runner_result, &current),
-        final_reconcile(
-            lock_client,
-            &tracked_deployment.deployment_id,
-            &session,
-            acquired_deployment.execution_claim.as_ref(),
-            &current,
-        )
-        .await,
-    );
+    let runner_result = finalize_step_loop(
+        lock_client,
+        &tracked_deployment.deployment_id,
+        &session,
+        acquired_deployment.execution_claim.as_ref(),
+        &current,
+        runner_result,
+    )
+    .await;
 
     // Semantic failures are checkpointed as a successful runner return. Mark
     // the visible step failed after finalization, but before converting that
