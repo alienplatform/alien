@@ -99,14 +99,14 @@ pub async fn ensure_server_running(port: u16) -> Result<()> {
 
 /// Ensure the dev server is running for the full `alien dev` session.
 ///
-/// When we need to start a fresh embedded manager, clear stale runtime state so
-/// deployment recovery from older sessions does not leak into the new run.
+/// Own the manager port while retaining the deployment database and local storage.
 pub async fn ensure_server_running_for_dev_session(
     port: u16,
     status_file: Option<PathBuf>,
     user_env_vars: Vec<CliEnvVar>,
+    deployment_name: &str,
 ) -> Result<()> {
-    ensure_server_running_internal(port, status_file, user_env_vars, true).await
+    ensure_server_running_internal(port, status_file, user_env_vars, Some(deployment_name)).await
 }
 
 /// Ensure the dev server is running with user-provided env vars and optional status file (start if not)
@@ -115,17 +115,17 @@ pub async fn ensure_server_running_with_env(
     status_file: Option<PathBuf>,
     user_env_vars: Vec<CliEnvVar>,
 ) -> Result<()> {
-    ensure_server_running_internal(port, status_file, user_env_vars, false).await
+    ensure_server_running_internal(port, status_file, user_env_vars, None).await
 }
 
 async fn ensure_server_running_internal(
     port: u16,
     status_file: Option<PathBuf>,
-    _user_env_vars: Vec<CliEnvVar>,
-    reset_state_on_start: bool,
+    user_env_vars: Vec<CliEnvVar>,
+    deployment_name: Option<&str>,
 ) -> Result<()> {
     if check_server_health(port).await {
-        if reset_state_on_start {
+        if deployment_name.is_some() {
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "port".to_string(),
                 message: format!(
@@ -152,13 +152,61 @@ async fn ensure_server_running_internal(
         )?;
     }
 
-    if reset_state_on_start {
-        reset_local_dev_runtime_state()?;
-    }
-
     ensure_dev_port_available(port)?;
 
+    if let Some(name) = deployment_name {
+        refresh_local_deployment_environment(name, &user_env_vars).await?;
+    }
+
     start_embedded_dev_manager(port).await
+}
+
+/// The full dev session owns this stopped manager's database. Refresh its CLI
+/// environment before execution resumes, preserving deployment identity and data.
+async fn refresh_local_deployment_environment(name: &str, variables: &[CliEnvVar]) -> Result<()> {
+    use alien_manager::{
+        auth::Subject,
+        stores::sqlite::{SqliteDatabase, SqliteDeploymentStore},
+        traits::deployment_store::{DeploymentFilter, DeploymentStore},
+    };
+    let path = get_current_dir()?.join(".alien/dev-server.db");
+    if !path.exists() {
+        return Ok(());
+    }
+    let db = SqliteDatabase::new(&path.to_string_lossy()).await.context(
+        ErrorData::ServerStartFailed {
+            reason: "Failed to open the stopped local manager".to_string(),
+        },
+    )?;
+    let store = SqliteDeploymentStore::new(Arc::new(db));
+    let deployments = store
+        .list_deployments(&Subject::system(), &DeploymentFilter::default())
+        .await
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to resolve local session deployment".to_string(),
+        })?;
+    let matches: Vec<_> = deployments
+        .iter()
+        .filter(|deployment| {
+            deployment.name == name && deployment.platform == alien_core::Platform::Local
+        })
+        .collect();
+    if matches.len() > 1 {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "name".to_string(),
+            message: format!("Multiple local deployments are named '{name}'"),
+        }));
+    }
+    if let Some(deployment) = matches.first() {
+        let variables = crate::cli_env_vars_to_core(variables).unwrap_or_default();
+        store
+            .replace_environment_variables(&deployment.id, &variables)
+            .await
+            .context(ErrorData::ServerStartFailed {
+                reason: "Failed to refresh the local session environment".to_string(),
+            })?;
+    }
+    Ok(())
 }
 
 fn ensure_dev_port_available(port: u16) -> Result<()> {
@@ -179,73 +227,6 @@ fn ensure_dev_port_available(port: u16) -> Result<()> {
             message: format!("Failed to bind local dev server to port {port}: {error}"),
         })),
     }
-}
-
-fn reset_local_dev_runtime_state() -> Result<()> {
-    let state_dir = get_current_dir()?.join(".alien");
-    if !state_dir.exists() {
-        return Ok(());
-    }
-
-    for db_file in ["dev-server.db", "dev-server.db-shm", "dev-server.db-wal"] {
-        let path = state_dir.join(db_file);
-        if path.exists() {
-            std::fs::remove_file(&path).into_alien_error().context(
-                ErrorData::FileOperationFailed {
-                    operation: "remove file".to_string(),
-                    file_path: path.display().to_string(),
-                    reason: "Failed to reset local dev manager database".to_string(),
-                },
-            )?;
-        }
-    }
-
-    for runtime_dir in ["commands_kv", "commands_storage"] {
-        let path = state_dir.join(runtime_dir);
-        if path.exists() {
-            std::fs::remove_dir_all(&path).into_alien_error().context(
-                ErrorData::FileOperationFailed {
-                    operation: "remove directory".to_string(),
-                    file_path: path.display().to_string(),
-                    reason: "Failed to reset local dev runtime state".to_string(),
-                },
-            )?;
-        }
-    }
-
-    let entries = std::fs::read_dir(&state_dir).into_alien_error().context(
-        ErrorData::FileOperationFailed {
-            operation: "read directory".to_string(),
-            file_path: state_dir.display().to_string(),
-            reason: "Failed to scan local dev state directory".to_string(),
-        },
-    )?;
-
-    for entry in entries {
-        let entry = entry
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "read directory entry".to_string(),
-                file_path: state_dir.display().to_string(),
-                reason: "Failed to inspect local dev state entry".to_string(),
-            })?;
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-
-        if name.starts_with("dep_") {
-            std::fs::remove_dir_all(&path).into_alien_error().context(
-                ErrorData::FileOperationFailed {
-                    operation: "remove directory".to_string(),
-                    file_path: path.display().to_string(),
-                    reason: "Failed to remove stale local deployment state".to_string(),
-                },
-            )?;
-        }
-    }
-
-    Ok(())
 }
 
 /// Build the embedded dev manager instance used by `alien dev`.
@@ -669,42 +650,12 @@ pub async fn create_initial_deployment(
 
 /// Prepare the deployment used by the full `alien dev` session.
 ///
-/// Unlike ad hoc deployment subcommands, the main dev loop should own a fresh
-/// deployment so stale local processes and incompatible stack state do not leak
-/// across runs.
+/// Reuse its durable deployment so restart does not delete storage or change bindings.
 pub async fn prepare_dev_session_deployment(
     deployment_name: &str,
     port: u16,
     environment_variables: Option<Vec<alien_core::EnvironmentVariable>>,
 ) -> Result<String> {
-    let client = local_dev_client(port);
-
-    if let Some(existing) = find_named_local_deployment(&client, deployment_name).await? {
-        info!(
-            "Refreshing existing local deployment '{}' ({})",
-            deployment_name, existing.id
-        );
-
-        client
-            .delete_deployment()
-            .id(&existing.id)
-            .body(alien_manager_api::types::DeleteDeploymentRequest {
-                action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
-            })
-            .send()
-            .await
-            .into_sdk_error()
-            .context(ErrorData::ApiRequestFailed {
-                message: format!(
-                    "Failed to delete existing local deployment '{}'",
-                    deployment_name
-                ),
-                url: None,
-            })?;
-
-        wait_for_local_deployment_absent(port, deployment_name).await?;
-    }
-
     create_initial_deployment(deployment_name, port, environment_variables, HashMap::new()).await
 }
 
@@ -1279,6 +1230,10 @@ mod tests {
             .await
             .expect("a rerun reuses the existing deployment");
         assert_eq!(rerun, "dep_1");
+        let session = prepare_dev_session_deployment("api", port, None)
+            .await
+            .expect("the full dev session also reuses durable state");
+        assert_eq!(session, "dep_1");
         assert_eq!(created.lock().unwrap().len(), 1);
     }
 

@@ -1393,7 +1393,13 @@ async fn run_dev_session(
 
     let result = async {
         // Start local services (invisible step — fast, no user-facing progress)
-        ensure_server_running_for_dev_session(port, status_file.clone(), user_env_vars).await?;
+        ensure_server_running_for_dev_session(
+            port,
+            status_file.clone(),
+            user_env_vars,
+            &deployment_name,
+        )
+        .await?;
 
         // Step 0: Building
         let is_tty = steps.is_enabled();
