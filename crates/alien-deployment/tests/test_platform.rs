@@ -271,6 +271,7 @@ fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentCo
         manager_url: None,
         deployment_token: None,
         native_image_host: None,
+        volume_restores: Vec::new(),
     }
 }
 

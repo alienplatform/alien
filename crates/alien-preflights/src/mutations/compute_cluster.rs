@@ -1132,7 +1132,7 @@ mod tests {
     use alien_core::{
         compute_planner::plan_compute, ComputeChoiceRange, ComputePoolSelection, ComputeSettings,
         ContainerAutoscaling, ContainerCode, DaemonCode, EnvironmentVariablesSnapshot,
-        ExternalBindings, FailureDomainSelection, NetworkSettings, PersistentStorage, ResourceSpec,
+        ExternalBindings, FailureDomainSelection, NetworkSettings, PersistentStorage, ResourceSpec, VolumeBackups,
         StackSettings,
     };
     use indexmap::IndexMap;
@@ -1565,6 +1565,7 @@ mod tests {
             .persistent_storage(PersistentStorage {
                 size: "20Gi".to_string(),
                 mount_path: "/data".to_string(),
+                backups: VolumeBackups::default(),
             })
             .stateful(true)
             .replicas(3)
@@ -1823,6 +1824,7 @@ mod tests {
             .persistent_storage(PersistentStorage {
                 size: "20Gi".to_string(),
                 mount_path: "/data".to_string(),
+                backups: VolumeBackups::default(),
             })
             .stateful(true)
             .replicas(1)
@@ -1883,6 +1885,7 @@ mod tests {
             .persistent_storage(PersistentStorage {
                 size: "20Gi".to_string(),
                 mount_path: "/data".to_string(),
+                backups: VolumeBackups::default(),
             })
             .stateful(true)
             .replicas(1)

@@ -163,6 +163,195 @@ async fn imported_continuation_refuses_missing_setup_resource() -> Result<()> {
     Ok(())
 }
 
+/// Built the way `initial_setup.rs` builds it for an imported handoff.
+fn new_imported_setup_executor(stack: &Stack) -> Result<StackExecutor> {
+    StackExecutor::builder(stack, ClientConfig::Test)
+        .deployment_config(&default_deployment_config())
+        .lifecycle_filter(vec![ResourceLifecycle::Frozen])
+        .step_running_resources(false)
+        .step_out_of_scope_resources(false)
+        .build()
+}
+
+fn entry(resource: Resource, lifecycle: ResourceLifecycle) -> alien_core::ResourceEntry {
+    alien_core::ResourceEntry {
+        config: resource,
+        lifecycle,
+        dependencies: Vec::new(),
+        remote_access: false,
+        enabled_when: None,
+    }
+}
+
+/// A stack of one Frozen storage plus `extra`, and imported state that holds the synced storage
+/// and `imported` for `extra`.
+async fn imported_beside_storage(
+    extra: (&str, alien_core::ResourceEntry),
+    imported: StackResourceState,
+) -> Result<(Stack, StackState)> {
+    let mut stack = Stack::new("imported".to_owned())
+        .add(test_storage("assets"), ResourceLifecycle::Frozen)
+        .build();
+    let mut state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+    state.resources.insert(extra.0.to_string(), imported);
+    stack.resources.insert(extra.0.to_string(), extra.1);
+    Ok((stack, state))
+}
+
+#[cfg(feature = "aws")]
+fn live_sandbox_entry() -> alien_core::ResourceEntry {
+    let sandbox = alien_core::Sandbox::new("agents".to_string())
+        .code(alien_core::SandboxCode::Image {
+            image: "s3://example-artifacts/agents/bundle.zip".to_string(),
+        })
+        .egress(alien_core::SandboxEgress::Allow)
+        .lifecycle(alien_core::SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build();
+    entry(Resource::new(sandbox), ResourceLifecycle::Live)
+}
+
+/// The record the AWS importer builds from a sandbox registration, so these tests follow the
+/// importer if what it produces changes.
+#[cfg(feature = "aws")]
+fn import_aws_sandbox(
+    entry: &alien_core::ResourceEntry,
+    image: Option<(&str, &str, &str)>,
+) -> StackResourceState {
+    use crate::import::ResourceImporter;
+
+    let settings = alien_core::StackSettings::default();
+    let ctx = alien_core::import::ImportContext {
+        resource_id: "agents",
+        platform: Platform::Aws,
+        region: "us-east-2",
+        stack_settings: &settings,
+        management_config: None,
+        resource: entry,
+    };
+    let data = alien_core::import::data::AwsSandboxImportData {
+        image_identifier: image.map(|(identifier, _, _)| identifier.to_string()),
+        image_arn: image.map(|(_, arn, _)| arn.to_string()),
+        image_version: image.map(|(_, _, version)| version.to_string()),
+        build_role_arn: Some("arn:aws:iam::123456789012:role/agents-build".to_string()),
+        bundle_uri: Some("s3://example-artifacts/agents/bundle.zip".to_string()),
+        egress_connector_arns: Vec::new(),
+        preview_ports: Vec::new(),
+        allow_egress: true,
+    };
+    crate::sandbox::AwsSandboxImporter
+        .import(data, &ctx)
+        .expect("the AWS sandbox registration imports")
+}
+
+/// A Live sandbox's build role is rendered by setup, so the import carries the sandbox outside
+/// the Frozen filter. Setup must leave it for the runtime controller rather than refuse the
+/// whole handoff.
+#[cfg(feature = "aws")]
+#[tokio::test]
+async fn imported_continuation_leaves_a_registered_live_sandbox_to_runtime() -> Result<()> {
+    let sandbox = live_sandbox_entry();
+    let imported = import_aws_sandbox(&sandbox, None);
+    let (stack, state) = imported_beside_storage(("agents", sandbox), imported).await?;
+
+    let continued = new_imported_setup_executor(&stack)?
+        .continue_imported(state)
+        .await?
+        .next_state;
+
+    assert_eq!(
+        continued.resources["assets"].status,
+        ResourceStatus::Running
+    );
+    assert_eq!(
+        continued.resources["agents"].status,
+        ResourceStatus::Provisioning,
+        "initial setup must neither refuse nor advance the Live sandbox"
+    );
+    Ok(())
+}
+
+/// A Live sandbox registered with its image already built claims an image the setup stack owns;
+/// its runtime controller would then update or delete it.
+#[cfg(feature = "aws")]
+#[tokio::test]
+async fn imported_continuation_refuses_a_live_sandbox_registered_as_built() -> Result<()> {
+    let sandbox = live_sandbox_entry();
+    let imported = import_aws_sandbox(
+        &sandbox,
+        Some((
+            "agents",
+            "arn:aws:lambda:us-east-2:123456789012:microvm-image:agents",
+            "1",
+        )),
+    );
+    let (stack, state) = imported_beside_storage(("agents", sandbox), imported).await?;
+
+    let error = new_imported_setup_executor(&stack)?
+        .continue_imported(state)
+        .await
+        .expect_err("a Live sandbox setup claims to have built must fail the handoff");
+
+    assert!(error.message.contains("unexpected resource 'agents'"));
+    assert_eq!(error.code, "IMPORTED_SETUP_STATE_INVALID");
+    Ok(())
+}
+
+/// Setup never renders a Worker, so a registered one is not something setup did, even in the
+/// shape a registered Live sandbox has.
+#[tokio::test]
+async fn imported_continuation_refuses_a_live_resource_setup_does_not_render() -> Result<()> {
+    let worker = Stack::new("worker".to_owned())
+        .add(test_function("func"), ResourceLifecycle::Live)
+        .build();
+    let synced = run_to_synced(&new_executor(&worker)?, new_test_state()).await?;
+    let mut imported = synced.resources["func"].clone();
+    imported.status = ResourceStatus::Provisioning;
+    let (stack, state) = imported_beside_storage(
+        (
+            "func",
+            entry(
+                Resource::new(test_function("func")),
+                ResourceLifecycle::Live,
+            ),
+        ),
+        imported,
+    )
+    .await?;
+
+    let error = new_imported_setup_executor(&stack)?
+        .continue_imported(state)
+        .await
+        .expect_err("a registered Worker must fail the handoff");
+
+    assert!(error.message.contains("unexpected resource 'func'"));
+    assert_eq!(error.code, "IMPORTED_SETUP_STATE_INVALID");
+    Ok(())
+}
+
+#[tokio::test]
+async fn imported_continuation_refuses_a_resource_outside_the_stack() -> Result<()> {
+    let stack = Stack::new("imported-stray".to_owned())
+        .add(test_storage("assets"), ResourceLifecycle::Frozen)
+        .build();
+    let mut state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+    state.resources.insert(
+        "stray".to_string(),
+        create_running_function_state("stray", "image"),
+    );
+
+    let error = new_imported_setup_executor(&stack)?
+        .continue_imported(state)
+        .await
+        .expect_err("a resource the stack does not declare must fail the handoff");
+
+    assert!(error.message.contains("unexpected resource 'stray'"));
+    assert_eq!(error.code, "IMPORTED_SETUP_STATE_INVALID");
+    Ok(())
+}
+
 /// Tests that config changes while a resource is still provisioning do not
 /// interrupt the in-flight create. The update should happen after create reaches
 /// a stable state.

@@ -2,7 +2,7 @@ use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{
     ownership_policy_for_resource_type, Container, Daemon, Platform, ResourceLifecycle, Sandbox,
-    SandboxCode, Stack, Storage,
+    SandboxCode, Stack, Storage, Worker,
 };
 
 /// Ensures each resource uses a lifecycle allowed by the ownership policy.
@@ -105,7 +105,7 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
 
             // Setup-rendered consumers need the complete binding while the package is applied.
             // A Live sandbox has no image ARN/version until its runtime controller finishes.
-            // Containers and Daemons are also runtime-provisioned: their controllers wait for
+            // Containers, Daemons and Workers are runtime-provisioned: their controllers wait for
             // dependencies and resolve the completed sandbox binding from controller state.
             for link in alien_core::links_of(&resource_entry.config) {
                 let Some(target) = stack.resources.get(link.id()) else {
@@ -115,6 +115,7 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                     && target.lifecycle == ResourceLifecycle::Live
                     && resource_entry.config.downcast_ref::<Container>().is_none()
                     && resource_entry.config.downcast_ref::<Daemon>().is_none()
+                    && resource_entry.config.downcast_ref::<Worker>().is_none()
                 {
                     errors.push(format!(
                         "Resource '{}' links sandbox '{}', which uses the Live lifecycle; its \
@@ -570,17 +571,14 @@ mod tests {
         assert!(live.success, "{:?}", live.errors);
     }
 
-    /// A Worker's binding to a sandbox carries `imageArn` and `imageVersion`, both required fields
-    /// of `AwsSandboxBinding`. A Live sandbox has neither at setup time, so the binding would fail
-    /// to deserialize at Worker startup instead of at plan time — the wrong end to discover it.
+    /// A Build is rendered by setup, and a binding to a sandbox carries `imageArn` and
+    /// `imageVersion`, both required fields of `AwsSandboxBinding`. A Live sandbox has neither
+    /// while setup applies, so the link is refused at plan time.
     #[tokio::test]
     async fn a_setup_rendered_consumer_cannot_link_a_live_sandbox() {
         let mut stack = sandbox_stack(ResourceLifecycle::Live);
-        let worker = alien_core::Worker::new("api".to_string())
+        let build = Build::new("image-build".to_string())
             .permissions("execution".to_string())
-            .code(alien_core::WorkerCode::Image {
-                image: "example.com/api:latest".to_string(),
-            })
             .link(
                 &alien_core::Sandbox::new("agents".to_string())
                     .code(alien_core::SandboxCode::Image {
@@ -595,10 +593,10 @@ mod tests {
             )
             .build();
         stack.resources.insert(
-            "api".to_string(),
+            "image-build".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(worker),
-                lifecycle: ResourceLifecycle::Live,
+                config: alien_core::Resource::new(build),
+                lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
                 enabled_when: None,
@@ -661,9 +659,18 @@ mod tests {
             .link(&linked_sandbox())
             .build();
 
+        let worker = alien_core::Worker::new("handler".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "example.com/handler:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .link(&linked_sandbox())
+            .build();
+
         for (id, resource) in [
             ("api", alien_core::Resource::new(container)),
             ("scheduler", alien_core::Resource::new(daemon)),
+            ("handler", alien_core::Resource::new(worker)),
         ] {
             let mut stack = sandbox_stack(ResourceLifecycle::Live);
             stack.resources.insert(

@@ -182,6 +182,7 @@ async fn prepare_stack_for_render(
         manager_url: None,
         deployment_token: None,
         native_image_host: None,
+        volume_restores: Vec::new(),
     };
 
     runner
@@ -633,6 +634,7 @@ mod tests {
                     manager_url: None,
                     deployment_token: None,
                     native_image_host: None,
+                    volume_restores: Vec::new(),
                 };
                 let runner = alien_preflights::runner::PreflightRunner::new();
                 let on_gcp = runner

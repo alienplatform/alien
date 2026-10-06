@@ -13,7 +13,7 @@ use alien_core::{
         ManagementPermissions, PermissionProfile, PermissionSetReference, PermissionsConfig,
     },
     AwsManagementConfig, ComputeSettings, Container, ContainerCode, DeploymentConfig,
-    EnvironmentVariablesSnapshot, ExternalBindings, ManagementConfig, PersistentStorage, Platform,
+    EnvironmentVariablesSnapshot, ExternalBindings, ManagementConfig, PersistentStorage, Platform, VolumeBackups,
     ResourceLifecycle, ResourceSpec, Stack, StackSettings, StackState,
 };
 use alien_preflights::runner::PreflightRunner;
@@ -38,6 +38,7 @@ fn container(id: &str, persistent: bool) -> Container {
             .persistent_storage(PersistentStorage {
                 size: "20Gi".to_string(),
                 mount_path: "/data".to_string(),
+                backups: VolumeBackups::default(),
             })
             .stateful(true)
             .replicas(1)

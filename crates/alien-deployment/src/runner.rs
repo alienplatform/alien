@@ -920,6 +920,7 @@ mod tests {
             manager_url: None,
             deployment_token: None,
             native_image_host: None,
+            volume_restores: Vec::new(),
         }
     }
 
