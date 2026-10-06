@@ -528,7 +528,7 @@ fn resource_scoped_permission_refs<'a>(
     refs
 }
 
-fn supports_azure_resource_binding(permission_set: &PermissionSet) -> bool {
+pub fn supports_azure_resource_binding(permission_set: &PermissionSet) -> bool {
     permission_set
         .platforms
         .azure
@@ -785,7 +785,7 @@ fn custom_role_segment(key: &str) -> String {
         .unwrap_or_else(|| "custom".to_string())
 }
 
-fn azure_resource_role_key_segment(key: &str) -> String {
+pub fn azure_resource_role_key_segment(key: &str) -> String {
     key.rsplit(':')
         .next()
         .map(|segment| {
@@ -835,7 +835,7 @@ fn is_worker_command_transport_permission(resource_type: &str, permission_set_id
 
 /// Sanitise a permission-set id like `storage/object-admin` into a
 /// Terraform label segment (`storage_object_admin`).
-fn sanitize_role_label(input: &str) -> String {
+pub fn sanitize_role_label(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
         if ch.is_ascii_alphanumeric() {

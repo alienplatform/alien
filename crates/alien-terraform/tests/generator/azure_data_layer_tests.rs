@@ -13,10 +13,11 @@
 
 use super::helpers::{assert_terraform_valid, linter_files, render, snapshot_module, test_utils};
 use alien_core::{
-    Ai, AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Key, Kv, LifecycleRule,
-    PermissionProfile, Queue, RemoteBindings, RemoteStackManagement, ResourceLifecycle,
-    ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, ServiceAccount,
-    Stack, StackSettings, Storage, Vault,
+    Ai, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
+    AzureStorageAccount, Key, Kv, LifecycleRule, PermissionProfile, PermissionSetReference, Queue,
+    RemoteBindings, RemoteStackManagement, ResourceLifecycle, ResourceRef, Sandbox, SandboxCode,
+    SandboxEgress, SandboxLifecyclePolicy, ServiceAccount, Stack, StackSettings, Storage, Vault,
+    Worker, WorkerCode,
 };
 use alien_permissions::{BindingTarget, PermissionContext};
 use alien_terraform::{
@@ -771,6 +772,641 @@ fn azure_sandbox_image_grant_reaches_the_manager_on_its_own_group_only() {
     assert_terraform_valid(&module, "azure sandbox image grant");
 }
 
+const SANDBOX_DATA_PLANE_ROLE_ID: &str = "c24cf47c-5077-412d-a19c-45202126392c";
+
+fn frozen_sandbox(id: &str) -> Sandbox {
+    Sandbox::new(id.to_string())
+        .code(SandboxCode::Image {
+            image: "ubuntu".to_string(),
+        })
+        .egress(SandboxEgress::Allow)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build()
+}
+
+/// The stack a customer renders: Frozen sandboxes, a Live Worker linked to each, and the
+/// `execution` identity carrying the profile's stack-wide sets the way the preflight builds it, so
+/// the module shows every grant that identity ends up with.
+fn workload_sandbox_stack(profile: PermissionProfile, sandbox_ids: &[&str]) -> Stack {
+    let sandboxes: Vec<Sandbox> = sandbox_ids.iter().map(|id| frozen_sandbox(id)).collect();
+    let mut worker = Worker::new("api".to_string())
+        .code(WorkerCode::Image {
+            image: "acmeprod.azurecr.io/api:1".to_string(),
+        })
+        .permissions("execution".to_string());
+    for sandbox in &sandboxes {
+        worker = worker.link(sandbox);
+    }
+    let execution_sa =
+        ServiceAccount::from_permission_profile("execution-sa".to_string(), &profile, |name| {
+            alien_permissions::get_permission_set(name).cloned()
+        })
+        .expect("built-in permission sets resolve");
+
+    let mut stack = Stack::new("byo-sandbox".to_string())
+        .permission("execution", profile)
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            AzureContainerAppsEnvironment::new("default-container-apps-environment".to_string())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(execution_sa, ResourceLifecycle::Frozen);
+    for sandbox in sandboxes {
+        stack = stack.add(sandbox, ResourceLifecycle::Frozen);
+    }
+    stack.add(worker.build(), ResourceLifecycle::Live).build()
+}
+
+fn rendered_tf(module: &alien_terraform::ModuleFiles) -> String {
+    module
+        .files
+        .iter()
+        .filter(|(name, _)| name.ends_with(".tf"))
+        .map(|(_, contents)| contents.clone())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn attribute(block: &hcl::Block, name: &str) -> String {
+    block
+        .body()
+        .attributes()
+        .find(|attribute| attribute.key() == name)
+        .map(|attribute| attribute.expr().to_string())
+        .unwrap_or_else(|| {
+            panic!(
+                "{} block has no `{name}` attribute: {}",
+                block
+                    .labels()
+                    .iter()
+                    .map(|label| label.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                hcl::to_string(block).expect("the block renders")
+            )
+        })
+}
+
+/// `(label, name, description)` of every rendered role assignment: its Terraform address, the
+/// Azure name seed it is applied under, and the text an approver reads.
+fn assignment_addresses(rendered: &str) -> Vec<(String, String, String)> {
+    let body: hcl::Body = hcl::from_str(rendered).expect("the module parses");
+    body.blocks()
+        .filter(|block| {
+            block.identifier() == "resource"
+                && block.labels().first().map(|label| label.as_str())
+                    == Some("azurerm_role_assignment")
+        })
+        .map(|block| {
+            (
+                block.labels()[1].as_str().to_string(),
+                attribute(block, "name"),
+                attribute(block, "description"),
+            )
+        })
+        .collect()
+}
+
+/// The error the module refuses to render with, for a workload profile on these sandboxes. A
+/// refusal is never retryable: the stack has to change.
+fn refusal(
+    profile: PermissionProfile,
+    sandbox_ids: &[&str],
+) -> alien_error::AlienError<alien_core::ErrorData> {
+    let stack = workload_sandbox_stack(profile, sandbox_ids);
+    let error =
+        super::helpers::try_render(&stack, TerraformTarget::Azure, StackSettings::default())
+            .expect_err("the module is refused");
+    assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+    assert!(!error.retryable, "{error}");
+    error
+}
+
+/// `(scope, role_definition_id, principal_id)` of every rendered role assignment.
+fn role_assignments(rendered: &str) -> Vec<(String, String, String)> {
+    let body: hcl::Body = hcl::from_str(rendered).expect("the module parses");
+    body.blocks()
+        .filter(|block| {
+            block.identifier() == "resource"
+                && block.labels().first().map(|label| label.as_str())
+                    == Some("azurerm_role_assignment")
+        })
+        .map(|block| {
+            (
+                attribute(block, "scope"),
+                attribute(block, "role_definition_id"),
+                attribute(block, "principal_id"),
+            )
+        })
+        .collect()
+}
+
+/// The scopes on which the execution identity holds the sandbox data-plane role.
+fn data_plane_scopes(rendered: &str) -> Vec<String> {
+    role_assignments(rendered)
+        .into_iter()
+        .filter(|(_, role, principal)| {
+            role.ends_with(&format!("roleDefinitions/{SANDBOX_DATA_PLANE_ROLE_ID}\""))
+                && principal == "azurerm_user_assigned_identity.execution_sa.principal_id"
+        })
+        .map(|(scope, _, _)| scope)
+        .collect()
+}
+
+/// A grant keyed by one sandbox reaches that group and no sibling.
+///
+/// `sandbox/execute` binds at resource scope only, so the identity's stack-wide grants cannot
+/// carry it; without this assignment the data plane answers every `sandbox.create` with 403.
+#[test]
+fn a_keyed_execute_grant_lands_on_that_sandbox_group_alone() {
+    let stack = workload_sandbox_stack(
+        PermissionProfile::new().resource("agents", ["sandbox/execute"]),
+        &["agents", "other"],
+    );
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = rendered_tf(&module);
+
+    assert_eq!(
+        data_plane_scopes(&rendered),
+        ["azapi_resource.agents.id"],
+        "{rendered}"
+    );
+    assert_terraform_valid(&module, "azure sandbox keyed workload grant");
+}
+
+/// A grant of `sandbox/management` keyed by one sandbox lands on that group through the
+/// setup-owned custom role rendered for the same profile, so lifecycle control stops at the one
+/// group rather than every sandbox in the resource group.
+#[test]
+fn a_keyed_management_grant_uses_the_setup_owned_role_on_that_sandbox_group() {
+    let stack = workload_sandbox_stack(
+        PermissionProfile::new().resource("agents", ["sandbox/management"]),
+        &["agents", "other"],
+    );
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = rendered_tf(&module);
+
+    let execution_assignments: Vec<_> = role_assignments(&rendered)
+        .into_iter()
+        .filter(|(_, _, principal)| {
+            principal == "azurerm_user_assigned_identity.execution_sa.principal_id"
+        })
+        .collect();
+    assert_eq!(execution_assignments.len(), 1, "{rendered}");
+    let (scope, role, _) = &execution_assignments[0];
+    assert_eq!(scope, "azapi_resource.agents.id", "{rendered}");
+    assert!(
+        role.starts_with("azurerm_role_definition.setup_execution_sandbox_management_"),
+        "the group grant uses the setup-owned role for this profile: {role}"
+    );
+    // Addressed by the set and the role's key, not its display name, so renaming the role keeps
+    // the address.
+    let addresses = assignment_addresses(&rendered)
+        .into_iter()
+        .filter(|(label, _, _)| label.starts_with("agents-execution_sa-"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        addresses
+            .iter()
+            .map(|(label, _, _)| label.as_str())
+            .collect::<Vec<_>>(),
+        ["agents-execution_sa-sandbox_management_microsoft_app_sandbox_groups_sandboxes_write_permissions"],
+        "{rendered}"
+    );
+    assert!(
+        addresses[0].1.ends_with(
+            ":agents:execution:sandbox_management_microsoft_app_sandbox_groups_sandboxes_write_permissions\")"
+        ),
+        "{}",
+        addresses[0].1
+    );
+    assert_terraform_valid(&module, "azure sandbox keyed management grant");
+}
+
+/// A `"*"` grant of `sandbox/execute` reaches every sandbox group in the deployment, one
+/// assignment each, and never the resource group: the preflight that authors link grants trusts a
+/// `"*"` entry to cover the link. `sandbox/management` under the same `"*"` (the role carrying
+/// `sandboxes/write`) already lands at the resource group through the identity's stack-wide
+/// grants, so no group-scoped copy of it renders.
+#[test]
+fn a_stack_wide_execute_grant_lands_on_every_sandbox_group_and_never_the_resource_group() {
+    let stack = workload_sandbox_stack(
+        PermissionProfile::new().global(["sandbox/management", "sandbox/execute"]),
+        &["agents", "other"],
+    );
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = rendered_tf(&module);
+
+    let mut scopes = data_plane_scopes(&rendered);
+    scopes.sort();
+    assert_eq!(
+        scopes,
+        ["azapi_resource.agents.id", "azapi_resource.other.id"],
+        "{rendered}"
+    );
+
+    let execution_assignments: Vec<_> = role_assignments(&rendered)
+        .into_iter()
+        .filter(|(_, _, principal)| {
+            principal == "azurerm_user_assigned_identity.execution_sa.principal_id"
+        })
+        .collect();
+    let group_scoped_management = execution_assignments
+        .iter()
+        .filter(|(scope, role, _)| {
+            scope.starts_with("azapi_resource.") && role.contains("sandboxes_write_permissions")
+        })
+        .count();
+    assert_eq!(
+        group_scoped_management, 0,
+        "a stack-wide management grant stays at the resource group:\n{rendered}"
+    );
+    let resource_group_management = execution_assignments
+        .iter()
+        .filter(|(scope, role, _)| {
+            scope.contains("resourceGroups/${var.azure_resource_group_name}\"")
+                && role.contains("sandboxes_write_permissions")
+        })
+        .count();
+    assert_eq!(
+        resource_group_management, 1,
+        "the identity holds management at the resource group once:\n{rendered}"
+    );
+
+    snapshot_module("azure_sandbox_workload_grant", &module);
+    assert_terraform_valid(&module, "azure sandbox stack-wide workload grant");
+}
+
+/// A profile with no resource-only sandbox set gets nothing on a sandbox group: an empty one, and
+/// one whose `"*"` names `sandbox/management`, which the stack-wide path already delivers.
+#[test]
+fn a_profile_without_a_resource_only_sandbox_set_gets_no_group_grant() {
+    for (case, profile, expected_at_the_resource_group) in [
+        ("no sets", PermissionProfile::new(), 0),
+        (
+            "stack-wide management only",
+            PermissionProfile::new().global(["sandbox/management"]),
+            1,
+        ),
+    ] {
+        let stack = workload_sandbox_stack(profile, &["agents"]);
+        let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+        let rendered = rendered_tf(&module);
+
+        let execution_assignments: Vec<_> = role_assignments(&rendered)
+            .into_iter()
+            .filter(|(_, _, principal)| {
+                principal == "azurerm_user_assigned_identity.execution_sa.principal_id"
+            })
+            .collect();
+        let on_the_group = execution_assignments
+            .iter()
+            .filter(|(scope, _, _)| scope == "azapi_resource.agents.id")
+            .count();
+        assert_eq!(on_the_group, 0, "{case}:\n{rendered}");
+        let at_the_resource_group = execution_assignments
+            .iter()
+            .filter(|(scope, _, _)| {
+                scope.contains("resourceGroups/${var.azure_resource_group_name}\"")
+            })
+            .count();
+        assert_eq!(
+            at_the_resource_group, expected_at_the_resource_group,
+            "{case}: a stack-wide management grant lands at the resource group once:\n{rendered}"
+        );
+        assert_terraform_valid(&module, &format!("azure sandbox no group grant, {case}"));
+    }
+}
+
+/// `sandbox/execute` and `sandbox/remote-execute` both resolve to the data-plane role; Azure
+/// refuses a second assignment of one role to one principal at one scope, so one renders.
+#[test]
+fn execute_and_remote_execute_share_one_data_plane_assignment() {
+    let stack = workload_sandbox_stack(
+        PermissionProfile::new().resource("agents", ["sandbox/execute", "sandbox/remote-execute"]),
+        &["agents"],
+    );
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = rendered_tf(&module);
+
+    assert_eq!(
+        data_plane_scopes(&rendered),
+        ["azapi_resource.agents.id"],
+        "{rendered}"
+    );
+    assert_terraform_valid(&module, "azure sandbox deduplicated workload grant");
+}
+
+/// A set of another resource type keyed on a sandbox has no sandbox-group scope to render on, so
+/// the module is refused rather than rendered with a grant nobody declared.
+#[test]
+fn a_set_of_another_resource_type_keyed_on_a_sandbox_is_refused() {
+    let error = refusal(
+        PermissionProfile::new().resource("agents", ["storage/data-read"]),
+        &["agents"],
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("grant storage/data-read to profile execution on sandbox agents")
+            && message.contains("only sandbox/* permission sets can be granted on a sandbox"),
+        "{message}"
+    );
+}
+
+/// An inline set may reuse a built-in id while granting something else, and the role label the
+/// id resolves to here is the built-in set's, so a keyed inline set is refused rather than handed
+/// the built-in role.
+#[test]
+fn an_inline_set_reusing_a_built_in_id_keyed_on_a_sandbox_is_refused() {
+    let inline = alien_core::permissions::PermissionSet {
+        id: "sandbox/management".to_string(),
+        description: "not the built-in set".to_string(),
+        platforms: alien_core::permissions::PlatformPermissions {
+            aws: None,
+            gcp: None,
+            azure: None,
+        },
+    };
+    let error = refusal(
+        PermissionProfile::new().resource("agents", [PermissionSetReference::from_inline(inline)]),
+        &["agents"],
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("grant sandbox/management to profile execution on sandbox agents")
+            && message.contains("only built-in permission sets referenced by name"),
+        "{message}"
+    );
+}
+
+/// Provisioning creates and deletes the group itself, so a workload profile keyed on a sandbox
+/// cannot hold it; a `"*"` provision grant is the service-account emitter's and renders no group
+/// grant here.
+#[test]
+fn a_keyed_provision_grant_on_a_sandbox_is_refused_and_a_stack_wide_one_is_skipped() {
+    let error = refusal(
+        PermissionProfile::new().resource("agents", ["sandbox/provision"]),
+        &["agents"],
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("grant sandbox/provision to profile execution on sandbox agents")
+            && message.contains("compiled at stack scope only on Azure"),
+        "{message}"
+    );
+
+    let stack = workload_sandbox_stack(
+        PermissionProfile::new().global(["sandbox/provision"]),
+        &["agents"],
+    );
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = rendered_tf(&module);
+    let execution_assignments: Vec<_> = role_assignments(&rendered)
+        .into_iter()
+        .filter(|(_, _, principal)| {
+            principal == "azurerm_user_assigned_identity.execution_sa.principal_id"
+        })
+        .collect();
+    let on_the_group = execution_assignments
+        .iter()
+        .filter(|(scope, _, _)| scope == "azapi_resource.agents.id")
+        .count();
+    assert_eq!(on_the_group, 0, "{rendered}");
+    let at_the_resource_group = execution_assignments
+        .iter()
+        .filter(|(scope, _, _)| scope.contains("resourceGroups/${var.azure_resource_group_name}\""))
+        .count();
+    assert_eq!(
+        at_the_resource_group, 1,
+        "a stack-wide provision grant lands at the resource group once:\n{rendered}"
+    );
+}
+
+/// The setup renders one role definition per profile and set id and takes inline sets that bind on
+/// an Azure resource, so such an inline set reusing a built-in id anywhere in the profile could be
+/// the one a keyed custom-role grant on another sandbox binds, carrying the inline set's actions.
+/// Inline sets need their own ids there.
+#[test]
+fn an_inline_set_reusing_a_built_in_id_anywhere_in_the_profile_is_refused() {
+    let inline = alien_permissions::get_permission_set("sandbox/management")
+        .cloned()
+        .expect("the built-in set is registered");
+    let error = refusal(
+        PermissionProfile::new()
+            .global([PermissionSetReference::from_inline(inline)])
+            .resource("other", ["sandbox/management"]),
+        &["agents", "other"],
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("grant sandbox/management to profile execution on sandbox other")
+            && message.contains("reuses this built-in id"),
+        "{message}"
+    );
+}
+
+/// An inline `sandbox/*` set under `"*"` that binds at the sandbox group only is delivered by no
+/// setup emitter, so it is refused; one that binds at the stack is the service-account emitter's
+/// and renders at the resource group with nothing on the group.
+#[test]
+fn an_inline_stack_wide_set_bound_only_at_the_group_is_refused() {
+    let mut group_only = alien_permissions::get_permission_set("sandbox/execute")
+        .cloned()
+        .expect("the built-in set is registered");
+    group_only.id = "sandbox/exec-copy".to_string();
+    let error = refusal(
+        PermissionProfile::new().global([PermissionSetReference::from_inline(group_only)]),
+        &["agents"],
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("grant sandbox/exec-copy to profile execution on sandbox agents")
+            && message.contains("delivered by no setup emitter"),
+        "{message}"
+    );
+
+    let mut stack_bound = alien_permissions::get_permission_set("sandbox/management")
+        .cloned()
+        .expect("the built-in set is registered");
+    stack_bound.id = "sandbox/management-copy".to_string();
+    let stack = workload_sandbox_stack(
+        PermissionProfile::new().global([PermissionSetReference::from_inline(stack_bound)]),
+        &["agents"],
+    );
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = rendered_tf(&module);
+    let execution_scopes: Vec<String> = role_assignments(&rendered)
+        .into_iter()
+        .filter(|(_, _, principal)| {
+            principal == "azurerm_user_assigned_identity.execution_sa.principal_id"
+        })
+        .map(|(scope, _, _)| scope)
+        .collect();
+    assert!(
+        !execution_scopes
+            .iter()
+            .any(|scope| scope == "azapi_resource.agents.id"),
+        "{rendered}"
+    );
+    assert!(
+        execution_scopes
+            .iter()
+            .any(|scope| scope.contains("resourceGroups/${var.azure_resource_group_name}\"")),
+        "the stack-bound copy lands at the resource group:\n{rendered}"
+    );
+}
+
+/// Each assignment is addressed by sandbox, profile and role, so the order a profile lists its
+/// sets in, and which of two sets resolving to one role comes first, change nothing in the
+/// rendered block: not the Terraform address or Azure name (see the emitter doc), nor the
+/// description (a changed attribute is a plan diff on a stack nobody changed).
+#[test]
+fn a_workload_assignment_keeps_its_address_when_the_profile_is_reordered() {
+    let addresses = |sets: [&str; 2]| {
+        let stack = workload_sandbox_stack(
+            PermissionProfile::new().resource("agents", sets),
+            &["agents"],
+        );
+        let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+        let mut addresses = assignment_addresses(&rendered_tf(&module));
+        addresses.sort();
+        addresses
+    };
+
+    let forward = addresses(["sandbox/execute", "sandbox/remote-execute"]);
+    let reversed = addresses(["sandbox/remote-execute", "sandbox/execute"]);
+    assert_eq!(forward, reversed);
+    assert_eq!(forward.len(), 1, "{forward:?}");
+    let (label, name, _) = &forward[0];
+    assert_eq!(
+        label,
+        &format!(
+            "agents-execution_sa-{}",
+            SANDBOX_DATA_PLANE_ROLE_ID.replace('-', "_")
+        )
+    );
+    assert!(
+        name.ends_with(&format!(
+            ":agents:execution:{}\")",
+            SANDBOX_DATA_PLANE_ROLE_ID.replace('-', "_")
+        )),
+        "{name}"
+    );
+}
+
+/// Which of two sets resolving to the data-plane role a profile names changes nothing in the
+/// rendered assignment: its address, Azure name and description follow the role.
+#[test]
+fn execute_and_remote_execute_alone_render_the_same_assignment() {
+    let addresses = |set: &str| {
+        let stack = workload_sandbox_stack(
+            PermissionProfile::new().resource("agents", [set]),
+            &["agents"],
+        );
+        let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+        assignment_addresses(&rendered_tf(&module))
+            .into_iter()
+            .filter(|(label, _, _)| label.starts_with("agents-execution_sa-"))
+            .collect::<Vec<_>>()
+    };
+
+    let execute = addresses("sandbox/execute");
+    assert_eq!(execute.len(), 1, "{execute:?}");
+    assert_eq!(execute, addresses("sandbox/remote-execute"));
+    assert!(
+        execute[0]
+            .2
+            .contains("Container Apps SandboxGroup Data Owner"),
+        "the description names the role an approver looks up: {}",
+        execute[0].2
+    );
+}
+
+/// Two sets granted on one sandbox through their own custom roles each get an assignment; neither
+/// is taken for the other's.
+#[test]
+fn two_custom_role_sets_on_one_sandbox_each_get_an_assignment() {
+    let stack = workload_sandbox_stack(
+        PermissionProfile::new().resource("agents", ["sandbox/management", "sandbox/heartbeat"]),
+        &["agents"],
+    );
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = rendered_tf(&module);
+
+    let mut on_the_group: Vec<String> = role_assignments(&rendered)
+        .into_iter()
+        .filter(|(scope, _, principal)| {
+            scope == "azapi_resource.agents.id"
+                && principal == "azurerm_user_assigned_identity.execution_sa.principal_id"
+        })
+        .map(|(_, role, _)| role)
+        .collect();
+    on_the_group.sort();
+    on_the_group.dedup();
+    assert_eq!(on_the_group.len(), 2, "{rendered}");
+    assert!(
+        on_the_group
+            .iter()
+            .all(|role| role.starts_with("azurerm_role_definition.setup_execution_sandbox_")),
+        "{on_the_group:?}"
+    );
+    assert_terraform_valid(&module, "azure sandbox two custom-role workload grants");
+}
+
+/// An inline set may reuse a built-in id when it grants nothing on Azure: no setup role definition
+/// is rendered from it, so the keyed grant still renders from the built-in set, whether that set
+/// resolves to a predefined role or a setup-owned custom one, as the link preflight expects.
+#[test]
+fn an_inline_set_reusing_a_built_in_id_that_reaches_no_setup_role_keeps_the_grant() {
+    let no_azure = |id: &str| alien_core::permissions::PermissionSet {
+        id: id.to_string(),
+        description: "a narrower grant on other platforms".to_string(),
+        platforms: alien_core::permissions::PlatformPermissions {
+            aws: None,
+            gcp: None,
+            azure: None,
+        },
+    };
+
+    for (case, inline, set, expected_role) in [
+        (
+            "execute, inline without Azure",
+            no_azure("sandbox/execute"),
+            "sandbox/execute",
+            SANDBOX_DATA_PLANE_ROLE_ID,
+        ),
+        (
+            "management, inline without Azure",
+            no_azure("sandbox/management"),
+            "sandbox/management",
+            "setup_execution_sandbox_management_",
+        ),
+    ] {
+        let stack = workload_sandbox_stack(
+            PermissionProfile::new()
+                .global([PermissionSetReference::from_inline(inline)])
+                .resource("agents", [set]),
+            &["agents"],
+        );
+        let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+        let rendered = rendered_tf(&module);
+        let on_the_group = role_assignments(&rendered)
+            .into_iter()
+            .filter(|(scope, role, principal)| {
+                scope == "azapi_resource.agents.id"
+                    && role.contains(expected_role)
+                    && principal == "azurerm_user_assigned_identity.execution_sa.principal_id"
+            })
+            .count();
+        assert_eq!(on_the_group, 1, "{case}:\n{rendered}");
+        assert_terraform_valid(&module, &format!("azure sandbox inline reuse, {case}"));
+    }
+}
+
 /// An AKS target is `Platform::Azure` but skips sandbox emission, so a note keyed off the platform
 /// would tell that installer to register a provider for a resource their package does not contain.
 #[test]
@@ -916,4 +1552,143 @@ fn azure_explicit_resource_grant_fragments_validate() {
     );
     test_utils::terraform_fmt_and_validate(&linter_files(&module))
         .assert_ok("explicit resource grant fragments: fmt, provider init, validate");
+}
+
+/// A stack with `agents` published for remote access beside an unpublished `other`, which the
+/// Worker links, and `execution` holding `profile`.
+fn published_sandbox_stack(profile: PermissionProfile) -> Stack {
+    let execution_sa =
+        ServiceAccount::from_permission_profile("execution-sa".to_string(), &profile, |name| {
+            alien_permissions::get_permission_set(name).cloned()
+        })
+        .expect("built-in permission sets resolve");
+    let worker = Worker::new("api".to_string())
+        .code(WorkerCode::Image {
+            image: "acmeprod.azurecr.io/api:1".to_string(),
+        })
+        .permissions("execution".to_string())
+        .link(&frozen_sandbox("other"))
+        .build();
+    Stack::new("byo-sandbox".to_string())
+        .permission("execution", profile)
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            AzureContainerAppsEnvironment::new("default-container-apps-environment".to_string())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(execution_sa, ResourceLifecycle::Frozen)
+        .add_with_remote_access(frozen_sandbox("agents"), ResourceLifecycle::Frozen)
+        .add(frozen_sandbox("other"), ResourceLifecycle::Frozen)
+        .add(worker, ResourceLifecycle::Live)
+        .build()
+}
+
+/// A sandbox published for remote access belongs to its remote caller, so a `"*"` grant fans out
+/// to every other sandbox group and skips that one. `sandbox/images` is the case that matters: the
+/// single-tenant preflight does not count it as reaching a sandbox, and on a published group it
+/// would let the deployment replace the image remote sessions boot from.
+#[test]
+fn a_stack_wide_grant_skips_a_sandbox_published_for_remote_access() {
+    let profile = PermissionProfile::new().global(["sandbox/images"]);
+    let stack = published_sandbox_stack(profile);
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = rendered_tf(&module);
+
+    let execution_scopes: Vec<String> = role_assignments(&rendered)
+        .into_iter()
+        .filter(|(_, _, principal)| {
+            principal == "azurerm_user_assigned_identity.execution_sa.principal_id"
+        })
+        .map(|(scope, _, _)| scope)
+        .collect();
+    assert!(
+        !execution_scopes
+            .iter()
+            .any(|scope| scope == "azapi_resource.agents.id"),
+        "{rendered}"
+    );
+    assert!(
+        execution_scopes
+            .iter()
+            .any(|scope| scope == "azapi_resource.other.id"),
+        "the unpublished group still gets the grant:\n{rendered}"
+    );
+    assert_terraform_valid(
+        &module,
+        "azure sandbox stack-wide grant beside a published one",
+    );
+}
+
+/// A grant keyed by a published sandbox is refused rather than rendered: the single-tenant preflight
+/// counts only grants that reach a session, and a disk-image write changes what remote sessions
+/// boot without reaching one. A set with nothing on Azure, from a profile shared across clouds,
+/// still renders nothing and is not refused.
+#[test]
+fn a_keyed_grant_on_a_sandbox_published_for_remote_access_is_refused() {
+    let shared =
+        published_sandbox_stack(PermissionProfile::new().resource("agents", ["sandbox/templates"]));
+    render(&shared, TerraformTarget::Azure, StackSettings::default());
+
+    let stack =
+        published_sandbox_stack(PermissionProfile::new().resource("agents", ["sandbox/images"]));
+    let error =
+        super::helpers::try_render(&stack, TerraformTarget::Azure, StackSettings::default())
+            .expect_err("the module is refused");
+    assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+    assert!(!error.retryable, "{error}");
+    let message = error.to_string();
+    assert!(
+        message.contains("grant sandbox/images to profile execution on sandbox agents")
+            && message.contains("published for remote access"),
+        "{message}"
+    );
+}
+
+/// Two (sandbox, profile) pairs whose names join into the same string still render two
+/// assignments: profile `b` on sandbox `agents-a` and profile `a-b` on sandbox `agents`.
+#[test]
+fn grants_whose_names_join_alike_get_their_own_addresses() {
+    let profile = || PermissionProfile::new();
+    let b = profile().resource("agents-a", ["sandbox/execute"]);
+    let a_b = profile().resource("agents", ["sandbox/execute"]);
+    let identity = |id: &str, profile: &PermissionProfile| {
+        ServiceAccount::from_permission_profile(id.to_string(), profile, |name| {
+            alien_permissions::get_permission_set(name).cloned()
+        })
+        .expect("built-in permission sets resolve")
+    };
+    let stack = Stack::new("byo-sandbox".to_string())
+        .permission("b", b.clone())
+        .permission("a-b", a_b.clone())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            AzureContainerAppsEnvironment::new("default-container-apps-environment".to_string())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(identity("b-sa", &b), ResourceLifecycle::Frozen)
+        .add(identity("a-b-sa", &a_b), ResourceLifecycle::Frozen)
+        .add(frozen_sandbox("agents-a"), ResourceLifecycle::Frozen)
+        .add(frozen_sandbox("agents"), ResourceLifecycle::Frozen)
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = rendered_tf(&module);
+
+    let mut on_groups: Vec<String> = assignment_addresses(&rendered)
+        .into_iter()
+        .map(|(label, _, _)| label)
+        .filter(|label| label.starts_with("agents"))
+        .collect();
+    on_groups.sort();
+    let role = SANDBOX_DATA_PLANE_ROLE_ID.replace('-', "_");
+    assert_eq!(
+        on_groups,
+        [
+            format!("agents-a_b_sa-{role}"),
+            format!("agents_a-b_sa-{role}")
+        ],
+        "{rendered}"
+    );
+    assert_terraform_valid(&module, "azure sandbox grants whose names join alike");
 }
