@@ -138,7 +138,8 @@ pub struct DeploymentConfig {
     /// Operator requests to replace a replica's persistent volume with a new
     /// volume made from a snapshot. A container controller performs each
     /// request once, identified by its `request_id`, and reports it in
-    /// `ContainerOutputs.volumes`.
+    /// `ContainerOutputs.volumes`. Only a volume that a controller reports in
+    /// `ContainerOutputs.volumes` can be the target of a request.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[builder(default)]
     pub volume_restores: Vec<VolumeRestoreRequest>,

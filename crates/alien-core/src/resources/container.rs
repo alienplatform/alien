@@ -101,7 +101,9 @@ pub const VOLUME_BACKUP_MAX_RETENTION_DAYS: u32 = 365;
 /// the volume as it would be after a sudden power loss. When a container is
 /// deleted, Alien keeps one final snapshot of each volume.
 ///
-/// Kubernetes deployments leave volume backups to the cluster's own tooling.
+/// Kubernetes deployments leave volume backups to the cluster's own tooling,
+/// and local deployments don't snapshot volumes. Neither reports volumes in
+/// `ContainerOutputs.volumes` or a `volumeBackups` status.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]

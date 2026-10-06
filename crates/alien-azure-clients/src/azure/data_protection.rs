@@ -225,7 +225,11 @@ impl BackupPolicy {
     ///
     /// Mirrors the request body in
     /// https://learn.microsoft.com/en-us/azure/backup/backup-azure-dataprotection-use-rest-api-create-update-disk-policy
-    pub fn disk_operational(start: &str, frequency: DiskBackupFrequency, retention_days: u32) -> Self {
+    pub fn disk_operational(
+        start: &str,
+        frequency: DiskBackupFrequency,
+        retention_days: u32,
+    ) -> Self {
         let operational_store = || DataStoreInfo {
             data_store_type: "OperationalStore".to_string(),
             object_type: "DataStoreInfoBase".to_string(),
@@ -565,7 +569,9 @@ impl AzureDataProtectionClient {
     }
 
     async fn get_json<T: DeserializeOwned>(&self, path: &str, op: &str, name: &str) -> Result<T> {
-        let req = self.signed_request(Method::GET, self.url(path), None).await?;
+        let req = self
+            .signed_request(Method::GET, self.url(path), None)
+            .await?;
         let resp = self.base.execute_request(req, op, name).await?;
         let body = resp
             .text()
@@ -922,8 +928,11 @@ mod tests {
 
     #[test]
     fn daily_policy_uses_p1d_and_daily_rule() {
-        let policy =
-            BackupPolicy::disk_operational("2024-01-01T00:00:00+00:00", DiskBackupFrequency::Daily, 30);
+        let policy = BackupPolicy::disk_operational(
+            "2024-01-01T00:00:00+00:00",
+            DiskBackupFrequency::Daily,
+            30,
+        );
         let json = serde_json::to_value(&policy).unwrap();
         assert_eq!(json["policyRules"][0]["name"], "BackupDaily");
         assert_eq!(
@@ -1103,7 +1112,12 @@ mod tests {
             "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/rg",
         );
         let result = test_client(&server)
-            .create_or_update_backup_instance("rg", "stack-db-backups", "stack-db-disk-0", &instance)
+            .create_or_update_backup_instance(
+                "rg",
+                "stack-db-backups",
+                "stack-db-disk-0",
+                &instance,
+            )
             .await
             .expect("backup instance put");
         mock.assert_async().await;
@@ -1132,7 +1146,8 @@ mod tests {
                     );
             })
             .await;
-        let instance = BackupInstance::for_disk("disk-id", "stack-db-disk-0", "eastus", "policy-id", "rg-id");
+        let instance =
+            BackupInstance::for_disk("disk-id", "stack-db-disk-0", "eastus", "policy-id", "rg-id");
         let result = test_client(&server)
             .validate_for_backup("rg", "stack-db-backups", &instance)
             .await
@@ -1141,7 +1156,10 @@ mod tests {
         let OperationResult::LongRunning(operation) = result else {
             panic!("expected a long-running operation");
         };
-        assert_eq!(operation.retry_after, Some(std::time::Duration::from_secs(10)));
+        assert_eq!(
+            operation.retry_after,
+            Some(std::time::Duration::from_secs(10))
+        );
     }
 
     #[tokio::test]
@@ -1149,7 +1167,8 @@ mod tests {
         let server = MockServer::start_async().await;
         server
             .mock_async(|when, then| {
-                when.method(PUT).path(format!("{VAULT_PATH}/backupInstances/stack-db-disk-0"));
+                when.method(PUT)
+                    .path(format!("{VAULT_PATH}/backupInstances/stack-db-disk-0"));
                 then.status(400).json_body(json!({
                     "error": {
                         "code": "UserErrorMissingRequiredPermissions",
@@ -1158,9 +1177,15 @@ mod tests {
                 }));
             })
             .await;
-        let instance = BackupInstance::for_disk("disk-id", "stack-db-disk-0", "eastus", "policy-id", "rg-id");
+        let instance =
+            BackupInstance::for_disk("disk-id", "stack-db-disk-0", "eastus", "policy-id", "rg-id");
         let error = test_client(&server)
-            .create_or_update_backup_instance("rg", "stack-db-backups", "stack-db-disk-0", &instance)
+            .create_or_update_backup_instance(
+                "rg",
+                "stack-db-backups",
+                "stack-db-disk-0",
+                &instance,
+            )
             .await
             .expect_err("permissions are missing");
         assert!(is_missing_permissions_error(&error));
@@ -1176,7 +1201,8 @@ mod tests {
         let server = MockServer::start_async().await;
         server
             .mock_async(|when, then| {
-                when.method(GET).path(format!("{VAULT_PATH}/backupInstances/stack-db-disk-0"));
+                when.method(GET)
+                    .path(format!("{VAULT_PATH}/backupInstances/stack-db-disk-0"));
                 then.status(404).json_body(json!({
                     "error": {"code": "ResourceNotFound", "message": "not found"}
                 }));
@@ -1217,7 +1243,9 @@ mod tests {
         let resume = server
             .mock_async(|when, then| {
                 when.method(POST)
-                    .path(format!("{VAULT_PATH}/backupInstances/stack-db-disk-0/resumeBackups"))
+                    .path(format!(
+                        "{VAULT_PATH}/backupInstances/stack-db-disk-0/resumeBackups"
+                    ))
                     .query_param("api-version", "2026-07-01");
                 then.status(200).json_body(json!({}));
             })

@@ -157,6 +157,35 @@ impl AzureSnapshotsClient {
     /// Same Compute disk resource provider version as the managed disks client.
     const API_VERSION: &'static str = "2024-03-02";
 
+    /// Follows a `nextLink` only on the management endpoint, so the bearer token is never sent
+    /// to another host.
+    fn same_origin_next_link(&self, link: String, resource_group: &str) -> Result<String> {
+        let endpoint = url::Url::parse(&self.base.build_url("", None))
+            .into_alien_error()
+            .context(ErrorData::InvalidClientConfig {
+                message: "Azure management endpoint is not a valid URL".to_string(),
+                errors: None,
+            })?;
+        let next = url::Url::parse(&link)
+            .into_alien_error()
+            .context(ErrorData::InvalidInput {
+                message: format!(
+                    "Azure ListSnapshots for {resource_group} returned an invalid nextLink"
+                ),
+                field_name: Some("nextLink".to_string()),
+            })?;
+        if next.origin() != endpoint.origin() {
+            return Err(alien_error::AlienError::new(ErrorData::InvalidInput {
+                message: format!(
+                    "Azure ListSnapshots for {resource_group} returned a nextLink on another host: {}",
+                    next.origin().ascii_serialization()
+                ),
+                field_name: Some("nextLink".to_string()),
+            }));
+        }
+        Ok(link)
+    }
+
     pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
         let endpoint = token_cache.management_endpoint().to_string();
         Self {
@@ -222,7 +251,11 @@ impl SnapshotsApi for AzureSnapshotsClient {
         .build()?;
         let signed = self.base.sign_request(req, &token).await?;
         self.base
-            .execute_request_with_long_running_support(signed, "CreateOrUpdateSnapshot", snapshot_name)
+            .execute_request_with_long_running_support(
+                signed,
+                "CreateOrUpdateSnapshot",
+                snapshot_name,
+            )
             .await
     }
 
@@ -276,7 +309,10 @@ impl SnapshotsApi for AzureSnapshotsClient {
                 },
             )?;
             snapshots.extend(page.value);
-            next_url = page.next_link;
+            next_url = page
+                .next_link
+                .map(|link| self.same_origin_next_link(link, resource_group))
+                .transpose()?;
         }
         Ok(snapshots)
     }
@@ -361,7 +397,10 @@ mod tests {
     #[tokio::test]
     async fn list_follows_next_link_pages() {
         let server = MockServer::start_async().await;
-        let next_link = format!("{}{SNAPSHOTS_PATH}?api-version=2024-03-02&$skiptoken=page2", server.base_url());
+        let next_link = format!(
+            "{}{SNAPSHOTS_PATH}?api-version=2024-03-02&$skiptoken=page2",
+            server.base_url()
+        );
         // Registered first: httpmock serves the first matching mock, and only the second page
         // request carries the skip token.
         let second = server
@@ -413,6 +452,34 @@ mod tests {
         assert!(snapshots[0].is_ready());
         assert_eq!(snapshots[0].properties.disk_size_gb, Some(10));
         assert!(!snapshots[1].is_ready());
+    }
+
+    #[tokio::test]
+    async fn list_refuses_a_next_link_on_another_host() {
+        let server = MockServer::start_async().await;
+        let other = MockServer::start_async().await;
+        let leaked = other
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(200).json_body(json!({ "value": [] }));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path(SNAPSHOTS_PATH);
+                then.status(200).json_body(json!({
+                    "value": [],
+                    "nextLink": format!("{}{SNAPSHOTS_PATH}?$skiptoken=page2", other.base_url())
+                }));
+            })
+            .await;
+
+        let error = test_client(&server)
+            .list_snapshots("rg")
+            .await
+            .expect_err("a nextLink on another host must not be followed");
+        assert!(error.to_string().contains("another host"), "{error}");
+        leaked.assert_hits_async(0).await;
     }
 
     #[test]
