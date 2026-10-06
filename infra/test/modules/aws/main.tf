@@ -618,6 +618,11 @@ resource "aws_s3_bucket_public_access_block" "test" {
 resource "aws_s3_bucket" "e2e_terraform_state" {
   provider = aws.target
   bucket   = local.e2e_terraform_state_name
+
+  # Reject teardown before it removes protections from retained test state.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_s3_bucket_versioning" "e2e_terraform_state" {
