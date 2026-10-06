@@ -850,7 +850,7 @@ mod tests {
                 "teardown-required"
             };
             Json(
-                serde_json::json!({ "id": ID, "name": "example", "platform": "test", "status": status, "deploymentGroupId": "dg_test", "deploymentProtocolVersion": 1, "projectId": PROJECT, "workspaceId": "ws_test", "retryRequested": false, "createdAt": "2026-01-01T00:00:00Z" }),
+                serde_json::json!({ "id": ID, "name": "example", "platform": "test", "status": status, "deploymentGroupId": "dg_test", "deploymentProtocolVersion": 1, "projectId": PROJECT, "workspaceId": "ws_000000000000000000000000", "managerId":"mgr_000000000000000000000000", "purpose":"application", "releaseChannel":"stable", "stackSettings":{}, "updatedAt":"2026-01-01T00:00:00Z", "retryRequested": false, "createdAt": "2026-01-01T00:00:00Z" }),
             ).into_response()
         }
         async fn request_delete(
@@ -889,12 +889,16 @@ mod tests {
         let manager_url = server_url.clone();
         let app = Router::new()
             .route("/v1/projects/{id}", get(project))
-            .route(
-                "/v1/resolve",
-                get(move || async move {
-                    Json(serde_json::json!({ "managerUrl": manager_url, "projectId": PROJECT }))
-                }),
-            )
+            // Current project routing is unrelated to the deployment's recorded manager.
+            .route("/v1/resolve", get(|| async { StatusCode::BAD_GATEWAY }))
+            .route("/v1/managers/{id}", get(move || async move {
+                Json(serde_json::json!({
+                    "id":"mgr_000000000000000000000000", "name":"original", "url":manager_url,
+                    "workspaceId":"ws_000000000000000000000000", "createdAt":"2026-01-01T00:00:00Z",
+                    "defaultProjectCount":0, "managedDeploymentCount":1, "managementConfigs":{},
+                    "isSystem":false, "status":"healthy", "targets":["test"]
+                }))
+            }))
             .route("/v1/deployments/{id}", get(deployment))
             .route("/v1/deployments/{id}/delete", post(request_delete))
             .route("/v1/sync/acquire", post(acquire))
