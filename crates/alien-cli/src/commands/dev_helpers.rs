@@ -37,7 +37,7 @@ use std::io::ErrorKind;
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::time::Duration;
+use tokio::{sync::oneshot, task::JoinHandle, time::Duration};
 use tracing::info;
 
 /// Parsed CLI environment variable.
@@ -108,8 +108,14 @@ pub async fn ensure_server_running_for_dev_session(
     status_file: Option<PathBuf>,
     user_env_vars: Vec<CliEnvVar>,
     deployment_name: &str,
-) -> Result<()> {
-    ensure_server_running_internal(port, status_file, user_env_vars, Some(deployment_name)).await
+) -> Result<EmbeddedDevManager> {
+    ensure_server_running_internal(port, status_file, user_env_vars, Some(deployment_name))
+        .await?
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ServerStartFailed {
+                reason: "The full development session must own its manager".to_string(),
+            })
+        })
 }
 
 /// Ensure the dev server is running with user-provided env vars and optional status file (start if not)
@@ -118,7 +124,9 @@ pub async fn ensure_server_running_with_env(
     status_file: Option<PathBuf>,
     user_env_vars: Vec<CliEnvVar>,
 ) -> Result<()> {
-    ensure_server_running_internal(port, status_file, user_env_vars, None).await
+    ensure_server_running_internal(port, status_file, user_env_vars, None)
+        .await
+        .map(|_| ())
 }
 
 async fn ensure_server_running_internal(
@@ -126,7 +134,7 @@ async fn ensure_server_running_internal(
     status_file: Option<PathBuf>,
     user_env_vars: Vec<CliEnvVar>,
     deployment_name: Option<&str>,
-) -> Result<()> {
+) -> Result<Option<EmbeddedDevManager>> {
     if check_server_health(port).await {
         if deployment_name.is_some() {
             return Err(AlienError::new(ErrorData::ValidationError {
@@ -145,7 +153,7 @@ async fn ensure_server_running_internal(
                 &build_dev_status(port, DevStatusState::Initializing, None, None),
             )?;
         }
-        return Ok(());
+        return Ok(None);
     }
 
     if let Some(status_file) = status_file {
@@ -166,7 +174,11 @@ async fn ensure_server_running_internal(
         .await?;
     }
 
-    start_embedded_dev_manager(port).await
+    if deployment_name.is_some() {
+        start_owned_embedded_dev_manager(port).await.map(Some)
+    } else {
+        start_embedded_dev_manager(port).await.map(|_| None)
+    }
 }
 
 /// The full dev session owns this stopped manager's database. Refresh its CLI
@@ -290,6 +302,48 @@ pub async fn build_embedded_dev_manager(
 }
 
 /// Start the embedded dev manager in the background and wait for it to be healthy.
+/// Owns the embedded manager until its reconciliation and native runtimes finish.
+pub struct EmbeddedDevManager {
+    shutdown: oneshot::Sender<()>,
+    task: JoinHandle<Result<()>>,
+}
+
+impl EmbeddedDevManager {
+    pub async fn shutdown(self) -> Result<()> {
+        let _ = self.shutdown.send(());
+        self.task
+            .await
+            .into_alien_error()
+            .context(ErrorData::ServerStartFailed {
+                reason: "The local manager task failed during shutdown".to_string(),
+            })?
+    }
+}
+
+async fn start_owned_embedded_dev_manager(port: u16) -> Result<EmbeddedDevManager> {
+    let (server, addr) = build_embedded_dev_manager(port).await?;
+    alien_local::start_docker_bridge_proxy(addr)
+        .await
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to expose the dev server on Docker's private host gateway".to_string(),
+        })?;
+    let (shutdown, receiver) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        server
+            .start_with_shutdown(addr, async {
+                let _ = receiver.await;
+            })
+            .await
+            .context(ErrorData::ServerStartFailed {
+                reason: "The local manager failed".to_string(),
+            })
+    });
+    let manager = EmbeddedDevManager { shutdown, task };
+    wait_for_dev_server_ready(port).await?;
+    ensure_local_dev_deployment_group(port).await?;
+    Ok(manager)
+}
+
 pub async fn start_embedded_dev_manager(port: u16) -> Result<()> {
     info!("Starting dev server on port {}...", port);
     let (server, addr) = build_embedded_dev_manager(port).await?;

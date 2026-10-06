@@ -1,5 +1,6 @@
 //! The assembled alien-manager, ready to start.
 
+use std::future::{pending, Future};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,7 +9,7 @@ use alien_error::{Context, IntoAlienError};
 use hyper::server::conn::http1;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::service::TowerToHyperService;
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, task::JoinSet};
 use tracing::{debug, info, warn};
 
 use crate::config::ManagerConfig;
@@ -64,8 +65,34 @@ impl AlienManager {
         self.start_with_listener(listener).await
     }
 
+    /// Start with caller-owned shutdown, finishing reconciliation and draining native runtimes.
+    pub async fn start_with_shutdown(
+        self,
+        addr: SocketAddr,
+        shutdown: impl Future<Output = ()> + Send,
+    ) -> crate::error::Result<()> {
+        let listener = TcpListener::bind(addr).await.into_alien_error().context(
+            ErrorData::ServerInitFailed {
+                reason: format!("Failed to bind to {addr}"),
+            },
+        )?;
+        self.start_with_listener_and_shutdown(listener, shutdown)
+            .await
+    }
+
     /// Start using an already-bound listener, retaining ownership of its reserved port.
     pub async fn start_with_listener(self, listener: TcpListener) -> crate::error::Result<()> {
+        self.start_with_listener_and_shutdown(listener, pending())
+            .await
+    }
+
+    async fn start_with_listener_and_shutdown(
+        self,
+        listener: TcpListener,
+        shutdown: impl Future<Output = ()> + Send,
+    ) -> crate::error::Result<()> {
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let mut tasks = JoinSet::new();
         let addr =
             listener
                 .local_addr()
@@ -93,8 +120,9 @@ impl AlienManager {
                 .as_ref()
                 .expect("deployment loop is constructed when enabled")
                 .clone();
-            tokio::spawn(async move {
-                deployment_loop.run().await;
+            let shutdown = shutdown_rx.clone();
+            tasks.spawn(async move {
+                deployment_loop.run_until_shutdown(shutdown).await;
             });
         } else {
             info!("Deployment loop disabled");
@@ -106,10 +134,13 @@ impl AlienManager {
                 self.config.clone(),
                 self.deployment_store.clone(),
                 deployment_loop
-                    .expect("deployment loop processor is constructed when heartbeat is enabled"),
+                    .as_ref()
+                    .expect("deployment loop processor is constructed when heartbeat is enabled")
+                    .clone(),
             );
-            tokio::spawn(async move {
-                heartbeat_loop.run().await;
+            let shutdown = shutdown_rx.clone();
+            tasks.spawn(async move {
+                heartbeat_loop.run_until_shutdown(shutdown).await;
             });
         } else {
             info!("Heartbeat loop disabled");
@@ -122,11 +153,15 @@ impl AlienManager {
         // termination without a poller.
         {
             let command_server = self.command_server.clone();
-            tokio::spawn(async move {
+            let mut shutdown = shutdown_rx;
+            tasks.spawn(async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 loop {
-                    interval.tick().await;
+                    tokio::select! {
+                        _ = shutdown.changed() => break,
+                        _ = interval.tick() => {}
+                    }
                     if let Err(e) = command_server.reap_expired_commands().await {
                         tracing::warn!(error = %e, "Command deadline reap failed");
                     }
@@ -136,12 +171,43 @@ impl AlienManager {
 
         info!(%addr, "alien-manager listening");
 
-        serve(listener, self.router, INBOUND_IDLE_TIMEOUT)
-            .await
-            .into_alien_error()
-            .context(ErrorData::InternalError {
-                message: "Server error".to_string(),
-            })?;
+        // Keep HTTP available while native runtimes drain their accepted work.
+        let mut server = tokio::spawn(serve(listener, self.router, INBOUND_IDLE_TIMEOUT));
+        let server_result = tokio::select! {
+            result = &mut server => Some(result),
+            _ = shutdown => None,
+        };
+        let _ = shutdown_tx.send(true);
+        let mut task_error = None;
+        while let Some(result) = tasks.join_next().await {
+            if let Err(error) = result {
+                task_error = Some(error);
+            }
+        }
+        if let Some(processor) = deployment_loop {
+            processor.shutdown_local_runtimes().await;
+        }
+        if let Some(result) = server_result {
+            result
+                .into_alien_error()
+                .context(ErrorData::InternalError {
+                    message: "Server task failed".to_string(),
+                })?
+                .into_alien_error()
+                .context(ErrorData::InternalError {
+                    message: "Server error".to_string(),
+                })?;
+        } else {
+            server.abort();
+            let _ = server.await;
+        }
+        if let Some(error) = task_error {
+            return Err(error)
+                .into_alien_error()
+                .context(ErrorData::InternalError {
+                    message: "Manager background task failed".to_string(),
+                });
+        }
 
         Ok(())
     }

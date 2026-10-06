@@ -274,19 +274,43 @@ impl DeploymentLoop {
 
     /// Run the deployment loop forever.
     pub async fn run(&self) {
+        let (_sender, shutdown) = tokio::sync::watch::channel(false);
+        self.run_until_shutdown(shutdown).await;
+    }
+
+    pub(crate) async fn run_until_shutdown(
+        &self,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) {
         info!(
             interval_secs = self.config.deployment_interval_secs,
             "Starting deployment loop"
         );
 
-        loop {
+        while !*shutdown.borrow() {
             if let Err(payload) = AssertUnwindSafe(self.tick()).catch_unwind().await {
                 error!(
                     panic = panic_payload_message(payload.as_ref()),
                     "Deployment loop tick panicked"
                 );
             }
-            tokio::time::sleep(Duration::from_secs(self.config.deployment_interval_secs)).await;
+            tokio::select! {
+                _ = shutdown.changed() => break,
+                _ = tokio::time::sleep(Duration::from_secs(self.config.deployment_interval_secs)) => {}
+            }
+        }
+    }
+
+    pub(crate) async fn shutdown_local_runtimes(&self) {
+        let providers: Vec<_> = {
+            let mut cache = self
+                .local_bindings_cache
+                .lock()
+                .expect("local_bindings_cache poisoned");
+            cache.drain().map(|(_, provider)| provider).collect()
+        };
+        for provider in providers {
+            provider.shutdown().await;
         }
     }
 
