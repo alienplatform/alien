@@ -2,7 +2,7 @@ use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::models::certificates::{CertificateBundle, CertificateImportParameters};
 use crate::azure::models::keyvault::{Vault, VaultCreateOrUpdateParameters};
 use crate::azure::models::secrets::{
-    SecretBundle, SecretListResult, SecretSetParameters, SecretUpdateParameters,
+    SecretBundle, SecretItem, SecretSetParameters, SecretUpdateParameters,
 };
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
@@ -195,12 +195,13 @@ pub trait KeyVaultSecretsApi: Send + Sync + std::fmt::Debug {
         secret_version: Option<String>,
     ) -> Result<SecretBundle>;
 
-    /// List a secret's versions: ids and attributes, never values
+    /// Lists every version of a secret, following `nextLink` pages: ids and
+    /// attributes, never values
     async fn list_secret_versions(
         &self,
         vault_base_url: String,
         secret_name: String,
-    ) -> Result<SecretListResult>;
+    ) -> Result<Vec<SecretItem>>;
 
     /// Update a secret in the key vault
     async fn update_secret(
@@ -533,6 +534,44 @@ impl KeyVaultManagementApi for AzureKeyVaultManagementClient {
 // Key Vault Secrets client
 // -----------------------------------------------------------------------------
 
+/// One page of a secret's versions. Key Vault returns at most 25 versions per
+/// page and links the next page with `nextLink`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SecretVersionsPage {
+    #[serde(default)]
+    value: Vec<SecretItem>,
+    #[serde(default)]
+    next_link: Option<String>,
+}
+
+/// Follows a `nextLink` only on the vault that served the first page, so the
+/// bearer token is never sent to another host.
+fn same_vault_next_link(
+    vault_origin: &url::Origin,
+    link: &str,
+    secret_name: &str,
+) -> Result<url::Url> {
+    let next = url::Url::parse(link)
+        .into_alien_error()
+        .context(ErrorData::InvalidInput {
+            message: format!(
+                "Azure GetSecretVersions for '{secret_name}' returned an invalid nextLink"
+            ),
+            field_name: Some("nextLink".to_string()),
+        })?;
+    if &next.origin() != vault_origin {
+        return Err(AlienError::new(ErrorData::InvalidInput {
+            message: format!(
+                "Azure GetSecretVersions for '{secret_name}' returned a nextLink on another host: {}",
+                next.origin().ascii_serialization()
+            ),
+            field_name: Some("nextLink".to_string()),
+        }));
+    }
+    Ok(next)
+}
+
 #[derive(Debug)]
 pub struct AzureKeyVaultSecretsClient {
     pub client: Client,
@@ -698,47 +737,58 @@ impl KeyVaultSecretsApi for AzureKeyVaultSecretsClient {
         Ok(secret)
     }
 
-    /// List a secret's versions: ids and attributes, never values
+    /// Lists every version of a secret, following `nextLink` pages: ids and
+    /// attributes, never values
     async fn list_secret_versions(
         &self,
         vault_base_url: String,
         secret_name: String,
-    ) -> Result<SecretListResult> {
-        let url = self.build_secrets_url(
+    ) -> Result<Vec<SecretItem>> {
+        let first = self.build_secrets_url(
             &vault_base_url,
             &format!("/secrets/{}/versions", secret_name),
             Some(vec![("api-version", "7.4".into())]),
         )?;
-
-        let resp = send_key_vault_request(
-            &self.token_cache,
-            self.client.get(url.to_string()),
-            "GetSecretVersions",
-        )
-        .await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            return Err(key_vault_response_error(
-                status,
+        let vault_origin = first.origin();
+        let mut versions = Vec::new();
+        let mut next_url = Some(first);
+        while let Some(url) = next_url.take() {
+            let resp = send_key_vault_request(
+                &self.token_cache,
+                self.client.get(url.to_string()),
                 "GetSecretVersions",
-                "Azure Key Vault Secret",
-                &secret_name,
-                &url,
-            ));
-        }
+            )
+            .await?;
 
-        let response_body =
-            resp.text()
-                .await
+            if !resp.status().is_success() {
+                let status = resp.status();
+                return Err(key_vault_response_error(
+                    status,
+                    "GetSecretVersions",
+                    "Azure Key Vault Secret",
+                    &secret_name,
+                    &url,
+                ));
+            }
+
+            let response_body =
+                resp.text()
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::HttpRequestFailed {
+                        message: "Azure GetSecretVersions: failed to read response body"
+                            .to_string(),
+                    })?;
+            let page: SecretVersionsPage = serde_json::from_str(&response_body)
                 .into_alien_error()
-                .context(ErrorData::HttpRequestFailed {
-                    message: "Azure GetSecretVersions: failed to read response body".to_string(),
-                })?;
-
-        serde_json::from_str(&response_body)
-            .into_alien_error()
-            .context(key_vault_parse_error("GetSecretVersions", &url))
+                .context(key_vault_parse_error("GetSecretVersions", &url))?;
+            versions.extend(page.value);
+            next_url = page
+                .next_link
+                .map(|link| same_vault_next_link(&vault_origin, &link, &secret_name))
+                .transpose()?;
+        }
+        Ok(versions)
     }
 
     /// Update a secret in the key vault
@@ -1122,7 +1172,9 @@ mod tests {
     use std::net::TcpListener;
     use std::thread::{self, JoinHandle};
 
-    use httpmock::{Method::DELETE, Method::PATCH, Method::POST, Method::PUT, MockServer};
+    use httpmock::{
+        Method::DELETE, Method::GET, Method::PATCH, Method::POST, Method::PUT, MockServer,
+    };
     use serde_json::json;
     use tempfile::NamedTempFile;
 
@@ -1233,6 +1285,100 @@ mod tests {
 
         response.assert_async().await;
         error
+    }
+
+    const VERSIONS_PATH: &str = "/secrets/api-key/versions";
+
+    fn secrets_client(server: &MockServer) -> AzureKeyVaultSecretsClient {
+        let config = AzureClientConfig::mock().with_service_overrides(ServiceOverrides {
+            endpoints: HashMap::from([("keyvault".to_string(), server.base_url())]),
+        });
+        AzureKeyVaultSecretsClient::new(Client::new(), AzureTokenCache::new(config))
+    }
+
+    #[tokio::test]
+    async fn list_secret_versions_follows_next_link_pages() {
+        let server = MockServer::start_async().await;
+        let next_link = format!(
+            "{}{VERSIONS_PATH}?api-version=7.4&$skiptoken=page2&maxresults=25",
+            server.base_url()
+        );
+        // Registered first: httpmock serves the first matching mock, and only
+        // the second page request carries the skip token.
+        let second = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(VERSIONS_PATH)
+                    .query_param("$skiptoken", "page2");
+                then.status(200).json_body(json!({
+                    "value": [{
+                        "id": "https://vault.vault.azure.net/secrets/api-key/newest",
+                        "attributes": { "enabled": true, "created": 1_800_000_100 }
+                    }]
+                }));
+            })
+            .await;
+        let first = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(VERSIONS_PATH)
+                    .query_param("api-version", "7.4");
+                then.status(200).json_body(json!({
+                    "value": [{
+                        "id": "https://vault.vault.azure.net/secrets/api-key/oldest",
+                        "attributes": { "enabled": true, "created": 1_800_000_000 }
+                    }],
+                    "nextLink": next_link
+                }));
+            })
+            .await;
+
+        let versions = secrets_client(&server)
+            .list_secret_versions(
+                "ignored-by-service-override".to_string(),
+                "api-key".to_string(),
+            )
+            .await
+            .expect("versions list");
+
+        first.assert_async().await;
+        second.assert_async().await;
+        let ids: Vec<_> = versions
+            .iter()
+            .filter_map(|item| item.id.as_deref()?.rsplit('/').next())
+            .collect();
+        assert_eq!(ids, ["oldest", "newest"]);
+    }
+
+    #[tokio::test]
+    async fn list_secret_versions_refuses_a_next_link_on_another_host() {
+        let server = MockServer::start_async().await;
+        let other = MockServer::start_async().await;
+        let leaked = other
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(200).json_body(json!({ "value": [] }));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path(VERSIONS_PATH);
+                then.status(200).json_body(json!({
+                    "value": [],
+                    "nextLink": format!("{}{VERSIONS_PATH}?$skiptoken=page2", other.base_url())
+                }));
+            })
+            .await;
+
+        let error = secrets_client(&server)
+            .list_secret_versions(
+                "ignored-by-service-override".to_string(),
+                "api-key".to_string(),
+            )
+            .await
+            .expect_err("a nextLink on another host must not be followed");
+        assert!(error.to_string().contains("another host"), "{error}");
+        leaked.assert_hits_async(0).await;
     }
 
     #[tokio::test]

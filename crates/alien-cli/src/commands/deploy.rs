@@ -1770,34 +1770,17 @@ async fn deploy_task_with_environment(
     // Deployment records intentionally omit the release stack. Resolve it
     // before entering the step loop; a missing or incompatible target is a
     // configuration error, not an observe-only deployment.
-    if current.target_release.is_none() {
-        if let Some(release_id) = deployment.desired_release_id.as_ref() {
-            current.target_release = Some(
-                load_release(
-                    &manager_ctx,
-                    &tracked_deployment.api_key,
-                    release_id,
-                    platform,
-                )
-                .await?,
-            );
-        }
-    }
-    // Setup on an installed deployment reconciles its state with the manager
-    // at every step; without the installed release that would clear it.
-    if matches!(plan, ExistingDeploymentPlan::SetupUpdate { .. }) {
-        if let Some(release_id) = deployment.current_release_id.as_ref() {
-            current.current_release = Some(
-                load_release(
-                    &manager_ctx,
-                    &tracked_deployment.api_key,
-                    release_id,
-                    platform,
-                )
-                .await?,
-            );
-        }
-    }
+    let deployment_token = tracked_deployment.api_key.as_str();
+    let manager_ctx_ref = &manager_ctx;
+    (current.target_release, current.current_release) = load_run_releases(
+        deployment.desired_release_id.as_deref(),
+        deployment.current_release_id.as_deref(),
+        matches!(plan, ExistingDeploymentPlan::SetupUpdate { .. }),
+        move |release_id: String| async move {
+            load_release(manager_ctx_ref, deployment_token, &release_id, platform).await
+        },
+    )
+    .await?;
 
     // Running deploy on a failed deployment is an implicit retry request
     if current.status.is_failed() {
@@ -2451,6 +2434,40 @@ async fn load_release(
     target_release_from_json(release_id, platform, release_json)
 }
 
+/// Loads the target and installed releases a run starts from. The target is
+/// the desired release. A setup update also needs the installed release: it
+/// reconciles state with the manager at every step, and without the installed
+/// release that would clear it. A failed refresh has no update in flight, so
+/// the deployment has no desired release; its setup retry applies the
+/// installed release again.
+async fn load_run_releases<L, LF>(
+    desired_release_id: Option<&str>,
+    current_release_id: Option<&str>,
+    setup_update: bool,
+    load: L,
+) -> Result<(
+    Option<alien_core::ReleaseInfo>,
+    Option<alien_core::ReleaseInfo>,
+)>
+where
+    L: Fn(String) -> LF,
+    LF: std::future::Future<Output = Result<alien_core::ReleaseInfo>>,
+{
+    let target = match desired_release_id {
+        Some(release_id) => Some(load(release_id.to_string()).await?),
+        None => None,
+    };
+    if !setup_update {
+        return Ok((target, None));
+    }
+    let installed = match current_release_id {
+        Some(release_id) => Some(load(release_id.to_string()).await?),
+        None => None,
+    };
+    let target = target.or_else(|| installed.clone());
+    Ok((target, installed))
+}
+
 fn target_release_from_json(
     release_id: &str,
     platform: Platform,
@@ -3069,6 +3086,74 @@ mod tests {
         assert_eq!(error.code, "CONFIGURATION_ERROR");
         assert!(error.message.contains("rel_test"));
         assert!(error.message.contains("aws"));
+    }
+
+    /// Runs `load_run_releases` with a loader that records each release id it
+    /// is asked for and returns a release whose stack is named after it.
+    async fn run_releases(
+        desired: Option<&str>,
+        installed: Option<&str>,
+        setup_update: bool,
+    ) -> (Option<String>, Option<String>, Vec<String>) {
+        let loaded = std::sync::Mutex::new(Vec::new());
+        let (target, current) =
+            load_run_releases(desired, installed, setup_update, |release_id: String| {
+                loaded
+                    .lock()
+                    .expect("loader log lock")
+                    .push(release_id.clone());
+                let release: Result<alien_core::ReleaseInfo> = Ok(alien_core::ReleaseInfo {
+                    stack: alien_core::Stack::new(format!("stack-{release_id}")).build(),
+                    release_id: Some(release_id),
+                    version: None,
+                    description: None,
+                });
+                async move { release }
+            })
+            .await
+            .expect("releases load");
+        for release in target.iter().chain(current.iter()) {
+            let release_id = release.release_id.as_deref().expect("release id");
+            assert_eq!(release.stack.id, format!("stack-{release_id}"));
+        }
+        let id = |release: Option<alien_core::ReleaseInfo>| release.and_then(|r| r.release_id);
+        (
+            id(target),
+            id(current),
+            loaded.into_inner().expect("loader log"),
+        )
+    }
+
+    #[tokio::test]
+    async fn refresh_retry_without_a_desired_release_reapplies_the_installed_release() {
+        // A failed refresh has no update in flight, so the deployment carries
+        // only its installed release.
+        let (target, current, loaded) = run_releases(None, Some("rel_installed"), true).await;
+        assert_eq!(target.as_deref(), Some("rel_installed"));
+        assert_eq!(current.as_deref(), Some("rel_installed"));
+        assert_eq!(loaded, ["rel_installed"]);
+    }
+
+    #[tokio::test]
+    async fn setup_update_targets_the_desired_release_over_the_installed_one() {
+        let (target, current, loaded) =
+            run_releases(Some("rel_new"), Some("rel_installed"), true).await;
+        assert_eq!(target.as_deref(), Some("rel_new"));
+        assert_eq!(current.as_deref(), Some("rel_installed"));
+        assert_eq!(loaded, ["rel_new", "rel_installed"]);
+    }
+
+    #[tokio::test]
+    async fn runtime_runs_load_only_the_desired_release() {
+        let (target, current, loaded) =
+            run_releases(Some("rel_new"), Some("rel_installed"), false).await;
+        assert_eq!(target.as_deref(), Some("rel_new"));
+        assert_eq!(current, None);
+        assert_eq!(loaded, ["rel_new"]);
+
+        let (target, current, loaded) = run_releases(None, Some("rel_installed"), false).await;
+        assert_eq!((target, current), (None, None));
+        assert!(loaded.is_empty());
     }
 
     #[test]
