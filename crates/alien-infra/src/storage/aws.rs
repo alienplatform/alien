@@ -488,10 +488,27 @@ impl AwsStorageController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Storage>()?;
         let prev_config = ctx.previous_resource_config::<Storage>()?;
+
+        if ctx.initial_setup_authority == alien_core::InitialSetupAuthority::ImportedHandoff
+            && ctx
+                .desired_stack
+                .resources
+                .get(&config.id)
+                .is_some_and(|entry| entry.lifecycle == alien_core::ResourceLifecycle::Frozen)
+            && config == prev_config
+        {
+            // Setup owns this bucket and its IAM grants. Dependency refreshes must
+            // preserve the installed bucket rather than rerun its setup flow.
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
+
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
 
         info!(name=%config.id, "Starting bucket configuration update");
 
@@ -1305,6 +1322,26 @@ mod tests {
     }
 
     // ─────────────── UPDATE FLOW TESTS ────────────────────────────────
+
+    #[tokio::test]
+    async fn unchanged_imported_bucket_refresh_preserves_setup_permissions() {
+        let storage = Storage::new("objects".to_string()).build();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage.clone())
+            .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
+            .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff)
+            .controller(AwsStorageController::mock_ready(&storage.id))
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.update(storage).unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert!(executor.outputs().is_some());
+    }
 
     #[rstest]
     #[case::basic_to_versioned(basic_storage(), storage_with_versioning())]
