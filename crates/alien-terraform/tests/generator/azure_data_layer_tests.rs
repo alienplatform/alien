@@ -11,14 +11,20 @@
 //! preflight pipeline is what wires them up at runtime. The tests stay
 //! self-contained.
 
-use super::helpers::{assert_terraform_valid, render, snapshot_module};
+use super::helpers::{assert_terraform_valid, linter_files, render, snapshot_module, test_utils};
 use alien_core::{
     Ai, AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Key, Kv, LifecycleRule,
     PermissionProfile, Queue, RemoteBindings, RemoteStackManagement, ResourceLifecycle,
     ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, ServiceAccount,
     Stack, StackSettings, Storage, Vault,
 };
-use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
+use alien_permissions::{BindingTarget, PermissionContext};
+use alien_terraform::{
+    emitters::azure::helpers::emit_role_definition_and_assignments_for_target,
+    generate_terraform_module, TerraformOptions, TerraformTarget, TfFragment, TfRegistry,
+};
+use hcl::Expression;
+use std::collections::HashSet;
 
 fn resource_group() -> AzureResourceGroup {
     AzureResourceGroup::new("default-resource-group".to_string()).build()
@@ -866,4 +872,48 @@ fn an_azure_remote_sandbox_renders_without_any_other_resource_declared() {
     );
 
     assert_terraform_valid(&module, "azure remote sandbox alone");
+}
+
+#[test]
+fn azure_explicit_resource_grant_fragments_validate() {
+    let stack = Stack::new("example".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .build();
+    let mut module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let builtin = alien_permissions::get_permission_set("storage/data-write").unwrap();
+    let mut fragment = TfFragment::default();
+    let mut seen = HashSet::new();
+    for (label, resource, set) in [
+        ("node_archive", "archive", builtin),
+        ("node_backup", "backup", builtin),
+    ] {
+        let context = PermissionContext::new()
+            .with_subscription_id("11111111-1111-1111-1111-111111111111")
+            .with_resource_group("data")
+            .with_storage_account_name("archiveaccount")
+            .with_resource_name(resource)
+            .with_stack_prefix("example");
+        emit_role_definition_and_assignments_for_target(
+            &mut fragment,
+            label,
+            "node",
+            BindingTarget::Resource,
+            Expression::String("22222222-2222-2222-2222-222222222222".to_string()),
+            set,
+            &context,
+            &mut seen,
+        )
+        .unwrap();
+    }
+    assert_eq!(fragment.resource_blocks.len(), 2);
+    let mut body = hcl::Body::builder();
+    for block in fragment.resource_blocks {
+        body = body.add_block(block);
+    }
+    module.files.insert(
+        "node-permissions.tf".to_string(),
+        hcl::to_string(&body.build()).unwrap(),
+    );
+    test_utils::terraform_fmt_and_validate(&linter_files(&module))
+        .assert_ok("explicit resource grant fragments: fmt, provider init, validate");
 }

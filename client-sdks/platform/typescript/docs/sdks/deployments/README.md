@@ -10,6 +10,7 @@
 * [listFilterEnvironments](#listfilterenvironments) - List distinct effective environments used by deployments. Used for filter dropdowns.
 * [listFilterDeploymentGroups](#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
 * [get](#get) - Retrieve a deployment by ID.
+* [getUpdateOperation](#getupdateoperation) - Retrieve a deployment update operation by its durable operation ID.
 * [getInfo](#getinfo) - Get deployment connection information including command endpoint and resource URLs.
 * [import](#import) - Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
 * [setFirstPartyDeploymentInputs](#setfirstpartydeploymentinputs) - Store operator-provided input values on a first-party deployment session token so CLI/local deploys apply them.
@@ -26,6 +27,9 @@
 * [updateEnvironmentVariables](#updateenvironmentvariables) - Replace a deployment's advanced environment variables. Stack-input-backed variables are write-only through the input endpoint. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
 * [createToken](#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
 * [listMachines](#listmachines)
+* [listVolumeRestores](#listvolumerestores) - List a deployment's volume restore requests, newest first.
+* [restoreVolume](#restorevolume) - Replace one replica's persistent volume with a new volume made from a snapshot. The deployment must be running (an update may already be queued or in progress). The replica is stopped while its volume is swapped, and the replaced volume is snapshotted before it is deleted.
+* [cancelVolumeRestore](#cancelvolumerestore) - Cancel a pending volume restore. Use it when a restore keeps failing: the deployment stops attempting it. A restore whose volume was already swapped still finishes. Allowed in any deployment status, including update-failed.
 
 ## list
 
@@ -82,6 +86,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentsList,
+  useDeploymentsListSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentsList,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentsList,
+  invalidateAllDeploymentsList,
+} from "@alienplatform/platform-api/react-query/deploymentsList.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="listDeployments" method="get" path="/v1/deployments" example="projectName" -->
@@ -132,6 +164,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentsList,
+  useDeploymentsListSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentsList,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentsList,
+  invalidateAllDeploymentsList,
+} from "@alienplatform/platform-api/react-query/deploymentsList.js";
 ```
 
 ### Parameters
@@ -219,6 +279,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentsCreateMutation
+} from "@alienplatform/platform-api/react-query/deploymentsCreate.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -295,6 +372,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentsGetStats,
+  useDeploymentsGetStatsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentsGetStats,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentsGetStats,
+  invalidateAllDeploymentsGetStats,
+} from "@alienplatform/platform-api/react-query/deploymentsGetStats.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="getDeploymentStats" method="get" path="/v1/deployments/stats" example="projectName" -->
@@ -345,6 +450,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentsGetStats,
+  useDeploymentsGetStatsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentsGetStats,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentsGetStats,
+  invalidateAllDeploymentsGetStats,
+} from "@alienplatform/platform-api/react-query/deploymentsGetStats.js";
 ```
 
 ### Parameters
@@ -422,6 +555,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentsListFilterEnvironments,
+  useDeploymentsListFilterEnvironmentsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentsListFilterEnvironments,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentsListFilterEnvironments,
+  invalidateAllDeploymentsListFilterEnvironments,
+} from "@alienplatform/platform-api/react-query/deploymentsListFilterEnvironments.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="listDeploymentFilterEnvironments" method="get" path="/v1/deployments/filter-environments" example="projectName" -->
@@ -472,6 +633,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentsListFilterEnvironments,
+  useDeploymentsListFilterEnvironmentsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentsListFilterEnvironments,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentsListFilterEnvironments,
+  invalidateAllDeploymentsListFilterEnvironments,
+} from "@alienplatform/platform-api/react-query/deploymentsListFilterEnvironments.js";
 ```
 
 ### Parameters
@@ -549,6 +738,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentsListFilterDeploymentGroups,
+  useDeploymentsListFilterDeploymentGroupsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentsListFilterDeploymentGroups,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentsListFilterDeploymentGroups,
+  invalidateAllDeploymentsListFilterDeploymentGroups,
+} from "@alienplatform/platform-api/react-query/deploymentsListFilterDeploymentGroups.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="listDeploymentFilterDeploymentGroups" method="get" path="/v1/deployments/filter-deployment-groups" example="projectName" -->
@@ -599,6 +816,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentsListFilterDeploymentGroups,
+  useDeploymentsListFilterDeploymentGroupsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentsListFilterDeploymentGroups,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentsListFilterDeploymentGroups,
+  invalidateAllDeploymentsListFilterDeploymentGroups,
+} from "@alienplatform/platform-api/react-query/deploymentsListFilterDeploymentGroups.js";
 ```
 
 ### Parameters
@@ -677,6 +922,34 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentsGet,
+  useDeploymentsGetSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentsGet,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentsGet,
+  invalidateAllDeploymentsGet,
+} from "@alienplatform/platform-api/react-query/deploymentsGet.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -695,6 +968,113 @@ run();
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 404                      | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## getUpdateOperation
+
+Retrieve a deployment update operation by its durable operation ID.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="getDeploymentUpdateOperation" method="get" path="/v1/deployments/{id}/update-operations/{operationId}" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deployments.getUpdateOperation({
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    operationId: "duop_0vtxpb1sw4sbcdwg2xo37q6",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsGetUpdateOperation } from "@alienplatform/platform-api/funcs/deploymentsGetUpdateOperation.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsGetUpdateOperation(alien, {
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    operationId: "duop_0vtxpb1sw4sbcdwg2xo37q6",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsGetUpdateOperation failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentsGetUpdateOperation,
+  useDeploymentsGetUpdateOperationSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentsGetUpdateOperation,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentsGetUpdateOperation,
+  invalidateAllDeploymentsGetUpdateOperation,
+} from "@alienplatform/platform-api/react-query/deploymentsGetUpdateOperation.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetDeploymentUpdateOperationRequest](../../models/operations/getdeploymentupdateoperationrequest.md)                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.DeploymentUpdateOperationSummary](../../models/deploymentupdateoperationsummary.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 403, 404                 | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -752,6 +1132,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentsGetInfo,
+  useDeploymentsGetInfoSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentsGetInfo,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentsGetInfo,
+  invalidateAllDeploymentsGetInfo,
+} from "@alienplatform/platform-api/react-query/deploymentsGetInfo.js";
 ```
 
 ### Parameters
@@ -887,6 +1295,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentsImportMutation
+} from "@alienplatform/platform-api/react-query/deploymentsImport.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -956,6 +1381,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentsSetFirstPartyDeploymentInputsMutation
+} from "@alienplatform/platform-api/react-query/deploymentsSetFirstPartyDeploymentInputs.js";
 ```
 
 ### Parameters
@@ -1063,7 +1505,7 @@ async function run() {
           id: "<id>",
           type: "<value>",
           importData: {
-  
+
           },
         },
       ],
@@ -1079,6 +1521,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentsCreateSetupRegistrationOperationMutation
+} from "@alienplatform/platform-api/react-query/deploymentsCreateSetupRegistrationOperation.js";
 ```
 
 ### Parameters
@@ -1158,6 +1617,34 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentsGetSetupRegistrationOperation,
+  useDeploymentsGetSetupRegistrationOperationSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentsGetSetupRegistrationOperation,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentsGetSetupRegistrationOperation,
+  invalidateAllDeploymentsGetSetupRegistrationOperation,
+} from "@alienplatform/platform-api/react-query/deploymentsGetSetupRegistrationOperation.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -1235,6 +1722,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentsDeleteMutation
+} from "@alienplatform/platform-api/react-query/deploymentsDelete.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -1310,6 +1814,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentsRedeployMutation
+} from "@alienplatform/platform-api/react-query/deploymentsRedeploy.js";
 ```
 
 ### Parameters
@@ -1395,6 +1916,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentsPinReleaseMutation
+} from "@alienplatform/platform-api/react-query/deploymentsPinRelease.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -1468,6 +2006,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentsSetReleaseChannelMutation
+} from "@alienplatform/platform-api/react-query/deploymentsSetReleaseChannel.js";
 ```
 
 ### Parameters
@@ -1544,6 +2099,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentsRetryMutation
+} from "@alienplatform/platform-api/react-query/deploymentsRetry.js";
 ```
 
 ### Parameters
@@ -1623,6 +2195,34 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentsGetInputs,
+  useDeploymentsGetInputsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentsGetInputs,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentsGetInputs,
+  invalidateAllDeploymentsGetInputs,
+} from "@alienplatform/platform-api/react-query/deploymentsGetInputs.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -1700,6 +2300,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentsUpdateInputsMutation
+} from "@alienplatform/platform-api/react-query/deploymentsUpdateInputs.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -1717,7 +2334,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 400, 403, 404            | application/json         |
+| errors.APIError          | 400, 403, 404, 409       | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -1775,6 +2392,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentsUpdateComputeMutation
+} from "@alienplatform/platform-api/react-query/deploymentsUpdateCompute.js";
 ```
 
 ### Parameters
@@ -1854,6 +2488,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentsUpdateEnvironmentVariablesMutation
+} from "@alienplatform/platform-api/react-query/deploymentsUpdateEnvironmentVariables.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -1931,6 +2582,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentsCreateTokenMutation
+} from "@alienplatform/platform-api/react-query/deploymentsCreateToken.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -2006,6 +2674,34 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentsListMachines,
+  useDeploymentsListMachinesSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentsListMachines,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentsListMachines,
+  invalidateAllDeploymentsListMachines,
+} from "@alienplatform/platform-api/react-query/deploymentsListMachines.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -2024,5 +2720,310 @@ run();
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 404                      | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## listVolumeRestores
+
+List a deployment's volume restore requests, newest first.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="listDeploymentVolumeRestores" method="get" path="/v1/deployments/{id}/volume-restores" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deployments.listVolumeRestores({
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsListVolumeRestores } from "@alienplatform/platform-api/funcs/deploymentsListVolumeRestores.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsListVolumeRestores(alien, {
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsListVolumeRestores failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentsListVolumeRestores,
+  useDeploymentsListVolumeRestoresSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentsListVolumeRestores,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentsListVolumeRestores,
+  invalidateAllDeploymentsListVolumeRestores,
+} from "@alienplatform/platform-api/react-query/deploymentsListVolumeRestores.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.ListDeploymentVolumeRestoresRequest](../../models/operations/listdeploymentvolumerestoresrequest.md)                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.ListVolumeRestoresResponse](../../models/listvolumerestoresresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 403, 404                 | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## restoreVolume
+
+Replace one replica's persistent volume with a new volume made from a snapshot. The deployment must be running (an update may already be queued or in progress). The replica is stopped while its volume is swapped, and the replaced volume is snapshotted before it is deleted.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="createDeploymentVolumeRestore" method="post" path="/v1/deployments/{id}/volume-restores" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deployments.restoreVolume({
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    createVolumeRestoreRequest: {
+      resourceId: "<id>",
+      ordinal: 104316,
+      snapshotId: "<id>",
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsRestoreVolume } from "@alienplatform/platform-api/funcs/deploymentsRestoreVolume.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsRestoreVolume(alien, {
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    createVolumeRestoreRequest: {
+      resourceId: "<id>",
+      ordinal: 104316,
+      snapshotId: "<id>",
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsRestoreVolume failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentsRestoreVolumeMutation
+} from "@alienplatform/platform-api/react-query/deploymentsRestoreVolume.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.CreateDeploymentVolumeRestoreRequest](../../models/operations/createdeploymentvolumerestorerequest.md)                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.VolumeRestore](../../models/volumerestore.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 403, 404, 409       | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## cancelVolumeRestore
+
+Cancel a pending volume restore. Use it when a restore keeps failing: the deployment stops attempting it. A restore whose volume was already swapped still finishes. Allowed in any deployment status, including update-failed.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="cancelDeploymentVolumeRestore" method="delete" path="/v1/deployments/{id}/volume-restores/{requestId}" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deployments.cancelVolumeRestore({
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    requestId: "vrst_rs1j4dytswpy7wbc819jdcx",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsCancelVolumeRestore } from "@alienplatform/platform-api/funcs/deploymentsCancelVolumeRestore.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsCancelVolumeRestore(alien, {
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    requestId: "vrst_rs1j4dytswpy7wbc819jdcx",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsCancelVolumeRestore failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentsCancelVolumeRestoreMutation
+} from "@alienplatform/platform-api/react-query/deploymentsCancelVolumeRestore.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.CancelDeploymentVolumeRestoreRequest](../../models/operations/canceldeploymentvolumerestorerequest.md)                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.VolumeRestore](../../models/volumerestore.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 403, 404, 409       | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |

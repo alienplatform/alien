@@ -8,7 +8,7 @@ The approve command (or null) and current status.
 import { GetAccessRequestCoordinatesResponse } from "@alienplatform/platform-api/models/operations";
 
 let value: GetAccessRequestCoordinatesResponse = {
-  status: "rejected",
+  status: "revoked",
   kubectlApprove: "<value>",
 };
 ```

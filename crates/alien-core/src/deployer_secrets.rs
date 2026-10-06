@@ -15,8 +15,9 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    vault_naming, BindingValue, EnvironmentVariablesSnapshot, Platform, StackInputDefinition,
-    StackInputKind, StackInputProvider, VaultBinding,
+    vault_naming, BindingValue, EnvironmentVariable, EnvironmentVariableType, Platform,
+    StackInputDefinition, StackInputEnvironmentVariableType, StackInputKind, StackInputProvider,
+    VaultBinding,
 };
 
 /// Prefix of every vault key that holds a deployer secret, so these keys
@@ -80,48 +81,20 @@ pub struct DeployerSecretSlot<'a> {
     pub has_stored_value: bool,
 }
 
-/// The deployment's input values as the deployer secret helpers must see them.
-///
-/// A control plane never puts a stored secret's value in `input_values`: it
-/// delivers it through the environment variables the input maps. Such an
-/// input counts as stored when every variable it maps is in `environment`, so
-/// a developer value is not mistaken for an empty deployer slot. Input and
-/// user variable names are unique, so a mapped name can only come from the
-/// input. The added entries mark presence only and carry no value.
-pub fn stored_input_values(
-    inputs: &[StackInputDefinition],
-    values: &HashMap<String, serde_json::Value>,
-    environment: &EnvironmentVariablesSnapshot,
-) -> HashMap<String, serde_json::Value> {
-    let mut stored = values.clone();
-    for input in inputs {
-        if input.kind != StackInputKind::Secret
-            || input.env.is_empty()
-            || stored.get(&input.id).is_some_and(|value| !value.is_null())
-        {
-            continue;
-        }
-        let delivered = input.env.iter().all(|mapping| {
-            environment
-                .variables
-                .iter()
-                .any(|variable| variable.name == mapping.name)
-        });
-        if delivered {
-            stored.insert(input.id.clone(), serde_json::Value::Bool(true));
-        }
-    }
-    stored
-}
-
 /// The vault-native deployer secret slots of a deployment on `platform`.
 ///
 /// `values` are the deployment's stored input values. A secret input the
 /// developer may also provide is a slot only when it has no stored value: a
-/// developer value keeps today's path.
+/// developer value keeps today's path. `stored_secret_input_ids` carries trusted
+/// presence when stored secret values are intentionally absent from `values`.
+/// Presence never supplies a value for gates, defaults, or environment variables.
+/// Only omitted legacy metadata may use complete Secret delivery in the trusted
+/// target snapshot. Explicit empty metadata disables this compatibility path.
 pub fn deployer_secret_slots<'a>(
     inputs: &'a [StackInputDefinition],
     values: &HashMap<String, serde_json::Value>,
+    stored_secret_input_ids: Option<&[String]>,
+    environment: &[EnvironmentVariable],
     platform: Platform,
 ) -> Vec<DeployerSecretSlot<'a>> {
     inputs
@@ -134,9 +107,13 @@ pub fn deployer_secret_slots<'a>(
                 .is_none_or(|platforms| platforms.is_empty() || platforms.contains(&platform))
         })
         .filter_map(|input| {
-            let has_stored_value = values.get(&input.id).is_some_and(|value| !value.is_null());
-            let developer_value =
-                has_stored_value && input.provided_by.contains(&StackInputProvider::Developer);
+            let has_stored_value = stored_secret_input_ids
+                .is_some_and(|ids| ids.contains(&input.id))
+                || values.get(&input.id).is_some_and(|value| !value.is_null());
+            let developer_value = input.provided_by.contains(&StackInputProvider::Developer)
+                && (has_stored_value
+                    || (stored_secret_input_ids.is_none()
+                        && legacy_secret_delivery_complete(input, environment)));
             (!developer_value).then(|| DeployerSecretSlot {
                 input,
                 vault_key: deployer_secret_vault_key(&input.id),
@@ -144,6 +121,52 @@ pub fn deployer_secret_slots<'a>(
             })
         })
         .collect()
+}
+
+// Only trusted legacy delivery can replace omitted presence metadata. No values
+// are read here, and scope coverage follows the same exact-id/prefix rules as delivery.
+fn legacy_secret_delivery_complete(
+    input: &StackInputDefinition,
+    environment: &[EnvironmentVariable],
+) -> bool {
+    !input.env.is_empty()
+        && input.env.iter().all(|mapping| {
+            let mut matches = environment
+                .iter()
+                .filter(|variable| variable.name == mapping.name);
+            let Some(variable) = matches.next() else {
+                return false;
+            };
+            // Duplicate names have no trusted precedence, even when their scopes differ.
+            if matches.next().is_some() {
+                return false;
+            }
+            !mapping.name.is_empty()
+                && mapping
+                    .target_resources
+                    .as_ref()
+                    .is_none_or(|targets| !targets.is_empty())
+                && !matches!(
+                    mapping.var_type,
+                    Some(StackInputEnvironmentVariableType::Plain)
+                )
+                && variable.var_type == EnvironmentVariableType::Secret
+                && match (&mapping.target_resources, &variable.target_resources) {
+                    (_, None) => true,
+                    (None, Some(delivered)) => delivered.iter().any(|pattern| pattern == "*"),
+                    (Some(required), Some(delivered)) => {
+                        !required.is_empty()
+                            && required.iter().all(|target| {
+                                delivered.iter().any(|pattern| {
+                                    pattern == target
+                                        || pattern
+                                            .strip_suffix('*')
+                                            .is_some_and(|prefix| target.starts_with(prefix))
+                                })
+                            })
+                    }
+                }
+        })
 }
 
 /// The secret store a deployer writes a vault-native secret into.
@@ -434,34 +457,48 @@ pub struct DeployerSecretEnv {
 pub fn deployer_secret_environment(
     inputs: &[StackInputDefinition],
     values: &HashMap<String, serde_json::Value>,
+    stored_secret_input_ids: Option<&[String]>,
+    environment: &[EnvironmentVariable],
     platform: Platform,
     reports: &[DeployerSecretReport],
 ) -> Vec<(DeployerSecretEnv, Option<Vec<String>>)> {
-    deployer_secret_slots(inputs, values, platform)
-        .into_iter()
-        .filter_map(|slot| {
-            let report = reports
-                .iter()
-                .find(|report| report.input_id == slot.input.id)?;
-            (!slot.has_stored_value).then_some((slot, report))
+    deployer_secret_slots(
+        inputs,
+        values,
+        stored_secret_input_ids,
+        environment,
+        platform,
+    )
+    .into_iter()
+    .filter_map(|slot| {
+        let report = reports
+            .iter()
+            .find(|report| report.input_id == slot.input.id)?;
+        // Only a concrete legacy value supplies delivery. Presence IDs do
+        // not supply a value for a pure deployer slot.
+        (!values
+            .get(&slot.input.id)
+            .is_some_and(|value| !value.is_null())
+            && (!slot.has_stored_value || report.status == DeployerSecretStatus::Present))
+            .then_some((slot, report))
+    })
+    .flat_map(|(slot, report)| {
+        slot.input.env.iter().map(move |mapping| {
+            (
+                DeployerSecretEnv {
+                    name: mapping.name.clone(),
+                    vault_key: slot.vault_key.clone(),
+                    secret_name: report.location.name.clone(),
+                    vault_name: report.location.vault_name.clone(),
+                    label: slot.input.label.clone(),
+                    required: slot.input.required,
+                    version: report.version.clone(),
+                },
+                mapping.target_resources.clone(),
+            )
         })
-        .flat_map(|(slot, report)| {
-            slot.input.env.iter().map(move |mapping| {
-                (
-                    DeployerSecretEnv {
-                        name: mapping.name.clone(),
-                        vault_key: slot.vault_key.clone(),
-                        secret_name: report.location.name.clone(),
-                        vault_name: report.location.vault_name.clone(),
-                        label: slot.input.label.clone(),
-                        required: slot.input.required,
-                        version: report.version.clone(),
-                    },
-                    mapping.target_resources.clone(),
-                )
-            })
-        })
-        .collect()
+    })
+    .collect()
 }
 
 #[cfg(test)]
@@ -491,6 +528,124 @@ mod tests {
     }
 
     #[test]
+    fn legacy_omitted_presence_uses_only_complete_scoped_secret_delivery() {
+        let base = serde_json::json!({
+            "environmentVariables": {
+                "variables": [{"name": "DATABASE_PASSWORD", "value": "fixture-value", "type": "secret"}],
+                "hash": "fixture", "createdAt": "2026-01-01T00:00:00Z"
+            }
+        });
+        let legacy: crate::DeploymentConfig = serde_json::from_value(base.clone()).unwrap();
+        assert_eq!(legacy.stored_secret_input_ids, None);
+        let input = secret(
+            "databasePassword",
+            vec![StackInputProvider::Developer, StackInputProvider::Deployer],
+        );
+        for case in [
+            "legacy",
+            "null",
+            "empty",
+            "unrelated",
+            "missing",
+            "plain",
+            "wrong-name",
+            "partial",
+            "narrow",
+            "matching-scope",
+            "broader-scope",
+            "deployer-only",
+            "no-mappings",
+            "plain-mapping",
+            "duplicate-plain",
+            "duplicate-scoped-secret",
+        ] {
+            let mut wire = base.clone();
+            let mut input = input.clone();
+            match case {
+                "null" => wire["storedSecretInputIds"] = serde_json::Value::Null,
+                "empty" => wire["storedSecretInputIds"] = serde_json::json!([]),
+                "unrelated" => wire["storedSecretInputIds"] = serde_json::json!(["other"]),
+                "missing" => wire["environmentVariables"]["variables"] = serde_json::json!([]),
+                "plain" => {
+                    wire["environmentVariables"]["variables"][0]["type"] =
+                        serde_json::json!("plain")
+                }
+                "duplicate-plain" | "duplicate-scoped-secret" => {
+                    let mut duplicate = wire["environmentVariables"]["variables"][0].clone();
+                    if case == "duplicate-plain" {
+                        duplicate["type"] = serde_json::json!("plain");
+                    } else {
+                        input.env[0].target_resources = Some(vec!["app".to_string()]);
+                        wire["environmentVariables"]["variables"][0]["targetResources"] =
+                            serde_json::json!(["app"]);
+                        duplicate["targetResources"] = serde_json::json!(["other"]);
+                    }
+                    wire["environmentVariables"]["variables"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(duplicate);
+                }
+                "wrong-name" => {
+                    wire["environmentVariables"]["variables"][0]["name"] =
+                        serde_json::json!("OTHER")
+                }
+                "partial" => {
+                    let mut mapping = input.env[0].clone();
+                    mapping.name = "SECOND".to_string();
+                    input.env.push(mapping);
+                }
+                "narrow" => {
+                    wire["environmentVariables"]["variables"][0]["targetResources"] =
+                        serde_json::json!(["app"])
+                }
+                "matching-scope" => {
+                    input.env[0].target_resources = Some(vec!["app*".to_string()]);
+                    wire["environmentVariables"]["variables"][0]["targetResources"] =
+                        serde_json::json!(["app*"]);
+                }
+                "broader-scope" => input.env[0].target_resources = Some(vec!["app".to_string()]),
+                "deployer-only" => input.provided_by = vec![StackInputProvider::Deployer],
+                "no-mappings" => input.env.clear(),
+                "plain-mapping" => {
+                    input.env[0].var_type = Some(StackInputEnvironmentVariableType::Plain)
+                }
+                _ => {}
+            }
+            let config: crate::DeploymentConfig = serde_json::from_value(wire).unwrap();
+            let inputs = [input];
+            let delivered = matches!(case, "legacy" | "null" | "matching-scope" | "broader-scope");
+            let slots = deployer_secret_slots(
+                &inputs,
+                &config.input_values,
+                config.stored_secret_input_ids.as_deref(),
+                &config.environment_variables.variables,
+                Platform::Aws,
+            );
+            assert_eq!(slots.is_empty(), delivered, "{case}");
+            let reports = [report("databasePassword", DeployerSecretStatus::Present)];
+            let pointers = deployer_secret_environment(
+                &inputs,
+                &config.input_values,
+                config.stored_secret_input_ids.as_deref(),
+                &config.environment_variables.variables,
+                Platform::Aws,
+                &reports,
+            );
+            assert_eq!(
+                pointers.len(),
+                if delivered || case == "no-mappings" {
+                    0
+                } else {
+                    inputs[0].env.len()
+                },
+                "{case}"
+            );
+            assert!(config.input_values.is_empty());
+            assert!(is_deployer_secret_input(&inputs[0]));
+        }
+    }
+
+    #[test]
     fn vault_keys_are_kebab_case_and_backend_safe() {
         assert_eq!(
             deployer_secret_vault_key("databasePassword"),
@@ -515,7 +670,7 @@ mod tests {
             serde_json::json!("from-before"),
         )]);
 
-        let slots = deployer_secret_slots(&inputs, &stored, Platform::Aws);
+        let slots = deployer_secret_slots(&inputs, &stored, Some(&[]), &[], Platform::Aws);
         assert_eq!(slots.len(), 1);
         assert_eq!(slots[0].vault_key, "input-database-password");
         assert!(slots[0].has_stored_value);
@@ -530,44 +685,16 @@ mod tests {
         let with_developer_value =
             HashMap::from([("databasePassword".to_string(), serde_json::json!("dev"))]);
 
-        assert!(deployer_secret_slots(&inputs, &with_developer_value, Platform::Aws).is_empty());
+        assert!(deployer_secret_slots(
+            &inputs,
+            &with_developer_value,
+            Some(&[]),
+            &[],
+            Platform::Aws
+        )
+        .is_empty());
         assert_eq!(
-            deployer_secret_slots(&inputs, &HashMap::new(), Platform::Aws).len(),
-            1
-        );
-    }
-
-    /// A control plane delivers a stored secret through its mapped variables,
-    /// never in `input_values`: a developer value delivered that way must keep
-    /// a dual-provided secret off the vault path, and only a fully delivered
-    /// input counts.
-    #[test]
-    fn a_secret_delivered_through_its_variables_counts_as_stored() {
-        let inputs = vec![secret(
-            "databasePassword",
-            vec![StackInputProvider::Developer, StackInputProvider::Deployer],
-        )];
-        let snapshot = |names: &[&str]| EnvironmentVariablesSnapshot {
-            variables: names
-                .iter()
-                .map(|name| crate::EnvironmentVariable {
-                    name: name.to_string(),
-                    value: "dev".to_string(),
-                    var_type: crate::EnvironmentVariableType::Secret,
-                    target_resources: None,
-                })
-                .collect(),
-            hash: String::new(),
-            created_at: String::new(),
-        };
-
-        let delivered =
-            stored_input_values(&inputs, &HashMap::new(), &snapshot(&["DATABASE_PASSWORD"]));
-        assert!(deployer_secret_slots(&inputs, &delivered, Platform::Aws).is_empty());
-
-        let not_delivered = stored_input_values(&inputs, &HashMap::new(), &snapshot(&["OTHER"]));
-        assert_eq!(
-            deployer_secret_slots(&inputs, &not_delivered, Platform::Aws).len(),
+            deployer_secret_slots(&inputs, &HashMap::new(), Some(&[]), &[], Platform::Aws).len(),
             1
         );
     }
@@ -578,7 +705,10 @@ mod tests {
         aws_only.platforms = Some(vec![Platform::Aws]);
         let inputs = vec![secret("key", vec![StackInputProvider::Developer]), aws_only];
 
-        assert!(deployer_secret_slots(&inputs, &HashMap::new(), Platform::Gcp).is_empty());
+        assert!(
+            deployer_secret_slots(&inputs, &HashMap::new(), Some(&[]), &[], Platform::Gcp)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -730,11 +860,21 @@ mod tests {
         )];
         let no_values = HashMap::new();
 
-        assert!(deployer_secret_environment(&inputs, &no_values, Platform::Aws, &[]).is_empty());
+        assert!(deployer_secret_environment(
+            &inputs,
+            &no_values,
+            Some(&[]),
+            &[],
+            Platform::Aws,
+            &[]
+        )
+        .is_empty());
 
         let env = deployer_secret_environment(
             &inputs,
             &no_values,
+            Some(&[]),
+            &[],
             Platform::Aws,
             &[report("databasePassword", DeployerSecretStatus::Missing)],
         );
@@ -766,8 +906,14 @@ mod tests {
         let mut azure_report = report("databasePassword", DeployerSecretStatus::Present);
         azure_report.location = location;
 
-        let env =
-            deployer_secret_environment(&inputs, &HashMap::new(), Platform::Azure, &[azure_report]);
+        let env = deployer_secret_environment(
+            &inputs,
+            &HashMap::new(),
+            Some(&[]),
+            &[],
+            Platform::Azure,
+            &[azure_report],
+        );
 
         assert_eq!(env.len(), 1);
         assert_eq!(env[0].0.secret_name, "input-database-password");
@@ -788,6 +934,8 @@ mod tests {
         assert!(deployer_secret_environment(
             &inputs,
             &stored,
+            Some(&[]),
+            &[],
             Platform::Aws,
             &[report("databasePassword", DeployerSecretStatus::Missing)],
         )
@@ -796,6 +944,8 @@ mod tests {
             deployer_secret_environment(
                 &inputs,
                 &stored,
+                Some(&[]),
+                &[],
                 Platform::Aws,
                 &[report("databasePassword", DeployerSecretStatus::Present)],
             )
@@ -806,11 +956,118 @@ mod tests {
             deployer_secret_environment(
                 &inputs,
                 &HashMap::new(),
+                Some(&[]),
+                &[],
                 Platform::Aws,
                 &[report("databasePassword", DeployerSecretStatus::Present)],
             )
             .len(),
             1
         );
+    }
+    #[test]
+    fn stored_secret_ids_classify_presence_without_input_values() {
+        for required in [true, false] {
+            let mut input = secret(
+                "apiKey",
+                vec![StackInputProvider::Developer, StackInputProvider::Deployer],
+            );
+            input.required = required;
+            let inputs = vec![input];
+            let values = HashMap::new();
+            let present = vec!["apiKey".to_string()];
+            assert!(
+                deployer_secret_slots(&inputs, &values, Some(&present), &[], Platform::Aws)
+                    .is_empty()
+            );
+            for ids in [vec![], vec!["removedInput".to_string()]] {
+                let slots = deployer_secret_slots(&inputs, &values, Some(&ids), &[], Platform::Aws);
+                assert_eq!(slots.len(), 1);
+                assert!(!slots[0].has_stored_value);
+                assert_eq!(slots[0].input.required, required);
+            }
+            let null_value = HashMap::from([("apiKey".to_string(), serde_json::Value::Null)]);
+            assert!(deployer_secret_slots(
+                &inputs,
+                &null_value,
+                Some(&present),
+                &[],
+                Platform::Aws
+            )
+            .is_empty());
+            assert_eq!(
+                deployer_secret_slots(&inputs, &null_value, Some(&[]), &[], Platform::Aws).len(),
+                1
+            );
+            for status in [DeployerSecretStatus::Missing, DeployerSecretStatus::Present] {
+                assert!(deployer_secret_environment(
+                    &inputs,
+                    &values,
+                    Some(&present),
+                    &[],
+                    Platform::Aws,
+                    &[report("apiKey", status)]
+                )
+                .is_empty());
+            }
+            assert!(
+                values.is_empty(),
+                "presence must not manufacture an input value"
+            );
+        }
+    }
+
+    #[test]
+    fn stored_secret_ids_keep_deployer_only_slots_and_legacy_fallback() {
+        let inputs = vec![secret("apiKey", vec![StackInputProvider::Deployer])];
+        let values = HashMap::new();
+        let present = vec!["apiKey".to_string()];
+        let slots = deployer_secret_slots(&inputs, &values, Some(&present), &[], Platform::Aws);
+        assert_eq!(slots.len(), 1);
+        assert!(slots[0].has_stored_value);
+        assert!(deployer_secret_environment(
+            &inputs,
+            &values,
+            Some(&present),
+            &[],
+            Platform::Aws,
+            &[report("apiKey", DeployerSecretStatus::Missing)]
+        )
+        .is_empty());
+        let environment = deployer_secret_environment(
+            &inputs,
+            &values,
+            Some(&present),
+            &[],
+            Platform::Aws,
+            &[report("apiKey", DeployerSecretStatus::Present)],
+        );
+        assert_eq!(environment.len(), 1);
+        assert_eq!(environment[0].0.vault_key, "input-api-key");
+    }
+
+    #[test]
+    fn stored_secret_ids_do_not_change_platform_or_kind_classification() {
+        let mut input = secret("apiKey", vec![StackInputProvider::Deployer]);
+        input.platforms = Some(vec![Platform::Aws]);
+        let inputs = vec![input.clone()];
+        let present = vec!["apiKey".to_string()];
+        assert!(deployer_secret_slots(
+            &inputs,
+            &HashMap::new(),
+            Some(&present),
+            &[],
+            Platform::Gcp
+        )
+        .is_empty());
+        input.kind = StackInputKind::String;
+        assert!(deployer_secret_slots(
+            &[input],
+            &HashMap::new(),
+            Some(&present),
+            &[],
+            Platform::Aws
+        )
+        .is_empty());
     }
 }

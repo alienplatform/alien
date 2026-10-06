@@ -10,7 +10,7 @@ import { DeploymentState } from "@alienplatform/platform-api/models";
 let value: DeploymentState = {
   platform: "local",
   protocolVersion: 632610,
-  status: "provisioning-failed",
+  status: "waiting-for-secrets",
 };
 ```
 

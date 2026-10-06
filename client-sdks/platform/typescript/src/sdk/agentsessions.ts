@@ -13,7 +13,7 @@ import { unwrapAsync } from "../types/fp.js";
 
 export class AgentSessions extends ClientSDK {
   /**
-   * List ai-agent monitor sessions for this workspace. Newest first, capped at 50.
+   * List ai-agent monitor sessions for this workspace, or for one project. Newest first, capped at 50.
    */
   async list(
     request?: operations.ListAgentSessionsRequest | undefined,

@@ -5,6 +5,6 @@
 
 import * as z from "zod";
 
-export const ValueSchema = z.any()
+export const ValueSchema = z.json()
 
 export type Value = z.infer<typeof ValueSchema>

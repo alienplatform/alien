@@ -17,10 +17,10 @@ const value: models.DataAwsIamRole2 = {
         source: "<value>",
       },
     ],
-    health: "degraded",
+    health: "unknown",
     lifecycle: "stopping",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "awsIamRole",
 };

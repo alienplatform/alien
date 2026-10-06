@@ -126,7 +126,7 @@ export type DaemonInstanceCpu = {
   value: number;
 };
 
-export type DaemonInstanceCpuUnion5 = DaemonInstanceCpu | any;
+export type DaemonInstanceCpuUnion5 = DaemonInstanceCpu | string;
 
 export const DaemonInstanceKind = {
   Container: "container",
@@ -152,12 +152,12 @@ export type DaemonInstanceMemory = {
   value: number;
 };
 
-export type DaemonInstanceMemoryUnion5 = DaemonInstanceMemory | any;
+export type DaemonInstanceMemoryUnion5 = DaemonInstanceMemory | string;
 
 export type DaemonInstance5 = {
-  cpu?: DaemonInstanceCpu | any | null | undefined;
+  cpu?: DaemonInstanceCpu | string | null | undefined;
   kind: DaemonInstanceKind;
-  memory?: DaemonInstanceMemory | any | null | undefined;
+  memory?: DaemonInstanceMemory | string | null | undefined;
   name: string;
   phase?: string | null | undefined;
   pid?: number | null | undefined;
@@ -166,7 +166,7 @@ export type DaemonInstance5 = {
   unitId: string;
 };
 
-export type DaemonInstanceUnion = DaemonInstance5 | any;
+export type DaemonInstanceUnion = DaemonInstance5 | string;
 
 export const EventSeverity3 = {
   Info: "info",
@@ -181,14 +181,14 @@ export type Subject3 = {
   name?: string | null | undefined;
 };
 
-export type SubjectUnion3 = Subject3 | any;
+export type SubjectUnion3 = Subject3 | string;
 
 export type Event11 = {
   kind: string;
   message: string;
   raw?: any | null | undefined;
   severity: EventSeverity3;
-  subject?: Subject3 | any | null | undefined;
+  subject?: Subject3 | string | null | undefined;
   timestamp: Date;
 };
 
@@ -252,7 +252,7 @@ export type GetResourceDeploymentDetailDataStatus18 = {
 
 export type DataLocal4 = {
   commandSupported: boolean;
-  daemonInstance?: DaemonInstance5 | any | null | undefined;
+  daemonInstance?: DaemonInstance5 | string | null | undefined;
   daemonName?: string | undefined;
   events: Array<Event11>;
   exitReason?: string | null | undefined;
@@ -279,7 +279,7 @@ export type Cpu6 = {
   value: number;
 };
 
-export type CpuUnion6 = Cpu6 | any;
+export type CpuUnion6 = Cpu6 | string;
 
 export type InvolvedObject8 = {
   apiVersion?: string | null | undefined;
@@ -291,25 +291,25 @@ export type InvolvedObject8 = {
   uid?: string | null | undefined;
 };
 
-export type InvolvedObjectUnion8 = InvolvedObject8 | any;
+export type InvolvedObjectUnion8 = InvolvedObject8 | string;
 
 export type SourceEvent8 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion8 = SourceEvent8 | any;
+export type SourceUnion8 = SourceEvent8 | string;
 
 export type Event10 = {
   count?: number | null | undefined;
   eventTime?: Date | null | undefined;
   firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject8 | any | null | undefined;
+  involvedObject?: InvolvedObject8 | string | null | undefined;
   lastTimestamp?: Date | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent8 | any | null | undefined;
+  source?: SourceEvent8 | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -328,7 +328,7 @@ export type Memory6 = {
   value: number;
 };
 
-export type MemoryUnion6 = Memory6 | any;
+export type MemoryUnion6 = Memory6 | string;
 
 /**
  * Image a running container reports.
@@ -366,7 +366,7 @@ export type CpuPod3 = {
   value: number;
 };
 
-export type PodCpuUnion3 = CpuPod3 | any;
+export type PodCpuUnion3 = CpuPod3 | string;
 
 export const MemoryPodUnit3 = {
   Count: "count",
@@ -383,7 +383,7 @@ export type MemoryPod3 = {
   value: number;
 };
 
-export type PodMemoryUnion3 = MemoryPod3 | any;
+export type PodMemoryUnion3 = MemoryPod3 | string;
 
 export type OwnerReference3 = {
   controller: boolean;
@@ -394,8 +394,8 @@ export type OwnerReference3 = {
 
 export type Pod3 = {
   containers?: Array<Container3> | undefined;
-  cpu?: CpuPod3 | any | null | undefined;
-  memory?: MemoryPod3 | any | null | undefined;
+  cpu?: CpuPod3 | string | null | undefined;
+  memory?: MemoryPod3 | string | null | undefined;
   name: string;
   nodeName?: string | null | undefined;
   ownerReferences: Array<OwnerReference3>;
@@ -494,20 +494,20 @@ export type Workload3 = {
   updatedReplicas?: number | null | undefined;
 };
 
-export type WorkloadUnion3 = Workload3 | any;
+export type WorkloadUnion3 = Workload3 | string;
 
 export type DataKubernetes3 = {
   commandSupported: boolean;
-  cpu?: Cpu6 | any | null | undefined;
+  cpu?: Cpu6 | string | null | undefined;
   events: Array<Event10>;
-  memory?: Memory6 | any | null | undefined;
+  memory?: Memory6 | string | null | undefined;
   name: string;
   namespace: string;
   pods: Array<Pod3>;
   replicas: Replicas4;
   restarts?: number | null | undefined;
   status: GetResourceDeploymentDetailDataStatus17;
-  workload?: Workload3 | any | null | undefined;
+  workload?: Workload3 | string | null | undefined;
   backend: "kubernetes";
 };
 
@@ -526,7 +526,7 @@ export type CpuDaemonInstance4 = {
   value: number;
 };
 
-export type DaemonInstanceCpuUnion4 = CpuDaemonInstance4 | any;
+export type DaemonInstanceCpuUnion4 = CpuDaemonInstance4 | string;
 
 export const MemoryDaemonInstanceUnit4 = {
   Count: "count",
@@ -545,13 +545,13 @@ export type MemoryDaemonInstance4 = {
   value: number;
 };
 
-export type DaemonInstanceMemoryUnion4 = MemoryDaemonInstance4 | any;
+export type DaemonInstanceMemoryUnion4 = MemoryDaemonInstance4 | string;
 
 export type DaemonInstance4 = {
-  cpu?: CpuDaemonInstance4 | any | null | undefined;
+  cpu?: CpuDaemonInstance4 | string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
-  memory?: MemoryDaemonInstance4 | any | null | undefined;
+  memory?: MemoryDaemonInstance4 | string | null | undefined;
   message?: string | null | undefined;
   metricsHealthy?: boolean | null | undefined;
   metricsLastUpdated?: string | null | undefined;
@@ -577,14 +577,14 @@ export type InvolvedObject7 = {
   replicaId?: string | null | undefined;
 };
 
-export type InvolvedObjectUnion7 = InvolvedObject7 | any;
+export type InvolvedObjectUnion7 = InvolvedObject7 | string;
 
 export type SourceEvent7 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion7 = SourceEvent7 | any;
+export type SourceUnion7 = SourceEvent7 | string;
 
 export type Event9 = {
   count?: number | null | undefined;
@@ -592,12 +592,12 @@ export type Event9 = {
   eventId?: string | null | undefined;
   eventTime?: Date | null | undefined;
   firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject7 | any | null | undefined;
+  involvedObject?: InvolvedObject7 | string | null | undefined;
   lastTimestamp?: Date | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent7 | any | null | undefined;
+  source?: SourceEvent7 | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -694,7 +694,7 @@ export type CpuDaemonInstance3 = {
   value: number;
 };
 
-export type DaemonInstanceCpuUnion3 = CpuDaemonInstance3 | any;
+export type DaemonInstanceCpuUnion3 = CpuDaemonInstance3 | string;
 
 export const MemoryDaemonInstanceUnit3 = {
   Count: "count",
@@ -713,13 +713,13 @@ export type MemoryDaemonInstance3 = {
   value: number;
 };
 
-export type DaemonInstanceMemoryUnion3 = MemoryDaemonInstance3 | any;
+export type DaemonInstanceMemoryUnion3 = MemoryDaemonInstance3 | string;
 
 export type DaemonInstance3 = {
-  cpu?: CpuDaemonInstance3 | any | null | undefined;
+  cpu?: CpuDaemonInstance3 | string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
-  memory?: MemoryDaemonInstance3 | any | null | undefined;
+  memory?: MemoryDaemonInstance3 | string | null | undefined;
   message?: string | null | undefined;
   metricsHealthy?: boolean | null | undefined;
   metricsLastUpdated?: string | null | undefined;
@@ -745,14 +745,14 @@ export type InvolvedObject6 = {
   replicaId?: string | null | undefined;
 };
 
-export type InvolvedObjectUnion6 = InvolvedObject6 | any;
+export type InvolvedObjectUnion6 = InvolvedObject6 | string;
 
 export type SourceEvent6 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion6 = SourceEvent6 | any;
+export type SourceUnion6 = SourceEvent6 | string;
 
 export type Event8 = {
   count?: number | null | undefined;
@@ -760,12 +760,12 @@ export type Event8 = {
   eventId?: string | null | undefined;
   eventTime?: Date | null | undefined;
   firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject6 | any | null | undefined;
+  involvedObject?: InvolvedObject6 | string | null | undefined;
   lastTimestamp?: Date | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent6 | any | null | undefined;
+  source?: SourceEvent6 | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -862,7 +862,7 @@ export type CpuDaemonInstance2 = {
   value: number;
 };
 
-export type DaemonInstanceCpuUnion2 = CpuDaemonInstance2 | any;
+export type DaemonInstanceCpuUnion2 = CpuDaemonInstance2 | string;
 
 export const MemoryDaemonInstanceUnit2 = {
   Count: "count",
@@ -881,13 +881,13 @@ export type MemoryDaemonInstance2 = {
   value: number;
 };
 
-export type DaemonInstanceMemoryUnion2 = MemoryDaemonInstance2 | any;
+export type DaemonInstanceMemoryUnion2 = MemoryDaemonInstance2 | string;
 
 export type DaemonInstance2 = {
-  cpu?: CpuDaemonInstance2 | any | null | undefined;
+  cpu?: CpuDaemonInstance2 | string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
-  memory?: MemoryDaemonInstance2 | any | null | undefined;
+  memory?: MemoryDaemonInstance2 | string | null | undefined;
   message?: string | null | undefined;
   metricsHealthy?: boolean | null | undefined;
   metricsLastUpdated?: string | null | undefined;
@@ -913,14 +913,14 @@ export type InvolvedObject5 = {
   replicaId?: string | null | undefined;
 };
 
-export type InvolvedObjectUnion5 = InvolvedObject5 | any;
+export type InvolvedObjectUnion5 = InvolvedObject5 | string;
 
 export type SourceEvent5 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion5 = SourceEvent5 | any;
+export type SourceUnion5 = SourceEvent5 | string;
 
 export type Event7 = {
   count?: number | null | undefined;
@@ -928,12 +928,12 @@ export type Event7 = {
   eventId?: string | null | undefined;
   eventTime?: Date | null | undefined;
   firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject5 | any | null | undefined;
+  involvedObject?: InvolvedObject5 | string | null | undefined;
   lastTimestamp?: Date | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent5 | any | null | undefined;
+  source?: SourceEvent5 | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -1030,7 +1030,7 @@ export type CpuDaemonInstance1 = {
   value: number;
 };
 
-export type DaemonInstanceCpuUnion1 = CpuDaemonInstance1 | any;
+export type DaemonInstanceCpuUnion1 = CpuDaemonInstance1 | string;
 
 export const MemoryDaemonInstanceUnit1 = {
   Count: "count",
@@ -1049,13 +1049,13 @@ export type MemoryDaemonInstance1 = {
   value: number;
 };
 
-export type DaemonInstanceMemoryUnion1 = MemoryDaemonInstance1 | any;
+export type DaemonInstanceMemoryUnion1 = MemoryDaemonInstance1 | string;
 
 export type DaemonInstance1 = {
-  cpu?: CpuDaemonInstance1 | any | null | undefined;
+  cpu?: CpuDaemonInstance1 | string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
-  memory?: MemoryDaemonInstance1 | any | null | undefined;
+  memory?: MemoryDaemonInstance1 | string | null | undefined;
   message?: string | null | undefined;
   metricsHealthy?: boolean | null | undefined;
   metricsLastUpdated?: string | null | undefined;
@@ -1081,14 +1081,14 @@ export type InvolvedObject4 = {
   replicaId?: string | null | undefined;
 };
 
-export type InvolvedObjectUnion4 = InvolvedObject4 | any;
+export type InvolvedObjectUnion4 = InvolvedObject4 | string;
 
 export type SourceEvent4 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion4 = SourceEvent4 | any;
+export type SourceUnion4 = SourceEvent4 | string;
 
 export type Event6 = {
   count?: number | null | undefined;
@@ -1096,12 +1096,12 @@ export type Event6 = {
   eventId?: string | null | undefined;
   eventTime?: Date | null | undefined;
   firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject4 | any | null | undefined;
+  involvedObject?: InvolvedObject4 | string | null | undefined;
   lastTimestamp?: Date | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent4 | any | null | undefined;
+  source?: SourceEvent4 | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -1217,7 +1217,7 @@ export type ContainerUnitCpu = {
   value: number;
 };
 
-export type ContainerUnitCpuUnion = ContainerUnitCpu | any;
+export type ContainerUnitCpuUnion = ContainerUnitCpu | string;
 
 export const ContainerUnitKind = {
   Container: "container",
@@ -1243,12 +1243,12 @@ export type ContainerUnitMemory = {
   value: number;
 };
 
-export type ContainerUnitMemoryUnion = ContainerUnitMemory | any;
+export type ContainerUnitMemoryUnion = ContainerUnitMemory | string;
 
 export type ContainerUnit = {
-  cpu?: ContainerUnitCpu | any | null | undefined;
+  cpu?: ContainerUnitCpu | string | null | undefined;
   kind: ContainerUnitKind;
-  memory?: ContainerUnitMemory | any | null | undefined;
+  memory?: ContainerUnitMemory | string | null | undefined;
   name: string;
   phase?: string | null | undefined;
   pid?: number | null | undefined;
@@ -1257,7 +1257,7 @@ export type ContainerUnit = {
   unitId: string;
 };
 
-export type ContainerUnitUnion = ContainerUnit | any;
+export type ContainerUnitUnion = ContainerUnit | string;
 
 export const CpuUnit5 = {
   Count: "count",
@@ -1274,7 +1274,7 @@ export type Cpu5 = {
   value: number;
 };
 
-export type CpuUnion5 = Cpu5 | any;
+export type CpuUnion5 = Cpu5 | string;
 
 /** @internal */
 export const GetResourceDeploymentDetailReason19$inboundSchema: z.ZodEnum<
@@ -1444,7 +1444,7 @@ export function daemonInstanceCpuFromJSON(
 export const DaemonInstanceCpuUnion5$inboundSchema: z.ZodType<
   DaemonInstanceCpuUnion5,
   unknown
-> = z.union([z.lazy(() => DaemonInstanceCpu$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DaemonInstanceCpu$inboundSchema), z.string()]);
 
 export function daemonInstanceCpuUnion5FromJSON(
   jsonString: string,
@@ -1489,7 +1489,7 @@ export function daemonInstanceMemoryFromJSON(
 export const DaemonInstanceMemoryUnion5$inboundSchema: z.ZodType<
   DaemonInstanceMemoryUnion5,
   unknown
-> = z.union([z.lazy(() => DaemonInstanceMemory$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DaemonInstanceMemory$inboundSchema), z.string()]);
 
 export function daemonInstanceMemoryUnion5FromJSON(
   jsonString: string,
@@ -1507,11 +1507,11 @@ export const DaemonInstance5$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   cpu: z.nullable(
-    z.union([z.lazy(() => DaemonInstanceCpu$inboundSchema), z.any()]),
+    z.union([z.lazy(() => DaemonInstanceCpu$inboundSchema), z.string()]),
   ).optional(),
   kind: DaemonInstanceKind$inboundSchema,
   memory: z.nullable(
-    z.union([z.lazy(() => DaemonInstanceMemory$inboundSchema), z.any()]),
+    z.union([z.lazy(() => DaemonInstanceMemory$inboundSchema), z.string()]),
   ).optional(),
   name: z.string(),
   phase: z.nullable(z.string()).optional(),
@@ -1535,7 +1535,7 @@ export function daemonInstance5FromJSON(
 export const DaemonInstanceUnion$inboundSchema: z.ZodType<
   DaemonInstanceUnion,
   unknown
-> = z.union([z.lazy(() => DaemonInstance5$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DaemonInstance5$inboundSchema), z.string()]);
 
 export function daemonInstanceUnionFromJSON(
   jsonString: string,
@@ -1570,7 +1570,7 @@ export function subject3FromJSON(
 
 /** @internal */
 export const SubjectUnion3$inboundSchema: z.ZodType<SubjectUnion3, unknown> = z
-  .union([z.lazy(() => Subject3$inboundSchema), z.any()]);
+  .union([z.lazy(() => Subject3$inboundSchema), z.string()]);
 
 export function subjectUnion3FromJSON(
   jsonString: string,
@@ -1588,8 +1588,9 @@ export const Event11$inboundSchema: z.ZodType<Event11, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   severity: EventSeverity3$inboundSchema,
-  subject: z.nullable(z.union([z.lazy(() => Subject3$inboundSchema), z.any()]))
-    .optional(),
+  subject: z.nullable(
+    z.union([z.lazy(() => Subject3$inboundSchema), z.string()]),
+  ).optional(),
   timestamp: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });
 
@@ -1678,7 +1679,7 @@ export const DataLocal4$inboundSchema: z.ZodType<DataLocal4, unknown> = z
   .object({
     commandSupported: z.boolean(),
     daemonInstance: z.nullable(
-      z.union([z.lazy(() => DaemonInstance5$inboundSchema), z.any()]),
+      z.union([z.lazy(() => DaemonInstance5$inboundSchema), z.string()]),
     ).optional(),
     daemonName: z.string().optional(),
     events: z.array(z.lazy(() => Event11$inboundSchema)),
@@ -1725,7 +1726,7 @@ export function cpu6FromJSON(
 /** @internal */
 export const CpuUnion6$inboundSchema: z.ZodType<CpuUnion6, unknown> = z.union([
   z.lazy(() => Cpu6$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function cpuUnion6FromJSON(
@@ -1766,7 +1767,7 @@ export function involvedObject8FromJSON(
 export const InvolvedObjectUnion8$inboundSchema: z.ZodType<
   InvolvedObjectUnion8,
   unknown
-> = z.union([z.lazy(() => InvolvedObject8$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => InvolvedObject8$inboundSchema), z.string()]);
 
 export function involvedObjectUnion8FromJSON(
   jsonString: string,
@@ -1797,7 +1798,7 @@ export function sourceEvent8FromJSON(
 
 /** @internal */
 export const SourceUnion8$inboundSchema: z.ZodType<SourceUnion8, unknown> = z
-  .union([z.lazy(() => SourceEvent8$inboundSchema), z.any()]);
+  .union([z.lazy(() => SourceEvent8$inboundSchema), z.string()]);
 
 export function sourceUnion8FromJSON(
   jsonString: string,
@@ -1819,7 +1820,7 @@ export const Event10$inboundSchema: z.ZodType<Event10, unknown> = z.object({
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),
   involvedObject: z.nullable(
-    z.union([z.lazy(() => InvolvedObject8$inboundSchema), z.any()]),
+    z.union([z.lazy(() => InvolvedObject8$inboundSchema), z.string()]),
   ).optional(),
   lastTimestamp: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
@@ -1828,7 +1829,7 @@ export const Event10$inboundSchema: z.ZodType<Event10, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([z.lazy(() => SourceEvent8$inboundSchema), z.any()]),
+    z.union([z.lazy(() => SourceEvent8$inboundSchema), z.string()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -1866,7 +1867,7 @@ export function memory6FromJSON(
 
 /** @internal */
 export const MemoryUnion6$inboundSchema: z.ZodType<MemoryUnion6, unknown> = z
-  .union([z.lazy(() => Memory6$inboundSchema), z.any()]);
+  .union([z.lazy(() => Memory6$inboundSchema), z.string()]);
 
 export function memoryUnion6FromJSON(
   jsonString: string,
@@ -1919,7 +1920,7 @@ export function cpuPod3FromJSON(
 
 /** @internal */
 export const PodCpuUnion3$inboundSchema: z.ZodType<PodCpuUnion3, unknown> = z
-  .union([z.lazy(() => CpuPod3$inboundSchema), z.any()]);
+  .union([z.lazy(() => CpuPod3$inboundSchema), z.string()]);
 
 export function podCpuUnion3FromJSON(
   jsonString: string,
@@ -1956,7 +1957,7 @@ export function memoryPod3FromJSON(
 export const PodMemoryUnion3$inboundSchema: z.ZodType<
   PodMemoryUnion3,
   unknown
-> = z.union([z.lazy(() => MemoryPod3$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => MemoryPod3$inboundSchema), z.string()]);
 
 export function podMemoryUnion3FromJSON(
   jsonString: string,
@@ -1992,10 +1993,11 @@ export function ownerReference3FromJSON(
 /** @internal */
 export const Pod3$inboundSchema: z.ZodType<Pod3, unknown> = z.object({
   containers: z.array(z.lazy(() => Container3$inboundSchema)).optional(),
-  cpu: z.nullable(z.union([z.lazy(() => CpuPod3$inboundSchema), z.any()]))
+  cpu: z.nullable(z.union([z.lazy(() => CpuPod3$inboundSchema), z.string()]))
     .optional(),
-  memory: z.nullable(z.union([z.lazy(() => MemoryPod3$inboundSchema), z.any()]))
-    .optional(),
+  memory: z.nullable(
+    z.union([z.lazy(() => MemoryPod3$inboundSchema), z.string()]),
+  ).optional(),
   name: z.string(),
   nodeName: z.nullable(z.string()).optional(),
   ownerReferences: z.array(z.lazy(() => OwnerReference3$inboundSchema)),
@@ -2156,7 +2158,7 @@ export function workload3FromJSON(
 
 /** @internal */
 export const WorkloadUnion3$inboundSchema: z.ZodType<WorkloadUnion3, unknown> =
-  z.union([z.lazy(() => Workload3$inboundSchema), z.any()]);
+  z.union([z.lazy(() => Workload3$inboundSchema), z.string()]);
 
 export function workloadUnion3FromJSON(
   jsonString: string,
@@ -2174,10 +2176,10 @@ export const DataKubernetes3$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   commandSupported: z.boolean(),
-  cpu: z.nullable(z.union([z.lazy(() => Cpu6$inboundSchema), z.any()]))
+  cpu: z.nullable(z.union([z.lazy(() => Cpu6$inboundSchema), z.string()]))
     .optional(),
   events: z.array(z.lazy(() => Event10$inboundSchema)),
-  memory: z.nullable(z.union([z.lazy(() => Memory6$inboundSchema), z.any()]))
+  memory: z.nullable(z.union([z.lazy(() => Memory6$inboundSchema), z.string()]))
     .optional(),
   name: z.string(),
   namespace: z.string(),
@@ -2186,7 +2188,7 @@ export const DataKubernetes3$inboundSchema: z.ZodType<
   restarts: z.nullable(z.int()).optional(),
   status: z.lazy(() => GetResourceDeploymentDetailDataStatus17$inboundSchema),
   workload: z.nullable(
-    z.union([z.lazy(() => Workload3$inboundSchema), z.any()]),
+    z.union([z.lazy(() => Workload3$inboundSchema), z.string()]),
   ).optional(),
   backend: z.literal("kubernetes"),
 });
@@ -2229,7 +2231,7 @@ export function cpuDaemonInstance4FromJSON(
 export const DaemonInstanceCpuUnion4$inboundSchema: z.ZodType<
   DaemonInstanceCpuUnion4,
   unknown
-> = z.union([z.lazy(() => CpuDaemonInstance4$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => CpuDaemonInstance4$inboundSchema), z.string()]);
 
 export function daemonInstanceCpuUnion4FromJSON(
   jsonString: string,
@@ -2269,7 +2271,7 @@ export function memoryDaemonInstance4FromJSON(
 export const DaemonInstanceMemoryUnion4$inboundSchema: z.ZodType<
   DaemonInstanceMemoryUnion4,
   unknown
-> = z.union([z.lazy(() => MemoryDaemonInstance4$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => MemoryDaemonInstance4$inboundSchema), z.string()]);
 
 export function daemonInstanceMemoryUnion4FromJSON(
   jsonString: string,
@@ -2287,12 +2289,12 @@ export const DaemonInstance4$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   cpu: z.nullable(
-    z.union([z.lazy(() => CpuDaemonInstance4$inboundSchema), z.any()]),
+    z.union([z.lazy(() => CpuDaemonInstance4$inboundSchema), z.string()]),
   ).optional(),
   ip: z.nullable(z.string()).optional(),
   machineId: z.nullable(z.string()).optional(),
   memory: z.nullable(
-    z.union([z.lazy(() => MemoryDaemonInstance4$inboundSchema), z.any()]),
+    z.union([z.lazy(() => MemoryDaemonInstance4$inboundSchema), z.string()]),
   ).optional(),
   message: z.nullable(z.string()).optional(),
   metricsHealthy: z.nullable(z.boolean()).optional(),
@@ -2347,7 +2349,7 @@ export function involvedObject7FromJSON(
 export const InvolvedObjectUnion7$inboundSchema: z.ZodType<
   InvolvedObjectUnion7,
   unknown
-> = z.union([z.lazy(() => InvolvedObject7$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => InvolvedObject7$inboundSchema), z.string()]);
 
 export function involvedObjectUnion7FromJSON(
   jsonString: string,
@@ -2378,7 +2380,7 @@ export function sourceEvent7FromJSON(
 
 /** @internal */
 export const SourceUnion7$inboundSchema: z.ZodType<SourceUnion7, unknown> = z
-  .union([z.lazy(() => SourceEvent7$inboundSchema), z.any()]);
+  .union([z.lazy(() => SourceEvent7$inboundSchema), z.string()]);
 
 export function sourceUnion7FromJSON(
   jsonString: string,
@@ -2402,7 +2404,7 @@ export const Event9$inboundSchema: z.ZodType<Event9, unknown> = z.object({
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),
   involvedObject: z.nullable(
-    z.union([z.lazy(() => InvolvedObject7$inboundSchema), z.any()]),
+    z.union([z.lazy(() => InvolvedObject7$inboundSchema), z.string()]),
   ).optional(),
   lastTimestamp: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
@@ -2411,7 +2413,7 @@ export const Event9$inboundSchema: z.ZodType<Event9, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([z.lazy(() => SourceEvent7$inboundSchema), z.any()]),
+    z.union([z.lazy(() => SourceEvent7$inboundSchema), z.string()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -2556,7 +2558,7 @@ export function cpuDaemonInstance3FromJSON(
 export const DaemonInstanceCpuUnion3$inboundSchema: z.ZodType<
   DaemonInstanceCpuUnion3,
   unknown
-> = z.union([z.lazy(() => CpuDaemonInstance3$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => CpuDaemonInstance3$inboundSchema), z.string()]);
 
 export function daemonInstanceCpuUnion3FromJSON(
   jsonString: string,
@@ -2596,7 +2598,7 @@ export function memoryDaemonInstance3FromJSON(
 export const DaemonInstanceMemoryUnion3$inboundSchema: z.ZodType<
   DaemonInstanceMemoryUnion3,
   unknown
-> = z.union([z.lazy(() => MemoryDaemonInstance3$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => MemoryDaemonInstance3$inboundSchema), z.string()]);
 
 export function daemonInstanceMemoryUnion3FromJSON(
   jsonString: string,
@@ -2614,12 +2616,12 @@ export const DaemonInstance3$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   cpu: z.nullable(
-    z.union([z.lazy(() => CpuDaemonInstance3$inboundSchema), z.any()]),
+    z.union([z.lazy(() => CpuDaemonInstance3$inboundSchema), z.string()]),
   ).optional(),
   ip: z.nullable(z.string()).optional(),
   machineId: z.nullable(z.string()).optional(),
   memory: z.nullable(
-    z.union([z.lazy(() => MemoryDaemonInstance3$inboundSchema), z.any()]),
+    z.union([z.lazy(() => MemoryDaemonInstance3$inboundSchema), z.string()]),
   ).optional(),
   message: z.nullable(z.string()).optional(),
   metricsHealthy: z.nullable(z.boolean()).optional(),
@@ -2674,7 +2676,7 @@ export function involvedObject6FromJSON(
 export const InvolvedObjectUnion6$inboundSchema: z.ZodType<
   InvolvedObjectUnion6,
   unknown
-> = z.union([z.lazy(() => InvolvedObject6$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => InvolvedObject6$inboundSchema), z.string()]);
 
 export function involvedObjectUnion6FromJSON(
   jsonString: string,
@@ -2705,7 +2707,7 @@ export function sourceEvent6FromJSON(
 
 /** @internal */
 export const SourceUnion6$inboundSchema: z.ZodType<SourceUnion6, unknown> = z
-  .union([z.lazy(() => SourceEvent6$inboundSchema), z.any()]);
+  .union([z.lazy(() => SourceEvent6$inboundSchema), z.string()]);
 
 export function sourceUnion6FromJSON(
   jsonString: string,
@@ -2729,7 +2731,7 @@ export const Event8$inboundSchema: z.ZodType<Event8, unknown> = z.object({
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),
   involvedObject: z.nullable(
-    z.union([z.lazy(() => InvolvedObject6$inboundSchema), z.any()]),
+    z.union([z.lazy(() => InvolvedObject6$inboundSchema), z.string()]),
   ).optional(),
   lastTimestamp: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
@@ -2738,7 +2740,7 @@ export const Event8$inboundSchema: z.ZodType<Event8, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([z.lazy(() => SourceEvent6$inboundSchema), z.any()]),
+    z.union([z.lazy(() => SourceEvent6$inboundSchema), z.string()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -2883,7 +2885,7 @@ export function cpuDaemonInstance2FromJSON(
 export const DaemonInstanceCpuUnion2$inboundSchema: z.ZodType<
   DaemonInstanceCpuUnion2,
   unknown
-> = z.union([z.lazy(() => CpuDaemonInstance2$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => CpuDaemonInstance2$inboundSchema), z.string()]);
 
 export function daemonInstanceCpuUnion2FromJSON(
   jsonString: string,
@@ -2923,7 +2925,7 @@ export function memoryDaemonInstance2FromJSON(
 export const DaemonInstanceMemoryUnion2$inboundSchema: z.ZodType<
   DaemonInstanceMemoryUnion2,
   unknown
-> = z.union([z.lazy(() => MemoryDaemonInstance2$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => MemoryDaemonInstance2$inboundSchema), z.string()]);
 
 export function daemonInstanceMemoryUnion2FromJSON(
   jsonString: string,
@@ -2941,12 +2943,12 @@ export const DaemonInstance2$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   cpu: z.nullable(
-    z.union([z.lazy(() => CpuDaemonInstance2$inboundSchema), z.any()]),
+    z.union([z.lazy(() => CpuDaemonInstance2$inboundSchema), z.string()]),
   ).optional(),
   ip: z.nullable(z.string()).optional(),
   machineId: z.nullable(z.string()).optional(),
   memory: z.nullable(
-    z.union([z.lazy(() => MemoryDaemonInstance2$inboundSchema), z.any()]),
+    z.union([z.lazy(() => MemoryDaemonInstance2$inboundSchema), z.string()]),
   ).optional(),
   message: z.nullable(z.string()).optional(),
   metricsHealthy: z.nullable(z.boolean()).optional(),
@@ -3001,7 +3003,7 @@ export function involvedObject5FromJSON(
 export const InvolvedObjectUnion5$inboundSchema: z.ZodType<
   InvolvedObjectUnion5,
   unknown
-> = z.union([z.lazy(() => InvolvedObject5$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => InvolvedObject5$inboundSchema), z.string()]);
 
 export function involvedObjectUnion5FromJSON(
   jsonString: string,
@@ -3032,7 +3034,7 @@ export function sourceEvent5FromJSON(
 
 /** @internal */
 export const SourceUnion5$inboundSchema: z.ZodType<SourceUnion5, unknown> = z
-  .union([z.lazy(() => SourceEvent5$inboundSchema), z.any()]);
+  .union([z.lazy(() => SourceEvent5$inboundSchema), z.string()]);
 
 export function sourceUnion5FromJSON(
   jsonString: string,
@@ -3056,7 +3058,7 @@ export const Event7$inboundSchema: z.ZodType<Event7, unknown> = z.object({
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),
   involvedObject: z.nullable(
-    z.union([z.lazy(() => InvolvedObject5$inboundSchema), z.any()]),
+    z.union([z.lazy(() => InvolvedObject5$inboundSchema), z.string()]),
   ).optional(),
   lastTimestamp: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
@@ -3065,7 +3067,7 @@ export const Event7$inboundSchema: z.ZodType<Event7, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([z.lazy(() => SourceEvent5$inboundSchema), z.any()]),
+    z.union([z.lazy(() => SourceEvent5$inboundSchema), z.string()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -3209,7 +3211,7 @@ export function cpuDaemonInstance1FromJSON(
 export const DaemonInstanceCpuUnion1$inboundSchema: z.ZodType<
   DaemonInstanceCpuUnion1,
   unknown
-> = z.union([z.lazy(() => CpuDaemonInstance1$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => CpuDaemonInstance1$inboundSchema), z.string()]);
 
 export function daemonInstanceCpuUnion1FromJSON(
   jsonString: string,
@@ -3249,7 +3251,7 @@ export function memoryDaemonInstance1FromJSON(
 export const DaemonInstanceMemoryUnion1$inboundSchema: z.ZodType<
   DaemonInstanceMemoryUnion1,
   unknown
-> = z.union([z.lazy(() => MemoryDaemonInstance1$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => MemoryDaemonInstance1$inboundSchema), z.string()]);
 
 export function daemonInstanceMemoryUnion1FromJSON(
   jsonString: string,
@@ -3267,12 +3269,12 @@ export const DaemonInstance1$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   cpu: z.nullable(
-    z.union([z.lazy(() => CpuDaemonInstance1$inboundSchema), z.any()]),
+    z.union([z.lazy(() => CpuDaemonInstance1$inboundSchema), z.string()]),
   ).optional(),
   ip: z.nullable(z.string()).optional(),
   machineId: z.nullable(z.string()).optional(),
   memory: z.nullable(
-    z.union([z.lazy(() => MemoryDaemonInstance1$inboundSchema), z.any()]),
+    z.union([z.lazy(() => MemoryDaemonInstance1$inboundSchema), z.string()]),
   ).optional(),
   message: z.nullable(z.string()).optional(),
   metricsHealthy: z.nullable(z.boolean()).optional(),
@@ -3327,7 +3329,7 @@ export function involvedObject4FromJSON(
 export const InvolvedObjectUnion4$inboundSchema: z.ZodType<
   InvolvedObjectUnion4,
   unknown
-> = z.union([z.lazy(() => InvolvedObject4$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => InvolvedObject4$inboundSchema), z.string()]);
 
 export function involvedObjectUnion4FromJSON(
   jsonString: string,
@@ -3358,7 +3360,7 @@ export function sourceEvent4FromJSON(
 
 /** @internal */
 export const SourceUnion4$inboundSchema: z.ZodType<SourceUnion4, unknown> = z
-  .union([z.lazy(() => SourceEvent4$inboundSchema), z.any()]);
+  .union([z.lazy(() => SourceEvent4$inboundSchema), z.string()]);
 
 export function sourceUnion4FromJSON(
   jsonString: string,
@@ -3382,7 +3384,7 @@ export const Event6$inboundSchema: z.ZodType<Event6, unknown> = z.object({
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),
   involvedObject: z.nullable(
-    z.union([z.lazy(() => InvolvedObject4$inboundSchema), z.any()]),
+    z.union([z.lazy(() => InvolvedObject4$inboundSchema), z.string()]),
   ).optional(),
   lastTimestamp: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
@@ -3391,7 +3393,7 @@ export const Event6$inboundSchema: z.ZodType<Event6, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([z.lazy(() => SourceEvent4$inboundSchema), z.any()]),
+    z.union([z.lazy(() => SourceEvent4$inboundSchema), z.string()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -3581,7 +3583,7 @@ export function containerUnitCpuFromJSON(
 export const ContainerUnitCpuUnion$inboundSchema: z.ZodType<
   ContainerUnitCpuUnion,
   unknown
-> = z.union([z.lazy(() => ContainerUnitCpu$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => ContainerUnitCpu$inboundSchema), z.string()]);
 
 export function containerUnitCpuUnionFromJSON(
   jsonString: string,
@@ -3626,7 +3628,7 @@ export function containerUnitMemoryFromJSON(
 export const ContainerUnitMemoryUnion$inboundSchema: z.ZodType<
   ContainerUnitMemoryUnion,
   unknown
-> = z.union([z.lazy(() => ContainerUnitMemory$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => ContainerUnitMemory$inboundSchema), z.string()]);
 
 export function containerUnitMemoryUnionFromJSON(
   jsonString: string,
@@ -3642,11 +3644,11 @@ export function containerUnitMemoryUnionFromJSON(
 export const ContainerUnit$inboundSchema: z.ZodType<ContainerUnit, unknown> = z
   .object({
     cpu: z.nullable(
-      z.union([z.lazy(() => ContainerUnitCpu$inboundSchema), z.any()]),
+      z.union([z.lazy(() => ContainerUnitCpu$inboundSchema), z.string()]),
     ).optional(),
     kind: ContainerUnitKind$inboundSchema,
     memory: z.nullable(
-      z.union([z.lazy(() => ContainerUnitMemory$inboundSchema), z.any()]),
+      z.union([z.lazy(() => ContainerUnitMemory$inboundSchema), z.string()]),
     ).optional(),
     name: z.string(),
     phase: z.nullable(z.string()).optional(),
@@ -3670,7 +3672,7 @@ export function containerUnitFromJSON(
 export const ContainerUnitUnion$inboundSchema: z.ZodType<
   ContainerUnitUnion,
   unknown
-> = z.union([z.lazy(() => ContainerUnit$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => ContainerUnit$inboundSchema), z.string()]);
 
 export function containerUnitUnionFromJSON(
   jsonString: string,
@@ -3706,7 +3708,7 @@ export function cpu5FromJSON(
 /** @internal */
 export const CpuUnion5$inboundSchema: z.ZodType<CpuUnion5, unknown> = z.union([
   z.lazy(() => Cpu5$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function cpuUnion5FromJSON(

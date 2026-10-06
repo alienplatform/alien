@@ -41,7 +41,7 @@ import {
   SyncReconcileRequestLifecycle19$outboundSchema,
 } from "./syncreconcilerequestlifecycle19.js";
 
-export type SyncReconcileRequestStatus19 = {
+export type ResourceHeartbeatStatus19 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue19>;
   health: SyncReconcileRequestHealth19;
   lifecycle: SyncReconcileRequestLifecycle19;
@@ -59,7 +59,7 @@ export type DataAws2 = {
   nodes: Nodes1;
   providerFleets: Array<ProviderFleet1>;
   region?: string | null | undefined;
-  status: SyncReconcileRequestStatus19;
+  status: ResourceHeartbeatStatus19;
   backend: "aws";
 };
 
@@ -90,7 +90,7 @@ export type DaemonInstanceCpu = {
   value: number;
 };
 
-export type DaemonInstanceCpuUnion5 = DaemonInstanceCpu | any;
+export type DaemonInstanceCpuUnion5 = DaemonInstanceCpu | string;
 
 export const DaemonInstanceKind = {
   Container: "container",
@@ -116,12 +116,12 @@ export type DaemonInstanceMemory = {
   value: number;
 };
 
-export type DaemonInstanceMemoryUnion5 = DaemonInstanceMemory | any;
+export type DaemonInstanceMemoryUnion5 = DaemonInstanceMemory | string;
 
 export type DaemonInstance5 = {
-  cpu?: DaemonInstanceCpu | any | null | undefined;
+  cpu?: DaemonInstanceCpu | string | null | undefined;
   kind: DaemonInstanceKind;
-  memory?: DaemonInstanceMemory | any | null | undefined;
+  memory?: DaemonInstanceMemory | string | null | undefined;
   name: string;
   phase?: string | null | undefined;
   pid?: number | null | undefined;
@@ -130,7 +130,7 @@ export type DaemonInstance5 = {
   unitId: string;
 };
 
-export type DaemonInstanceUnion = DaemonInstance5 | any;
+export type DaemonInstanceUnion = DaemonInstance5 | string;
 
 export const EventSeverity3 = {
   Info: "info",
@@ -147,14 +147,14 @@ export type SyncReconcileRequestSubject3 = {
 
 export type SyncReconcileRequestSubjectUnion3 =
   | SyncReconcileRequestSubject3
-  | any;
+  | string;
 
 export type SyncReconcileRequestEvent11 = {
   kind: string;
   message: string;
   raw?: any | null | undefined;
   severity: EventSeverity3;
-  subject?: SyncReconcileRequestSubject3 | any | null | undefined;
+  subject?: SyncReconcileRequestSubject3 | string | null | undefined;
   timestamp: Date;
 };
 
@@ -209,7 +209,7 @@ export type SyncReconcileRequestLifecycle18 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle18
 >;
 
-export type SyncReconcileRequestStatus18 = {
+export type ResourceHeartbeatStatus18 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue18>;
   health: SyncReconcileRequestHealth18;
   lifecycle: SyncReconcileRequestLifecycle18;
@@ -220,7 +220,7 @@ export type SyncReconcileRequestStatus18 = {
 
 export type DataLocal4 = {
   commandSupported: boolean;
-  daemonInstance?: DaemonInstance5 | any | null | undefined;
+  daemonInstance?: DaemonInstance5 | string | null | undefined;
   daemonName?: string | undefined;
   events: Array<SyncReconcileRequestEvent11>;
   exitReason?: string | null | undefined;
@@ -228,7 +228,7 @@ export type DataLocal4 = {
   pid?: number | null | undefined;
   restartCount?: number | null | undefined;
   runtimeId: string;
-  status: SyncReconcileRequestStatus18;
+  status: ResourceHeartbeatStatus18;
   backend: "local";
 };
 
@@ -247,7 +247,7 @@ export type SyncReconcileRequestCpu6 = {
   value: number;
 };
 
-export type CpuUnion6 = SyncReconcileRequestCpu6 | any;
+export type CpuUnion6 = SyncReconcileRequestCpu6 | string;
 
 export type InvolvedObject8 = {
   apiVersion?: string | null | undefined;
@@ -259,25 +259,25 @@ export type InvolvedObject8 = {
   uid?: string | null | undefined;
 };
 
-export type InvolvedObjectUnion8 = InvolvedObject8 | any;
+export type InvolvedObjectUnion8 = InvolvedObject8 | string;
 
 export type SourceEvent8 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type EventSourceUnion8 = SourceEvent8 | any;
+export type EventSourceUnion8 = SourceEvent8 | string;
 
 export type SyncReconcileRequestEvent10 = {
   count?: number | null | undefined;
   eventTime?: Date | null | undefined;
   firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject8 | any | null | undefined;
+  involvedObject?: InvolvedObject8 | string | null | undefined;
   lastTimestamp?: Date | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent8 | any | null | undefined;
+  source?: SourceEvent8 | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -296,7 +296,7 @@ export type SyncReconcileRequestMemory6 = {
   value: number;
 };
 
-export type MemoryUnion6 = SyncReconcileRequestMemory6 | any;
+export type MemoryUnion6 = SyncReconcileRequestMemory6 | string;
 
 /**
  * Image a running container reports.
@@ -334,7 +334,7 @@ export type CpuPod3 = {
   value: number;
 };
 
-export type PodCpuUnion3 = CpuPod3 | any;
+export type PodCpuUnion3 = CpuPod3 | string;
 
 export const MemoryPodUnit3 = {
   Count: "count",
@@ -351,7 +351,7 @@ export type MemoryPod3 = {
   value: number;
 };
 
-export type PodMemoryUnion3 = MemoryPod3 | any;
+export type PodMemoryUnion3 = MemoryPod3 | string;
 
 export type OwnerReference3 = {
   controller: boolean;
@@ -362,8 +362,8 @@ export type OwnerReference3 = {
 
 export type Pod3 = {
   containers?: Array<Container3> | undefined;
-  cpu?: CpuPod3 | any | null | undefined;
-  memory?: MemoryPod3 | any | null | undefined;
+  cpu?: CpuPod3 | string | null | undefined;
+  memory?: MemoryPod3 | string | null | undefined;
   name: string;
   nodeName?: string | null | undefined;
   ownerReferences: Array<OwnerReference3>;
@@ -436,7 +436,7 @@ export type SyncReconcileRequestLifecycle17 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle17
 >;
 
-export type SyncReconcileRequestStatus17 = {
+export type ResourceHeartbeatStatus17 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue17>;
   health: SyncReconcileRequestHealth17;
   lifecycle: SyncReconcileRequestLifecycle17;
@@ -464,20 +464,20 @@ export type Workload3 = {
   updatedReplicas?: number | null | undefined;
 };
 
-export type WorkloadUnion3 = Workload3 | any;
+export type WorkloadUnion3 = Workload3 | string;
 
 export type DataKubernetes3 = {
   commandSupported: boolean;
-  cpu?: SyncReconcileRequestCpu6 | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu6 | string | null | undefined;
   events: Array<SyncReconcileRequestEvent10>;
-  memory?: SyncReconcileRequestMemory6 | any | null | undefined;
+  memory?: SyncReconcileRequestMemory6 | string | null | undefined;
   name: string;
   namespace: string;
   pods: Array<Pod3>;
   replicas: Replicas4;
   restarts?: number | null | undefined;
-  status: SyncReconcileRequestStatus17;
-  workload?: Workload3 | any | null | undefined;
+  status: ResourceHeartbeatStatus17;
+  workload?: Workload3 | string | null | undefined;
   backend: "kubernetes";
 };
 
@@ -496,7 +496,7 @@ export type CpuDaemonInstance4 = {
   value: number;
 };
 
-export type DaemonInstanceCpuUnion4 = CpuDaemonInstance4 | any;
+export type DaemonInstanceCpuUnion4 = CpuDaemonInstance4 | string;
 
 export const MemoryDaemonInstanceUnit4 = {
   Count: "count",
@@ -515,13 +515,13 @@ export type MemoryDaemonInstance4 = {
   value: number;
 };
 
-export type DaemonInstanceMemoryUnion4 = MemoryDaemonInstance4 | any;
+export type DaemonInstanceMemoryUnion4 = MemoryDaemonInstance4 | string;
 
 export type DaemonInstance4 = {
-  cpu?: CpuDaemonInstance4 | any | null | undefined;
+  cpu?: CpuDaemonInstance4 | string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
-  memory?: MemoryDaemonInstance4 | any | null | undefined;
+  memory?: MemoryDaemonInstance4 | string | null | undefined;
   message?: string | null | undefined;
   metricsHealthy?: boolean | null | undefined;
   metricsLastUpdated?: string | null | undefined;
@@ -547,14 +547,14 @@ export type InvolvedObject7 = {
   replicaId?: string | null | undefined;
 };
 
-export type InvolvedObjectUnion7 = InvolvedObject7 | any;
+export type InvolvedObjectUnion7 = InvolvedObject7 | string;
 
 export type SourceEvent7 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type EventSourceUnion7 = SourceEvent7 | any;
+export type EventSourceUnion7 = SourceEvent7 | string;
 
 export type SyncReconcileRequestEvent9 = {
   count?: number | null | undefined;
@@ -562,12 +562,12 @@ export type SyncReconcileRequestEvent9 = {
   eventId?: string | null | undefined;
   eventTime?: Date | null | undefined;
   firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject7 | any | null | undefined;
+  involvedObject?: InvolvedObject7 | string | null | undefined;
   lastTimestamp?: Date | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent7 | any | null | undefined;
+  source?: SourceEvent7 | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -622,7 +622,7 @@ export type SyncReconcileRequestLifecycle16 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle16
 >;
 
-export type SyncReconcileRequestStatus16 = {
+export type ResourceHeartbeatStatus16 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue16>;
   health: SyncReconcileRequestHealth16;
   lifecycle: SyncReconcileRequestLifecycle16;
@@ -646,7 +646,7 @@ export type DataMachines1 = {
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
   observedImage?: string | null | undefined;
-  status: SyncReconcileRequestStatus16;
+  status: ResourceHeartbeatStatus16;
   unavailableInstances: number;
   backend: "machines";
 };
@@ -666,7 +666,7 @@ export type CpuDaemonInstance3 = {
   value: number;
 };
 
-export type DaemonInstanceCpuUnion3 = CpuDaemonInstance3 | any;
+export type DaemonInstanceCpuUnion3 = CpuDaemonInstance3 | string;
 
 export const MemoryDaemonInstanceUnit3 = {
   Count: "count",
@@ -685,13 +685,13 @@ export type MemoryDaemonInstance3 = {
   value: number;
 };
 
-export type DaemonInstanceMemoryUnion3 = MemoryDaemonInstance3 | any;
+export type DaemonInstanceMemoryUnion3 = MemoryDaemonInstance3 | string;
 
 export type DaemonInstance3 = {
-  cpu?: CpuDaemonInstance3 | any | null | undefined;
+  cpu?: CpuDaemonInstance3 | string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
-  memory?: MemoryDaemonInstance3 | any | null | undefined;
+  memory?: MemoryDaemonInstance3 | string | null | undefined;
   message?: string | null | undefined;
   metricsHealthy?: boolean | null | undefined;
   metricsLastUpdated?: string | null | undefined;
@@ -717,14 +717,14 @@ export type InvolvedObject6 = {
   replicaId?: string | null | undefined;
 };
 
-export type InvolvedObjectUnion6 = InvolvedObject6 | any;
+export type InvolvedObjectUnion6 = InvolvedObject6 | string;
 
 export type SourceEvent6 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type EventSourceUnion6 = SourceEvent6 | any;
+export type EventSourceUnion6 = SourceEvent6 | string;
 
 export type SyncReconcileRequestEvent8 = {
   count?: number | null | undefined;
@@ -732,12 +732,12 @@ export type SyncReconcileRequestEvent8 = {
   eventId?: string | null | undefined;
   eventTime?: Date | null | undefined;
   firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject6 | any | null | undefined;
+  involvedObject?: InvolvedObject6 | string | null | undefined;
   lastTimestamp?: Date | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent6 | any | null | undefined;
+  source?: SourceEvent6 | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -792,7 +792,7 @@ export type SyncReconcileRequestLifecycle15 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle15
 >;
 
-export type SyncReconcileRequestStatus15 = {
+export type ResourceHeartbeatStatus15 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue15>;
   health: SyncReconcileRequestHealth15;
   lifecycle: SyncReconcileRequestLifecycle15;
@@ -816,7 +816,7 @@ export type DataAzure1 = {
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
   observedImage?: string | null | undefined;
-  status: SyncReconcileRequestStatus15;
+  status: ResourceHeartbeatStatus15;
   unavailableInstances: number;
   backend: "azure";
 };
@@ -836,7 +836,7 @@ export type CpuDaemonInstance2 = {
   value: number;
 };
 
-export type DaemonInstanceCpuUnion2 = CpuDaemonInstance2 | any;
+export type DaemonInstanceCpuUnion2 = CpuDaemonInstance2 | string;
 
 export const MemoryDaemonInstanceUnit2 = {
   Count: "count",
@@ -855,13 +855,13 @@ export type MemoryDaemonInstance2 = {
   value: number;
 };
 
-export type DaemonInstanceMemoryUnion2 = MemoryDaemonInstance2 | any;
+export type DaemonInstanceMemoryUnion2 = MemoryDaemonInstance2 | string;
 
 export type DaemonInstance2 = {
-  cpu?: CpuDaemonInstance2 | any | null | undefined;
+  cpu?: CpuDaemonInstance2 | string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
-  memory?: MemoryDaemonInstance2 | any | null | undefined;
+  memory?: MemoryDaemonInstance2 | string | null | undefined;
   message?: string | null | undefined;
   metricsHealthy?: boolean | null | undefined;
   metricsLastUpdated?: string | null | undefined;
@@ -887,14 +887,14 @@ export type InvolvedObject5 = {
   replicaId?: string | null | undefined;
 };
 
-export type InvolvedObjectUnion5 = InvolvedObject5 | any;
+export type InvolvedObjectUnion5 = InvolvedObject5 | string;
 
 export type SourceEvent5 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type EventSourceUnion5 = SourceEvent5 | any;
+export type EventSourceUnion5 = SourceEvent5 | string;
 
 export type SyncReconcileRequestEvent7 = {
   count?: number | null | undefined;
@@ -902,12 +902,12 @@ export type SyncReconcileRequestEvent7 = {
   eventId?: string | null | undefined;
   eventTime?: Date | null | undefined;
   firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject5 | any | null | undefined;
+  involvedObject?: InvolvedObject5 | string | null | undefined;
   lastTimestamp?: Date | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent5 | any | null | undefined;
+  source?: SourceEvent5 | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -962,7 +962,7 @@ export type SyncReconcileRequestLifecycle14 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle14
 >;
 
-export type SyncReconcileRequestStatus14 = {
+export type ResourceHeartbeatStatus14 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue14>;
   health: SyncReconcileRequestHealth14;
   lifecycle: SyncReconcileRequestLifecycle14;
@@ -986,7 +986,7 @@ export type DataGcp1 = {
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
   observedImage?: string | null | undefined;
-  status: SyncReconcileRequestStatus14;
+  status: ResourceHeartbeatStatus14;
   unavailableInstances: number;
   backend: "gcp";
 };
@@ -1006,7 +1006,7 @@ export type CpuDaemonInstance1 = {
   value: number;
 };
 
-export type DaemonInstanceCpuUnion1 = CpuDaemonInstance1 | any;
+export type DaemonInstanceCpuUnion1 = CpuDaemonInstance1 | string;
 
 export const MemoryDaemonInstanceUnit1 = {
   Count: "count",
@@ -1025,13 +1025,13 @@ export type MemoryDaemonInstance1 = {
   value: number;
 };
 
-export type DaemonInstanceMemoryUnion1 = MemoryDaemonInstance1 | any;
+export type DaemonInstanceMemoryUnion1 = MemoryDaemonInstance1 | string;
 
 export type DaemonInstance1 = {
-  cpu?: CpuDaemonInstance1 | any | null | undefined;
+  cpu?: CpuDaemonInstance1 | string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
-  memory?: MemoryDaemonInstance1 | any | null | undefined;
+  memory?: MemoryDaemonInstance1 | string | null | undefined;
   message?: string | null | undefined;
   metricsHealthy?: boolean | null | undefined;
   metricsLastUpdated?: string | null | undefined;
@@ -1057,14 +1057,14 @@ export type InvolvedObject4 = {
   replicaId?: string | null | undefined;
 };
 
-export type InvolvedObjectUnion4 = InvolvedObject4 | any;
+export type InvolvedObjectUnion4 = InvolvedObject4 | string;
 
 export type SourceEvent4 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type EventSourceUnion4 = SourceEvent4 | any;
+export type EventSourceUnion4 = SourceEvent4 | string;
 
 export type SyncReconcileRequestEvent6 = {
   count?: number | null | undefined;
@@ -1072,12 +1072,12 @@ export type SyncReconcileRequestEvent6 = {
   eventId?: string | null | undefined;
   eventTime?: Date | null | undefined;
   firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject4 | any | null | undefined;
+  involvedObject?: InvolvedObject4 | string | null | undefined;
   lastTimestamp?: Date | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent4 | any | null | undefined;
+  source?: SourceEvent4 | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -1132,7 +1132,7 @@ export type SyncReconcileRequestLifecycle13 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle13
 >;
 
-export type SyncReconcileRequestStatus13 = {
+export type ResourceHeartbeatStatus13 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue13>;
   health: SyncReconcileRequestHealth13;
   lifecycle: SyncReconcileRequestLifecycle13;
@@ -1156,7 +1156,7 @@ export type DataAws1 = {
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
   observedImage?: string | null | undefined;
-  status: SyncReconcileRequestStatus13;
+  status: ResourceHeartbeatStatus13;
   unavailableInstances: number;
   backend: "aws";
 };
@@ -1195,7 +1195,7 @@ export type ContainerUnitCpu = {
   value: number;
 };
 
-export type ContainerUnitCpuUnion = ContainerUnitCpu | any;
+export type ContainerUnitCpuUnion = ContainerUnitCpu | string;
 
 export const ContainerUnitKind = {
   Container: "container",
@@ -1221,12 +1221,12 @@ export type ContainerUnitMemory = {
   value: number;
 };
 
-export type ContainerUnitMemoryUnion = ContainerUnitMemory | any;
+export type ContainerUnitMemoryUnion = ContainerUnitMemory | string;
 
 export type ContainerUnit = {
-  cpu?: ContainerUnitCpu | any | null | undefined;
+  cpu?: ContainerUnitCpu | string | null | undefined;
   kind: ContainerUnitKind;
-  memory?: ContainerUnitMemory | any | null | undefined;
+  memory?: ContainerUnitMemory | string | null | undefined;
   name: string;
   phase?: string | null | undefined;
   pid?: number | null | undefined;
@@ -1235,7 +1235,7 @@ export type ContainerUnit = {
   unitId: string;
 };
 
-export type ContainerUnitUnion = ContainerUnit | any;
+export type ContainerUnitUnion = ContainerUnit | string;
 
 export const CpuUnit5 = {
   Count: "count",
@@ -1252,7 +1252,7 @@ export type SyncReconcileRequestCpu5 = {
   value: number;
 };
 
-export type CpuUnion5 = SyncReconcileRequestCpu5 | any;
+export type CpuUnion5 = SyncReconcileRequestCpu5 | string;
 
 export const EventSeverity2 = {
   Info: "info",
@@ -1269,14 +1269,14 @@ export type SyncReconcileRequestSubject2 = {
 
 export type SyncReconcileRequestSubjectUnion2 =
   | SyncReconcileRequestSubject2
-  | any;
+  | string;
 
 export type SyncReconcileRequestEvent5 = {
   kind: string;
   message: string;
   raw?: any | null | undefined;
   severity: EventSeverity2;
-  subject?: SyncReconcileRequestSubject2 | any | null | undefined;
+  subject?: SyncReconcileRequestSubject2 | string | null | undefined;
   timestamp: Date;
 };
 
@@ -1291,7 +1291,7 @@ export const MemoryUnit5 = {
 export type MemoryUnit5 = ClosedEnum<typeof MemoryUnit5>;
 
 /** @internal */
-export type SyncReconcileRequestStatus19$Outbound = {
+export type ResourceHeartbeatStatus19$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue19$Outbound>;
   health: string;
   lifecycle: string;
@@ -1301,9 +1301,9 @@ export type SyncReconcileRequestStatus19$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus19$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus19$Outbound,
-  SyncReconcileRequestStatus19
+export const ResourceHeartbeatStatus19$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus19$Outbound,
+  ResourceHeartbeatStatus19
 > = z.object({
   collectionIssues: z.array(
     SyncReconcileRequestCollectionIssue19$outboundSchema,
@@ -1315,13 +1315,11 @@ export const SyncReconcileRequestStatus19$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus19ToJSON(
-  syncReconcileRequestStatus19: SyncReconcileRequestStatus19,
+export function resourceHeartbeatStatus19ToJSON(
+  resourceHeartbeatStatus19: ResourceHeartbeatStatus19,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus19$outboundSchema.parse(
-      syncReconcileRequestStatus19,
-    ),
+    ResourceHeartbeatStatus19$outboundSchema.parse(resourceHeartbeatStatus19),
   );
 }
 
@@ -1335,7 +1333,7 @@ export type DataAws2$Outbound = {
   nodes: Nodes1$Outbound;
   providerFleets: Array<ProviderFleet1$Outbound>;
   region?: string | null | undefined;
-  status: SyncReconcileRequestStatus19$Outbound;
+  status: ResourceHeartbeatStatus19$Outbound;
   backend: "aws";
 };
 
@@ -1350,7 +1348,7 @@ export const DataAws2$outboundSchema: z.ZodType<DataAws2$Outbound, DataAws2> = z
     nodes: Nodes1$outboundSchema,
     providerFleets: z.array(ProviderFleet1$outboundSchema),
     region: z.nullable(z.string()).optional(),
-    status: z.lazy(() => SyncReconcileRequestStatus19$outboundSchema),
+    status: z.lazy(() => ResourceHeartbeatStatus19$outboundSchema),
     backend: z.literal("aws"),
   });
 
@@ -1451,13 +1449,15 @@ export function daemonInstanceCpuToJSON(
 }
 
 /** @internal */
-export type DaemonInstanceCpuUnion5$Outbound = DaemonInstanceCpu$Outbound | any;
+export type DaemonInstanceCpuUnion5$Outbound =
+  | DaemonInstanceCpu$Outbound
+  | string;
 
 /** @internal */
 export const DaemonInstanceCpuUnion5$outboundSchema: z.ZodType<
   DaemonInstanceCpuUnion5$Outbound,
   DaemonInstanceCpuUnion5
-> = z.union([z.lazy(() => DaemonInstanceCpu$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => DaemonInstanceCpu$outboundSchema), z.string()]);
 
 export function daemonInstanceCpuUnion5ToJSON(
   daemonInstanceCpuUnion5: DaemonInstanceCpuUnion5,
@@ -1503,13 +1503,13 @@ export function daemonInstanceMemoryToJSON(
 /** @internal */
 export type DaemonInstanceMemoryUnion5$Outbound =
   | DaemonInstanceMemory$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DaemonInstanceMemoryUnion5$outboundSchema: z.ZodType<
   DaemonInstanceMemoryUnion5$Outbound,
   DaemonInstanceMemoryUnion5
-> = z.union([z.lazy(() => DaemonInstanceMemory$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => DaemonInstanceMemory$outboundSchema), z.string()]);
 
 export function daemonInstanceMemoryUnion5ToJSON(
   daemonInstanceMemoryUnion5: DaemonInstanceMemoryUnion5,
@@ -1521,9 +1521,9 @@ export function daemonInstanceMemoryUnion5ToJSON(
 
 /** @internal */
 export type DaemonInstance5$Outbound = {
-  cpu?: DaemonInstanceCpu$Outbound | any | null | undefined;
+  cpu?: DaemonInstanceCpu$Outbound | string | null | undefined;
   kind: string;
-  memory?: DaemonInstanceMemory$Outbound | any | null | undefined;
+  memory?: DaemonInstanceMemory$Outbound | string | null | undefined;
   name: string;
   phase?: string | null | undefined;
   pid?: number | null | undefined;
@@ -1538,11 +1538,11 @@ export const DaemonInstance5$outboundSchema: z.ZodType<
   DaemonInstance5
 > = z.object({
   cpu: z.nullable(
-    z.union([z.lazy(() => DaemonInstanceCpu$outboundSchema), z.any()]),
+    z.union([z.lazy(() => DaemonInstanceCpu$outboundSchema), z.string()]),
   ).optional(),
   kind: DaemonInstanceKind$outboundSchema,
   memory: z.nullable(
-    z.union([z.lazy(() => DaemonInstanceMemory$outboundSchema), z.any()]),
+    z.union([z.lazy(() => DaemonInstanceMemory$outboundSchema), z.string()]),
   ).optional(),
   name: z.string(),
   phase: z.nullable(z.string()).optional(),
@@ -1559,13 +1559,13 @@ export function daemonInstance5ToJSON(
 }
 
 /** @internal */
-export type DaemonInstanceUnion$Outbound = DaemonInstance5$Outbound | any;
+export type DaemonInstanceUnion$Outbound = DaemonInstance5$Outbound | string;
 
 /** @internal */
 export const DaemonInstanceUnion$outboundSchema: z.ZodType<
   DaemonInstanceUnion$Outbound,
   DaemonInstanceUnion
-> = z.union([z.lazy(() => DaemonInstance5$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => DaemonInstance5$outboundSchema), z.string()]);
 
 export function daemonInstanceUnionToJSON(
   daemonInstanceUnion: DaemonInstanceUnion,
@@ -1609,7 +1609,7 @@ export function syncReconcileRequestSubject3ToJSON(
 /** @internal */
 export type SyncReconcileRequestSubjectUnion3$Outbound =
   | SyncReconcileRequestSubject3$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const SyncReconcileRequestSubjectUnion3$outboundSchema: z.ZodType<
@@ -1617,7 +1617,7 @@ export const SyncReconcileRequestSubjectUnion3$outboundSchema: z.ZodType<
   SyncReconcileRequestSubjectUnion3
 > = z.union([
   z.lazy(() => SyncReconcileRequestSubject3$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function syncReconcileRequestSubjectUnion3ToJSON(
@@ -1636,7 +1636,7 @@ export type SyncReconcileRequestEvent11$Outbound = {
   message: string;
   raw?: any | null | undefined;
   severity: string;
-  subject?: SyncReconcileRequestSubject3$Outbound | any | null | undefined;
+  subject?: SyncReconcileRequestSubject3$Outbound | string | null | undefined;
   timestamp: string;
 };
 
@@ -1652,7 +1652,7 @@ export const SyncReconcileRequestEvent11$outboundSchema: z.ZodType<
   subject: z.nullable(
     z.union([
       z.lazy(() => SyncReconcileRequestSubject3$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   timestamp: z.date().transform(v => v.toISOString()),
@@ -1718,7 +1718,7 @@ export const SyncReconcileRequestLifecycle18$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle18);
 
 /** @internal */
-export type SyncReconcileRequestStatus18$Outbound = {
+export type ResourceHeartbeatStatus18$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue18$Outbound>;
   health: string;
   lifecycle: string;
@@ -1728,9 +1728,9 @@ export type SyncReconcileRequestStatus18$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus18$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus18$Outbound,
-  SyncReconcileRequestStatus18
+export const ResourceHeartbeatStatus18$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus18$Outbound,
+  ResourceHeartbeatStatus18
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue18$outboundSchema),
@@ -1742,20 +1742,18 @@ export const SyncReconcileRequestStatus18$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus18ToJSON(
-  syncReconcileRequestStatus18: SyncReconcileRequestStatus18,
+export function resourceHeartbeatStatus18ToJSON(
+  resourceHeartbeatStatus18: ResourceHeartbeatStatus18,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus18$outboundSchema.parse(
-      syncReconcileRequestStatus18,
-    ),
+    ResourceHeartbeatStatus18$outboundSchema.parse(resourceHeartbeatStatus18),
   );
 }
 
 /** @internal */
 export type DataLocal4$Outbound = {
   commandSupported: boolean;
-  daemonInstance?: DaemonInstance5$Outbound | any | null | undefined;
+  daemonInstance?: DaemonInstance5$Outbound | string | null | undefined;
   daemonName?: string | undefined;
   events: Array<SyncReconcileRequestEvent11$Outbound>;
   exitReason?: string | null | undefined;
@@ -1763,7 +1761,7 @@ export type DataLocal4$Outbound = {
   pid?: number | null | undefined;
   restartCount?: number | null | undefined;
   runtimeId: string;
-  status: SyncReconcileRequestStatus18$Outbound;
+  status: ResourceHeartbeatStatus18$Outbound;
   backend: "local";
 };
 
@@ -1774,7 +1772,7 @@ export const DataLocal4$outboundSchema: z.ZodType<
 > = z.object({
   commandSupported: z.boolean(),
   daemonInstance: z.nullable(
-    z.union([z.lazy(() => DaemonInstance5$outboundSchema), z.any()]),
+    z.union([z.lazy(() => DaemonInstance5$outboundSchema), z.string()]),
   ).optional(),
   daemonName: z.string().optional(),
   events: z.array(z.lazy(() => SyncReconcileRequestEvent11$outboundSchema)),
@@ -1783,7 +1781,7 @@ export const DataLocal4$outboundSchema: z.ZodType<
   pid: z.nullable(z.int()).optional(),
   restartCount: z.nullable(z.int()).optional(),
   runtimeId: z.string(),
-  status: z.lazy(() => SyncReconcileRequestStatus18$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus18$outboundSchema),
   backend: z.literal("local"),
 });
 
@@ -1820,13 +1818,16 @@ export function syncReconcileRequestCpu6ToJSON(
 }
 
 /** @internal */
-export type CpuUnion6$Outbound = SyncReconcileRequestCpu6$Outbound | any;
+export type CpuUnion6$Outbound = SyncReconcileRequestCpu6$Outbound | string;
 
 /** @internal */
 export const CpuUnion6$outboundSchema: z.ZodType<
   CpuUnion6$Outbound,
   CpuUnion6
-> = z.union([z.lazy(() => SyncReconcileRequestCpu6$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileRequestCpu6$outboundSchema),
+  z.string(),
+]);
 
 export function cpuUnion6ToJSON(cpuUnion6: CpuUnion6): string {
   return JSON.stringify(CpuUnion6$outboundSchema.parse(cpuUnion6));
@@ -1864,13 +1865,13 @@ export function involvedObject8ToJSON(
 }
 
 /** @internal */
-export type InvolvedObjectUnion8$Outbound = InvolvedObject8$Outbound | any;
+export type InvolvedObjectUnion8$Outbound = InvolvedObject8$Outbound | string;
 
 /** @internal */
 export const InvolvedObjectUnion8$outboundSchema: z.ZodType<
   InvolvedObjectUnion8$Outbound,
   InvolvedObjectUnion8
-> = z.union([z.lazy(() => InvolvedObject8$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => InvolvedObject8$outboundSchema), z.string()]);
 
 export function involvedObjectUnion8ToJSON(
   involvedObjectUnion8: InvolvedObjectUnion8,
@@ -1900,13 +1901,13 @@ export function sourceEvent8ToJSON(sourceEvent8: SourceEvent8): string {
 }
 
 /** @internal */
-export type EventSourceUnion8$Outbound = SourceEvent8$Outbound | any;
+export type EventSourceUnion8$Outbound = SourceEvent8$Outbound | string;
 
 /** @internal */
 export const EventSourceUnion8$outboundSchema: z.ZodType<
   EventSourceUnion8$Outbound,
   EventSourceUnion8
-> = z.union([z.lazy(() => SourceEvent8$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => SourceEvent8$outboundSchema), z.string()]);
 
 export function eventSourceUnion8ToJSON(
   eventSourceUnion8: EventSourceUnion8,
@@ -1921,12 +1922,12 @@ export type SyncReconcileRequestEvent10$Outbound = {
   count?: number | null | undefined;
   eventTime?: string | null | undefined;
   firstTimestamp?: string | null | undefined;
-  involvedObject?: InvolvedObject8$Outbound | any | null | undefined;
+  involvedObject?: InvolvedObject8$Outbound | string | null | undefined;
   lastTimestamp?: string | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent8$Outbound | any | null | undefined;
+  source?: SourceEvent8$Outbound | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -1940,7 +1941,7 @@ export const SyncReconcileRequestEvent10$outboundSchema: z.ZodType<
   firstTimestamp: z.nullable(z.date().transform(v => v.toISOString()))
     .optional(),
   involvedObject: z.nullable(
-    z.union([z.lazy(() => InvolvedObject8$outboundSchema), z.any()]),
+    z.union([z.lazy(() => InvolvedObject8$outboundSchema), z.string()]),
   ).optional(),
   lastTimestamp: z.nullable(z.date().transform(v => v.toISOString()))
     .optional(),
@@ -1948,7 +1949,7 @@ export const SyncReconcileRequestEvent10$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([z.lazy(() => SourceEvent8$outboundSchema), z.any()]),
+    z.union([z.lazy(() => SourceEvent8$outboundSchema), z.string()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -1994,7 +1995,9 @@ export function syncReconcileRequestMemory6ToJSON(
 }
 
 /** @internal */
-export type MemoryUnion6$Outbound = SyncReconcileRequestMemory6$Outbound | any;
+export type MemoryUnion6$Outbound =
+  | SyncReconcileRequestMemory6$Outbound
+  | string;
 
 /** @internal */
 export const MemoryUnion6$outboundSchema: z.ZodType<
@@ -2002,7 +2005,7 @@ export const MemoryUnion6$outboundSchema: z.ZodType<
   MemoryUnion6
 > = z.union([
   z.lazy(() => SyncReconcileRequestMemory6$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function memoryUnion6ToJSON(memoryUnion6: MemoryUnion6): string {
@@ -2053,13 +2056,13 @@ export function cpuPod3ToJSON(cpuPod3: CpuPod3): string {
 }
 
 /** @internal */
-export type PodCpuUnion3$Outbound = CpuPod3$Outbound | any;
+export type PodCpuUnion3$Outbound = CpuPod3$Outbound | string;
 
 /** @internal */
 export const PodCpuUnion3$outboundSchema: z.ZodType<
   PodCpuUnion3$Outbound,
   PodCpuUnion3
-> = z.union([z.lazy(() => CpuPod3$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => CpuPod3$outboundSchema), z.string()]);
 
 export function podCpuUnion3ToJSON(podCpuUnion3: PodCpuUnion3): string {
   return JSON.stringify(PodCpuUnion3$outboundSchema.parse(podCpuUnion3));
@@ -2089,13 +2092,13 @@ export function memoryPod3ToJSON(memoryPod3: MemoryPod3): string {
 }
 
 /** @internal */
-export type PodMemoryUnion3$Outbound = MemoryPod3$Outbound | any;
+export type PodMemoryUnion3$Outbound = MemoryPod3$Outbound | string;
 
 /** @internal */
 export const PodMemoryUnion3$outboundSchema: z.ZodType<
   PodMemoryUnion3$Outbound,
   PodMemoryUnion3
-> = z.union([z.lazy(() => MemoryPod3$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => MemoryPod3$outboundSchema), z.string()]);
 
 export function podMemoryUnion3ToJSON(
   podMemoryUnion3: PodMemoryUnion3,
@@ -2131,8 +2134,8 @@ export function ownerReference3ToJSON(
 /** @internal */
 export type Pod3$Outbound = {
   containers?: Array<Container3$Outbound> | undefined;
-  cpu?: CpuPod3$Outbound | any | null | undefined;
-  memory?: MemoryPod3$Outbound | any | null | undefined;
+  cpu?: CpuPod3$Outbound | string | null | undefined;
+  memory?: MemoryPod3$Outbound | string | null | undefined;
   name: string;
   nodeName?: string | null | undefined;
   ownerReferences: Array<OwnerReference3$Outbound>;
@@ -2148,10 +2151,10 @@ export type Pod3$Outbound = {
 /** @internal */
 export const Pod3$outboundSchema: z.ZodType<Pod3$Outbound, Pod3> = z.object({
   containers: z.array(z.lazy(() => Container3$outboundSchema)).optional(),
-  cpu: z.nullable(z.union([z.lazy(() => CpuPod3$outboundSchema), z.any()]))
+  cpu: z.nullable(z.union([z.lazy(() => CpuPod3$outboundSchema), z.string()]))
     .optional(),
   memory: z.nullable(
-    z.union([z.lazy(() => MemoryPod3$outboundSchema), z.any()]),
+    z.union([z.lazy(() => MemoryPod3$outboundSchema), z.string()]),
   ).optional(),
   name: z.string(),
   nodeName: z.nullable(z.string()).optional(),
@@ -2246,7 +2249,7 @@ export const SyncReconcileRequestLifecycle17$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle17);
 
 /** @internal */
-export type SyncReconcileRequestStatus17$Outbound = {
+export type ResourceHeartbeatStatus17$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue17$Outbound>;
   health: string;
   lifecycle: string;
@@ -2256,9 +2259,9 @@ export type SyncReconcileRequestStatus17$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus17$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus17$Outbound,
-  SyncReconcileRequestStatus17
+export const ResourceHeartbeatStatus17$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus17$Outbound,
+  ResourceHeartbeatStatus17
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue17$outboundSchema),
@@ -2270,13 +2273,11 @@ export const SyncReconcileRequestStatus17$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus17ToJSON(
-  syncReconcileRequestStatus17: SyncReconcileRequestStatus17,
+export function resourceHeartbeatStatus17ToJSON(
+  resourceHeartbeatStatus17: ResourceHeartbeatStatus17,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus17$outboundSchema.parse(
-      syncReconcileRequestStatus17,
-    ),
+    ResourceHeartbeatStatus17$outboundSchema.parse(resourceHeartbeatStatus17),
   );
 }
 
@@ -2342,13 +2343,13 @@ export function workload3ToJSON(workload3: Workload3): string {
 }
 
 /** @internal */
-export type WorkloadUnion3$Outbound = Workload3$Outbound | any;
+export type WorkloadUnion3$Outbound = Workload3$Outbound | string;
 
 /** @internal */
 export const WorkloadUnion3$outboundSchema: z.ZodType<
   WorkloadUnion3$Outbound,
   WorkloadUnion3
-> = z.union([z.lazy(() => Workload3$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => Workload3$outboundSchema), z.string()]);
 
 export function workloadUnion3ToJSON(workloadUnion3: WorkloadUnion3): string {
   return JSON.stringify(WorkloadUnion3$outboundSchema.parse(workloadUnion3));
@@ -2357,16 +2358,16 @@ export function workloadUnion3ToJSON(workloadUnion3: WorkloadUnion3): string {
 /** @internal */
 export type DataKubernetes3$Outbound = {
   commandSupported: boolean;
-  cpu?: SyncReconcileRequestCpu6$Outbound | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu6$Outbound | string | null | undefined;
   events: Array<SyncReconcileRequestEvent10$Outbound>;
-  memory?: SyncReconcileRequestMemory6$Outbound | any | null | undefined;
+  memory?: SyncReconcileRequestMemory6$Outbound | string | null | undefined;
   name: string;
   namespace: string;
   pods: Array<Pod3$Outbound>;
   replicas: Replicas4$Outbound;
   restarts?: number | null | undefined;
-  status: SyncReconcileRequestStatus17$Outbound;
-  workload?: Workload3$Outbound | any | null | undefined;
+  status: ResourceHeartbeatStatus17$Outbound;
+  workload?: Workload3$Outbound | string | null | undefined;
   backend: "kubernetes";
 };
 
@@ -2377,13 +2378,16 @@ export const DataKubernetes3$outboundSchema: z.ZodType<
 > = z.object({
   commandSupported: z.boolean(),
   cpu: z.nullable(
-    z.union([z.lazy(() => SyncReconcileRequestCpu6$outboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => SyncReconcileRequestCpu6$outboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   events: z.array(z.lazy(() => SyncReconcileRequestEvent10$outboundSchema)),
   memory: z.nullable(
     z.union([
       z.lazy(() => SyncReconcileRequestMemory6$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   name: z.string(),
@@ -2391,9 +2395,9 @@ export const DataKubernetes3$outboundSchema: z.ZodType<
   pods: z.array(z.lazy(() => Pod3$outboundSchema)),
   replicas: z.lazy(() => Replicas4$outboundSchema),
   restarts: z.nullable(z.int()).optional(),
-  status: z.lazy(() => SyncReconcileRequestStatus17$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus17$outboundSchema),
   workload: z.nullable(
-    z.union([z.lazy(() => Workload3$outboundSchema), z.any()]),
+    z.union([z.lazy(() => Workload3$outboundSchema), z.string()]),
   ).optional(),
   backend: z.literal("kubernetes"),
 });
@@ -2435,13 +2439,13 @@ export function cpuDaemonInstance4ToJSON(
 /** @internal */
 export type DaemonInstanceCpuUnion4$Outbound =
   | CpuDaemonInstance4$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DaemonInstanceCpuUnion4$outboundSchema: z.ZodType<
   DaemonInstanceCpuUnion4$Outbound,
   DaemonInstanceCpuUnion4
-> = z.union([z.lazy(() => CpuDaemonInstance4$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => CpuDaemonInstance4$outboundSchema), z.string()]);
 
 export function daemonInstanceCpuUnion4ToJSON(
   daemonInstanceCpuUnion4: DaemonInstanceCpuUnion4,
@@ -2482,13 +2486,13 @@ export function memoryDaemonInstance4ToJSON(
 /** @internal */
 export type DaemonInstanceMemoryUnion4$Outbound =
   | MemoryDaemonInstance4$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DaemonInstanceMemoryUnion4$outboundSchema: z.ZodType<
   DaemonInstanceMemoryUnion4$Outbound,
   DaemonInstanceMemoryUnion4
-> = z.union([z.lazy(() => MemoryDaemonInstance4$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => MemoryDaemonInstance4$outboundSchema), z.string()]);
 
 export function daemonInstanceMemoryUnion4ToJSON(
   daemonInstanceMemoryUnion4: DaemonInstanceMemoryUnion4,
@@ -2500,10 +2504,10 @@ export function daemonInstanceMemoryUnion4ToJSON(
 
 /** @internal */
 export type DaemonInstance4$Outbound = {
-  cpu?: CpuDaemonInstance4$Outbound | any | null | undefined;
+  cpu?: CpuDaemonInstance4$Outbound | string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
-  memory?: MemoryDaemonInstance4$Outbound | any | null | undefined;
+  memory?: MemoryDaemonInstance4$Outbound | string | null | undefined;
   message?: string | null | undefined;
   metricsHealthy?: boolean | null | undefined;
   metricsLastUpdated?: string | null | undefined;
@@ -2526,12 +2530,12 @@ export const DaemonInstance4$outboundSchema: z.ZodType<
   DaemonInstance4
 > = z.object({
   cpu: z.nullable(
-    z.union([z.lazy(() => CpuDaemonInstance4$outboundSchema), z.any()]),
+    z.union([z.lazy(() => CpuDaemonInstance4$outboundSchema), z.string()]),
   ).optional(),
   ip: z.nullable(z.string()).optional(),
   machineId: z.nullable(z.string()).optional(),
   memory: z.nullable(
-    z.union([z.lazy(() => MemoryDaemonInstance4$outboundSchema), z.any()]),
+    z.union([z.lazy(() => MemoryDaemonInstance4$outboundSchema), z.string()]),
   ).optional(),
   message: z.nullable(z.string()).optional(),
   metricsHealthy: z.nullable(z.boolean()).optional(),
@@ -2585,13 +2589,13 @@ export function involvedObject7ToJSON(
 }
 
 /** @internal */
-export type InvolvedObjectUnion7$Outbound = InvolvedObject7$Outbound | any;
+export type InvolvedObjectUnion7$Outbound = InvolvedObject7$Outbound | string;
 
 /** @internal */
 export const InvolvedObjectUnion7$outboundSchema: z.ZodType<
   InvolvedObjectUnion7$Outbound,
   InvolvedObjectUnion7
-> = z.union([z.lazy(() => InvolvedObject7$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => InvolvedObject7$outboundSchema), z.string()]);
 
 export function involvedObjectUnion7ToJSON(
   involvedObjectUnion7: InvolvedObjectUnion7,
@@ -2621,13 +2625,13 @@ export function sourceEvent7ToJSON(sourceEvent7: SourceEvent7): string {
 }
 
 /** @internal */
-export type EventSourceUnion7$Outbound = SourceEvent7$Outbound | any;
+export type EventSourceUnion7$Outbound = SourceEvent7$Outbound | string;
 
 /** @internal */
 export const EventSourceUnion7$outboundSchema: z.ZodType<
   EventSourceUnion7$Outbound,
   EventSourceUnion7
-> = z.union([z.lazy(() => SourceEvent7$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => SourceEvent7$outboundSchema), z.string()]);
 
 export function eventSourceUnion7ToJSON(
   eventSourceUnion7: EventSourceUnion7,
@@ -2644,12 +2648,12 @@ export type SyncReconcileRequestEvent9$Outbound = {
   eventId?: string | null | undefined;
   eventTime?: string | null | undefined;
   firstTimestamp?: string | null | undefined;
-  involvedObject?: InvolvedObject7$Outbound | any | null | undefined;
+  involvedObject?: InvolvedObject7$Outbound | string | null | undefined;
   lastTimestamp?: string | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent7$Outbound | any | null | undefined;
+  source?: SourceEvent7$Outbound | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -2665,7 +2669,7 @@ export const SyncReconcileRequestEvent9$outboundSchema: z.ZodType<
   firstTimestamp: z.nullable(z.date().transform(v => v.toISOString()))
     .optional(),
   involvedObject: z.nullable(
-    z.union([z.lazy(() => InvolvedObject7$outboundSchema), z.any()]),
+    z.union([z.lazy(() => InvolvedObject7$outboundSchema), z.string()]),
   ).optional(),
   lastTimestamp: z.nullable(z.date().transform(v => v.toISOString()))
     .optional(),
@@ -2673,7 +2677,7 @@ export const SyncReconcileRequestEvent9$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([z.lazy(() => SourceEvent7$outboundSchema), z.any()]),
+    z.union([z.lazy(() => SourceEvent7$outboundSchema), z.string()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -2736,7 +2740,7 @@ export const SyncReconcileRequestLifecycle16$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle16);
 
 /** @internal */
-export type SyncReconcileRequestStatus16$Outbound = {
+export type ResourceHeartbeatStatus16$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue16$Outbound>;
   health: string;
   lifecycle: string;
@@ -2746,9 +2750,9 @@ export type SyncReconcileRequestStatus16$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus16$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus16$Outbound,
-  SyncReconcileRequestStatus16
+export const ResourceHeartbeatStatus16$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus16$Outbound,
+  ResourceHeartbeatStatus16
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue16$outboundSchema),
@@ -2760,13 +2764,11 @@ export const SyncReconcileRequestStatus16$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus16ToJSON(
-  syncReconcileRequestStatus16: SyncReconcileRequestStatus16,
+export function resourceHeartbeatStatus16ToJSON(
+  resourceHeartbeatStatus16: ResourceHeartbeatStatus16,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus16$outboundSchema.parse(
-      syncReconcileRequestStatus16,
-    ),
+    ResourceHeartbeatStatus16$outboundSchema.parse(resourceHeartbeatStatus16),
   );
 }
 
@@ -2786,7 +2788,7 @@ export type DataMachines1$Outbound = {
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
   observedImage?: string | null | undefined;
-  status: SyncReconcileRequestStatus16$Outbound;
+  status: ResourceHeartbeatStatus16$Outbound;
   unavailableInstances: number;
   backend: "machines";
 };
@@ -2810,7 +2812,7 @@ export const DataMachines1$outboundSchema: z.ZodType<
   horizonStatusReason: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.string(),
   observedImage: z.nullable(z.string()).optional(),
-  status: z.lazy(() => SyncReconcileRequestStatus16$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus16$outboundSchema),
   unavailableInstances: z.int(),
   backend: z.literal("machines"),
 });
@@ -2850,13 +2852,13 @@ export function cpuDaemonInstance3ToJSON(
 /** @internal */
 export type DaemonInstanceCpuUnion3$Outbound =
   | CpuDaemonInstance3$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DaemonInstanceCpuUnion3$outboundSchema: z.ZodType<
   DaemonInstanceCpuUnion3$Outbound,
   DaemonInstanceCpuUnion3
-> = z.union([z.lazy(() => CpuDaemonInstance3$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => CpuDaemonInstance3$outboundSchema), z.string()]);
 
 export function daemonInstanceCpuUnion3ToJSON(
   daemonInstanceCpuUnion3: DaemonInstanceCpuUnion3,
@@ -2897,13 +2899,13 @@ export function memoryDaemonInstance3ToJSON(
 /** @internal */
 export type DaemonInstanceMemoryUnion3$Outbound =
   | MemoryDaemonInstance3$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DaemonInstanceMemoryUnion3$outboundSchema: z.ZodType<
   DaemonInstanceMemoryUnion3$Outbound,
   DaemonInstanceMemoryUnion3
-> = z.union([z.lazy(() => MemoryDaemonInstance3$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => MemoryDaemonInstance3$outboundSchema), z.string()]);
 
 export function daemonInstanceMemoryUnion3ToJSON(
   daemonInstanceMemoryUnion3: DaemonInstanceMemoryUnion3,
@@ -2915,10 +2917,10 @@ export function daemonInstanceMemoryUnion3ToJSON(
 
 /** @internal */
 export type DaemonInstance3$Outbound = {
-  cpu?: CpuDaemonInstance3$Outbound | any | null | undefined;
+  cpu?: CpuDaemonInstance3$Outbound | string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
-  memory?: MemoryDaemonInstance3$Outbound | any | null | undefined;
+  memory?: MemoryDaemonInstance3$Outbound | string | null | undefined;
   message?: string | null | undefined;
   metricsHealthy?: boolean | null | undefined;
   metricsLastUpdated?: string | null | undefined;
@@ -2941,12 +2943,12 @@ export const DaemonInstance3$outboundSchema: z.ZodType<
   DaemonInstance3
 > = z.object({
   cpu: z.nullable(
-    z.union([z.lazy(() => CpuDaemonInstance3$outboundSchema), z.any()]),
+    z.union([z.lazy(() => CpuDaemonInstance3$outboundSchema), z.string()]),
   ).optional(),
   ip: z.nullable(z.string()).optional(),
   machineId: z.nullable(z.string()).optional(),
   memory: z.nullable(
-    z.union([z.lazy(() => MemoryDaemonInstance3$outboundSchema), z.any()]),
+    z.union([z.lazy(() => MemoryDaemonInstance3$outboundSchema), z.string()]),
   ).optional(),
   message: z.nullable(z.string()).optional(),
   metricsHealthy: z.nullable(z.boolean()).optional(),
@@ -3000,13 +3002,13 @@ export function involvedObject6ToJSON(
 }
 
 /** @internal */
-export type InvolvedObjectUnion6$Outbound = InvolvedObject6$Outbound | any;
+export type InvolvedObjectUnion6$Outbound = InvolvedObject6$Outbound | string;
 
 /** @internal */
 export const InvolvedObjectUnion6$outboundSchema: z.ZodType<
   InvolvedObjectUnion6$Outbound,
   InvolvedObjectUnion6
-> = z.union([z.lazy(() => InvolvedObject6$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => InvolvedObject6$outboundSchema), z.string()]);
 
 export function involvedObjectUnion6ToJSON(
   involvedObjectUnion6: InvolvedObjectUnion6,
@@ -3036,13 +3038,13 @@ export function sourceEvent6ToJSON(sourceEvent6: SourceEvent6): string {
 }
 
 /** @internal */
-export type EventSourceUnion6$Outbound = SourceEvent6$Outbound | any;
+export type EventSourceUnion6$Outbound = SourceEvent6$Outbound | string;
 
 /** @internal */
 export const EventSourceUnion6$outboundSchema: z.ZodType<
   EventSourceUnion6$Outbound,
   EventSourceUnion6
-> = z.union([z.lazy(() => SourceEvent6$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => SourceEvent6$outboundSchema), z.string()]);
 
 export function eventSourceUnion6ToJSON(
   eventSourceUnion6: EventSourceUnion6,
@@ -3059,12 +3061,12 @@ export type SyncReconcileRequestEvent8$Outbound = {
   eventId?: string | null | undefined;
   eventTime?: string | null | undefined;
   firstTimestamp?: string | null | undefined;
-  involvedObject?: InvolvedObject6$Outbound | any | null | undefined;
+  involvedObject?: InvolvedObject6$Outbound | string | null | undefined;
   lastTimestamp?: string | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent6$Outbound | any | null | undefined;
+  source?: SourceEvent6$Outbound | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -3080,7 +3082,7 @@ export const SyncReconcileRequestEvent8$outboundSchema: z.ZodType<
   firstTimestamp: z.nullable(z.date().transform(v => v.toISOString()))
     .optional(),
   involvedObject: z.nullable(
-    z.union([z.lazy(() => InvolvedObject6$outboundSchema), z.any()]),
+    z.union([z.lazy(() => InvolvedObject6$outboundSchema), z.string()]),
   ).optional(),
   lastTimestamp: z.nullable(z.date().transform(v => v.toISOString()))
     .optional(),
@@ -3088,7 +3090,7 @@ export const SyncReconcileRequestEvent8$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([z.lazy(() => SourceEvent6$outboundSchema), z.any()]),
+    z.union([z.lazy(() => SourceEvent6$outboundSchema), z.string()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -3151,7 +3153,7 @@ export const SyncReconcileRequestLifecycle15$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle15);
 
 /** @internal */
-export type SyncReconcileRequestStatus15$Outbound = {
+export type ResourceHeartbeatStatus15$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue15$Outbound>;
   health: string;
   lifecycle: string;
@@ -3161,9 +3163,9 @@ export type SyncReconcileRequestStatus15$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus15$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus15$Outbound,
-  SyncReconcileRequestStatus15
+export const ResourceHeartbeatStatus15$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus15$Outbound,
+  ResourceHeartbeatStatus15
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue15$outboundSchema),
@@ -3175,13 +3177,11 @@ export const SyncReconcileRequestStatus15$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus15ToJSON(
-  syncReconcileRequestStatus15: SyncReconcileRequestStatus15,
+export function resourceHeartbeatStatus15ToJSON(
+  resourceHeartbeatStatus15: ResourceHeartbeatStatus15,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus15$outboundSchema.parse(
-      syncReconcileRequestStatus15,
-    ),
+    ResourceHeartbeatStatus15$outboundSchema.parse(resourceHeartbeatStatus15),
   );
 }
 
@@ -3201,7 +3201,7 @@ export type DataAzure1$Outbound = {
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
   observedImage?: string | null | undefined;
-  status: SyncReconcileRequestStatus15$Outbound;
+  status: ResourceHeartbeatStatus15$Outbound;
   unavailableInstances: number;
   backend: "azure";
 };
@@ -3225,7 +3225,7 @@ export const DataAzure1$outboundSchema: z.ZodType<
   horizonStatusReason: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.string(),
   observedImage: z.nullable(z.string()).optional(),
-  status: z.lazy(() => SyncReconcileRequestStatus15$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus15$outboundSchema),
   unavailableInstances: z.int(),
   backend: z.literal("azure"),
 });
@@ -3265,13 +3265,13 @@ export function cpuDaemonInstance2ToJSON(
 /** @internal */
 export type DaemonInstanceCpuUnion2$Outbound =
   | CpuDaemonInstance2$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DaemonInstanceCpuUnion2$outboundSchema: z.ZodType<
   DaemonInstanceCpuUnion2$Outbound,
   DaemonInstanceCpuUnion2
-> = z.union([z.lazy(() => CpuDaemonInstance2$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => CpuDaemonInstance2$outboundSchema), z.string()]);
 
 export function daemonInstanceCpuUnion2ToJSON(
   daemonInstanceCpuUnion2: DaemonInstanceCpuUnion2,
@@ -3312,13 +3312,13 @@ export function memoryDaemonInstance2ToJSON(
 /** @internal */
 export type DaemonInstanceMemoryUnion2$Outbound =
   | MemoryDaemonInstance2$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DaemonInstanceMemoryUnion2$outboundSchema: z.ZodType<
   DaemonInstanceMemoryUnion2$Outbound,
   DaemonInstanceMemoryUnion2
-> = z.union([z.lazy(() => MemoryDaemonInstance2$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => MemoryDaemonInstance2$outboundSchema), z.string()]);
 
 export function daemonInstanceMemoryUnion2ToJSON(
   daemonInstanceMemoryUnion2: DaemonInstanceMemoryUnion2,
@@ -3330,10 +3330,10 @@ export function daemonInstanceMemoryUnion2ToJSON(
 
 /** @internal */
 export type DaemonInstance2$Outbound = {
-  cpu?: CpuDaemonInstance2$Outbound | any | null | undefined;
+  cpu?: CpuDaemonInstance2$Outbound | string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
-  memory?: MemoryDaemonInstance2$Outbound | any | null | undefined;
+  memory?: MemoryDaemonInstance2$Outbound | string | null | undefined;
   message?: string | null | undefined;
   metricsHealthy?: boolean | null | undefined;
   metricsLastUpdated?: string | null | undefined;
@@ -3356,12 +3356,12 @@ export const DaemonInstance2$outboundSchema: z.ZodType<
   DaemonInstance2
 > = z.object({
   cpu: z.nullable(
-    z.union([z.lazy(() => CpuDaemonInstance2$outboundSchema), z.any()]),
+    z.union([z.lazy(() => CpuDaemonInstance2$outboundSchema), z.string()]),
   ).optional(),
   ip: z.nullable(z.string()).optional(),
   machineId: z.nullable(z.string()).optional(),
   memory: z.nullable(
-    z.union([z.lazy(() => MemoryDaemonInstance2$outboundSchema), z.any()]),
+    z.union([z.lazy(() => MemoryDaemonInstance2$outboundSchema), z.string()]),
   ).optional(),
   message: z.nullable(z.string()).optional(),
   metricsHealthy: z.nullable(z.boolean()).optional(),
@@ -3415,13 +3415,13 @@ export function involvedObject5ToJSON(
 }
 
 /** @internal */
-export type InvolvedObjectUnion5$Outbound = InvolvedObject5$Outbound | any;
+export type InvolvedObjectUnion5$Outbound = InvolvedObject5$Outbound | string;
 
 /** @internal */
 export const InvolvedObjectUnion5$outboundSchema: z.ZodType<
   InvolvedObjectUnion5$Outbound,
   InvolvedObjectUnion5
-> = z.union([z.lazy(() => InvolvedObject5$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => InvolvedObject5$outboundSchema), z.string()]);
 
 export function involvedObjectUnion5ToJSON(
   involvedObjectUnion5: InvolvedObjectUnion5,
@@ -3451,13 +3451,13 @@ export function sourceEvent5ToJSON(sourceEvent5: SourceEvent5): string {
 }
 
 /** @internal */
-export type EventSourceUnion5$Outbound = SourceEvent5$Outbound | any;
+export type EventSourceUnion5$Outbound = SourceEvent5$Outbound | string;
 
 /** @internal */
 export const EventSourceUnion5$outboundSchema: z.ZodType<
   EventSourceUnion5$Outbound,
   EventSourceUnion5
-> = z.union([z.lazy(() => SourceEvent5$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => SourceEvent5$outboundSchema), z.string()]);
 
 export function eventSourceUnion5ToJSON(
   eventSourceUnion5: EventSourceUnion5,
@@ -3474,12 +3474,12 @@ export type SyncReconcileRequestEvent7$Outbound = {
   eventId?: string | null | undefined;
   eventTime?: string | null | undefined;
   firstTimestamp?: string | null | undefined;
-  involvedObject?: InvolvedObject5$Outbound | any | null | undefined;
+  involvedObject?: InvolvedObject5$Outbound | string | null | undefined;
   lastTimestamp?: string | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent5$Outbound | any | null | undefined;
+  source?: SourceEvent5$Outbound | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -3495,7 +3495,7 @@ export const SyncReconcileRequestEvent7$outboundSchema: z.ZodType<
   firstTimestamp: z.nullable(z.date().transform(v => v.toISOString()))
     .optional(),
   involvedObject: z.nullable(
-    z.union([z.lazy(() => InvolvedObject5$outboundSchema), z.any()]),
+    z.union([z.lazy(() => InvolvedObject5$outboundSchema), z.string()]),
   ).optional(),
   lastTimestamp: z.nullable(z.date().transform(v => v.toISOString()))
     .optional(),
@@ -3503,7 +3503,7 @@ export const SyncReconcileRequestEvent7$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([z.lazy(() => SourceEvent5$outboundSchema), z.any()]),
+    z.union([z.lazy(() => SourceEvent5$outboundSchema), z.string()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -3566,7 +3566,7 @@ export const SyncReconcileRequestLifecycle14$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle14);
 
 /** @internal */
-export type SyncReconcileRequestStatus14$Outbound = {
+export type ResourceHeartbeatStatus14$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue14$Outbound>;
   health: string;
   lifecycle: string;
@@ -3576,9 +3576,9 @@ export type SyncReconcileRequestStatus14$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus14$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus14$Outbound,
-  SyncReconcileRequestStatus14
+export const ResourceHeartbeatStatus14$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus14$Outbound,
+  ResourceHeartbeatStatus14
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue14$outboundSchema),
@@ -3590,13 +3590,11 @@ export const SyncReconcileRequestStatus14$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus14ToJSON(
-  syncReconcileRequestStatus14: SyncReconcileRequestStatus14,
+export function resourceHeartbeatStatus14ToJSON(
+  resourceHeartbeatStatus14: ResourceHeartbeatStatus14,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus14$outboundSchema.parse(
-      syncReconcileRequestStatus14,
-    ),
+    ResourceHeartbeatStatus14$outboundSchema.parse(resourceHeartbeatStatus14),
   );
 }
 
@@ -3616,7 +3614,7 @@ export type DataGcp1$Outbound = {
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
   observedImage?: string | null | undefined;
-  status: SyncReconcileRequestStatus14$Outbound;
+  status: ResourceHeartbeatStatus14$Outbound;
   unavailableInstances: number;
   backend: "gcp";
 };
@@ -3638,7 +3636,7 @@ export const DataGcp1$outboundSchema: z.ZodType<DataGcp1$Outbound, DataGcp1> = z
     horizonStatusReason: z.nullable(z.string()).optional(),
     latestUpdateTimestamp: z.string(),
     observedImage: z.nullable(z.string()).optional(),
-    status: z.lazy(() => SyncReconcileRequestStatus14$outboundSchema),
+    status: z.lazy(() => ResourceHeartbeatStatus14$outboundSchema),
     unavailableInstances: z.int(),
     backend: z.literal("gcp"),
   });
@@ -3678,13 +3676,13 @@ export function cpuDaemonInstance1ToJSON(
 /** @internal */
 export type DaemonInstanceCpuUnion1$Outbound =
   | CpuDaemonInstance1$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DaemonInstanceCpuUnion1$outboundSchema: z.ZodType<
   DaemonInstanceCpuUnion1$Outbound,
   DaemonInstanceCpuUnion1
-> = z.union([z.lazy(() => CpuDaemonInstance1$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => CpuDaemonInstance1$outboundSchema), z.string()]);
 
 export function daemonInstanceCpuUnion1ToJSON(
   daemonInstanceCpuUnion1: DaemonInstanceCpuUnion1,
@@ -3725,13 +3723,13 @@ export function memoryDaemonInstance1ToJSON(
 /** @internal */
 export type DaemonInstanceMemoryUnion1$Outbound =
   | MemoryDaemonInstance1$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const DaemonInstanceMemoryUnion1$outboundSchema: z.ZodType<
   DaemonInstanceMemoryUnion1$Outbound,
   DaemonInstanceMemoryUnion1
-> = z.union([z.lazy(() => MemoryDaemonInstance1$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => MemoryDaemonInstance1$outboundSchema), z.string()]);
 
 export function daemonInstanceMemoryUnion1ToJSON(
   daemonInstanceMemoryUnion1: DaemonInstanceMemoryUnion1,
@@ -3743,10 +3741,10 @@ export function daemonInstanceMemoryUnion1ToJSON(
 
 /** @internal */
 export type DaemonInstance1$Outbound = {
-  cpu?: CpuDaemonInstance1$Outbound | any | null | undefined;
+  cpu?: CpuDaemonInstance1$Outbound | string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
-  memory?: MemoryDaemonInstance1$Outbound | any | null | undefined;
+  memory?: MemoryDaemonInstance1$Outbound | string | null | undefined;
   message?: string | null | undefined;
   metricsHealthy?: boolean | null | undefined;
   metricsLastUpdated?: string | null | undefined;
@@ -3769,12 +3767,12 @@ export const DaemonInstance1$outboundSchema: z.ZodType<
   DaemonInstance1
 > = z.object({
   cpu: z.nullable(
-    z.union([z.lazy(() => CpuDaemonInstance1$outboundSchema), z.any()]),
+    z.union([z.lazy(() => CpuDaemonInstance1$outboundSchema), z.string()]),
   ).optional(),
   ip: z.nullable(z.string()).optional(),
   machineId: z.nullable(z.string()).optional(),
   memory: z.nullable(
-    z.union([z.lazy(() => MemoryDaemonInstance1$outboundSchema), z.any()]),
+    z.union([z.lazy(() => MemoryDaemonInstance1$outboundSchema), z.string()]),
   ).optional(),
   message: z.nullable(z.string()).optional(),
   metricsHealthy: z.nullable(z.boolean()).optional(),
@@ -3828,13 +3826,13 @@ export function involvedObject4ToJSON(
 }
 
 /** @internal */
-export type InvolvedObjectUnion4$Outbound = InvolvedObject4$Outbound | any;
+export type InvolvedObjectUnion4$Outbound = InvolvedObject4$Outbound | string;
 
 /** @internal */
 export const InvolvedObjectUnion4$outboundSchema: z.ZodType<
   InvolvedObjectUnion4$Outbound,
   InvolvedObjectUnion4
-> = z.union([z.lazy(() => InvolvedObject4$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => InvolvedObject4$outboundSchema), z.string()]);
 
 export function involvedObjectUnion4ToJSON(
   involvedObjectUnion4: InvolvedObjectUnion4,
@@ -3864,13 +3862,13 @@ export function sourceEvent4ToJSON(sourceEvent4: SourceEvent4): string {
 }
 
 /** @internal */
-export type EventSourceUnion4$Outbound = SourceEvent4$Outbound | any;
+export type EventSourceUnion4$Outbound = SourceEvent4$Outbound | string;
 
 /** @internal */
 export const EventSourceUnion4$outboundSchema: z.ZodType<
   EventSourceUnion4$Outbound,
   EventSourceUnion4
-> = z.union([z.lazy(() => SourceEvent4$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => SourceEvent4$outboundSchema), z.string()]);
 
 export function eventSourceUnion4ToJSON(
   eventSourceUnion4: EventSourceUnion4,
@@ -3887,12 +3885,12 @@ export type SyncReconcileRequestEvent6$Outbound = {
   eventId?: string | null | undefined;
   eventTime?: string | null | undefined;
   firstTimestamp?: string | null | undefined;
-  involvedObject?: InvolvedObject4$Outbound | any | null | undefined;
+  involvedObject?: InvolvedObject4$Outbound | string | null | undefined;
   lastTimestamp?: string | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent4$Outbound | any | null | undefined;
+  source?: SourceEvent4$Outbound | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -3908,7 +3906,7 @@ export const SyncReconcileRequestEvent6$outboundSchema: z.ZodType<
   firstTimestamp: z.nullable(z.date().transform(v => v.toISOString()))
     .optional(),
   involvedObject: z.nullable(
-    z.union([z.lazy(() => InvolvedObject4$outboundSchema), z.any()]),
+    z.union([z.lazy(() => InvolvedObject4$outboundSchema), z.string()]),
   ).optional(),
   lastTimestamp: z.nullable(z.date().transform(v => v.toISOString()))
     .optional(),
@@ -3916,7 +3914,7 @@ export const SyncReconcileRequestEvent6$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([z.lazy(() => SourceEvent4$outboundSchema), z.any()]),
+    z.union([z.lazy(() => SourceEvent4$outboundSchema), z.string()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -3979,7 +3977,7 @@ export const SyncReconcileRequestLifecycle13$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle13);
 
 /** @internal */
-export type SyncReconcileRequestStatus13$Outbound = {
+export type ResourceHeartbeatStatus13$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue13$Outbound>;
   health: string;
   lifecycle: string;
@@ -3989,9 +3987,9 @@ export type SyncReconcileRequestStatus13$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus13$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus13$Outbound,
-  SyncReconcileRequestStatus13
+export const ResourceHeartbeatStatus13$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus13$Outbound,
+  ResourceHeartbeatStatus13
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue13$outboundSchema),
@@ -4003,13 +4001,11 @@ export const SyncReconcileRequestStatus13$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus13ToJSON(
-  syncReconcileRequestStatus13: SyncReconcileRequestStatus13,
+export function resourceHeartbeatStatus13ToJSON(
+  resourceHeartbeatStatus13: ResourceHeartbeatStatus13,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus13$outboundSchema.parse(
-      syncReconcileRequestStatus13,
-    ),
+    ResourceHeartbeatStatus13$outboundSchema.parse(resourceHeartbeatStatus13),
   );
 }
 
@@ -4029,7 +4025,7 @@ export type DataAws1$Outbound = {
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
   observedImage?: string | null | undefined;
-  status: SyncReconcileRequestStatus13$Outbound;
+  status: ResourceHeartbeatStatus13$Outbound;
   unavailableInstances: number;
   backend: "aws";
 };
@@ -4051,7 +4047,7 @@ export const DataAws1$outboundSchema: z.ZodType<DataAws1$Outbound, DataAws1> = z
     horizonStatusReason: z.nullable(z.string()).optional(),
     latestUpdateTimestamp: z.string(),
     observedImage: z.nullable(z.string()).optional(),
-    status: z.lazy(() => SyncReconcileRequestStatus13$outboundSchema),
+    status: z.lazy(() => ResourceHeartbeatStatus13$outboundSchema),
     unavailableInstances: z.int(),
     backend: z.literal("aws"),
   });
@@ -4153,13 +4149,13 @@ export function containerUnitCpuToJSON(
 }
 
 /** @internal */
-export type ContainerUnitCpuUnion$Outbound = ContainerUnitCpu$Outbound | any;
+export type ContainerUnitCpuUnion$Outbound = ContainerUnitCpu$Outbound | string;
 
 /** @internal */
 export const ContainerUnitCpuUnion$outboundSchema: z.ZodType<
   ContainerUnitCpuUnion$Outbound,
   ContainerUnitCpuUnion
-> = z.union([z.lazy(() => ContainerUnitCpu$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => ContainerUnitCpu$outboundSchema), z.string()]);
 
 export function containerUnitCpuUnionToJSON(
   containerUnitCpuUnion: ContainerUnitCpuUnion,
@@ -4205,13 +4201,13 @@ export function containerUnitMemoryToJSON(
 /** @internal */
 export type ContainerUnitMemoryUnion$Outbound =
   | ContainerUnitMemory$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const ContainerUnitMemoryUnion$outboundSchema: z.ZodType<
   ContainerUnitMemoryUnion$Outbound,
   ContainerUnitMemoryUnion
-> = z.union([z.lazy(() => ContainerUnitMemory$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => ContainerUnitMemory$outboundSchema), z.string()]);
 
 export function containerUnitMemoryUnionToJSON(
   containerUnitMemoryUnion: ContainerUnitMemoryUnion,
@@ -4223,9 +4219,9 @@ export function containerUnitMemoryUnionToJSON(
 
 /** @internal */
 export type ContainerUnit$Outbound = {
-  cpu?: ContainerUnitCpu$Outbound | any | null | undefined;
+  cpu?: ContainerUnitCpu$Outbound | string | null | undefined;
   kind: string;
-  memory?: ContainerUnitMemory$Outbound | any | null | undefined;
+  memory?: ContainerUnitMemory$Outbound | string | null | undefined;
   name: string;
   phase?: string | null | undefined;
   pid?: number | null | undefined;
@@ -4240,11 +4236,11 @@ export const ContainerUnit$outboundSchema: z.ZodType<
   ContainerUnit
 > = z.object({
   cpu: z.nullable(
-    z.union([z.lazy(() => ContainerUnitCpu$outboundSchema), z.any()]),
+    z.union([z.lazy(() => ContainerUnitCpu$outboundSchema), z.string()]),
   ).optional(),
   kind: ContainerUnitKind$outboundSchema,
   memory: z.nullable(
-    z.union([z.lazy(() => ContainerUnitMemory$outboundSchema), z.any()]),
+    z.union([z.lazy(() => ContainerUnitMemory$outboundSchema), z.string()]),
   ).optional(),
   name: z.string(),
   phase: z.nullable(z.string()).optional(),
@@ -4259,13 +4255,13 @@ export function containerUnitToJSON(containerUnit: ContainerUnit): string {
 }
 
 /** @internal */
-export type ContainerUnitUnion$Outbound = ContainerUnit$Outbound | any;
+export type ContainerUnitUnion$Outbound = ContainerUnit$Outbound | string;
 
 /** @internal */
 export const ContainerUnitUnion$outboundSchema: z.ZodType<
   ContainerUnitUnion$Outbound,
   ContainerUnitUnion
-> = z.union([z.lazy(() => ContainerUnit$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => ContainerUnit$outboundSchema), z.string()]);
 
 export function containerUnitUnionToJSON(
   containerUnitUnion: ContainerUnitUnion,
@@ -4304,13 +4300,16 @@ export function syncReconcileRequestCpu5ToJSON(
 }
 
 /** @internal */
-export type CpuUnion5$Outbound = SyncReconcileRequestCpu5$Outbound | any;
+export type CpuUnion5$Outbound = SyncReconcileRequestCpu5$Outbound | string;
 
 /** @internal */
 export const CpuUnion5$outboundSchema: z.ZodType<
   CpuUnion5$Outbound,
   CpuUnion5
-> = z.union([z.lazy(() => SyncReconcileRequestCpu5$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileRequestCpu5$outboundSchema),
+  z.string(),
+]);
 
 export function cpuUnion5ToJSON(cpuUnion5: CpuUnion5): string {
   return JSON.stringify(CpuUnion5$outboundSchema.parse(cpuUnion5));
@@ -4350,7 +4349,7 @@ export function syncReconcileRequestSubject2ToJSON(
 /** @internal */
 export type SyncReconcileRequestSubjectUnion2$Outbound =
   | SyncReconcileRequestSubject2$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const SyncReconcileRequestSubjectUnion2$outboundSchema: z.ZodType<
@@ -4358,7 +4357,7 @@ export const SyncReconcileRequestSubjectUnion2$outboundSchema: z.ZodType<
   SyncReconcileRequestSubjectUnion2
 > = z.union([
   z.lazy(() => SyncReconcileRequestSubject2$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function syncReconcileRequestSubjectUnion2ToJSON(
@@ -4377,7 +4376,7 @@ export type SyncReconcileRequestEvent5$Outbound = {
   message: string;
   raw?: any | null | undefined;
   severity: string;
-  subject?: SyncReconcileRequestSubject2$Outbound | any | null | undefined;
+  subject?: SyncReconcileRequestSubject2$Outbound | string | null | undefined;
   timestamp: string;
 };
 
@@ -4393,7 +4392,7 @@ export const SyncReconcileRequestEvent5$outboundSchema: z.ZodType<
   subject: z.nullable(
     z.union([
       z.lazy(() => SyncReconcileRequestSubject2$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   timestamp: z.date().transform(v => v.toISOString()),

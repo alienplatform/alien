@@ -9,9 +9,9 @@
 const value: operations.SourceEvent9 = {};
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

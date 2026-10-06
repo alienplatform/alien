@@ -17,14 +17,14 @@ const value: models.DataAwsMicrovm = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
+        reason: "api-unavailable",
         severity: "info",
         source: "<value>",
       },
     ],
     health: "healthy",
     lifecycle: "updating",
-    partial: true,
+    partial: false,
     stale: true,
   },
   backend: "awsMicrovm",

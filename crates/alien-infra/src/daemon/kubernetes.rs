@@ -64,8 +64,9 @@ impl KubernetesDaemonController {
 
         let daemon_set_name = kubernetes_resource_name(&ctx.resource_prefix, &config.id);
         let namespace = self.get_kubernetes_namespace(ctx)?;
-        let service_account_name =
-            kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
+        let service_account_name = config
+            .get_permissions()
+            .map(|profile| kubernetes_service_account_name(&ctx.resource_prefix, profile));
         let registry_secret_name = format!("{}-registry", daemon_set_name);
         let environment_secret_name = format!("{}-env", daemon_set_name);
         let workload_client = ctx
@@ -174,7 +175,7 @@ impl KubernetesDaemonController {
                 config,
                 &daemon_set_name,
                 &namespace,
-                &service_account_name,
+                service_account_name.as_deref(),
                 image_pull_secret_name.as_deref(),
                 env_secret_plan.as_ref(),
                 ctx,
@@ -460,8 +461,9 @@ impl KubernetesDaemonController {
         let legacy_environment_owner_proven =
             crate::core::pod_spec_references_environment_secret(pod_spec, &environment_secret_name);
 
-        let service_account_name =
-            kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
+        let service_account_name = config
+            .get_permissions()
+            .map(|profile| kubernetes_service_account_name(&ctx.resource_prefix, profile));
         let image_pull_secret_name = if let DaemonCode::Image { image } = &config.code {
             let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -510,7 +512,7 @@ impl KubernetesDaemonController {
                 config,
                 daemon_set_name,
                 namespace,
-                &service_account_name,
+                service_account_name.as_deref(),
                 image_pull_secret_name.as_deref(),
                 env_secret_plan.as_ref(),
                 ctx,
@@ -985,7 +987,7 @@ impl KubernetesDaemonController {
         config: &Daemon,
         daemon_set_name: &str,
         namespace: &str,
-        service_account_name: &str,
+        service_account_name: Option<&str>,
         image_pull_secret_name: Option<&str>,
         env_secret_plan: Option<&KubernetesEnvSecretPlan>,
         ctx: &ResourceControllerContext<'_>,
@@ -1092,7 +1094,8 @@ impl KubernetesDaemonController {
         })?;
         let pod_spec = PodSpec {
             node_selector,
-            service_account_name: Some(service_account_name.to_string()),
+            service_account_name: service_account_name.map(str::to_owned),
+            automount_service_account_token: service_account_name.is_none().then_some(false),
             containers: vec![container],
             restart_policy: Some("Always".to_string()),
             image_pull_secrets,
@@ -1250,6 +1253,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn daemon_without_profile_does_not_mount_a_workload_identity() {
+        let mut config = manifest_test_daemon(&[("OBJECTS_BUCKET", "objects")]);
+        config.permissions = None;
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        let manifest = manifest_test_controller()
+            .build_daemonset(
+                &config,
+                "agent",
+                "test-ns",
+                None,
+                None,
+                None,
+                &harness.ctx(),
+            )
+            .await
+            .expect("daemonset manifest");
+        let spec = manifest.spec.unwrap().template.spec.unwrap();
+        assert_eq!(spec.service_account_name, None);
+        assert_eq!(spec.automount_service_account_token, Some(false));
+        assert_eq!(spec.containers.len(), 1);
+        assert!(spec.containers[0]
+            .env
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|entry| {
+                entry.name == "OBJECTS_BUCKET" && entry.value.as_deref() == Some("objects")
+            }));
+    }
+
+    #[tokio::test]
     async fn daemonset_manifest_projects_secrets_and_never_carries_alien_secrets() {
         let variables = vec![
             secret_env_var("APP_SECRET", "s3cret", None),
@@ -1293,7 +1327,7 @@ mod tests {
                 &config,
                 "agent",
                 "test-ns",
-                "agent-sa",
+                Some("agent-sa"),
                 None,
                 Some(&plan),
                 &harness.ctx(),
@@ -1376,7 +1410,7 @@ mod tests {
                 &config,
                 "agent",
                 "test-ns",
-                "agent-sa",
+                Some("agent-sa"),
                 None,
                 None,
                 &harness.ctx(),
@@ -1463,7 +1497,7 @@ mod tests {
                     &config,
                     "agent",
                     "test-ns",
-                    "agent-sa",
+                    Some("agent-sa"),
                     None,
                     Some(&plan),
                     &harness.ctx(),

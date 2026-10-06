@@ -16,6 +16,10 @@ import {
   EncryptedStackInputValue$inboundSchema,
 } from "./encryptedstackinputvalue.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  ExternalBindingUnion,
+  ExternalBindingUnion$inboundSchema,
+} from "./externalbindingunion.js";
 
 export const CreateManagerResponseSetupStatus = {
   Pending: "pending",
@@ -213,12 +217,12 @@ export type CreateManagerResponseFailureDomains6 = {
 
 export type CreateManagerResponseFailureDomainsUnion6 =
   | CreateManagerResponseFailureDomains6
-  | any;
+  | string;
 
 export type CreateManagerResponsePoolsAutoscale3 = {
   failureDomains?:
     | CreateManagerResponseFailureDomains6
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -255,12 +259,12 @@ export type CreateManagerResponseFailureDomains5 = {
 
 export type CreateManagerResponseFailureDomainsUnion5 =
   | CreateManagerResponseFailureDomains5
-  | any;
+  | string;
 
 export type CreateManagerResponsePoolsFixed3 = {
   failureDomains?:
     | CreateManagerResponseFailureDomains5
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -303,7 +307,7 @@ export type CreateManagerResponseCompute3 = {
 
 export type CreateManagerResponseComputeUnion3 =
   | CreateManagerResponseCompute3
-  | any;
+  | string;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -323,7 +327,7 @@ export type CreateManagerResponseAws3 = {
   certificateArn: string;
 };
 
-export type CreateManagerResponseAwsUnion3 = CreateManagerResponseAws3 | any;
+export type CreateManagerResponseAwsUnion3 = CreateManagerResponseAws3 | string;
 
 export type CreateManagerResponseAzure3 = {
   keyVaultCertificateId: string;
@@ -332,13 +336,13 @@ export type CreateManagerResponseAzure3 = {
 
 export type CreateManagerResponseAzureUnion3 =
   | CreateManagerResponseAzure3
-  | any;
+  | string;
 
 export type CreateManagerResponseGcp3 = {
   certificateName: string;
 };
 
-export type CreateManagerResponseGcpUnion3 = CreateManagerResponseGcp3 | any;
+export type CreateManagerResponseGcpUnion3 = CreateManagerResponseGcp3 | string;
 
 /**
  * Namespace-scoped Kubernetes TLS Secret reference.
@@ -363,16 +367,20 @@ export type CreateManagerResponseDomainsKubernetes3 = {
 
 export type CreateManagerResponseDomainsKubernetesUnion3 =
   | CreateManagerResponseDomainsKubernetes3
-  | any;
+  | string;
 
 /**
  * Platform-specific certificate references for custom domains.
  */
 export type CreateManagerResponseDomainsCertificate3 = {
-  aws?: CreateManagerResponseAws3 | any | null | undefined;
-  azure?: CreateManagerResponseAzure3 | any | null | undefined;
-  gcp?: CreateManagerResponseGcp3 | any | null | undefined;
-  kubernetes?: CreateManagerResponseDomainsKubernetes3 | any | null | undefined;
+  aws?: CreateManagerResponseAws3 | string | null | undefined;
+  azure?: CreateManagerResponseAzure3 | string | null | undefined;
+  gcp?: CreateManagerResponseGcp3 | string | null | undefined;
+  kubernetes?:
+    | CreateManagerResponseDomainsKubernetes3
+    | string
+    | null
+    | undefined;
 };
 
 /**
@@ -418,7 +426,7 @@ export type CreateManagerResponsePublicEndpointTargetMachineAddresses3 = {
 export type CreateManagerResponsePublicEndpointTargetUnion3 =
   | CreateManagerResponsePublicEndpointTargetLoadBalancer3
   | CreateManagerResponsePublicEndpointTargetMachineAddresses3
-  | any;
+  | string;
 
 /**
  * Domain configuration for the stack.
@@ -439,24 +447,28 @@ export type CreateManagerResponseDomains3 = {
   publicEndpointTarget?:
     | CreateManagerResponsePublicEndpointTargetLoadBalancer3
     | CreateManagerResponsePublicEndpointTargetMachineAddresses3
-    | any
+    | string
     | null
     | undefined;
 };
 
 export type CreateManagerResponseDomainsUnion3 =
   | CreateManagerResponseDomains3
-  | any;
+  | string;
 
 /**
- * External bindings for pre-existing infrastructure.
- *
- * @remarks
- * Allows using existing resources (MinIO, Redis, shared Container Apps
- * Environment, etc.) instead of having Alien provision them.
- * Required for Kubernetes platform, optional for cloud platforms.
+ * Reachability of the deployment's public endpoints, fixed at setup.
  */
-export type CreateManagerResponseExternalBindings3 = {};
+export const CreateManagerResponseEndpointAccess3 = {
+  Internet: "internet",
+  Private: "private",
+} as const;
+/**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export type CreateManagerResponseEndpointAccess3 = ClosedEnum<
+  typeof CreateManagerResponseEndpointAccess3
+>;
 
 /**
  * How heartbeat health checks are handled.
@@ -487,7 +499,7 @@ export type CreateManagerResponseCloud3 = {
 
 export type CreateManagerResponseCloudUnion3 =
   | CreateManagerResponseCloud3
-  | any;
+  | string;
 
 /**
  * Ownership model for the Kubernetes cluster.
@@ -508,7 +520,7 @@ export type CreateManagerResponseOwnership3 = ClosedEnum<
  * Kubernetes cluster setup settings.
  */
 export type CreateManagerResponseCluster3 = {
-  cloud?: CreateManagerResponseCloud3 | any | null | undefined;
+  cloud?: CreateManagerResponseCloud3 | string | null | undefined;
   /**
    * Namespace where the Alien chart and application resources run.
    */
@@ -521,7 +533,7 @@ export type CreateManagerResponseCluster3 = {
 
 export type CreateManagerResponseClusterUnion3 =
   | CreateManagerResponseCluster3
-  | any;
+  | string;
 
 export type CreateManagerResponseCertificateNone6 = {
   mode: "none";
@@ -661,7 +673,7 @@ export type CreateManagerResponseProviderUnion12 =
   | CreateManagerResponseProviderAwsAlb12
   | CreateManagerResponseProviderAzureApplicationGatewayForContainers12
   | CreateManagerResponseProviderGkeGateway12
-  | any;
+  | string;
 
 /**
  * Shared Gateway API route profile values.
@@ -691,7 +703,7 @@ export type CreateManagerResponseRouteGateway6 = {
     | CreateManagerResponseProviderAwsAlb12
     | CreateManagerResponseProviderAzureApplicationGatewayForContainers12
     | CreateManagerResponseProviderGkeGateway12
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -771,7 +783,7 @@ export type CreateManagerResponseProviderUnion11 =
   | CreateManagerResponseProviderAwsAlb11
   | CreateManagerResponseProviderAzureApplicationGatewayForContainers11
   | CreateManagerResponseProviderGkeGateway11
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -797,7 +809,7 @@ export type CreateManagerResponseRouteIngress6 = {
     | CreateManagerResponseProviderAwsAlb11
     | CreateManagerResponseProviderAzureApplicationGatewayForContainers11
     | CreateManagerResponseProviderGkeGateway11
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -971,7 +983,7 @@ export type CreateManagerResponseProviderUnion10 =
   | CreateManagerResponseProviderAwsAlb10
   | CreateManagerResponseProviderAzureApplicationGatewayForContainers10
   | CreateManagerResponseProviderGkeGateway10
-  | any;
+  | string;
 
 /**
  * Shared Gateway API route profile values.
@@ -1001,7 +1013,7 @@ export type CreateManagerResponseRouteGateway5 = {
     | CreateManagerResponseProviderAwsAlb10
     | CreateManagerResponseProviderAzureApplicationGatewayForContainers10
     | CreateManagerResponseProviderGkeGateway10
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -1081,7 +1093,7 @@ export type CreateManagerResponseProviderUnion9 =
   | CreateManagerResponseProviderAwsAlb9
   | CreateManagerResponseProviderAzureApplicationGatewayForContainers9
   | CreateManagerResponseProviderGkeGateway9
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -1107,7 +1119,7 @@ export type CreateManagerResponseRouteIngress5 = {
     | CreateManagerResponseProviderAwsAlb9
     | CreateManagerResponseProviderAzureApplicationGatewayForContainers9
     | CreateManagerResponseProviderGkeGateway9
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -1154,7 +1166,7 @@ export type CreateManagerResponseExposureUnion3 =
   | CreateManagerResponseExposureCustom3
   | CreateManagerResponseExposureGenerated3
   | CreateManagerResponseExposureDisabled3
-  | any;
+  | string;
 
 /**
  * Kubernetes runtime substrate configuration.
@@ -1167,19 +1179,19 @@ export type CreateManagerResponseExposureUnion3 =
  * cluster.
  */
 export type CreateManagerResponseKubernetes3 = {
-  cluster?: CreateManagerResponseCluster3 | any | null | undefined;
+  cluster?: CreateManagerResponseCluster3 | string | null | undefined;
   exposure?:
     | CreateManagerResponseExposureCustom3
     | CreateManagerResponseExposureGenerated3
     | CreateManagerResponseExposureDisabled3
-    | any
+    | string
     | null
     | undefined;
 };
 
 export type CreateManagerResponseKubernetesUnion3 =
   | CreateManagerResponseKubernetes3
-  | any;
+  | string;
 
 export const CreateManagerResponseTypeByoVnetAzure3 = {
   ByoVnetAzure: "byo-vnet-azure",
@@ -1307,7 +1319,7 @@ export type CreateManagerResponseNetworkUnion3 =
   | CreateManagerResponseNetworkByoVnetAzure3
   | CreateManagerResponseNetworkUseDefault3
   | CreateManagerResponseNetworkCreate3
-  | any;
+  | string;
 
 /**
  * How telemetry (logs, metrics, traces) is handled.
@@ -1351,33 +1363,29 @@ export type CreateManagerResponseUpdates3 = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type CreateManagerResponseStackSettings3 = {
-  compute?: CreateManagerResponseCompute3 | any | null | undefined;
+  compute?: CreateManagerResponseCompute3 | string | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
   deploymentModel?: CreateManagerResponseDeploymentModel3 | undefined;
-  domains?: CreateManagerResponseDomains3 | any | null | undefined;
+  domains?: CreateManagerResponseDomains3 | string | null | undefined;
   /**
-   * External bindings for pre-existing infrastructure.
-   *
-   * @remarks
-   * Allows using existing resources (MinIO, Redis, shared Container Apps
-   * Environment, etc.) instead of having Alien provision them.
-   * Required for Kubernetes platform, optional for cloud platforms.
+   * Reachability of the deployment's public endpoints, fixed at setup.
    */
-  externalBindings?: CreateManagerResponseExternalBindings3 | null | undefined;
+  endpointAccess?: CreateManagerResponseEndpointAccess3 | undefined;
+  externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
   /**
    * How heartbeat health checks are handled.
    */
   heartbeats?: CreateManagerResponseHeartbeats3 | undefined;
-  kubernetes?: CreateManagerResponseKubernetes3 | any | null | undefined;
+  kubernetes?: CreateManagerResponseKubernetes3 | string | null | undefined;
   network?:
     | CreateManagerResponseNetworkByoVpcAws3
     | CreateManagerResponseNetworkByoVpcGcp3
     | CreateManagerResponseNetworkByoVnetAzure3
     | CreateManagerResponseNetworkUseDefault3
     | CreateManagerResponseNetworkCreate3
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -1445,12 +1453,12 @@ export type CreateManagerResponseFailureDomains4 = {
 
 export type CreateManagerResponseFailureDomainsUnion4 =
   | CreateManagerResponseFailureDomains4
-  | any;
+  | string;
 
 export type CreateManagerResponsePoolsAutoscale2 = {
   failureDomains?:
     | CreateManagerResponseFailureDomains4
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -1487,12 +1495,12 @@ export type CreateManagerResponseFailureDomains3 = {
 
 export type CreateManagerResponseFailureDomainsUnion3 =
   | CreateManagerResponseFailureDomains3
-  | any;
+  | string;
 
 export type CreateManagerResponsePoolsFixed2 = {
   failureDomains?:
     | CreateManagerResponseFailureDomains3
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -1535,7 +1543,7 @@ export type CreateManagerResponseCompute2 = {
 
 export type CreateManagerResponseComputeUnion2 =
   | CreateManagerResponseCompute2
-  | any;
+  | string;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -1555,7 +1563,7 @@ export type CreateManagerResponseAws2 = {
   certificateArn: string;
 };
 
-export type CreateManagerResponseAwsUnion2 = CreateManagerResponseAws2 | any;
+export type CreateManagerResponseAwsUnion2 = CreateManagerResponseAws2 | string;
 
 export type CreateManagerResponseAzure2 = {
   keyVaultCertificateId: string;
@@ -1564,13 +1572,13 @@ export type CreateManagerResponseAzure2 = {
 
 export type CreateManagerResponseAzureUnion2 =
   | CreateManagerResponseAzure2
-  | any;
+  | string;
 
 export type CreateManagerResponseGcp2 = {
   certificateName: string;
 };
 
-export type CreateManagerResponseGcpUnion2 = CreateManagerResponseGcp2 | any;
+export type CreateManagerResponseGcpUnion2 = CreateManagerResponseGcp2 | string;
 
 /**
  * Namespace-scoped Kubernetes TLS Secret reference.
@@ -1595,16 +1603,20 @@ export type CreateManagerResponseDomainsKubernetes2 = {
 
 export type CreateManagerResponseDomainsKubernetesUnion2 =
   | CreateManagerResponseDomainsKubernetes2
-  | any;
+  | string;
 
 /**
  * Platform-specific certificate references for custom domains.
  */
 export type CreateManagerResponseDomainsCertificate2 = {
-  aws?: CreateManagerResponseAws2 | any | null | undefined;
-  azure?: CreateManagerResponseAzure2 | any | null | undefined;
-  gcp?: CreateManagerResponseGcp2 | any | null | undefined;
-  kubernetes?: CreateManagerResponseDomainsKubernetes2 | any | null | undefined;
+  aws?: CreateManagerResponseAws2 | string | null | undefined;
+  azure?: CreateManagerResponseAzure2 | string | null | undefined;
+  gcp?: CreateManagerResponseGcp2 | string | null | undefined;
+  kubernetes?:
+    | CreateManagerResponseDomainsKubernetes2
+    | string
+    | null
+    | undefined;
 };
 
 /**
@@ -1650,7 +1662,7 @@ export type CreateManagerResponsePublicEndpointTargetMachineAddresses2 = {
 export type CreateManagerResponsePublicEndpointTargetUnion2 =
   | CreateManagerResponsePublicEndpointTargetLoadBalancer2
   | CreateManagerResponsePublicEndpointTargetMachineAddresses2
-  | any;
+  | string;
 
 /**
  * Domain configuration for the stack.
@@ -1671,14 +1683,14 @@ export type CreateManagerResponseDomains2 = {
   publicEndpointTarget?:
     | CreateManagerResponsePublicEndpointTargetLoadBalancer2
     | CreateManagerResponsePublicEndpointTargetMachineAddresses2
-    | any
+    | string
     | null
     | undefined;
 };
 
 export type CreateManagerResponseDomainsUnion2 =
   | CreateManagerResponseDomains2
-  | any;
+  | string;
 
 /** @internal */
 export const CreateManagerResponseSetupStatus$inboundSchema: z.ZodEnum<
@@ -1969,7 +1981,7 @@ export const CreateManagerResponseFailureDomainsUnion6$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => CreateManagerResponseFailureDomains6$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function createManagerResponseFailureDomainsUnion6FromJSON(
@@ -1996,7 +2008,7 @@ export const CreateManagerResponsePoolsAutoscale3$inboundSchema: z.ZodType<
   failure_domains: z.nullable(
     z.union([
       z.lazy(() => CreateManagerResponseFailureDomains6$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -2046,7 +2058,7 @@ export const CreateManagerResponseFailureDomainsUnion5$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => CreateManagerResponseFailureDomains5$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function createManagerResponseFailureDomainsUnion5FromJSON(
@@ -2073,7 +2085,7 @@ export const CreateManagerResponsePoolsFixed3$inboundSchema: z.ZodType<
   failure_domains: z.nullable(
     z.union([
       z.lazy(() => CreateManagerResponseFailureDomains5$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -2144,7 +2156,7 @@ export const CreateManagerResponseComputeUnion3$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => CreateManagerResponseCompute3$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function createManagerResponseComputeUnion3FromJSON(
@@ -2185,7 +2197,10 @@ export function createManagerResponseAws3FromJSON(
 export const CreateManagerResponseAwsUnion3$inboundSchema: z.ZodType<
   CreateManagerResponseAwsUnion3,
   unknown
-> = z.union([z.lazy(() => CreateManagerResponseAws3$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => CreateManagerResponseAws3$inboundSchema),
+  z.string(),
+]);
 
 export function createManagerResponseAwsUnion3FromJSON(
   jsonString: string,
@@ -2220,7 +2235,10 @@ export function createManagerResponseAzure3FromJSON(
 export const CreateManagerResponseAzureUnion3$inboundSchema: z.ZodType<
   CreateManagerResponseAzureUnion3,
   unknown
-> = z.union([z.lazy(() => CreateManagerResponseAzure3$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => CreateManagerResponseAzure3$inboundSchema),
+  z.string(),
+]);
 
 export function createManagerResponseAzureUnion3FromJSON(
   jsonString: string,
@@ -2254,7 +2272,10 @@ export function createManagerResponseGcp3FromJSON(
 export const CreateManagerResponseGcpUnion3$inboundSchema: z.ZodType<
   CreateManagerResponseGcpUnion3,
   unknown
-> = z.union([z.lazy(() => CreateManagerResponseGcp3$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => CreateManagerResponseGcp3$inboundSchema),
+  z.string(),
+]);
 
 export function createManagerResponseGcpUnion3FromJSON(
   jsonString: string,
@@ -2314,7 +2335,7 @@ export function createManagerResponseDomainsKubernetes3FromJSON(
 export const CreateManagerResponseDomainsKubernetesUnion3$inboundSchema:
   z.ZodType<CreateManagerResponseDomainsKubernetesUnion3, unknown> = z.union([
     z.lazy(() => CreateManagerResponseDomainsKubernetes3$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function createManagerResponseDomainsKubernetesUnion3FromJSON(
@@ -2339,18 +2360,27 @@ export const CreateManagerResponseDomainsCertificate3$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   aws: z.nullable(
-    z.union([z.lazy(() => CreateManagerResponseAws3$inboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => CreateManagerResponseAws3$inboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   azure: z.nullable(
-    z.union([z.lazy(() => CreateManagerResponseAzure3$inboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => CreateManagerResponseAzure3$inboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   gcp: z.nullable(
-    z.union([z.lazy(() => CreateManagerResponseGcp3$inboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => CreateManagerResponseGcp3$inboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   kubernetes: z.nullable(
     z.union([
       z.lazy(() => CreateManagerResponseDomainsKubernetes3$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -2461,7 +2491,7 @@ export const CreateManagerResponsePublicEndpointTargetUnion3$inboundSchema:
       z.lazy(() =>
         CreateManagerResponsePublicEndpointTargetMachineAddresses3$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ],
   );
 
@@ -2500,7 +2530,7 @@ export const CreateManagerResponseDomains3$inboundSchema: z.ZodType<
       z.lazy(() =>
         CreateManagerResponsePublicEndpointTargetMachineAddresses3$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -2521,7 +2551,7 @@ export const CreateManagerResponseDomainsUnion3$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => CreateManagerResponseDomains3$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function createManagerResponseDomainsUnion3FromJSON(
@@ -2536,21 +2566,9 @@ export function createManagerResponseDomainsUnion3FromJSON(
 }
 
 /** @internal */
-export const CreateManagerResponseExternalBindings3$inboundSchema: z.ZodType<
-  CreateManagerResponseExternalBindings3,
-  unknown
-> = z.object({});
-
-export function createManagerResponseExternalBindings3FromJSON(
-  jsonString: string,
-): SafeParseResult<CreateManagerResponseExternalBindings3, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      CreateManagerResponseExternalBindings3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CreateManagerResponseExternalBindings3' from JSON`,
-  );
-}
+export const CreateManagerResponseEndpointAccess3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseEndpointAccess3
+> = z.enum(CreateManagerResponseEndpointAccess3);
 
 /** @internal */
 export const CreateManagerResponseHeartbeats3$inboundSchema: z.ZodEnum<
@@ -2585,7 +2603,10 @@ export function createManagerResponseCloud3FromJSON(
 export const CreateManagerResponseCloudUnion3$inboundSchema: z.ZodType<
   CreateManagerResponseCloudUnion3,
   unknown
-> = z.union([z.lazy(() => CreateManagerResponseCloud3$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => CreateManagerResponseCloud3$inboundSchema),
+  z.string(),
+]);
 
 export function createManagerResponseCloudUnion3FromJSON(
   jsonString: string,
@@ -2608,7 +2629,10 @@ export const CreateManagerResponseCluster3$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   cloud: z.nullable(
-    z.union([z.lazy(() => CreateManagerResponseCloud3$inboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => CreateManagerResponseCloud3$inboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   namespace: z.nullable(z.string()).optional(),
   ownership: CreateManagerResponseOwnership3$inboundSchema,
@@ -2630,7 +2654,7 @@ export const CreateManagerResponseClusterUnion3$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => CreateManagerResponseCluster3$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function createManagerResponseClusterUnion3FromJSON(
@@ -2892,7 +2916,7 @@ export const CreateManagerResponseProviderUnion12$inboundSchema: z.ZodType<
     CreateManagerResponseProviderAzureApplicationGatewayForContainers12$inboundSchema
   ),
   z.lazy(() => CreateManagerResponseProviderGkeGateway12$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function createManagerResponseProviderUnion12FromJSON(
@@ -2923,7 +2947,7 @@ export const CreateManagerResponseRouteGateway6$inboundSchema: z.ZodType<
         CreateManagerResponseProviderAzureApplicationGatewayForContainers12$inboundSchema
       ),
       z.lazy(() => CreateManagerResponseProviderGkeGateway12$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("gateway"),
@@ -3045,7 +3069,7 @@ export const CreateManagerResponseProviderUnion11$inboundSchema: z.ZodType<
     CreateManagerResponseProviderAzureApplicationGatewayForContainers11$inboundSchema
   ),
   z.lazy(() => CreateManagerResponseProviderGkeGateway11$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function createManagerResponseProviderUnion11FromJSON(
@@ -3075,7 +3099,7 @@ export const CreateManagerResponseRouteIngress6$inboundSchema: z.ZodType<
         CreateManagerResponseProviderAzureApplicationGatewayForContainers11$inboundSchema
       ),
       z.lazy(() => CreateManagerResponseProviderGkeGateway11$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
@@ -3394,7 +3418,7 @@ export const CreateManagerResponseProviderUnion10$inboundSchema: z.ZodType<
     CreateManagerResponseProviderAzureApplicationGatewayForContainers10$inboundSchema
   ),
   z.lazy(() => CreateManagerResponseProviderGkeGateway10$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function createManagerResponseProviderUnion10FromJSON(
@@ -3425,7 +3449,7 @@ export const CreateManagerResponseRouteGateway5$inboundSchema: z.ZodType<
         CreateManagerResponseProviderAzureApplicationGatewayForContainers10$inboundSchema
       ),
       z.lazy(() => CreateManagerResponseProviderGkeGateway10$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("gateway"),
@@ -3547,7 +3571,7 @@ export const CreateManagerResponseProviderUnion9$inboundSchema: z.ZodType<
     CreateManagerResponseProviderAzureApplicationGatewayForContainers9$inboundSchema
   ),
   z.lazy(() => CreateManagerResponseProviderGkeGateway9$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function createManagerResponseProviderUnion9FromJSON(
@@ -3577,7 +3601,7 @@ export const CreateManagerResponseRouteIngress5$inboundSchema: z.ZodType<
         CreateManagerResponseProviderAzureApplicationGatewayForContainers9$inboundSchema
       ),
       z.lazy(() => CreateManagerResponseProviderGkeGateway9$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
@@ -3684,7 +3708,7 @@ export const CreateManagerResponseExposureUnion3$inboundSchema: z.ZodType<
   z.lazy(() => CreateManagerResponseExposureCustom3$inboundSchema),
   z.lazy(() => CreateManagerResponseExposureGenerated3$inboundSchema),
   z.lazy(() => CreateManagerResponseExposureDisabled3$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function createManagerResponseExposureUnion3FromJSON(
@@ -3706,7 +3730,7 @@ export const CreateManagerResponseKubernetes3$inboundSchema: z.ZodType<
   cluster: z.nullable(
     z.union([
       z.lazy(() => CreateManagerResponseCluster3$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   exposure: z.nullable(
@@ -3714,7 +3738,7 @@ export const CreateManagerResponseKubernetes3$inboundSchema: z.ZodType<
       z.lazy(() => CreateManagerResponseExposureCustom3$inboundSchema),
       z.lazy(() => CreateManagerResponseExposureGenerated3$inboundSchema),
       z.lazy(() => CreateManagerResponseExposureDisabled3$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -3735,7 +3759,7 @@ export const CreateManagerResponseKubernetesUnion3$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => CreateManagerResponseKubernetes3$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function createManagerResponseKubernetesUnion3FromJSON(
@@ -3927,7 +3951,7 @@ export const CreateManagerResponseNetworkUnion3$inboundSchema: z.ZodType<
   z.lazy(() => CreateManagerResponseNetworkByoVnetAzure3$inboundSchema),
   z.lazy(() => CreateManagerResponseNetworkUseDefault3$inboundSchema),
   z.lazy(() => CreateManagerResponseNetworkCreate3$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function createManagerResponseNetworkUnion3FromJSON(
@@ -3959,7 +3983,7 @@ export const CreateManagerResponseStackSettings3$inboundSchema: z.ZodType<
   compute: z.nullable(
     z.union([
       z.lazy(() => CreateManagerResponseCompute3$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   deploymentModel: CreateManagerResponseDeploymentModel3$inboundSchema
@@ -3967,17 +3991,18 @@ export const CreateManagerResponseStackSettings3$inboundSchema: z.ZodType<
   domains: z.nullable(
     z.union([
       z.lazy(() => CreateManagerResponseDomains3$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
+  endpointAccess: CreateManagerResponseEndpointAccess3$inboundSchema.optional(),
   externalBindings: z.nullable(
-    z.lazy(() => CreateManagerResponseExternalBindings3$inboundSchema),
+    z.record(z.string(), ExternalBindingUnion$inboundSchema),
   ).optional(),
   heartbeats: CreateManagerResponseHeartbeats3$inboundSchema.optional(),
   kubernetes: z.nullable(
     z.union([
       z.lazy(() => CreateManagerResponseKubernetes3$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   network: z.nullable(
@@ -3987,7 +4012,7 @@ export const CreateManagerResponseStackSettings3$inboundSchema: z.ZodType<
       z.lazy(() => CreateManagerResponseNetworkByoVnetAzure3$inboundSchema),
       z.lazy(() => CreateManagerResponseNetworkUseDefault3$inboundSchema),
       z.lazy(() => CreateManagerResponseNetworkCreate3$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   publicEndpoints: z.nullable(
@@ -4065,7 +4090,7 @@ export const CreateManagerResponseFailureDomainsUnion4$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => CreateManagerResponseFailureDomains4$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function createManagerResponseFailureDomainsUnion4FromJSON(
@@ -4092,7 +4117,7 @@ export const CreateManagerResponsePoolsAutoscale2$inboundSchema: z.ZodType<
   failure_domains: z.nullable(
     z.union([
       z.lazy(() => CreateManagerResponseFailureDomains4$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -4142,7 +4167,7 @@ export const CreateManagerResponseFailureDomainsUnion3$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => CreateManagerResponseFailureDomains3$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function createManagerResponseFailureDomainsUnion3FromJSON(
@@ -4169,7 +4194,7 @@ export const CreateManagerResponsePoolsFixed2$inboundSchema: z.ZodType<
   failure_domains: z.nullable(
     z.union([
       z.lazy(() => CreateManagerResponseFailureDomains3$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -4240,7 +4265,7 @@ export const CreateManagerResponseComputeUnion2$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => CreateManagerResponseCompute2$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function createManagerResponseComputeUnion2FromJSON(
@@ -4281,7 +4306,10 @@ export function createManagerResponseAws2FromJSON(
 export const CreateManagerResponseAwsUnion2$inboundSchema: z.ZodType<
   CreateManagerResponseAwsUnion2,
   unknown
-> = z.union([z.lazy(() => CreateManagerResponseAws2$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => CreateManagerResponseAws2$inboundSchema),
+  z.string(),
+]);
 
 export function createManagerResponseAwsUnion2FromJSON(
   jsonString: string,
@@ -4316,7 +4344,10 @@ export function createManagerResponseAzure2FromJSON(
 export const CreateManagerResponseAzureUnion2$inboundSchema: z.ZodType<
   CreateManagerResponseAzureUnion2,
   unknown
-> = z.union([z.lazy(() => CreateManagerResponseAzure2$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => CreateManagerResponseAzure2$inboundSchema),
+  z.string(),
+]);
 
 export function createManagerResponseAzureUnion2FromJSON(
   jsonString: string,
@@ -4350,7 +4381,10 @@ export function createManagerResponseGcp2FromJSON(
 export const CreateManagerResponseGcpUnion2$inboundSchema: z.ZodType<
   CreateManagerResponseGcpUnion2,
   unknown
-> = z.union([z.lazy(() => CreateManagerResponseGcp2$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => CreateManagerResponseGcp2$inboundSchema),
+  z.string(),
+]);
 
 export function createManagerResponseGcpUnion2FromJSON(
   jsonString: string,
@@ -4410,7 +4444,7 @@ export function createManagerResponseDomainsKubernetes2FromJSON(
 export const CreateManagerResponseDomainsKubernetesUnion2$inboundSchema:
   z.ZodType<CreateManagerResponseDomainsKubernetesUnion2, unknown> = z.union([
     z.lazy(() => CreateManagerResponseDomainsKubernetes2$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function createManagerResponseDomainsKubernetesUnion2FromJSON(
@@ -4435,18 +4469,27 @@ export const CreateManagerResponseDomainsCertificate2$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   aws: z.nullable(
-    z.union([z.lazy(() => CreateManagerResponseAws2$inboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => CreateManagerResponseAws2$inboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   azure: z.nullable(
-    z.union([z.lazy(() => CreateManagerResponseAzure2$inboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => CreateManagerResponseAzure2$inboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   gcp: z.nullable(
-    z.union([z.lazy(() => CreateManagerResponseGcp2$inboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => CreateManagerResponseGcp2$inboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   kubernetes: z.nullable(
     z.union([
       z.lazy(() => CreateManagerResponseDomainsKubernetes2$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -4557,7 +4600,7 @@ export const CreateManagerResponsePublicEndpointTargetUnion2$inboundSchema:
       z.lazy(() =>
         CreateManagerResponsePublicEndpointTargetMachineAddresses2$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ],
   );
 
@@ -4596,7 +4639,7 @@ export const CreateManagerResponseDomains2$inboundSchema: z.ZodType<
       z.lazy(() =>
         CreateManagerResponsePublicEndpointTargetMachineAddresses2$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -4617,7 +4660,7 @@ export const CreateManagerResponseDomainsUnion2$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => CreateManagerResponseDomains2$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function createManagerResponseDomainsUnion2FromJSON(

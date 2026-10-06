@@ -26,7 +26,7 @@ let value: DataDaemon = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "not-installed",
+          reason: "api-unavailable",
           severity: "warning",
           source: "<value>",
         },

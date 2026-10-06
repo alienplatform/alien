@@ -25,9 +25,9 @@ const value: models.TargetDeploymentHorizonMachineImage = {
 };
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

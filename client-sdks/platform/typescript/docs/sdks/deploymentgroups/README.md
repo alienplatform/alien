@@ -76,6 +76,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentGroupsListDeploymentGroups,
+  useDeploymentGroupsListDeploymentGroupsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentGroupsListDeploymentGroups,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentGroupsListDeploymentGroups,
+  invalidateAllDeploymentGroupsListDeploymentGroups,
+} from "@alienplatform/platform-api/react-query/deploymentGroupsListDeploymentGroups.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="listDeploymentGroups" method="get" path="/v1/deployment-groups" example="projectName" -->
@@ -126,6 +154,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentGroupsListDeploymentGroups,
+  useDeploymentGroupsListDeploymentGroupsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentGroupsListDeploymentGroups,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentGroupsListDeploymentGroups,
+  invalidateAllDeploymentGroupsListDeploymentGroups,
+} from "@alienplatform/platform-api/react-query/deploymentGroupsListDeploymentGroups.js";
 ```
 
 ### Parameters
@@ -209,6 +265,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentGroupsCreateDeploymentGroupMutation
+} from "@alienplatform/platform-api/react-query/deploymentGroupsCreateDeploymentGroup.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -288,6 +361,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentGroupsEnsureDeploymentGroupByNameMutation
+} from "@alienplatform/platform-api/react-query/deploymentGroupsEnsureDeploymentGroupByName.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -363,6 +453,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentGroupsGetDeploymentGroupByExternalId,
+  useDeploymentGroupsGetDeploymentGroupByExternalIdSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentGroupsGetDeploymentGroupByExternalId,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentGroupsGetDeploymentGroupByExternalId,
+  invalidateAllDeploymentGroupsGetDeploymentGroupByExternalId,
+} from "@alienplatform/platform-api/react-query/deploymentGroupsGetDeploymentGroupByExternalId.js";
 ```
 
 ### Parameters
@@ -446,6 +564,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentGroupsEnsureDeploymentGroupByExternalIdMutation
+} from "@alienplatform/platform-api/react-query/deploymentGroupsEnsureDeploymentGroupByExternalId.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -523,6 +658,34 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentGroupsGetDeploymentGroup,
+  useDeploymentGroupsGetDeploymentGroupSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentGroupsGetDeploymentGroup,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentGroupsGetDeploymentGroup,
+  invalidateAllDeploymentGroupsGetDeploymentGroup,
+} from "@alienplatform/platform-api/react-query/deploymentGroupsGetDeploymentGroup.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -591,13 +754,30 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-    
+
   } else {
     console.log("deploymentGroupsDeleteDeploymentGroup failed:", res.error);
   }
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentGroupsDeleteDeploymentGroupMutation
+} from "@alienplatform/platform-api/react-query/deploymentGroupsDeleteDeploymentGroup.js";
 ```
 
 ### Parameters
@@ -683,6 +863,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentGroupsUpdateDeploymentGroupMutation
+} from "@alienplatform/platform-api/react-query/deploymentGroupsUpdateDeploymentGroup.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -764,6 +961,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentGroupsSetDeploymentGroupExternalIdMutation
+} from "@alienplatform/platform-api/react-query/deploymentGroupsSetDeploymentGroupExternalId.js";
 ```
 
 ### Parameters
@@ -861,6 +1075,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentGroupsCreateDeploymentGroupTokenMutation
+} from "@alienplatform/platform-api/react-query/deploymentGroupsCreateDeploymentGroupToken.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -878,7 +1109,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 400, 404                 | application/json         |
+| errors.APIError          | 400, 404, 409            | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -936,6 +1167,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentGroupsCreateFirstPartyDeploymentSessionMutation
+} from "@alienplatform/platform-api/react-query/deploymentGroupsCreateFirstPartyDeploymentSession.js";
 ```
 
 ### Parameters
@@ -1013,6 +1261,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentGroupsGetExternalAIBinding,
+  useDeploymentGroupsGetExternalAIBindingSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentGroupsGetExternalAIBinding,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentGroupsGetExternalAIBinding,
+  invalidateAllDeploymentGroupsGetExternalAIBinding,
+} from "@alienplatform/platform-api/react-query/deploymentGroupsGetExternalAIBinding.js";
 ```
 
 ### Parameters
@@ -1102,6 +1378,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentGroupsPutExternalAIBindingMutation
+} from "@alienplatform/platform-api/react-query/deploymentGroupsPutExternalAIBinding.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -1170,13 +1463,30 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-    
+
   } else {
     console.log("deploymentGroupsDeleteExternalAIBinding failed:", res.error);
   }
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentGroupsDeleteExternalAIBindingMutation
+} from "@alienplatform/platform-api/react-query/deploymentGroupsDeleteExternalAIBinding.js";
 ```
 
 ### Parameters
@@ -1258,6 +1568,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentGroupsCreateExternalAIModelCheckMutation
+} from "@alienplatform/platform-api/react-query/deploymentGroupsCreateExternalAIModelCheck.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -1334,6 +1661,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentGroupsGetExternalAIModelCheck,
+  useDeploymentGroupsGetExternalAIModelCheckSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentGroupsGetExternalAIModelCheck,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentGroupsGetExternalAIModelCheck,
+  invalidateAllDeploymentGroupsGetExternalAIModelCheck,
+} from "@alienplatform/platform-api/react-query/deploymentGroupsGetExternalAIModelCheck.js";
 ```
 
 ### Parameters

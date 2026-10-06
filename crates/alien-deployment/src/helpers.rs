@@ -196,13 +196,14 @@ pub fn inject_environment_variables(
     info!("Injecting environment variables into compute resources");
 
     let snapshot = &config.environment_variables;
-    let stored = alien_core::stored_input_values(
+    let deployer_environment = deployer_secret_environment(
         &stack.inputs,
         &config.input_values,
-        &config.environment_variables,
+        config.stored_secret_input_ids.as_deref(),
+        &config.environment_variables.variables,
+        platform,
+        deployer_reports,
     );
-    let deployer_environment =
-        deployer_secret_environment(&stack.inputs, &stored, platform, deployer_reports);
     for (resource_name, resource_entry) in &mut stack.resources {
         let resource_type = resource_entry.config.resource_type();
 
@@ -703,7 +704,7 @@ pub async fn sync_secrets_to_vault(
 /// safe to run from a control plane that must never see the customer's secret.
 ///
 /// Returns one report per slot with where the deployer writes it. A deployment
-/// with slots but no secrets vault fails fast: the slots have nowhere to live.
+/// without a secrets vault keeps its pre-vault delivery until setup adds one.
 pub async fn check_deployer_secrets(
     stack: &Stack,
     stack_state: &StackState,
@@ -711,12 +712,13 @@ pub async fn check_deployer_secrets(
     config: &DeploymentConfig,
     platform: Platform,
 ) -> Result<Vec<DeployerSecretReport>> {
-    let stored = alien_core::stored_input_values(
+    let slots = deployer_secret_slots(
         &stack.inputs,
         &config.input_values,
-        &config.environment_variables,
+        config.stored_secret_input_ids.as_deref(),
+        &config.environment_variables.variables,
+        platform,
     );
-    let slots = deployer_secret_slots(&stack.inputs, &stored, platform);
     if slots.is_empty() {
         return Ok(Vec::new());
     }
@@ -806,12 +808,13 @@ pub fn deployer_secrets_blocking_start<'a>(
     platform: Platform,
     reports: &'a [DeployerSecretReport],
 ) -> Vec<&'a DeployerSecretReport> {
-    let stored = alien_core::stored_input_values(
+    let slots = deployer_secret_slots(
         &stack.inputs,
         &config.input_values,
-        &config.environment_variables,
+        config.stored_secret_input_ids.as_deref(),
+        &config.environment_variables.variables,
+        platform,
     );
-    let slots = deployer_secret_slots(&stack.inputs, &stored, platform);
     reports
         .iter()
         .filter(|report| report.blocks_start())
@@ -1258,6 +1261,94 @@ mod tests {
             .allow_frozen_changes(false)
             .external_bindings(ExternalBindings::default())
             .build()
+    }
+
+    #[tokio::test]
+    async fn stored_dual_secret_presence_skips_vault_checks_but_not_deployer_only_secrets() {
+        let mut stack = make_single_function_stack("demo-worker");
+        stack.inputs = vec![serde_json::from_value(serde_json::json!({
+            "id": "apiKey", "kind": "secret", "providedBy": ["developer", "deployer"],
+            "required": true, "label": "API key", "description": ""
+        }))
+        .unwrap()];
+        let mut config = make_config(make_snapshot(&[], &[]));
+        config.stored_secret_input_ids = Some(vec!["apiKey".to_string()]);
+        let mut state = StackState::new(Platform::Test);
+        let reports =
+            check_deployer_secrets(&stack, &state, &ClientConfig::Test, &config, Platform::Test)
+                .await
+                .unwrap();
+        assert!(reports.is_empty());
+        assert!(config.input_values.is_empty());
+        let missing = DeployerSecretReport {
+            input_id: "apiKey".to_string(),
+            label: "API key".to_string(),
+            required: true,
+            status: DeployerSecretStatus::Missing,
+            message: None,
+            version: None,
+            location: alien_core::DeployerSecretLocation {
+                store: alien_core::DeployerSecretStore::LocalVault,
+                name: "input-api-key".to_string(),
+                vault_name: None,
+                console_url: None,
+                cli_command: String::new(),
+                delete_command: None,
+            },
+        };
+        assert!(deployer_secrets_blocking_start(
+            &stack,
+            &config,
+            Platform::Test,
+            &[missing.clone()]
+        )
+        .is_empty());
+        config.stored_secret_input_ids = Some(Vec::new());
+        assert!(
+            check_deployer_secrets(&stack, &state, &ClientConfig::Test, &config, Platform::Test)
+                .await
+                .unwrap()
+                .is_empty(),
+            "pre-vault deployments can still refresh"
+        );
+        state.resources.insert(
+            SECRETS_VAULT_ID.to_string(),
+            StackResourceState::new_pending(
+                Vault::RESOURCE_TYPE.to_string(),
+                Resource::new(Vault::new(SECRETS_VAULT_ID.to_string()).build()),
+                Some(ResourceLifecycle::Frozen),
+                Vec::new(),
+            ),
+        );
+        assert!(check_deployer_secrets(
+            &stack,
+            &state,
+            &ClientConfig::Test,
+            &config,
+            Platform::Test
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            deployer_secrets_blocking_start(&stack, &config, Platform::Test, &[missing.clone()])
+                .len(),
+            1
+        );
+        config.stored_secret_input_ids = Some(vec!["apiKey".to_string()]);
+        stack.inputs[0].provided_by = vec![alien_core::StackInputProvider::Deployer];
+        assert!(check_deployer_secrets(
+            &stack,
+            &state,
+            &ClientConfig::Test,
+            &config,
+            Platform::Test
+        )
+        .await
+        .is_err());
+        assert!(
+            deployer_secrets_blocking_start(&stack, &config, Platform::Test, &[missing]).is_empty(),
+            "legacy stored presence remains a fallback until the vault is filled"
+        );
     }
 
     fn make_single_function_stack(function_id: &str) -> Stack {

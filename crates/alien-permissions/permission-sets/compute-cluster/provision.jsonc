@@ -337,6 +337,34 @@
           }
         }
       },
+      // Read profile metadata in this account: generated profile names need not
+      // carry the stack prefix. The backing role is inspected within PassRole's scope.
+      {
+        "grant": {
+          "actions": ["iam:GetInstanceProfile"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:instance-profile/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:instance-profile/*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["iam:GetRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+          }
+        }
+      },
       // iam:PassRole — scoped to stack-prefixed IAM roles created by setup.
       // CloudFormation role names are based on logical IDs and generated
       // suffixes, so they do not reliably end in a fixed role suffix.

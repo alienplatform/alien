@@ -58,6 +58,11 @@ output "s3_bucket" {
   sensitive = true
 }
 
+output "e2e_terraform_state_bucket" {
+  value     = local.e2e_terraform_state_name
+  sensitive = true
+}
+
 output "lambda_image_uri" {
   value     = "${aws_ecr_repository.lambda_test.repository_url}:latest"
   sensitive = true

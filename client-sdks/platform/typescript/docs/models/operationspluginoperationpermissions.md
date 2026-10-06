@@ -15,7 +15,7 @@ let value: OperationsPluginOperationPermissions = {
       permissions: [
         "<value 1>",
       ],
-      scope: "projects/${projectName}",
+      scope: "projects/${projectName}/buckets/${resourceName}",
       reason: "<value>",
     },
   ],

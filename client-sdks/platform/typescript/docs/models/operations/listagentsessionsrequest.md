@@ -10,5 +10,6 @@ let value: ListAgentSessionsRequest = {};
 
 ## Fields
 
-| Field       | Type        | Required    | Description |
-| ----------- | ----------- | ----------- | ----------- |
+| Field                                                                  | Type                                                                   | Required                                                               | Description                                                            |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `project`                                                              | *string*                                                               | :heavy_minus_sign:                                                     | Only sessions bound to this project. Omit to list the whole workspace. |

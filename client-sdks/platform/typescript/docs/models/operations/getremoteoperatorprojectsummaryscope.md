@@ -11,5 +11,5 @@ let value: GetRemoteOperatorProjectSummaryScope = "projects/${projectName}";
 ## Values
 
 ```typescript
-"projects/${projectName}"
+"projects/${projectName}" | "projects/${projectName}/buckets/${resourceName}"
 ```

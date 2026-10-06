@@ -19,6 +19,26 @@ import {
   TargetOperationsBundleSet$inboundSchema,
 } from "./targetoperationsbundleset.js";
 
+export type SyncReconcileResponseHealthCheck = {
+  path: string;
+  port: number;
+};
+
+export type TargetDynamicContainer = {
+  name: string;
+  generation: number;
+  image: string;
+  cpu: string;
+  memory: string;
+  replicas: number;
+  ports: Array<number>;
+  deleted: boolean;
+  env: { [k: string]: string };
+  secretEnv: { [k: string]: string };
+  healthCheck?: SyncReconcileResponseHealthCheck | undefined;
+  suspendedReason?: string | undefined;
+};
+
 /**
  * State reconciliation result with optional target
  */
@@ -36,7 +56,60 @@ export type SyncReconcileResponse = {
    * Target operations-bundle set the Operator should converge its loaded plugin registry toward.
    */
   targetOperationsBundleSet?: TargetOperationsBundleSet | undefined;
+  /**
+   * Complete release-independent dynamic container target set for a Kubernetes Operator.
+   */
+  targetDynamicContainers?: Array<TargetDynamicContainer> | undefined;
 };
+
+/** @internal */
+export const SyncReconcileResponseHealthCheck$inboundSchema: z.ZodType<
+  SyncReconcileResponseHealthCheck,
+  unknown
+> = z.object({
+  path: z.string(),
+  port: z.int(),
+});
+
+export function syncReconcileResponseHealthCheckFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseHealthCheck, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponseHealthCheck$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseHealthCheck' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDynamicContainer$inboundSchema: z.ZodType<
+  TargetDynamicContainer,
+  unknown
+> = z.object({
+  name: z.string(),
+  generation: z.int(),
+  image: z.string(),
+  cpu: z.string(),
+  memory: z.string(),
+  replicas: z.int(),
+  ports: z.array(z.int()),
+  deleted: z.boolean(),
+  env: z.record(z.string(), z.string()),
+  secretEnv: z.record(z.string(), z.string()),
+  healthCheck: z.lazy(() => SyncReconcileResponseHealthCheck$inboundSchema)
+    .optional(),
+  suspendedReason: z.string().optional(),
+});
+
+export function targetDynamicContainerFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDynamicContainer, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDynamicContainer$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDynamicContainer' from JSON`,
+  );
+}
 
 /** @internal */
 export const SyncReconcileResponse$inboundSchema: z.ZodType<
@@ -47,6 +120,9 @@ export const SyncReconcileResponse$inboundSchema: z.ZodType<
   current: DeploymentState$inboundSchema,
   target: TargetDeployment$inboundSchema.optional(),
   targetOperationsBundleSet: TargetOperationsBundleSet$inboundSchema.optional(),
+  targetDynamicContainers: z.array(
+    z.lazy(() => TargetDynamicContainer$inboundSchema),
+  ).optional(),
 });
 
 export function syncReconcileResponseFromJSON(
