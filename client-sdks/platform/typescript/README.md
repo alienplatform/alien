@@ -301,6 +301,9 @@ run();
 * [updateEnvironmentVariables](docs/sdks/deployments/README.md#updateenvironmentvariables) - Replace a deployment's advanced environment variables. Stack-input-backed variables are write-only through the input endpoint. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
 * [createToken](docs/sdks/deployments/README.md#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
 * [listMachines](docs/sdks/deployments/README.md#listmachines)
+* [listVolumeRestores](docs/sdks/deployments/README.md#listvolumerestores) - List a deployment's volume restore requests, newest first.
+* [restoreVolume](docs/sdks/deployments/README.md#restorevolume) - Replace one replica's persistent volume with a new volume made from a snapshot. The deployment must be running (an update may already be queued or in progress). The replica is stopped while its volume is swapped, and the replaced volume is snapshotted before it is deleted.
+* [cancelVolumeRestore](docs/sdks/deployments/README.md#cancelvolumerestore) - Cancel a pending volume restore. Use it when a restore keeps failing: the deployment stops attempting it. A restore whose volume was already swapped still finishes. Allowed in any deployment status, including update-failed.
 
 ### [Domains](docs/sdks/domains/README.md)
 
@@ -593,6 +596,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentGroupsUpdateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
 - [`deploymentPlanCompute`](docs/sdks/deployment/README.md#plancompute) - Plan deployment compute for the active release before stack preparation. The response contains recommended machine and scale choices for cloud compute pools.
 - [`deploymentPrepareStack`](docs/sdks/deployment/README.md#preparestack) - Prepare the active release stack for a deployment portal setup session. The response contains the generated stack shape plus setup compatibility metadata.
+- [`deploymentsCancelVolumeRestore`](docs/sdks/deployments/README.md#cancelvolumerestore) - Cancel a pending volume restore. Use it when a restore keeps failing: the deployment stops attempting it. A restore whose volume was already swapped still finishes. Allowed in any deployment status, including update-failed.
 - [`deploymentsCreate`](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
 - [`deploymentsCreateSetupRegistrationOperation`](docs/sdks/deployments/README.md#createsetupregistrationoperation) - Start a durable setup registration operation for CloudFormation, Terraform, or Helm.
 - [`deploymentsCreateToken`](docs/sdks/deployments/README.md#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
@@ -608,8 +612,10 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentsListFilterDeploymentGroups`](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
 - [`deploymentsListFilterEnvironments`](docs/sdks/deployments/README.md#listfilterenvironments) - List distinct effective environments used by deployments. Used for filter dropdowns.
 - [`deploymentsListMachines`](docs/sdks/deployments/README.md#listmachines)
+- [`deploymentsListVolumeRestores`](docs/sdks/deployments/README.md#listvolumerestores) - List a deployment's volume restore requests, newest first.
 - [`deploymentsPinRelease`](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
 - [`deploymentsRedeploy`](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
+- [`deploymentsRestoreVolume`](docs/sdks/deployments/README.md#restorevolume) - Replace one replica's persistent volume with a new volume made from a snapshot. The deployment must be running (an update may already be queued or in progress). The replica is stopped while its volume is swapped, and the replaced volume is snapshotted before it is deleted.
 - [`deploymentsRetry`](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 - [`deploymentsSetFirstPartyDeploymentInputs`](docs/sdks/deployments/README.md#setfirstpartydeploymentinputs) - Store operator-provided input values on a first-party deployment session token so CLI/local deploys apply them.
 - [`deploymentsSetReleaseChannel`](docs/sdks/deployments/README.md#setreleasechannel)
@@ -872,6 +878,7 @@ To learn about this feature and how to get started, check
 - [`useDeploymentGroupsUpdateDeploymentGroupMutation`](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
 - [`useDeploymentPlanComputeMutation`](docs/sdks/deployment/README.md#plancompute) - Plan deployment compute for the active release before stack preparation. The response contains recommended machine and scale choices for cloud compute pools.
 - [`useDeploymentPrepareStackMutation`](docs/sdks/deployment/README.md#preparestack) - Prepare the active release stack for a deployment portal setup session. The response contains the generated stack shape plus setup compatibility metadata.
+- [`useDeploymentsCancelVolumeRestoreMutation`](docs/sdks/deployments/README.md#cancelvolumerestore) - Cancel a pending volume restore. Use it when a restore keeps failing: the deployment stops attempting it. A restore whose volume was already swapped still finishes. Allowed in any deployment status, including update-failed.
 - [`useDeploymentsCreateMutation`](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
 - [`useDeploymentsCreateSetupRegistrationOperationMutation`](docs/sdks/deployments/README.md#createsetupregistrationoperation) - Start a durable setup registration operation for CloudFormation, Terraform, or Helm.
 - [`useDeploymentsCreateTokenMutation`](docs/sdks/deployments/README.md#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
@@ -887,8 +894,10 @@ To learn about this feature and how to get started, check
 - [`useDeploymentsListFilterDeploymentGroups`](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
 - [`useDeploymentsListFilterEnvironments`](docs/sdks/deployments/README.md#listfilterenvironments) - List distinct effective environments used by deployments. Used for filter dropdowns.
 - [`useDeploymentsListMachines`](docs/sdks/deployments/README.md#listmachines)
+- [`useDeploymentsListVolumeRestores`](docs/sdks/deployments/README.md#listvolumerestores) - List a deployment's volume restore requests, newest first.
 - [`useDeploymentsPinReleaseMutation`](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
 - [`useDeploymentsRedeployMutation`](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
+- [`useDeploymentsRestoreVolumeMutation`](docs/sdks/deployments/README.md#restorevolume) - Replace one replica's persistent volume with a new volume made from a snapshot. The deployment must be running (an update may already be queued or in progress). The replica is stopped while its volume is swapped, and the replaced volume is snapshotted before it is deleted.
 - [`useDeploymentsRetryMutation`](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 - [`useDeploymentsSetFirstPartyDeploymentInputsMutation`](docs/sdks/deployments/README.md#setfirstpartydeploymentinputs) - Store operator-provided input values on a first-party deployment session token so CLI/local deploys apply them.
 - [`useDeploymentsSetReleaseChannelMutation`](docs/sdks/deployments/README.md#setreleasechannel)

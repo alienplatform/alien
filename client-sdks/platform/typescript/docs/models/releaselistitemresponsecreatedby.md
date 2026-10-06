@@ -1,17 +1,17 @@
-# CreatedBy
+# ReleaseListItemResponseCreatedBy
 
 Platform user who created the release, included when ?include=createdBy is used
 
 ## Example Usage
 
 ```typescript
-import { CreatedBy } from "@alienplatform/platform-api/models";
+import { ReleaseListItemResponseCreatedBy } from "@alienplatform/platform-api/models";
 
-let value: CreatedBy = {
+let value: ReleaseListItemResponseCreatedBy = {
   id: "<id>",
   name: "<value>",
-  email: "Jacky.Marvin@yahoo.com",
-  image: "https://loremflickr.com/3225/676?lock=2601971394296232",
+  email: "Timmothy4@yahoo.com",
+  image: "https://picsum.photos/seed/TVwGWpOmO/2713/1619",
 };
 ```
 

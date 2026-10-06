@@ -27,6 +27,144 @@ export type EventDataDeploymentDeletionRequested = {
 /**
  * Type of authenticated principal that requested an event.
  */
+export const EventKind9 = {
+  User: "user",
+  ServiceAccount: "serviceAccount",
+} as const;
+/**
+ * Type of authenticated principal that requested an event.
+ */
+export type EventKind9 = ClosedEnum<typeof EventKind9>;
+
+/**
+ * Client channel that carried a principal's request.
+ */
+export const EventViaEnum9 = {
+  Mcp: "mcp",
+} as const;
+/**
+ * Client channel that carried a principal's request.
+ */
+export type EventViaEnum9 = ClosedEnum<typeof EventViaEnum9>;
+
+export type EventViaUnion9 = EventViaEnum9 | string;
+
+/**
+ * Authenticated principal that requested a deployment intent event.
+ */
+export type EventActor9 = {
+  /**
+   * User email when the principal is a user.
+   */
+  email?: string | null | undefined;
+  /**
+   * Stable user or service-account identifier.
+   */
+  id: string;
+  /**
+   * Type of authenticated principal that requested an event.
+   */
+  kind: EventKind9;
+  via?: EventViaEnum9 | string | null | undefined;
+};
+
+export type EventActorUnion9 = EventActor9 | string;
+
+export type EventDataDeploymentVolumeRestoreCancelled = {
+  actor?: EventActor9 | string | null | undefined;
+  /**
+   * ID of the deployment
+   */
+  deploymentId: string;
+  /**
+   * Replica ordinal whose volume was to be replaced
+   */
+  ordinal: number;
+  /**
+   * ID of the cancelled volume restore request
+   */
+  requestId: string;
+  /**
+   * ID of the container resource that owns the volume
+   */
+  resourceId: string;
+  type: "DeploymentVolumeRestoreCancelled";
+};
+
+/**
+ * Type of authenticated principal that requested an event.
+ */
+export const EventKind8 = {
+  User: "user",
+  ServiceAccount: "serviceAccount",
+} as const;
+/**
+ * Type of authenticated principal that requested an event.
+ */
+export type EventKind8 = ClosedEnum<typeof EventKind8>;
+
+/**
+ * Client channel that carried a principal's request.
+ */
+export const EventViaEnum8 = {
+  Mcp: "mcp",
+} as const;
+/**
+ * Client channel that carried a principal's request.
+ */
+export type EventViaEnum8 = ClosedEnum<typeof EventViaEnum8>;
+
+export type EventViaUnion8 = EventViaEnum8 | string;
+
+/**
+ * Authenticated principal that requested a deployment intent event.
+ */
+export type EventActor8 = {
+  /**
+   * User email when the principal is a user.
+   */
+  email?: string | null | undefined;
+  /**
+   * Stable user or service-account identifier.
+   */
+  id: string;
+  /**
+   * Type of authenticated principal that requested an event.
+   */
+  kind: EventKind8;
+  via?: EventViaEnum8 | string | null | undefined;
+};
+
+export type EventActorUnion8 = EventActor8 | string;
+
+export type EventDataDeploymentVolumeRestoreRequested = {
+  actor?: EventActor8 | string | null | undefined;
+  /**
+   * ID of the deployment
+   */
+  deploymentId: string;
+  /**
+   * Replica ordinal whose volume is replaced
+   */
+  ordinal: number;
+  /**
+   * ID of the volume restore request
+   */
+  requestId: string;
+  /**
+   * ID of the container resource that owns the volume
+   */
+  resourceId: string;
+  /**
+   * Cloud ID of the snapshot to restore
+   */
+  snapshotId: string;
+  type: "DeploymentVolumeRestoreRequested";
+};
+
+/**
+ * Type of authenticated principal that requested an event.
+ */
 export const EventKind7 = {
   User: "user",
   ServiceAccount: "serviceAccount",
@@ -1517,6 +1655,8 @@ export type EventDataUnion =
   | EventDataDeploymentReleasePinned
   | EventDataDeploymentReleaseUnpinned
   | EventDataDeploymentEnvironmentUpdated
+  | EventDataDeploymentVolumeRestoreRequested
+  | EventDataDeploymentVolumeRestoreCancelled
   | EventDataDeploymentDeletionRequested
   | DeploymentCredentialRotationEvent;
 
@@ -1708,6 +1848,8 @@ export type Event = {
     | EventDataDeploymentReleasePinned
     | EventDataDeploymentReleaseUnpinned
     | EventDataDeploymentEnvironmentUpdated
+    | EventDataDeploymentVolumeRestoreRequested
+    | EventDataDeploymentVolumeRestoreCancelled
     | EventDataDeploymentDeletionRequested
     | DeploymentCredentialRotationEvent;
   /**
@@ -1742,6 +1884,187 @@ export function eventDataDeploymentDeletionRequestedFromJSON(
     (x) =>
       EventDataDeploymentDeletionRequested$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'EventDataDeploymentDeletionRequested' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventKind9$inboundSchema: z.ZodEnum<typeof EventKind9> = z.enum(
+  EventKind9,
+);
+
+/** @internal */
+export const EventViaEnum9$inboundSchema: z.ZodEnum<typeof EventViaEnum9> = z
+  .enum(EventViaEnum9);
+
+/** @internal */
+export const EventViaUnion9$inboundSchema: z.ZodType<EventViaUnion9, unknown> =
+  z.union([EventViaEnum9$inboundSchema, z.string()]);
+
+export function eventViaUnion9FromJSON(
+  jsonString: string,
+): SafeParseResult<EventViaUnion9, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventViaUnion9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventViaUnion9' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventActor9$inboundSchema: z.ZodType<EventActor9, unknown> = z
+  .object({
+    email: z.nullable(z.string()).optional(),
+    id: z.string(),
+    kind: EventKind9$inboundSchema,
+    via: z.nullable(z.union([EventViaEnum9$inboundSchema, z.string()]))
+      .optional(),
+  });
+
+export function eventActor9FromJSON(
+  jsonString: string,
+): SafeParseResult<EventActor9, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventActor9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventActor9' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventActorUnion9$inboundSchema: z.ZodType<
+  EventActorUnion9,
+  unknown
+> = z.union([z.lazy(() => EventActor9$inboundSchema), z.string()]);
+
+export function eventActorUnion9FromJSON(
+  jsonString: string,
+): SafeParseResult<EventActorUnion9, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventActorUnion9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventActorUnion9' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventDataDeploymentVolumeRestoreCancelled$inboundSchema: z.ZodType<
+  EventDataDeploymentVolumeRestoreCancelled,
+  unknown
+> = z.object({
+  actor: z.nullable(
+    z.union([z.lazy(() => EventActor9$inboundSchema), z.string()]),
+  ).optional(),
+  deploymentId: z.string(),
+  ordinal: z.int(),
+  requestId: z.string(),
+  resourceId: z.string(),
+  type: z.literal("DeploymentVolumeRestoreCancelled"),
+});
+
+export function eventDataDeploymentVolumeRestoreCancelledFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  EventDataDeploymentVolumeRestoreCancelled,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      EventDataDeploymentVolumeRestoreCancelled$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'EventDataDeploymentVolumeRestoreCancelled' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventKind8$inboundSchema: z.ZodEnum<typeof EventKind8> = z.enum(
+  EventKind8,
+);
+
+/** @internal */
+export const EventViaEnum8$inboundSchema: z.ZodEnum<typeof EventViaEnum8> = z
+  .enum(EventViaEnum8);
+
+/** @internal */
+export const EventViaUnion8$inboundSchema: z.ZodType<EventViaUnion8, unknown> =
+  z.union([EventViaEnum8$inboundSchema, z.string()]);
+
+export function eventViaUnion8FromJSON(
+  jsonString: string,
+): SafeParseResult<EventViaUnion8, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventViaUnion8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventViaUnion8' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventActor8$inboundSchema: z.ZodType<EventActor8, unknown> = z
+  .object({
+    email: z.nullable(z.string()).optional(),
+    id: z.string(),
+    kind: EventKind8$inboundSchema,
+    via: z.nullable(z.union([EventViaEnum8$inboundSchema, z.string()]))
+      .optional(),
+  });
+
+export function eventActor8FromJSON(
+  jsonString: string,
+): SafeParseResult<EventActor8, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventActor8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventActor8' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventActorUnion8$inboundSchema: z.ZodType<
+  EventActorUnion8,
+  unknown
+> = z.union([z.lazy(() => EventActor8$inboundSchema), z.string()]);
+
+export function eventActorUnion8FromJSON(
+  jsonString: string,
+): SafeParseResult<EventActorUnion8, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventActorUnion8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventActorUnion8' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventDataDeploymentVolumeRestoreRequested$inboundSchema: z.ZodType<
+  EventDataDeploymentVolumeRestoreRequested,
+  unknown
+> = z.object({
+  actor: z.nullable(
+    z.union([z.lazy(() => EventActor8$inboundSchema), z.string()]),
+  ).optional(),
+  deploymentId: z.string(),
+  ordinal: z.int(),
+  requestId: z.string(),
+  resourceId: z.string(),
+  snapshotId: z.string(),
+  type: z.literal("DeploymentVolumeRestoreRequested"),
+});
+
+export function eventDataDeploymentVolumeRestoreRequestedFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  EventDataDeploymentVolumeRestoreRequested,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      EventDataDeploymentVolumeRestoreRequested$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'EventDataDeploymentVolumeRestoreRequested' from JSON`,
   );
 }
 
@@ -3524,6 +3847,8 @@ export const EventDataUnion$inboundSchema: z.ZodType<EventDataUnion, unknown> =
     z.lazy(() => EventDataDeploymentReleasePinned$inboundSchema),
     z.lazy(() => EventDataDeploymentReleaseUnpinned$inboundSchema),
     z.lazy(() => EventDataDeploymentEnvironmentUpdated$inboundSchema),
+    z.lazy(() => EventDataDeploymentVolumeRestoreRequested$inboundSchema),
+    z.lazy(() => EventDataDeploymentVolumeRestoreCancelled$inboundSchema),
     z.lazy(() => EventDataDeploymentDeletionRequested$inboundSchema),
     DeploymentCredentialRotationEvent$inboundSchema,
   ]);
@@ -3699,6 +4024,8 @@ export const Event$inboundSchema: z.ZodType<Event, unknown> = z.object({
     z.lazy(() => EventDataDeploymentReleasePinned$inboundSchema),
     z.lazy(() => EventDataDeploymentReleaseUnpinned$inboundSchema),
     z.lazy(() => EventDataDeploymentEnvironmentUpdated$inboundSchema),
+    z.lazy(() => EventDataDeploymentVolumeRestoreRequested$inboundSchema),
+    z.lazy(() => EventDataDeploymentVolumeRestoreCancelled$inboundSchema),
     z.lazy(() => EventDataDeploymentDeletionRequested$inboundSchema),
     DeploymentCredentialRotationEvent$inboundSchema,
   ]),

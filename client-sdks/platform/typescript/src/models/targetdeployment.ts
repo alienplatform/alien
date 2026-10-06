@@ -11,11 +11,19 @@ import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
+  ReleaseInfoTypeStringList,
+  ReleaseInfoTypeStringList$inboundSchema,
   TargetDeploymentConfig,
   TargetDeploymentConfig$inboundSchema,
-  TargetDeploymentDefaultStringList,
-  TargetDeploymentDefaultStringList$inboundSchema,
-} from "./targetdeploymentdefaultstringlist.js";
+} from "./releaseinfotypestringlist.js";
+
+export type TargetDeploymentDefaultStringList = {
+  type: ReleaseInfoTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
 
 export const ReleaseInfoTypeBoolean = {
   Boolean: "boolean",
@@ -1588,6 +1596,25 @@ export type TargetDeployment = {
 };
 
 /** @internal */
+export const TargetDeploymentDefaultStringList$inboundSchema: z.ZodType<
+  TargetDeploymentDefaultStringList,
+  unknown
+> = z.object({
+  type: ReleaseInfoTypeStringList$inboundSchema,
+  value: z.array(z.string()),
+});
+
+export function targetDeploymentDefaultStringListFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentDefaultStringList, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentDefaultStringList$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentDefaultStringList' from JSON`,
+  );
+}
+
+/** @internal */
 export const ReleaseInfoTypeBoolean$inboundSchema: z.ZodEnum<
   typeof ReleaseInfoTypeBoolean
 > = z.enum(ReleaseInfoTypeBoolean);
@@ -1667,7 +1694,7 @@ export const TargetDeploymentDefaultUnion$inboundSchema: z.ZodType<
   z.lazy(() => TargetDeploymentDefaultString$inboundSchema),
   z.lazy(() => TargetDeploymentDefaultNumber$inboundSchema),
   z.lazy(() => TargetDeploymentDefaultBoolean$inboundSchema),
-  TargetDeploymentDefaultStringList$inboundSchema,
+  z.lazy(() => TargetDeploymentDefaultStringList$inboundSchema),
   z.string(),
 ]);
 
@@ -1827,7 +1854,7 @@ export const TargetDeploymentInput$inboundSchema: z.ZodType<
       z.lazy(() => TargetDeploymentDefaultString$inboundSchema),
       z.lazy(() => TargetDeploymentDefaultNumber$inboundSchema),
       z.lazy(() => TargetDeploymentDefaultBoolean$inboundSchema),
-      TargetDeploymentDefaultStringList$inboundSchema,
+      z.lazy(() => TargetDeploymentDefaultStringList$inboundSchema),
       z.string(),
     ]),
   ).optional(),

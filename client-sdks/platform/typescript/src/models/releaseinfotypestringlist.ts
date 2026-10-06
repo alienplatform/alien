@@ -1887,6 +1887,37 @@ export type TargetDeploymentStackSettings = {
 };
 
 /**
+ * Replace one replica's persistent volume with a new volume made from a snapshot.
+ *
+ * @remarks
+ *
+ * The controller stops the replica, snapshots the volume it is about to
+ * replace (so the restore can be undone), creates the new volume in the same
+ * zone, starts the replica on it, and deletes the replaced volume.
+ */
+export type TargetDeploymentVolumeRestore = {
+  /**
+   * Replica ordinal whose volume is replaced
+   */
+  ordinal: number;
+  /**
+   * Unique ID of this request. A controller performs each request once.
+   */
+  requestId: string;
+  /**
+   * ID of the container resource that owns the volume
+   */
+  resourceId: string;
+  /**
+   * Cloud ID of the snapshot to restore: an EBS snapshot ID, a Compute
+   *
+   * @remarks
+   * Engine snapshot name, or an Azure snapshot resource ID
+   */
+  snapshotId: string;
+};
+
+/**
  * Deployment configuration
  *
  * @remarks
@@ -2052,6 +2083,16 @@ export type TargetDeploymentConfig = {
    * Absent on legacy targets; an explicit empty list means no stored secrets.
    */
   storedSecretInputIds?: Array<string> | undefined;
+  /**
+   * Operator requests to replace a replica's persistent volume with a new
+   *
+   * @remarks
+   * volume made from a snapshot. A container controller performs each
+   * request once, identified by its `request_id`, and reports it in
+   * `ContainerOutputs.volumes`. Only a volume that a controller reports in
+   * `ContainerOutputs.volumes` can be the target of a request.
+   */
+  volumeRestores?: Array<TargetDeploymentVolumeRestore> | undefined;
 };
 
 export const ReleaseInfoTypeStringList = {
@@ -2060,14 +2101,6 @@ export const ReleaseInfoTypeStringList = {
 export type ReleaseInfoTypeStringList = ClosedEnum<
   typeof ReleaseInfoTypeStringList
 >;
-
-export type TargetDeploymentDefaultStringList = {
-  type: ReleaseInfoTypeStringList;
-  /**
-   * String list default.
-   */
-  value: Array<string>;
-};
 
 /** @internal */
 export const TargetDeploymentBasePlatformEnum$inboundSchema: z.ZodEnum<
@@ -4720,6 +4753,27 @@ export function targetDeploymentStackSettingsFromJSON(
 }
 
 /** @internal */
+export const TargetDeploymentVolumeRestore$inboundSchema: z.ZodType<
+  TargetDeploymentVolumeRestore,
+  unknown
+> = z.object({
+  ordinal: z.int(),
+  requestId: z.string(),
+  resourceId: z.string(),
+  snapshotId: z.string(),
+});
+
+export function targetDeploymentVolumeRestoreFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentVolumeRestore, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentVolumeRestore$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentVolumeRestore' from JSON`,
+  );
+}
+
+/** @internal */
 export const TargetDeploymentConfig$inboundSchema: z.ZodType<
   TargetDeploymentConfig,
   unknown
@@ -4774,6 +4828,9 @@ export const TargetDeploymentConfig$inboundSchema: z.ZodType<
   stackSettings: z.lazy(() => TargetDeploymentStackSettings$inboundSchema)
     .optional(),
   storedSecretInputIds: z.array(z.string()).optional(),
+  volumeRestores: z.array(
+    z.lazy(() => TargetDeploymentVolumeRestore$inboundSchema),
+  ).optional(),
 });
 
 export function targetDeploymentConfigFromJSON(
@@ -4790,22 +4847,3 @@ export function targetDeploymentConfigFromJSON(
 export const ReleaseInfoTypeStringList$inboundSchema: z.ZodEnum<
   typeof ReleaseInfoTypeStringList
 > = z.enum(ReleaseInfoTypeStringList);
-
-/** @internal */
-export const TargetDeploymentDefaultStringList$inboundSchema: z.ZodType<
-  TargetDeploymentDefaultStringList,
-  unknown
-> = z.object({
-  type: ReleaseInfoTypeStringList$inboundSchema,
-  value: z.array(z.string()),
-});
-
-export function targetDeploymentDefaultStringListFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentDefaultStringList, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentDefaultStringList$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentDefaultStringList' from JSON`,
-  );
-}

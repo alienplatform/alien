@@ -1897,6 +1897,37 @@ export type DeploymentConfigStackSettings = {
 };
 
 /**
+ * Replace one replica's persistent volume with a new volume made from a snapshot.
+ *
+ * @remarks
+ *
+ * The controller stops the replica, snapshots the volume it is about to
+ * replace (so the restore can be undone), creates the new volume in the same
+ * zone, starts the replica on it, and deletes the replaced volume.
+ */
+export type DeploymentConfigVolumeRestore = {
+  /**
+   * Replica ordinal whose volume is replaced
+   */
+  ordinal: number;
+  /**
+   * Unique ID of this request. A controller performs each request once.
+   */
+  requestId: string;
+  /**
+   * ID of the container resource that owns the volume
+   */
+  resourceId: string;
+  /**
+   * Cloud ID of the snapshot to restore: an EBS snapshot ID, a Compute
+   *
+   * @remarks
+   * Engine snapshot name, or an Azure snapshot resource ID
+   */
+  snapshotId: string;
+};
+
+/**
  * Deployment configuration
  */
 export type DeploymentConfig = {
@@ -2057,6 +2088,16 @@ export type DeploymentConfig = {
    * Absent on legacy targets; an explicit empty list means no stored secrets.
    */
   storedSecretInputIds?: Array<string> | undefined;
+  /**
+   * Operator requests to replace a replica's persistent volume with a new
+   *
+   * @remarks
+   * volume made from a snapshot. A container controller performs each
+   * request once, identified by its `request_id`, and reports it in
+   * `ContainerOutputs.volumes`. Only a volume that a controller reports in
+   * `ContainerOutputs.volumes` can be the target of a request.
+   */
+  volumeRestores?: Array<DeploymentConfigVolumeRestore> | undefined;
 };
 
 /** @internal */
@@ -4747,6 +4788,27 @@ export function deploymentConfigStackSettingsFromJSON(
 }
 
 /** @internal */
+export const DeploymentConfigVolumeRestore$inboundSchema: z.ZodType<
+  DeploymentConfigVolumeRestore,
+  unknown
+> = z.object({
+  ordinal: z.int(),
+  requestId: z.string(),
+  resourceId: z.string(),
+  snapshotId: z.string(),
+});
+
+export function deploymentConfigVolumeRestoreFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigVolumeRestore, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentConfigVolumeRestore$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigVolumeRestore' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentConfig$inboundSchema: z.ZodType<
   DeploymentConfig,
   unknown
@@ -4801,6 +4863,9 @@ export const DeploymentConfig$inboundSchema: z.ZodType<
   stackSettings: z.lazy(() => DeploymentConfigStackSettings$inboundSchema)
     .optional(),
   storedSecretInputIds: z.array(z.string()).optional(),
+  volumeRestores: z.array(
+    z.lazy(() => DeploymentConfigVolumeRestore$inboundSchema),
+  ).optional(),
 });
 
 export function deploymentConfigFromJSON(
