@@ -1,7 +1,8 @@
 use alien_local::{ContainerConfig, LocalContainerManager};
 use bollard::Docker;
 use dockdash::{Arch, Image};
-use std::{collections::HashMap, sync::Arc};
+use futures::FutureExt;
+use std::{collections::HashMap, panic::AssertUnwindSafe, sync::Arc};
 
 #[tokio::test]
 #[ignore = "requires Docker and registry access"]
@@ -53,7 +54,7 @@ async fn concurrent_shared_image_loads_keep_both_containers_inspectable() {
         )
     );
     let docker = Docker::connect_with_local_defaults().unwrap();
-    let inspect = async {
+    let inspect = AssertUnwindSafe(async {
         let first = first.unwrap();
         let second = second.unwrap();
         let first = docker
@@ -72,9 +73,12 @@ async fn concurrent_shared_image_loads_keep_both_containers_inspectable() {
         let labels = first.config.unwrap().labels.unwrap();
         assert_eq!(labels["alien.dev/image-id"], id);
         assert_eq!(labels["alien.dev/resource"], first_name);
-    }
+    })
+    .catch_unwind()
     .await;
     manager.delete_container(&first_name).await.unwrap();
     manager.delete_container(&second_name).await.unwrap();
-    inspect
+    if let Err(panic) = inspect {
+        std::panic::resume_unwind(panic);
+    }
 }
